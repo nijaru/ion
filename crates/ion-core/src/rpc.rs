@@ -14,7 +14,7 @@ use std::time::Duration;
 
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, mpsc, oneshot, watch};
 
 /// In-flight JSON-RPC requests keyed by id.
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
@@ -24,8 +24,10 @@ pub(crate) struct StdioRpc {
     stdin_tx: mpsc::Sender<String>,
     next_id: AtomicU64,
     pending: Pending,
-    /// Kept for teardown: dropping kills the process (kill_on_drop).
-    _child: tokio::process::Child,
+    closed: watch::Sender<bool>,
+    /// Owns the child wait/kill lifecycle; dropping aborts the waiter and
+    /// therefore drops the kill-on-drop child.
+    _waiter: tokio::task::JoinHandle<()>,
 }
 
 /// Definition of one subprocess peer.
@@ -57,18 +59,24 @@ impl StdioRpc {
         let stdin = child.stdin.take().ok_or("no stdin")?;
         let stdout = child.stdout.take().ok_or("no stdout")?;
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(64);
+        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
+        let (closed, _) = watch::channel(false);
+
+        let writer_pending = Arc::clone(&pending);
+        let writer_closed = closed.clone();
         tokio::spawn(async move {
             let mut stdin = stdin;
             while let Some(line) = stdin_rx.recv().await {
                 if stdin.write_all(line.as_bytes()).await.is_err() {
+                    close_connection(&writer_pending, &writer_closed).await;
                     break;
                 }
                 let _ = stdin.flush().await;
             }
         });
 
-        let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let reader_pending = Arc::clone(&pending);
+        let reader_closed = closed.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(stdout).lines();
             while let Ok(Some(line)) = lines.next_line().await {
@@ -89,17 +97,22 @@ impl StdioRpc {
             }
             // Peer exited: fail every in-flight request so callers
             // observe the crash instead of waiting forever.
-            let mut map = reader_pending.lock().await;
-            for (_, sender) in map.drain() {
-                let _ = sender.send(Err("server closed".to_owned()));
-            }
+            close_connection(&reader_pending, &reader_closed).await;
+        });
+
+        let waiter_pending = Arc::clone(&pending);
+        let waiter_closed = closed.clone();
+        let waiter = tokio::spawn(async move {
+            let _ = child.wait().await;
+            close_connection(&waiter_pending, &waiter_closed).await;
         });
 
         let rpc = Self {
             stdin_tx,
             next_id: AtomicU64::new(1),
             pending,
-            _child: child,
+            closed,
+            _waiter: waiter,
         };
 
         let response = tokio::time::timeout(timeout, async {
@@ -121,6 +134,11 @@ impl StdioRpc {
 
     /// Send one JSON-RPC request and await its matching response.
     pub(crate) async fn request(&self, method: &str, params: Value) -> Result<Value, String> {
+        let mut closed = self.closed.subscribe();
+        if *closed.borrow() {
+            return Err("server closed".to_owned());
+        }
+
         let id = self.next_id.fetch_add(1, Ordering::Relaxed);
         let message = serde_json::json!({
             "jsonrpc": "2.0",
@@ -128,15 +146,34 @@ impl StdioRpc {
             "method": method,
             "params": params,
         });
-        let (tx, rx) = oneshot::channel();
+        let (tx, mut rx) = oneshot::channel();
         self.pending.lock().await.insert(id, tx);
-        if self.stdin_tx.send(format!("{message}\n")).await.is_err() {
+        if *closed.borrow() {
             self.pending.lock().await.remove(&id);
             return Err("server closed".to_owned());
         }
-        match rx.await {
-            Ok(result) => result,
-            Err(_) => Err("response channel dropped".to_owned()),
+        if self
+            .stdin_tx
+            .send(format!("{message}{}", char::from(10)))
+            .await
+            .is_err()
+        {
+            self.pending.lock().await.remove(&id);
+            close_connection(&self.pending, &self.closed).await;
+            return Err("server closed".to_owned());
+        }
+
+        tokio::select! {
+            result = &mut rx => result.unwrap_or_else(|_| Err("response channel dropped".to_owned())),
+            changed = closed.changed() => {
+                if changed.is_err() {
+                    return Err("server closed".to_owned());
+                }
+                match rx.await {
+                    Ok(result) => result,
+                    Err(_) => Err("server closed".to_owned()),
+                }
+            }
         }
     }
 
@@ -190,6 +227,20 @@ impl StdioRpc {
             return Err(extract_text(&response));
         }
         Ok(extract_text(&response))
+    }
+}
+
+async fn close_connection(pending: &Pending, closed: &watch::Sender<bool>) {
+    closed.send_replace(true);
+    let mut map = pending.lock().await;
+    for (_, sender) in map.drain() {
+        let _ = sender.send(Err("server closed".to_owned()));
+    }
+}
+
+impl Drop for StdioRpc {
+    fn drop(&mut self) {
+        self._waiter.abort();
     }
 }
 
