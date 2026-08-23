@@ -6,6 +6,7 @@
 //! [`crate::tool::Tool`] contract.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rmcp::ServiceExt;
@@ -13,14 +14,21 @@ use rmcp::model::{
     CallToolRequestParams, CallToolResponse, ClientCapabilities, ClientInfo, ContentBlock,
     Implementation, ProtocolVersion,
 };
-use rmcp::service::{RoleClient, RunningService};
+use rmcp::service::{Peer, RoleClient};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde_json::Value;
 use tokio::process::Command;
+use tokio::task::JoinHandle;
+use tokio_util::sync::CancellationToken;
+
+pub(crate) type CloseHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 
 /// A live connection to one stdio MCP subprocess.
 pub(crate) struct StdioRpc {
-    client: Arc<RunningService<RoleClient, ClientInfo>>,
+    client: Peer<RoleClient>,
+    shutdown: CancellationToken,
+    closed: Arc<AtomicBool>,
+    _monitor: JoinHandle<()>,
 }
 
 /// Definition of one subprocess peer.
@@ -48,6 +56,7 @@ impl StdioRpc {
         def: &PeerDef,
         client_info: ClientInfo,
         timeout: Duration,
+        on_closed: CloseHandler,
     ) -> Result<Self, String> {
         let command = Command::new(&def.command).configure(|command| {
             command.args(&def.args);
@@ -65,16 +74,47 @@ impl StdioRpc {
             .unwrap_or_else(|| "?".to_owned());
         tracing::debug!(server = %def.name, %version, "subprocess peer initialized");
 
+        let peer = client.peer().clone();
+        let shutdown = CancellationToken::new();
+        let monitor_shutdown = shutdown.clone();
+        let closed = Arc::new(AtomicBool::new(false));
+        let monitor_closed = Arc::clone(&closed);
+        let client_shutdown = client.cancellation_token();
+        let monitor = tokio::spawn(async move {
+            let mut waiting = Box::pin(client.waiting());
+            tokio::select! {
+                result = &mut waiting => {
+                    if let Err(err) = result {
+                        tracing::debug!(error = %err, "subprocess peer monitor stopped");
+                    }
+                    monitor_closed.store(true, Ordering::Release);
+                    on_closed();
+                }
+                () = monitor_shutdown.cancelled() => {
+                    client_shutdown.cancel();
+                    let _ = waiting.await;
+                    monitor_closed.store(true, Ordering::Release);
+                }
+            }
+        });
+
         Ok(Self {
-            client: Arc::new(client),
+            client: peer,
+            shutdown,
+            closed,
+            _monitor: monitor,
         })
+    }
+
+    #[must_use]
+    pub(crate) fn is_closed(&self) -> bool {
+        self.closed.load(Ordering::Acquire)
     }
 
     /// List all tools through the official MCP client API.
     pub(crate) async fn list_tools(&self) -> Result<Vec<crate::tool::ToolSpec>, String> {
         let tools = self
             .client
-            .peer()
             .list_all_tools()
             .await
             .map_err(|err| format!("tools/list: {err}"))?;
@@ -129,6 +169,12 @@ impl StdioRpc {
             }
             _ => Err("MCP tool returned an unsupported response".to_owned()),
         }
+    }
+}
+
+impl Drop for StdioRpc {
+    fn drop(&mut self) {
+        self.shutdown.cancel();
     }
 }
 

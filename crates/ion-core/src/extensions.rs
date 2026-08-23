@@ -22,7 +22,7 @@ use tokio_util::sync::CancellationToken;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::rpc::{PeerDef, StdioRpc, client_info};
+use crate::rpc::{CloseHandler, PeerDef, StdioRpc, client_info};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
 /// Handshake timeout: a slow extension delays startup once, visibly,
@@ -55,12 +55,20 @@ impl ExtensionService {
     /// extension never blocks startup.
     pub async fn start_into(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) {
         for def in defs {
+            let scope = format!("ext:{}", def.name);
+            let callback_scope = scope.clone();
+            let callback_catalog = catalog.clone();
+            let on_closed: CloseHandler = Arc::new(move || {
+                callback_catalog.remove_scope(&callback_scope);
+            });
             let peer = PeerDef {
                 name: def.name.clone(),
                 command: def.command.clone(),
                 args: def.args.clone(),
             };
-            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT).await {
+            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT, on_closed)
+                .await
+            {
                 Ok(rpc) => rpc,
                 Err(err) => {
                     tracing::warn!(extension = %def.name, error = %err, "extension failed to start");
@@ -87,7 +95,10 @@ impl ExtensionService {
                         tools = scoped.len(),
                         "extension ready"
                     );
-                    catalog.register_scope(format!("ext:{}", def.name), scoped);
+                    catalog.register_scope(scope.clone(), scoped);
+                    if arc.is_closed() {
+                        catalog.remove_scope(&scope);
+                    }
                 }
                 Err(err) => {
                     tracing::warn!(extension = %def.name, error = %err, "extension tools/list failed");

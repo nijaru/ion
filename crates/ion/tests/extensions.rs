@@ -3,6 +3,7 @@
 //! the project trust gate for executable configuration.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -57,7 +58,7 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     ExtensionService::new()
         .start_into(&[ext_def("crashing_extension.py")], &catalog)
         .await;
-    // The ghost tool registered before the process died.
+    // The ghost tool is present while the peer is live.
     assert!(catalog.specs().iter().any(|s| s.name == "textkit__ghost"));
 
     let provider = ScriptedProvider::new(vec![
@@ -69,7 +70,7 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     ]);
     let store = SessionStore::open_in_memory().expect("store");
     let policy = Arc::new(ion_core::AllowlistPolicy::new(["textkit__ghost"]));
-    let runtime = Runtime::start_with_policy(provider, catalog, store.clone(), policy);
+    let runtime = Runtime::start_with_policy(provider, catalog.clone(), store.clone(), policy);
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
@@ -98,6 +99,21 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
         transcript.contains("extension `textkit` crashed"),
         "{transcript}"
     );
+
+    tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if !catalog
+                .specs()
+                .iter()
+                .any(|spec| spec.name == "textkit__ghost")
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("a dead extension must be removed from future capability snapshots");
 }
 
 #[tokio::test]

@@ -19,7 +19,7 @@ use tokio_util::sync::CancellationToken;
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::rpc::{PeerDef, StdioRpc, client_info};
+use crate::rpc::{CloseHandler, PeerDef, StdioRpc, client_info};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
 /// Handshake and discovery timeouts: a slow server delays startup once,
@@ -52,12 +52,20 @@ impl McpService {
     /// warning and is skipped: one broken server never blocks startup.
     pub async fn start_into(&self, defs: &[ServerDef], catalog: &ToolCatalog) {
         for def in defs {
+            let scope = format!("mcp:{}", def.name);
+            let callback_scope = scope.clone();
+            let callback_catalog = catalog.clone();
+            let on_closed: CloseHandler = Arc::new(move || {
+                callback_catalog.remove_scope(&callback_scope);
+            });
             let peer = PeerDef {
                 name: def.name.clone(),
                 command: def.command.clone(),
                 args: def.args.clone(),
             };
-            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT).await {
+            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT, on_closed)
+                .await
+            {
                 Ok(rpc) => rpc,
                 Err(err) => {
                     tracing::warn!(server = %def.name, error = %err, "MCP server failed to start");
@@ -84,7 +92,10 @@ impl McpService {
                         tools = scoped.len(),
                         "MCP server ready"
                     );
-                    catalog.register_scope(format!("mcp:{}", def.name), scoped);
+                    catalog.register_scope(scope.clone(), scoped);
+                    if arc.is_closed() {
+                        catalog.remove_scope(&scope);
+                    }
                 }
                 Err(err) => {
                     tracing::warn!(server = %def.name, error = %err, "MCP tools/list failed");

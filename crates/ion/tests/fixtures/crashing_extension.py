@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """An extension that answers the handshake and discovery, then exits
-before any tool call can complete."""
+when its tool is called."""
 import json
 import sys
 
@@ -37,4 +37,5 @@ for line in sys.stdin:
                 ]
             },
         })
+    elif method == "tools/call":
         sys.exit(1)

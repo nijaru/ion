@@ -791,7 +791,7 @@ impl ToolCatalog {
 
     /// Remove a scope; future snapshots no longer include its tools.
     /// Returns false when the scope was not registered.
-    pub fn remove_scope(&mut self, scope: &str) -> bool {
+    pub fn remove_scope(&self, scope: &str) -> bool {
         self.dynamic
             .write()
             .expect("tool catalog poisoned")
@@ -2229,7 +2229,7 @@ mod catalog_tests {
 
     #[test]
     fn scope_registration_and_removal_change_future_snapshots() {
-        let mut catalog = ToolCatalog::with_cwd("/tmp");
+        let catalog = ToolCatalog::with_cwd("/tmp");
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
         catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
         assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
@@ -2270,7 +2270,7 @@ mod catalog_tests {
 
     #[tokio::test]
     async fn removed_scope_yields_visible_unknown_tool_failure() {
-        let mut catalog = ToolCatalog::with_cwd("/tmp");
+        let catalog = ToolCatalog::with_cwd("/tmp");
         catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
         let outcome = catalog
             .execute("mcp_echo", &json!({}), CancellationToken::default())
