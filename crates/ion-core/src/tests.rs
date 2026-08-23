@@ -1099,6 +1099,93 @@ async fn read_write_edit_search_find_roundtrip() {
     let _ = std::fs::remove_dir_all(&tmp);
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn native_file_tools_reject_symlink_targets_and_parents() {
+    use std::os::unix::fs::symlink;
+
+    let root = tempfile::tempdir().expect("root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    std::fs::write(outside.path().join("secret.txt"), "outside").expect("seed outside file");
+    std::fs::create_dir(outside.path().join("nested")).expect("seed outside directory");
+    std::fs::write(outside.path().join("nested/secret.txt"), "nested outside")
+        .expect("seed nested outside file");
+    symlink(
+        outside.path().join("secret.txt"),
+        root.path().join("link.txt"),
+    )
+    .expect("link file");
+    symlink(outside.path().join("nested"), root.path().join("link-dir")).expect("link directory");
+
+    let registry = ToolRegistry::with_cwd(root.path());
+    let cancel = tokio_util::sync::CancellationToken::new();
+    for (name, arguments) in [
+        ("read", json!({"path": "link.txt"})),
+        (
+            "write",
+            json!({"path": "link.txt", "contents": "overwritten"}),
+        ),
+        (
+            "write",
+            json!({"path": "link-dir/new.txt", "contents": "escaped"}),
+        ),
+        (
+            "edit",
+            json!({"path": "link.txt", "old_str": "outside", "new_str": "changed"}),
+        ),
+        ("search", json!({"path": "link-dir", "pattern": "secret"})),
+        ("find", json!({"path": "link-dir", "pattern": "*.txt"})),
+    ] {
+        let outcome = registry.execute(name, &arguments, cancel.clone()).await;
+        assert!(outcome.is_error, "{name} followed a symlink: {outcome:?}");
+        assert!(
+            outcome.output.contains("symlink"),
+            "{name} did not explain the rejected link: {outcome:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(outside.path().join("secret.txt")).expect("outside file"),
+        "outside"
+    );
+}
+
+#[tokio::test]
+async fn native_file_tools_reject_protected_git_paths() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    std::fs::create_dir(root.path().join(".git")).expect("git directory");
+    std::fs::write(root.path().join(".git/config"), "private").expect("git config");
+    let registry = ToolRegistry::with_cwd(root.path());
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    for (name, arguments) in [
+        ("read", json!({"path": ".git/config"})),
+        (
+            "write",
+            json!({"path": ".git/config", "contents": "changed"}),
+        ),
+        (
+            "edit",
+            json!({"path": ".git/config", "old_str": "private", "new_str": "changed"}),
+        ),
+        ("search", json!({"path": ".git", "pattern": "private"})),
+        ("find", json!({"path": ".git", "pattern": "*"})),
+    ] {
+        let outcome = registry.execute(name, &arguments, cancel.clone()).await;
+        assert!(
+            outcome.is_error,
+            "{name} accessed protected path: {outcome:?}"
+        );
+        assert!(
+            outcome.output.contains("protected"),
+            "{name} did not explain the protected path: {outcome:?}"
+        );
+    }
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".git/config")).expect("git config"),
+        "private"
+    );
+}
+
 #[tokio::test]
 async fn bash_runs_command_and_reports_nonzero_exit() {
     let registry = ToolRegistry::default();
@@ -2254,14 +2341,11 @@ fn canonicalization_resolves_and_normalizes_paths() {
             path: "/tmp/project/src/main.rs".into()
         }
     );
-    let target = registry
-        .canonicalize("read", &json!({ "path": "/etc/hosts" }))
-        .expect("canonicalize");
-    assert_eq!(
-        target,
-        crate::tool::CanonicalTarget::Path {
-            path: "/etc/hosts".into()
-        }
+    assert!(
+        registry
+            .canonicalize("read", &json!({ "path": "/etc/hosts" }))
+            .is_err(),
+        "canonicalization must reject the same absolute path the executor rejects"
     );
     let target = registry
         .canonicalize("bash", &json!({ "command": "echo hi" }))
@@ -2437,7 +2521,10 @@ async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
 
 mod reconcile {
     use super::*;
-    use crate::tool::{ReconcileVerdict, classify_reconciliation, reconciliation_evidence};
+    use crate::tool::{
+        FileSnapshot, ReconcileVerdict, classify_reconciliation, classify_reconciliation_snapshot,
+        reconciliation_evidence,
+    };
     use std::path::PathBuf;
 
     fn sha_hex(bytes: &[u8]) -> String {
@@ -2463,6 +2550,7 @@ mod reconcile {
         .expect("evidence");
         assert_eq!(evidence["preimage"]["exists"], true);
         assert_eq!(evidence["preimage"]["hash"], sha_hex(b"old"));
+        assert!(evidence["preimage"]["identity"].is_string());
         assert_eq!(evidence["postimage_hash"], sha_hex(b"new"));
         assert!(evidence["path"].as_str().unwrap().ends_with("a.txt"));
 
@@ -2501,6 +2589,37 @@ mod reconcile {
             .await
             .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn write_rejects_same_content_file_replacement() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("a.txt");
+        std::fs::write(&file, "old").expect("seed");
+        let arguments = json!({ "path": "a.txt", "contents": "new" });
+        let evidence = reconciliation_evidence(dir.path(), "write", &arguments)
+            .await
+            .expect("evidence");
+
+        let replacement = dir.path().join("replacement.txt");
+        std::fs::write(&replacement, "old").expect("replacement");
+        std::fs::rename(&replacement, &file).expect("replace file");
+
+        let registry = ToolRegistry::with_cwd(dir.path());
+        let outcome = registry
+            .execute_with_reconciliation(
+                "write",
+                &arguments,
+                Some(&evidence),
+                tokio_util::sync::CancellationToken::new(),
+            )
+            .await;
+        assert!(
+            outcome.is_error,
+            "replacement must not be overwritten: {outcome:?}"
+        );
+        assert!(outcome.output.contains("precondition"), "{outcome:?}");
+        assert_eq!(std::fs::read_to_string(&file).expect("file"), "old");
     }
 
     #[test]
@@ -2545,6 +2664,32 @@ mod reconcile {
         assert_eq!(
             classify_reconciliation(&json!(null), Some([0u8; 32])),
             ReconcileVerdict::Unknown
+        );
+
+        let identity_evidence = json!({
+            "preimage": {
+                "exists": true,
+                "hash": sha_hex(b"preimage"),
+                "identity": "1:1",
+            },
+            "postimage_hash": sha_hex(b"postimage"),
+        });
+        let replacement = FileSnapshot {
+            hash: digest(b"preimage").expect("digest"),
+            identity: Some("2:2".to_owned()),
+        };
+        assert_eq!(
+            classify_reconciliation_snapshot(&identity_evidence, Some(&replacement)),
+            ReconcileVerdict::Conflict,
+            "same-content replacement must not be replayed"
+        );
+        let original = FileSnapshot {
+            identity: Some("1:1".to_owned()),
+            ..replacement
+        };
+        assert_eq!(
+            classify_reconciliation_snapshot(&identity_evidence, Some(&original)),
+            ReconcileVerdict::SafeToExecute
         );
     }
 
@@ -2745,6 +2890,42 @@ mod reconcile {
             settled,
             "postimage must settle without repeating: {loaded:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn same_content_replacement_settles_indeterminate_without_overwrite() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        std::fs::write(dir.path().join("a.txt"), "old").expect("seed preimage");
+        let store = SessionStore::open_in_memory().expect("store");
+        let session_id = pending_write_session(&store, dir.path()).await;
+
+        let replacement = dir.path().join("replacement.txt");
+        std::fs::write(&replacement, "old").expect("replacement");
+        std::fs::rename(&replacement, dir.path().join("a.txt")).expect("replace file");
+
+        let runtime = Runtime::open_session(
+            ScriptedProvider::echo(),
+            ToolRegistry::with_cwd(dir.path()),
+            store.clone(),
+            session_id,
+        )
+        .await
+        .expect("reopen");
+        let session = runtime.session();
+        wait_until_idle(&session).await;
+        session.close().await.expect("close");
+        runtime.join().await.expect("join");
+
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("a.txt")).expect("file"),
+            "old",
+            "recovery must not overwrite a same-content replacement"
+        );
+        let loaded = store.load(session_id).await.expect("load");
+        assert!(matches!(
+            loaded.operations[0].latest.1.state,
+            OperationState::Finished(OperationOutcome::Indeterminate)
+        ));
     }
 
     #[tokio::test]

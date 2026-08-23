@@ -10,6 +10,7 @@ description = "Ion runtime controller and print-mode contract"
 [dependencies]
 globset = "0.4.20"
 libc = "0.2.189"
+nix = { version = "0.31.3", features = ["fs"] }
 regex = "1.13.1"
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

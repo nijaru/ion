@@ -10,16 +10,21 @@
 use std::collections::HashMap;
 use std::collections::VecDeque;
 use std::future::Future;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
 use std::sync::Arc;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
+#[cfg(unix)]
+use nix::fcntl::{OFlag, open, openat};
+#[cfg(unix)]
+use nix::sys::stat::{Mode, mkdirat};
 use regex::Regex;
 use serde_json::{Value, json};
 use tokio::fs;
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -224,39 +229,42 @@ pub enum CanonicalTarget {
     Remote { tool: String },
 }
 
-/// Lexically normalize a path without touching the filesystem:
-/// collapse `.` and resolve `..` against the path itself.
-#[must_use]
-pub fn normalize(path: &std::path::Path) -> std::path::PathBuf {
-    let mut out = std::path::PathBuf::new();
-    for component in path.components() {
-        match component {
-            std::path::Component::CurDir => {}
-            std::path::Component::ParentDir => {
-                out.pop();
-            }
-            other => out.push(other),
-        }
-    }
-    out
-}
-
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
 /// can clone the working directory cheaply before invoking a tool.
-/// SHA-256 of one file's contents, or `None` when it does not exist.
-pub(crate) async fn file_hash(path: &Path) -> Option<[u8; 32]> {
-    match fs::read(path).await {
-        Ok(bytes) => {
-            use sha2::{Digest, Sha256};
-            Some(Sha256::digest(&bytes).into())
-        }
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => None,
-    }
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The file state used for reconciliation and execution-time precondition
+/// checks. The identity supplements the content hash so replacing a file
+/// with another file containing the same bytes is still detected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FileSnapshot {
+    pub hash: [u8; 32],
+    pub identity: Option<String>,
+}
+
+fn snapshot_json(snapshot: &FileSnapshot) -> Value {
+    let mut value = json!({
+        "exists": true,
+        "hash": hex(&snapshot.hash),
+    });
+    if let Some(identity) = &snapshot.identity {
+        value["identity"] = Value::String(identity.clone());
+    }
+    value
+}
+
+#[cfg(unix)]
+fn metadata_identity(metadata: &std::fs::Metadata) -> Option<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    Some(format!("{}:{}", metadata.dev(), metadata.ino()))
+}
+
+#[cfg(not(unix))]
+fn metadata_identity(_: &std::fs::Metadata) -> Option<String> {
+    None
 }
 
 /// Reconciliation evidence for one write/edit invocation (DESIGN.md
@@ -272,10 +280,10 @@ pub async fn reconciliation_evidence(
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing string argument: path".to_owned())?;
-    let full = resolve_under(cwd, path_arg).map_err(|e| e.output)?;
-    let preimage = match file_hash(&full).await {
-        Some(hash) => serde_json::json!({ "exists": true, "hash": hex(&hash) }),
-        None => serde_json::json!({ "exists": false }),
+    let full = resolve_under(cwd, path_arg)?;
+    let preimage = match file_snapshot(cwd, Path::new(path_arg), false).await? {
+        Some(snapshot) => snapshot_json(&snapshot),
+        None => json!({ "exists": false }),
     };
     let postimage: Vec<u8> = match name {
         "write" => arguments
@@ -293,9 +301,7 @@ pub async fn reconciliation_evidence(
                 .get("new_str")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let original = fs::read_to_string(&full)
-                .await
-                .map_err(|err| format!("read failed: {err}"))?;
+            let original = read_secure_text(cwd, Path::new(path_arg), false).await?;
             if !original.contains(old_str) {
                 return Err("old_str not found in file".to_owned());
             }
@@ -329,27 +335,82 @@ pub enum ReconcileVerdict {
     Unknown,
 }
 
-/// Classify a pending Reconcile effect against the current file state.
-#[must_use]
-pub fn classify_reconciliation(evidence: &Value, current: Option<[u8; 32]>) -> ReconcileVerdict {
-    let current_hex = current.map(|hash| hex(&hash));
+fn classify_reconciliation_parts(
+    evidence: &Value,
+    current_hash: Option<String>,
+    current_identity: Option<&str>,
+) -> ReconcileVerdict {
+    if evidence.is_null() {
+        return ReconcileVerdict::Unknown;
+    }
     let postimage = evidence.get("postimage_hash").and_then(|v| v.as_str());
-    if postimage == current_hex.as_deref() && postimage.is_some() {
+    if postimage == current_hash.as_deref() && postimage.is_some() {
         return ReconcileVerdict::AlreadyApplied;
     }
     let Some(preimage) = evidence.get("preimage") else {
         return ReconcileVerdict::Unknown;
     };
-    let preimage_matches = if preimage.get("exists").and_then(|v| v.as_bool()) == Some(true) {
-        preimage.get("hash").and_then(|v| v.as_str()) == current_hex.as_deref()
-    } else {
-        current.is_none()
+    let preimage_exists = preimage.get("exists").and_then(|v| v.as_bool()) == Some(true);
+    if !preimage_exists {
+        return if current_hash.is_none() {
+            ReconcileVerdict::SafeToExecute
+        } else {
+            ReconcileVerdict::Conflict
+        };
+    }
+    let preimage_matches = preimage.get("hash").and_then(|v| v.as_str()) == current_hash.as_deref();
+    let identity_matches = match preimage.get("identity").and_then(|v| v.as_str()) {
+        Some(expected) => current_identity == Some(expected),
+        None => true,
     };
-    if preimage_matches {
+    if preimage_matches && identity_matches {
         ReconcileVerdict::SafeToExecute
     } else {
         ReconcileVerdict::Conflict
     }
+}
+
+/// Classify a pending Reconcile effect against a hash-only file state.
+/// Older persisted evidence may not contain a file identity, so this
+/// compatibility helper retains the original hash-only classification.
+#[cfg(test)]
+#[must_use]
+pub fn classify_reconciliation(evidence: &Value, current: Option<[u8; 32]>) -> ReconcileVerdict {
+    classify_reconciliation_parts(evidence, current.map(|hash| hex(&hash)), None)
+}
+
+/// Classify a pending Reconcile effect using the current file identity.
+/// Identity-aware evidence refuses to replay over a same-content replacement.
+#[must_use]
+pub(crate) fn classify_reconciliation_snapshot(
+    evidence: &Value,
+    current: Option<&FileSnapshot>,
+) -> ReconcileVerdict {
+    classify_reconciliation_parts(
+        evidence,
+        current.map(|snapshot| hex(&snapshot.hash)),
+        current.and_then(|snapshot| snapshot.identity.as_deref()),
+    )
+}
+
+fn precondition_matches(evidence: &Value, current: Option<&FileSnapshot>) -> bool {
+    let Some(preimage) = evidence.get("preimage") else {
+        return false;
+    };
+    let exists = preimage.get("exists").and_then(|v| v.as_bool()) == Some(true);
+    if !exists {
+        return current.is_none();
+    }
+    let Some(current) = current else {
+        return false;
+    };
+    let hash_matches =
+        preimage.get("hash").and_then(|v| v.as_str()) == Some(hex(&current.hash).as_str());
+    let identity_matches = match preimage.get("identity").and_then(|v| v.as_str()) {
+        Some(expected) => current.identity.as_deref() == Some(expected),
+        None => true,
+    };
+    hash_matches && identity_matches
 }
 
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
@@ -435,12 +496,7 @@ impl ToolRegistry {
                 .get(key)
                 .and_then(|v| v.as_str())
                 .ok_or_else(|| format!("missing string argument: {key}"))?;
-            let joined = if std::path::Path::new(raw).is_absolute() {
-                std::path::PathBuf::from(raw)
-            } else {
-                self.cwd.join(raw)
-            };
-            Ok(normalize(&joined))
+            resolve_under(&self.cwd, raw)
         };
         match name {
             "read" | "write" | "edit" => Ok(CanonicalTarget::Path {
@@ -453,7 +509,7 @@ impl ToolRegistry {
                     })
                 } else {
                     Ok(CanonicalTarget::Path {
-                        path: normalize(&self.cwd),
+                        path: lexically_normalize(&self.cwd),
                     })
                 }
             }
@@ -522,6 +578,30 @@ impl ToolRegistry {
             return ToolOutcome::error(msg);
         }
         entry.tool.as_ref().call(arguments.clone(), cancel).await
+    }
+
+    /// Execute a native mutation with the reconciliation evidence that was
+    /// committed before its effect intent. The evidence is passed through a
+    /// private argument so the native owner can verify the opened file
+    /// descriptor immediately before truncating it.
+    pub(crate) async fn execute_with_reconciliation(
+        &self,
+        name: &str,
+        arguments: &Value,
+        reconciliation: Option<&Value>,
+        cancel: CancellationToken,
+    ) -> ToolOutcome {
+        if !matches!(name, "write" | "edit") || reconciliation.is_none() {
+            return self.execute(name, arguments, cancel).await;
+        }
+        let mut enriched = arguments.clone();
+        if let Some(object) = enriched.as_object_mut() {
+            object.insert(
+                "__ion_reconciliation".to_owned(),
+                reconciliation.cloned().expect("checked above"),
+            );
+        }
+        self.execute(name, &enriched, cancel).await
     }
 }
 
@@ -687,6 +767,18 @@ impl ToolCatalog {
     ) -> ToolOutcome {
         self.snapshot().execute(name, arguments, cancel).await
     }
+
+    pub(crate) async fn execute_with_reconciliation(
+        &self,
+        name: &str,
+        arguments: &Value,
+        reconciliation: Option<&Value>,
+        cancel: CancellationToken,
+    ) -> ToolOutcome {
+        self.snapshot()
+            .execute_with_reconciliation(name, arguments, reconciliation, cancel)
+            .await
+    }
 }
 
 impl From<ToolRegistry> for ToolCatalog {
@@ -787,33 +879,87 @@ fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
     map
 }
 
+#[derive(Debug, Clone)]
+struct SecurePath {
+    display: PathBuf,
+    relative: PathBuf,
+}
+
+#[derive(Debug)]
+enum SecureOpenError {
+    Missing,
+    Message(String),
+}
+
+impl SecureOpenError {
+    fn message(message: impl Into<String>) -> Self {
+        Self::Message(message.into())
+    }
+}
+
+fn secure_open_error_text(error: SecureOpenError) -> String {
+    match error {
+        SecureOpenError::Missing => "path not found".to_owned(),
+        SecureOpenError::Message(message) => message,
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum SecureOpenMode {
+    Read,
+    WriteReplace,
+    WriteExisting,
+    WriteCreateExclusive,
+}
+
 /// Resolve a user-supplied relative path under `cwd`, lexically normalizing
-/// `.` and `..` and rejecting escapes above the project root.
-fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf, ToolOutcome> {
-    let relative = Path::new(raw);
-    if relative.is_absolute() {
-        return Err(ToolOutcome::error(format!(
-            "refusing absolute path outside the project root: {raw}"
-        )));
-    }
-    let candidate = cwd.join(relative);
-    let normalized = lexically_normalize(&candidate);
-    // Containment is checked on normalized forms. A relative root
-    // normalizes to "." (no prefix to match), so containment there
-    // means: the candidate stayed relative and did not climb out with
-    // ".." - which normalization preserves as a leading component.
+/// `.` and `..`, rejecting escapes, and refusing protected `.git` paths.
+/// Filesystem symlink checks happen at the descriptor-open boundary below.
+fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf, String> {
+    Ok(secure_path(cwd, Path::new(raw), false)?.display)
+}
+
+fn secure_path(cwd: &Path, raw: &Path, allow_absolute: bool) -> Result<SecurePath, String> {
     let root = lexically_normalize(cwd);
-    let contained = if root == Path::new(".") {
-        !normalized.starts_with("..")
+    let (display, relative) = if raw.is_absolute() {
+        if !allow_absolute {
+            return Err(format!(
+                "refusing absolute path outside the project root: {}",
+                raw.display()
+            ));
+        }
+        let display = lexically_normalize(raw);
+        let relative = display
+            .strip_prefix(&root)
+            .map_err(|_| format!("path escapes the project root: {}", raw.display()))?
+            .to_path_buf();
+        (display, relative)
     } else {
-        normalized.starts_with(&root)
+        let relative = lexically_normalize(raw);
+        let display = lexically_normalize(&root.join(&relative));
+        (display, relative)
     };
-    if !contained {
-        return Err(ToolOutcome::error(format!(
-            "path escapes the project root: {raw}"
-        )));
+    if relative == Path::new("..") || relative.starts_with("..") {
+        return Err(format!("path escapes the project root: {}", raw.display()));
     }
-    Ok(normalized)
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            std::path::Component::ParentDir | std::path::Component::RootDir
+        )
+    }) {
+        return Err(format!("path escapes the project root: {}", raw.display()));
+    }
+    if relative
+        .components()
+        .any(|component| matches!(component, std::path::Component::Normal(name) if name == ".git"))
+    {
+        return Err(format!(
+            "protected path is not available to native file tools: {}",
+            raw.display()
+        ));
+    }
+    Ok(SecurePath { display, relative })
 }
 
 /// Lexical normalization: collapse `.` and `..` without touching the
@@ -853,6 +999,290 @@ fn lexically_normalize(path: &Path) -> PathBuf {
     out
 }
 
+#[cfg(not(unix))]
+fn check_no_symlink_components(path: &Path) -> Result<(), SecureOpenError> {
+    let mut current = PathBuf::new();
+    for component in path.components() {
+        current.push(component.as_os_str());
+        match std::fs::symlink_metadata(&current) {
+            Ok(metadata) if metadata.file_type().is_symlink() => {
+                return Err(SecureOpenError::message(format!(
+                    "refusing symlink path component: {}",
+                    current.display()
+                )));
+            }
+            Ok(_) => {}
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => break,
+            Err(err) => {
+                return Err(SecureOpenError::message(format!(
+                    "cannot inspect path component {}: {err}",
+                    current.display()
+                )));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn nix_open_error(err: nix::errno::Errno) -> SecureOpenError {
+    if err == nix::errno::Errno::ENOENT {
+        SecureOpenError::Missing
+    } else if err == nix::errno::Errno::ELOOP {
+        SecureOpenError::message("refusing symlink path component")
+    } else {
+        SecureOpenError::message(err.to_string())
+    }
+}
+
+#[cfg(unix)]
+fn open_secure_unix(
+    cwd: &Path,
+    path: &SecurePath,
+    mode: SecureOpenMode,
+) -> Result<std::os::fd::OwnedFd, SecureOpenError> {
+    let root_flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+    let mut directory = open(cwd, root_flags, Mode::empty()).map_err(nix_open_error)?;
+    let components: Vec<_> = path.relative.components().collect();
+    let Some(leaf) = components.last() else {
+        return Err(SecureOpenError::message("path must name a file"));
+    };
+    let mut candidate = cwd.to_path_buf();
+    for component in &components[..components.len() - 1] {
+        let name = component.as_os_str();
+        candidate.push(name);
+        if let Ok(metadata) = std::fs::symlink_metadata(&candidate)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(SecureOpenError::message(format!(
+                "refusing symlink path component: {}",
+                candidate.display()
+            )));
+        }
+        let flags = root_flags;
+        directory = match openat(&directory, name, flags, Mode::empty()) {
+            Ok(next) => next,
+            Err(nix::errno::Errno::ENOENT) => {
+                if !matches!(
+                    mode,
+                    SecureOpenMode::WriteReplace | SecureOpenMode::WriteCreateExclusive
+                ) {
+                    return Err(SecureOpenError::Missing);
+                }
+                match mkdirat(&directory, name, Mode::from_bits_truncate(0o755)) {
+                    Ok(()) | Err(nix::errno::Errno::EEXIST) => {}
+                    Err(err) => return Err(nix_open_error(err)),
+                }
+                openat(&directory, name, flags, Mode::empty()).map_err(nix_open_error)?
+            }
+            Err(err) => return Err(nix_open_error(err)),
+        };
+    }
+    let leaf_flags = OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+    let (access, create, truncate, exclusive) = match mode {
+        SecureOpenMode::Read => (OFlag::O_RDONLY, false, false, false),
+        SecureOpenMode::WriteReplace => (OFlag::O_WRONLY, true, true, false),
+        SecureOpenMode::WriteExisting => (OFlag::O_RDWR, false, false, false),
+        SecureOpenMode::WriteCreateExclusive => (OFlag::O_WRONLY, true, false, true),
+    };
+    let mut flags = leaf_flags | access;
+    if create {
+        flags |= OFlag::O_CREAT;
+    }
+    if truncate {
+        flags |= OFlag::O_TRUNC;
+    }
+    if exclusive {
+        flags |= OFlag::O_EXCL;
+    }
+    openat(
+        &directory,
+        leaf.as_os_str(),
+        flags,
+        Mode::from_bits_truncate(0o600),
+    )
+    .map_err(nix_open_error)
+}
+
+#[cfg(unix)]
+fn validate_secure_directory_unix(cwd: &Path, path: &SecurePath) -> Result<(), SecureOpenError> {
+    let root_flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
+    let mut directory = open(cwd, root_flags, Mode::empty()).map_err(nix_open_error)?;
+    let mut candidate = cwd.to_path_buf();
+    for component in path.relative.components() {
+        candidate.push(component.as_os_str());
+        if let Ok(metadata) = std::fs::symlink_metadata(&candidate)
+            && metadata.file_type().is_symlink()
+        {
+            return Err(SecureOpenError::message(format!(
+                "refusing symlink path component: {}",
+                candidate.display()
+            )));
+        }
+        directory = openat(&directory, component.as_os_str(), root_flags, Mode::empty())
+            .map_err(nix_open_error)?;
+    }
+    Ok(())
+}
+
+fn validate_secure_directory(cwd: &Path, path: &SecurePath) -> Result<(), SecureOpenError> {
+    #[cfg(unix)]
+    {
+        validate_secure_directory_unix(cwd, path)
+    }
+    #[cfg(not(unix))]
+    {
+        check_no_symlink_components(&path.display)
+    }
+}
+
+async fn open_secure_file(
+    cwd: &Path,
+    path: &SecurePath,
+    mode: SecureOpenMode,
+) -> Result<fs::File, SecureOpenError> {
+    #[cfg(unix)]
+    {
+        let fd = open_secure_unix(cwd, path, mode)?;
+        Ok(fs::File::from_std(std::fs::File::from(fd)))
+    }
+    #[cfg(not(unix))]
+    {
+        check_no_symlink_components(&path.display)?;
+        let mut options = fs::OpenOptions::new();
+        match mode {
+            SecureOpenMode::Read => {
+                options.read(true);
+            }
+            SecureOpenMode::WriteReplace => {
+                options.write(true).create(true).truncate(true);
+            }
+            SecureOpenMode::WriteExisting => {
+                options.read(true).write(true);
+            }
+            SecureOpenMode::WriteCreateExclusive => {
+                options.write(true).create_new(true);
+            }
+        }
+        options.open(&path.display).await.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                SecureOpenError::Missing
+            } else {
+                SecureOpenError::message(err.to_string())
+            }
+        })
+    }
+}
+
+async fn snapshot_from_file(file: &mut fs::File) -> Result<FileSnapshot, String> {
+    let metadata = file
+        .metadata()
+        .await
+        .map_err(|err| format!("cannot inspect file: {err}"))?;
+    if !metadata.file_type().is_file() {
+        return Err("path is not a regular file".to_owned());
+    }
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .await
+        .map_err(|err| format!("read failed: {err}"))?;
+    file.seek(SeekFrom::Start(0))
+        .await
+        .map_err(|err| format!("cannot rewind file: {err}"))?;
+    use sha2::{Digest, Sha256};
+    Ok(FileSnapshot {
+        hash: Sha256::digest(bytes).into(),
+        identity: metadata_identity(&metadata),
+    })
+}
+
+pub(crate) async fn file_snapshot(
+    cwd: &Path,
+    path: &Path,
+    allow_absolute: bool,
+) -> Result<Option<FileSnapshot>, String> {
+    let secure = secure_path(cwd, path, allow_absolute)?;
+    let mut file = match open_secure_file(cwd, &secure, SecureOpenMode::Read).await {
+        Ok(file) => file,
+        Err(SecureOpenError::Missing) => return Ok(None),
+        Err(SecureOpenError::Message(message)) => return Err(message),
+    };
+    snapshot_from_file(&mut file).await.map(Some)
+}
+
+async fn read_secure_bytes(
+    cwd: &Path,
+    path: &Path,
+    allow_absolute: bool,
+) -> Result<Vec<u8>, String> {
+    let secure = secure_path(cwd, path, allow_absolute)?;
+    let mut file = open_secure_file(cwd, &secure, SecureOpenMode::Read)
+        .await
+        .map_err(|error| match error {
+            SecureOpenError::Missing => "file not found".to_owned(),
+            SecureOpenError::Message(message) => message,
+        })?;
+    let mut bytes = Vec::new();
+    file.read_to_end(&mut bytes)
+        .await
+        .map_err(|err| format!("read failed: {err}"))?;
+    Ok(bytes)
+}
+
+async fn read_secure_text(cwd: &Path, path: &Path, allow_absolute: bool) -> Result<String, String> {
+    let bytes = read_secure_bytes(cwd, path, allow_absolute).await?;
+    String::from_utf8(bytes).map_err(|err| format!("file is not valid UTF-8: {err}"))
+}
+
+async fn write_secure_bytes(
+    cwd: &Path,
+    path: &str,
+    contents: &[u8],
+    reconciliation: Option<&Value>,
+) -> Result<(), String> {
+    let secure = secure_path(cwd, Path::new(path), false)?;
+    let expected_exists = reconciliation.and_then(|evidence| {
+        evidence
+            .get("preimage")
+            .and_then(|preimage| preimage.get("exists"))
+            .and_then(Value::as_bool)
+    });
+    let mode = match expected_exists {
+        Some(true) => SecureOpenMode::WriteExisting,
+        Some(false) => SecureOpenMode::WriteCreateExclusive,
+        None => SecureOpenMode::WriteReplace,
+    };
+    let mut file = open_secure_file(cwd, &secure, mode)
+        .await
+        .map_err(|error| match error {
+            SecureOpenError::Missing => "file disappeared before write".to_owned(),
+            SecureOpenError::Message(message) => format!("write failed: {message}"),
+        })?;
+    if let Some(evidence) = reconciliation.filter(|_| expected_exists == Some(true)) {
+        let current = snapshot_from_file(&mut file)
+            .await
+            .map_err(|message| format!("write precondition could not be checked: {message}"))?;
+        if !precondition_matches(evidence, Some(&current)) {
+            return Err("write precondition changed; refusing to overwrite".to_owned());
+        }
+        file.set_len(0)
+            .await
+            .map_err(|err| format!("write truncate failed: {err}"))?;
+        file.seek(SeekFrom::Start(0))
+            .await
+            .map_err(|err| format!("write seek failed: {err}"))?;
+    }
+    file.write_all(contents)
+        .await
+        .map_err(|err| format!("write failed: {err}"))?;
+    file.flush()
+        .await
+        .map_err(|err| format!("write flush failed: {err}"))?;
+    file.sync_all()
+        .await
+        .map_err(|err| format!("write sync failed: {err}"))
+}
+
 // ---- read ----
 
 pub struct ReadTool {
@@ -890,16 +1320,9 @@ impl Tool for ReadTool {
                 Some(p) => p.to_owned(),
                 None => return ToolOutcome::error("missing argument: path"),
             };
-            let full = match resolve_under(&self.cwd, &path) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            match fs::read(&full).await {
-                Ok(bytes) => match String::from_utf8(bytes) {
-                    Ok(text) => ToolOutcome::text(text),
-                    Err(err) => ToolOutcome::error(format!("file is not valid UTF-8: {err}")),
-                },
-                Err(err) => ToolOutcome::error(format!("read failed: {err}")),
+            match read_secure_text(&self.cwd, Path::new(&path), false).await {
+                Ok(text) => ToolOutcome::text(text),
+                Err(message) => ToolOutcome::error(format!("read failed: {message}")),
             }
         })
     }
@@ -947,21 +1370,10 @@ impl Tool for WriteTool {
                 Some(c) => c.to_owned(),
                 None => return ToolOutcome::error("missing argument: contents"),
             };
-            let full = match resolve_under(&self.cwd, &path) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            if let Some(parent) = full.parent() {
-                match fs::create_dir_all(parent).await {
-                    Ok(()) => {}
-                    Err(err) => {
-                        return ToolOutcome::error(format!("cannot create directory: {err}"));
-                    }
-                }
-            }
-            match fs::write(&full, contents).await {
+            let reconciliation = arguments.get("__ion_reconciliation");
+            match write_secure_bytes(&self.cwd, &path, contents.as_bytes(), reconciliation).await {
                 Ok(()) => ToolOutcome::text("written"),
-                Err(err) => ToolOutcome::error(format!("write failed: {err}")),
+                Err(message) => ToolOutcome::error(message),
             }
         })
     }
@@ -1015,21 +1427,24 @@ impl Tool for EditTool {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_owned();
-            let full = match resolve_under(&self.cwd, &path) {
-                Ok(p) => p,
-                Err(e) => return e,
-            };
-            let original = match fs::read_to_string(&full).await {
+            let original = match read_secure_text(&self.cwd, Path::new(&path), false).await {
                 Ok(text) => text,
-                Err(err) => return ToolOutcome::error(format!("read failed: {err}")),
+                Err(message) => return ToolOutcome::error(format!("read failed: {message}")),
             };
             if !original.contains(&old_str) {
                 return ToolOutcome::error("old_str not found in file");
             }
             let updated = original.replacen(&old_str, &new_str, 1);
-            match fs::write(&full, updated).await {
+            match write_secure_bytes(
+                &self.cwd,
+                &path,
+                updated.as_bytes(),
+                arguments.get("__ion_reconciliation"),
+            )
+            .await
+            {
                 Ok(()) => ToolOutcome::text("edited"),
-                Err(err) => ToolOutcome::error(format!("write failed: {err}")),
+                Err(message) => ToolOutcome::error(message),
             }
         })
     }
@@ -1199,21 +1614,32 @@ impl Tool for SearchTool {
             let Ok(regex) = Regex::new(pattern) else {
                 return ToolOutcome::error(format!("invalid regex: {pattern}"));
             };
-            let root = match arguments.get("path").and_then(|v| v.as_str()) {
-                Some(p) => match resolve_under(&self.cwd, p) {
-                    Ok(r) => r,
-                    Err(e) => return e,
+            let secure_root = match arguments.get("path").and_then(|v| v.as_str()) {
+                Some(p) => match secure_path(&self.cwd, Path::new(p), false) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
                 },
-                None => self.cwd.as_ref().to_path_buf(),
+                None => match secure_path(&self.cwd, Path::new("."), false) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
+                },
             };
-            search_files(&root, &regex, &cancel).await
+            if let Err(error) = validate_secure_directory(&self.cwd, &secure_root) {
+                return ToolOutcome::error(secure_open_error_text(error));
+            }
+            search_files(&self.cwd, &secure_root.display, &regex, &cancel).await
         })
     }
 }
 
 /// Walk `root` collecting `path:line_number:line` for every non-binary
 /// file containing a regex match. Skips hidden entries and `target`.
-async fn search_files(root: &Path, regex: &Regex, cancel: &CancellationToken) -> ToolOutcome {
+async fn search_files(
+    cwd: &Path,
+    root: &Path,
+    regex: &Regex,
+    cancel: &CancellationToken,
+) -> ToolOutcome {
     let mut results: Vec<String> = Vec::new();
     let mut files: VecDeque<PathBuf> = VecDeque::new();
     collect_files(root, &mut files);
@@ -1222,7 +1648,7 @@ async fn search_files(root: &Path, regex: &Regex, cancel: &CancellationToken) ->
         if cancel.is_cancelled() {
             return ToolOutcome::error("cancelled".to_owned());
         }
-        let Ok(contents) = fs::read_to_string(&file).await else {
+        let Ok(contents) = read_secure_text(cwd, &file, true).await else {
             continue;
         };
         if contents.as_bytes().contains(&0u8) {
@@ -1261,9 +1687,15 @@ fn collect_files(root: &Path, out: &mut VecDeque<PathBuf>) {
         if name.starts_with('.') || name == "target" {
             continue;
         }
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             collect_files(&path, out);
-        } else if path.is_file() {
+        } else if file_type.is_file() {
             out.push_back(path);
         }
     }
@@ -1314,15 +1746,21 @@ impl Tool for FindTool {
             let Ok(set) = builder.build() else {
                 return ToolOutcome::error("cannot build glob set");
             };
-            let root = match arguments.get("path").and_then(|v| v.as_str()) {
-                Some(p) => match resolve_under(&self.cwd, p) {
-                    Ok(r) => r,
-                    Err(e) => return e,
+            let secure_root = match arguments.get("path").and_then(|v| v.as_str()) {
+                Some(p) => match secure_path(&self.cwd, Path::new(p), false) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
                 },
-                None => self.cwd.as_ref().to_path_buf(),
+                None => match secure_path(&self.cwd, Path::new("."), false) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
+                },
             };
+            if let Err(error) = validate_secure_directory(&self.cwd, &secure_root) {
+                return ToolOutcome::error(secure_open_error_text(error));
+            }
             let mut outputs: Vec<String> = Vec::new();
-            collect_matches(&root, &set, &mut outputs);
+            collect_matches(&secure_root.display, &set, &mut outputs);
             let _ = cancel;
             if outputs.is_empty() {
                 ToolOutcome::text("no matches")
@@ -1351,9 +1789,15 @@ fn collect_matches_under(original_root: &Path, dir: &Path, set: &GlobSet, out: &
         if name.starts_with('.') || name == "target" {
             continue;
         }
-        if path.is_dir() {
+        let Ok(file_type) = entry.file_type() else {
+            continue;
+        };
+        if file_type.is_symlink() {
+            continue;
+        }
+        if file_type.is_dir() {
             collect_matches_under(original_root, &path, set, out);
-        } else {
+        } else if file_type.is_file() {
             let rel = path
                 .strip_prefix(original_root)
                 .unwrap_or(&path)

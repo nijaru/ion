@@ -1492,7 +1492,7 @@ impl<P: Provider> SessionRuntime<P> {
                             target_summary(&self.tools, &call.name, &call.arguments),
                         );
                         warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
-                        self.spawn_tool_effect(Some(effect_id), call);
+                        self.spawn_tool_effect(Some(effect_id), call, None);
                     }
                     RecoveryClass::NeverReplay => {
                         // Side effects cannot be classified (§12.4); an
@@ -1546,15 +1546,27 @@ impl<P: Provider> SessionRuntime<P> {
                             .unwrap_or(serde_json::Value::Null);
                         let verdict = match &evidence {
                             serde_json::Value::Null => crate::tool::ReconcileVerdict::Unknown,
-                            evidence => {
-                                let current = match evidence.get("path").and_then(|v| v.as_str()) {
-                                    Some(path) => {
-                                        crate::tool::file_hash(std::path::Path::new(path)).await
+                            evidence => match evidence.get("path").and_then(|v| v.as_str()) {
+                                Some(path) => match crate::tool::file_snapshot(
+                                    self.tools.cwd(),
+                                    std::path::Path::new(path),
+                                    true,
+                                )
+                                .await
+                                {
+                                    Ok(current) => crate::tool::classify_reconciliation_snapshot(
+                                        evidence,
+                                        current.as_ref(),
+                                    ),
+                                    Err(err) => {
+                                        warn!(
+                                            "cannot inspect reconciliation target during recovery: {err}"
+                                        );
+                                        crate::tool::ReconcileVerdict::Conflict
                                     }
-                                    None => None,
-                                };
-                                crate::tool::classify_reconciliation(evidence, current)
-                            }
+                                },
+                                None => crate::tool::ReconcileVerdict::Unknown,
+                            },
                         };
                         match verdict {
                             crate::tool::ReconcileVerdict::SafeToExecute => {
@@ -1612,7 +1624,11 @@ impl<P: Provider> SessionRuntime<P> {
                                     &call.name,
                                     target_summary(&self.tools, &call.name, &call.arguments),
                                 );
-                                self.spawn_tool_effect(Some(effect_id), call);
+                                self.spawn_tool_effect(
+                                    Some(effect_id),
+                                    call,
+                                    Some(evidence.clone()),
+                                );
                                 info!(%operation_id, "reconciled a pending file mutation by preimage match");
                             }
                             crate::tool::ReconcileVerdict::AlreadyApplied => {
@@ -2274,7 +2290,13 @@ impl<P: Provider> SessionRuntime<P> {
             self.operation_tool_calls += 1;
             let target = target_summary(&self.tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
-            self.spawn_tool_effect(effect_id_of(self.operation.as_ref()), call);
+            let reconciliation = self
+                .operation
+                .as_ref()
+                .and_then(|active| active.open_effect.as_ref())
+                .and_then(|effect| effect.effective_input.get("reconciliation"))
+                .cloned();
+            self.spawn_tool_effect(effect_id_of(self.operation.as_ref()), call, reconciliation);
         }
         true
     }
@@ -2312,7 +2334,12 @@ impl<P: Provider> SessionRuntime<P> {
         });
     }
 
-    fn spawn_tool_effect(&mut self, effect_id: Option<EffectId>, call: ToolCall) {
+    fn spawn_tool_effect(
+        &mut self,
+        effect_id: Option<EffectId>,
+        call: ToolCall,
+        reconciliation: Option<serde_json::Value>,
+    ) {
         let Some(effect_id) = effect_id else {
             return;
         };
@@ -2331,7 +2358,9 @@ impl<P: Provider> SessionRuntime<P> {
         } = call;
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
-            let outcome = tools.execute(&name, &arguments, cancel).await;
+            let outcome = tools
+                .execute_with_reconciliation(&name, &arguments, reconciliation.as_ref(), cancel)
+                .await;
             let result = if outcome.is_error {
                 ToolResult::Err {
                     call_id,
