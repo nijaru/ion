@@ -33,7 +33,11 @@ struct Window {
 
 pub struct Screen {
     width: u16,
-    height: u16,
+    /// Physical row where our region starts (the launch cursor). The
+    /// region extends to the screen bottom; completed content above it
+    /// is native terminal scrollback.
+    origin: u16,
+    screen_height: u16,
     current: Option<Window>,
     /// Last emitted hardware-cursor state; avoids redundant hide/show
     /// sequences between frames (perceived flicker while typing).
@@ -42,11 +46,16 @@ pub struct Screen {
 }
 
 impl Screen {
-    pub fn new(width: u16, height: u16) -> Self {
-        let (width, height) = clamp_size(width, height);
+    /// `origin_row` is the physical row the region starts on (the
+    /// launch cursor after the banner); the region extends to the
+    /// bottom of the `screen_height`-row terminal.
+    pub fn new(width: u16, origin_row: u16, screen_height: u16) -> Self {
+        let screen_height = screen_height.max(1);
+        let origin = origin_row.min(screen_height.saturating_sub(1));
         Self {
-            width,
-            height,
+            width: width.max(1),
+            origin,
+            screen_height,
             current: None,
             cursor_shown: false,
             cursor_at: None,
@@ -54,25 +63,29 @@ impl Screen {
     }
 
     pub fn size(&self) -> (u16, u16) {
-        (self.width, self.height)
+        (self.width, self.avail())
     }
 
-    /// Newlines the host should emit before the first draw so the
-    /// window fits below the launch cursor instead of overwriting
-    /// existing terminal content above it.
-    pub fn reserve_rows(&self) -> u16 {
-        self.height.saturating_sub(1)
+    /// Visible rows of the region: origin to screen bottom. Follows
+    /// terminal growth and shrinkage.
+    fn avail(&self) -> u16 {
+        self.screen_height.saturating_sub(self.origin).max(1)
     }
 
     /// A size change invalidates the window; the next draw repaints
-    /// every row from the fresh buffer.
+    /// every row from the fresh buffer. If the terminal shrank below
+    /// the origin, the origin re-anchors near the new bottom.
     pub fn resize(&mut self, width: u16, height: u16) {
-        let (width, height) = clamp_size(width, height);
-        if width == self.width && height == self.height {
+        let width = width.max(1);
+        let height = height.max(1);
+        if width == self.width && height == self.screen_height {
             return;
         }
         self.width = width;
-        self.height = height;
+        self.screen_height = height;
+        if self.origin + 2 > height {
+            self.origin = height.saturating_sub(2);
+        }
         self.current = None;
         self.cursor_shown = false;
         self.cursor_at = None;
@@ -81,13 +94,13 @@ impl Screen {
     /// Render one frame. Lines must already be wrapped to `width`;
     /// each occupies exactly one row (overlong spans truncate).
     pub fn draw(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {
-        let h = self.height as usize;
+        let h = self.avail() as usize;
         let w = self.width;
         let committed_rows = frame.committed.len();
         let total = committed_rows + frame.live.len();
         let offset = total.saturating_sub(h);
 
-        let mut next = Buffer::empty(Rect::new(0, 0, w, self.height));
+        let mut next = Buffer::empty(Rect::new(0, 0, w, self.avail()));
         for r in 0..h {
             let absolute = r + offset;
             let line = if absolute < committed_rows {
@@ -110,7 +123,7 @@ impl Screen {
             None => 0,
         };
         if scrolled > 0 {
-            write!(out, "\x1b[{};1H", self.height)?;
+            write!(out, "\x1b[{};1H", self.screen_height)?;
             for _ in 0..scrolled {
                 out.write_all(b"\r\n")?;
             }
@@ -128,7 +141,7 @@ impl Screen {
                     src_row as u16,
                 )
             {
-                emit_buffer_row(out, &next, r)?;
+                emit_buffer_row(out, &next, r, self.origin)?;
                 painted = true;
             }
         }
@@ -168,13 +181,9 @@ impl Screen {
     /// Park below the rendered window on shutdown so the shell prompt
     /// lands on a fresh line.
     pub fn finish(&mut self, out: &mut impl Write) -> io::Result<()> {
-        let row = self.height;
+        let row = self.screen_height;
         write!(out, "\x1b[{row};1H\x1b[?25h\x1b[0m\r\n")
     }
-}
-
-fn clamp_size(width: u16, height: u16) -> (u16, u16) {
-    (width.max(1), height.max(1))
 }
 
 fn row_differs(next: &Buffer, r: u16, prev: &Buffer, prev_r: u16) -> bool {
@@ -191,7 +200,7 @@ fn row_differs(next: &Buffer, r: u16, prev: &Buffer, prev_r: u16) -> bool {
 /// granularity keeps wide characters consistent: both compared sides
 /// come from complete renders, so continuation cells can never join
 /// across a partial edit.
-fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16) -> io::Result<()> {
+fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16, origin: u16) -> io::Result<()> {
     let w = buf.area.width;
     let mut x = 0u16;
     while x < w {
@@ -208,7 +217,7 @@ fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16) -> io::Result<()>
         }
         // Blank runs are written too: they erase whatever the previous
         // frame left in that row (shrink, lag rebuild).
-        write!(out, "\x1b[{};{}H", r + 1, start + 1)?;
+        write!(out, "\x1b[{};{}H", origin + r + 1, start + 1)?;
         emit_style(out, cell.style())?;
         write!(out, "{text}")?;
         write!(out, "\x1b[0m")?;
@@ -310,7 +319,7 @@ mod tests {
 
     fn render(frames: Vec<Spec>) -> Vec<u8> {
         let mut out = Vec::new();
-        let mut screen = Screen::new(40, 6);
+        let mut screen = Screen::new(40, 0, 6);
         for (committed, live, cursor) in frames {
             screen
                 .draw(
@@ -423,7 +432,7 @@ mod tests {
         let live_before = [line("status one")];
         let live_after = [line("status after resize")];
         let mut out = Vec::new();
-        let mut screen = Screen::new(40, 6);
+        let mut screen = Screen::new(40, 0, 6);
         screen
             .draw(
                 &mut out,

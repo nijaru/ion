@@ -1021,14 +1021,16 @@ fn str_width(line: &Line<'_>) -> usize {
     line.spans.iter().map(|s| s.content.width()).sum()
 }
 
-/// Fixed live-band height: tool row(s), draft tail, status, composer
-/// always fit without scrolling, so reversible edits never push rows
-/// into terminal scrollback (§22.3).
-const LIVE_REGION_ROWS: usize = 6;
+/// Maximum live-band height: tool row(s), draft tail, status,
+/// composer. The band is variable-height within this cap; growth
+/// beyond the window scrolls physically (monotonic offset), shrink
+/// blanks freed rows in place — reversible edits never duplicate
+/// committed content into scrollback (§22.3).
+const LIVE_REGION_MAX_ROWS: usize = 6;
 
-/// The live band below the committed transcript. Returns exactly
-/// LIVE_REGION_ROWS pre-wrapped rows plus the hardware cursor position
-/// relative to the band; the composer always occupies the last rows.
+/// The live band below the committed transcript. Returns pre-wrapped
+/// rows (at most LIVE_REGION_MAX_ROWS) plus the hardware cursor
+/// position relative to the band; the composer occupies the last rows.
 fn build_live(
     state: &UiState,
     palette: &Palette,
@@ -1094,16 +1096,14 @@ fn build_live(
     };
     head.push(status);
 
-    // Fit the head above the composer inside the fixed band, keeping
+    // Fit the head above the composer inside the band cap, keeping
     // the newest content when truncating.
-    let budget = LIVE_REGION_ROWS.saturating_sub(composer_len);
+    let budget = LIVE_REGION_MAX_ROWS.saturating_sub(composer_len);
     if head.len() > budget {
         head = head.split_off(head.len() - budget);
     }
 
-    let mut lines: Vec<Line<'static>> =
-        vec![Line::from(String::new()); LIVE_REGION_ROWS.saturating_sub(head.len() + composer_len)];
-    lines.extend(head);
+    let mut lines: Vec<Line<'static>> = head;
 
     // Cursor position within the wrapped composer rows.
     let mut cursor = None;
@@ -1120,7 +1120,6 @@ fn build_live(
         walked += row_width;
     }
     lines.extend(composer_rows);
-    debug_assert_eq!(lines.len(), LIVE_REGION_ROWS);
 
     (lines, cursor)
 }
@@ -1202,28 +1201,40 @@ pub async fn run(
     let palette = palette(theme);
 
     let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut screen = Screen::new(term_w, term_h);
     let mut out = io::stdout();
 
-    // Reserve the window's rows below the launch cursor so the first
-    // draw never overwrites existing terminal content above it (§22.3).
-    let reserved = screen.reserve_rows();
-    print!("{}", "\n".repeat(reserved as usize));
-    io::stdout().flush().ok();
-
-    // Committed transcript: banner, restored entries, flushed turns.
-    // The live band is rebuilt every frame from UiState; committed
-    // lines never change once appended (§22 line-diff model).
-    let mut transcript = Transcript::new(term_w);
+    // The banner is committed straight to native scrollback above the
+    // region (§22.3 inline semantics): completed content never lives in
+    // the diffed window.
     let banner = if resume_session.is_some() {
         "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
     } else {
         "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
     };
-    transcript.push(Line::from(banner).dim());
+    println!("{banner}");
+    io::stdout().flush().ok();
+
+    // Anchor the region at the launch cursor. Queried before the
+    // EventStream exists, so no competing stdin reader.
+    let (_, cursor_row) = crossterm::cursor::position()
+        .map_err(|err| RuntimeError::OperationFailed(format!("cursor query failed: {err}")))?;
+    let mut origin = cursor_row;
+    // Keep a minimal usable region above the screen bottom.
+    const MIN_REGION_ROWS: u16 = 4;
+    if term_h.saturating_sub(origin) < MIN_REGION_ROWS {
+        let push = MIN_REGION_ROWS - (term_h - origin);
+        print!("{}", "\n".repeat(push as usize));
+        io::stdout().flush().ok();
+        origin = origin.saturating_sub(push);
+    }
+    let mut screen = Screen::new(term_w, origin, term_h);
+
+    // Committed transcript: restored entries, flushed turns. Committed
+    // lines never change once appended (§22 line-diff model).
+    let mut transcript = Transcript::new(term_w);
 
     // Resume: project the persisted transcript into the committed array.
-    let mut durable_prefix = 1usize; // banner
+    let mut durable_prefix = 0usize; // presentation lines atop transcript
     if let Some(session_id) = resume_session {
         let loaded = store
             .load(session_id)
@@ -1260,9 +1271,8 @@ pub async fn run(
     // §21.4/§31.14: the initial snapshot is authoritative for durable
     // history. Entries settled between the resume load and this
     // subscribe are appended; a fresh session's snapshot is empty.
-    if snapshot.entries.len() > durable_prefix - 1 {
-        let skip = durable_prefix - 1;
-        transcript.extend(entry_lines(&snapshot.entries[skip..]));
+    if snapshot.entries.len() > durable_prefix {
+        transcript.extend(entry_lines(&snapshot.entries[durable_prefix..]));
     }
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
