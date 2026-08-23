@@ -2,6 +2,7 @@
 //! shell over this library; integration tests drive the same surface.
 
 pub mod acp;
+pub mod openai_codex;
 pub mod openrouter;
 pub mod print;
 pub mod settings;
@@ -12,9 +13,8 @@ pub use ion_terminal::screen;
 use std::future::Future;
 use std::sync::Arc;
 
-use futures_util::future::Either;
-
 use ion_core::{EngineSignal, ModelCapabilities, Provider, ProviderRequest, ScriptedProvider};
+use openai_codex::OpenAICodexProvider;
 use openrouter::OpenRouterProvider;
 
 pub use acp::{AcpConfig, serve as acp_serve};
@@ -24,7 +24,9 @@ pub use settings::Settings;
 /// dyn-compatible by design; the host composes concretely.
 pub enum CliProvider {
     Scripted(ScriptedProvider),
+    OpenAICodex(OpenAICodexProvider),
     OpenRouter(OpenRouterProvider),
+    Unavailable(String),
 }
 
 impl Provider for CliProvider {
@@ -34,16 +36,22 @@ impl Provider for CliProvider {
         cancel: tokio_util::sync::CancellationToken,
         out: tokio::sync::mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send {
-        // The arms return distinct concrete futures; erase them for the
-        // host-level dispatch.
-        Box::pin(match self {
-            CliProvider::Scripted(provider) => {
-                let fut = provider.run(request, cancel, out);
-                Either::Left(fut)
-            }
-            CliProvider::OpenRouter(provider) => {
-                let fut = provider.run(request, cancel, out);
-                Either::Right(fut)
+        Box::pin(async move {
+            match self {
+                CliProvider::Scripted(provider) => provider.run(request, cancel, out).await,
+                CliProvider::OpenAICodex(provider) => {
+                    provider.run(request, cancel, out).await;
+                }
+                CliProvider::OpenRouter(provider) => provider.run(request, cancel, out).await,
+                CliProvider::Unavailable(message) => {
+                    let _ = out
+                        .send(EngineSignal::Failed {
+                            operation_id: request.operation_id,
+                            step: request.step,
+                            message: message.clone(),
+                        })
+                        .await;
+                }
             }
         })
     }
@@ -51,14 +59,24 @@ impl Provider for CliProvider {
     async fn context_window(&self) -> Option<u64> {
         match self {
             CliProvider::Scripted(_) => None,
+            CliProvider::OpenAICodex(provider) => provider.context_window().await,
             CliProvider::OpenRouter(provider) => provider.context_window().await,
+            CliProvider::Unavailable(_) => None,
         }
     }
 
     async fn capabilities(&self) -> ModelCapabilities {
         match self {
             CliProvider::Scripted(provider) => provider.capabilities().await,
+            CliProvider::OpenAICodex(provider) => provider.capabilities().await,
             CliProvider::OpenRouter(provider) => provider.capabilities().await,
+            CliProvider::Unavailable(_) => ModelCapabilities {
+                reasoning: false,
+                tool_calls: false,
+                prompt_cache: false,
+                streaming: false,
+                recovery: false,
+            },
         }
     }
 }

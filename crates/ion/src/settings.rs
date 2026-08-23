@@ -1,6 +1,6 @@
 //! User settings (`~/.config/ion/settings.toml`), pi-style camelCase
 //! keys. The compiled-in defaults mirror the maintainer's pi settings
-//! (`stealth/ox-alpha` via openrouter); a settings file overrides them.
+//! (`gpt-5.6-luna` via openai-codex); a settings file overrides them.
 
 use std::path::PathBuf;
 
@@ -15,6 +15,33 @@ pub enum Theme {
     /// Follow the terminal's light/dark preference (pi's "light/dark").
     #[serde(rename = "light/dark")]
     Auto,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingLevel {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl ThinkingLevel {
+    #[must_use]
+    pub fn reasoning_effort(self) -> Option<&'static str> {
+        match self {
+            Self::Off => None,
+            Self::Minimal => Some("minimal"),
+            Self::Low => Some("low"),
+            Self::Medium => Some("medium"),
+            Self::High => Some("high"),
+            Self::Xhigh => Some("xhigh"),
+            Self::Max => Some("max"),
+        }
+    }
 }
 
 /// Per-action key overrides; unset actions keep their defaults.
@@ -46,6 +73,7 @@ pub struct Keybindings {
 pub struct Settings {
     default_model: Option<String>,
     default_provider: Option<String>,
+    default_thinking_level: Option<ThinkingLevel>,
     /// Native shell enforcement. `auto` selects the strongest backend
     /// available on the host; it never upgrades project trust or approval.
     sandbox: Option<SandboxMode>,
@@ -59,6 +87,12 @@ pub struct Settings {
     /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock).
     #[serde(default)]
     pub hide_thinking_block: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ModelSelection {
+    pub provider: String,
+    pub model: String,
 }
 
 /// One `[[extensions]]` entry: a subprocess extension publishing tools
@@ -98,8 +132,9 @@ impl Settings {
     /// means the key is unset.
     fn maintainer_defaults() -> Settings {
         Settings {
-            default_model: Some("stealth/ox-alpha".to_owned()),
-            default_provider: Some("openrouter".to_owned()),
+            default_model: Some("gpt-5.6-luna".to_owned()),
+            default_provider: Some("openai-codex".to_owned()),
+            default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
             theme: None,
             keybindings: Keybindings::default(),
@@ -125,6 +160,7 @@ impl Settings {
         Self {
             default_model: None,
             default_provider: None,
+            default_thinking_level: None,
             sandbox: None,
             theme: None,
             keybindings: crate::settings::Keybindings::default(),
@@ -150,29 +186,44 @@ impl Settings {
         toml::from_str(&text).map_err(|err| format!("{}: {err}", path.display()))
     }
 
-    /// The OpenRouter model id to use by default, if any. The provider
-    /// must be openrouter (the only adapter); an `openrouter/` prefix
-    /// on the model id is accepted and stripped.
-    pub fn openrouter_model(&self) -> Result<Option<String>, String> {
-        if self.default_provider.as_deref().unwrap_or("openrouter") != "openrouter" {
+    /// Resolve the configured provider and model. A provider prefix on the
+    /// model is accepted when it agrees with `defaultProvider`.
+    pub fn model_selection(&self) -> Result<Option<ModelSelection>, String> {
+        let provider = self.default_provider.as_deref().unwrap_or("openai-codex");
+        if !matches!(provider, "openai-codex" | "openrouter") {
             return Err(format!(
-                "unsupported defaultProvider {:?}; only \"openrouter\" exists",
+                "unsupported defaultProvider {:?}; supported providers are \"openai-codex\" and \"openrouter\"",
                 self.default_provider
             ));
         }
         let Some(model) = &self.default_model else {
             return Ok(None);
         };
-        Ok(Some(
-            model
-                .strip_prefix("openrouter/")
-                .unwrap_or(model)
-                .to_owned(),
-        ))
+        let prefix = format!("{provider}/");
+        if let Some(model) = model.strip_prefix(&prefix) {
+            return Ok(Some(ModelSelection {
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+            }));
+        }
+        if model.starts_with("openai-codex/") || model.starts_with("openrouter/") {
+            return Err(format!(
+                "defaultModel provider prefix does not match defaultProvider: {model:?} vs {provider:?}"
+            ));
+        }
+        Ok(Some(ModelSelection {
+            provider: provider.to_owned(),
+            model: model.to_owned(),
+        }))
     }
 
     pub fn theme(&self) -> Theme {
         self.theme.unwrap_or(Theme::Auto)
+    }
+
+    #[must_use]
+    pub fn thinking_level(&self) -> ThinkingLevel {
+        self.default_thinking_level.unwrap_or(ThinkingLevel::Xhigh)
     }
 
     /// The resolved native-shell enforcement requested by this settings
@@ -191,10 +242,14 @@ mod tests {
     fn defaults_mirror_maintainer_pi_settings() {
         let settings = Settings::maintainer_defaults();
         assert_eq!(
-            settings.openrouter_model().unwrap().as_deref(),
-            Some("stealth/ox-alpha")
+            settings.model_selection().unwrap(),
+            Some(ModelSelection {
+                provider: "openai-codex".to_owned(),
+                model: "gpt-5.6-luna".to_owned(),
+            })
         );
         assert_eq!(settings.theme(), Theme::Auto);
+        assert_eq!(settings.thinking_level(), ThinkingLevel::Xhigh);
     }
 
     #[test]
@@ -208,8 +263,8 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            settings.openrouter_model().unwrap().as_deref(),
-            Some("stealth/ox-alpha")
+            settings.model_selection().unwrap().unwrap().model,
+            "stealth/ox-alpha"
         );
         assert_eq!(settings.theme(), Theme::Light);
     }
@@ -217,14 +272,31 @@ mod tests {
     #[test]
     fn no_default_model_falls_back_to_scripted() {
         let settings: Settings = toml::from_str("theme = \"dark\"").unwrap();
-        assert_eq!(settings.openrouter_model().unwrap(), None);
+        assert_eq!(settings.model_selection().unwrap(), None);
         assert_eq!(settings.theme(), Theme::Dark);
     }
 
     #[test]
-    fn non_openrouter_provider_is_refused() {
+    fn unsupported_provider_is_refused() {
         let settings: Settings = toml::from_str("defaultProvider = \"anthropic\"").unwrap();
-        assert!(settings.openrouter_model().is_err());
+        assert!(settings.model_selection().is_err());
+    }
+
+    #[test]
+    fn codex_provider_is_supported() {
+        let settings: Settings =
+            toml::from_str("defaultModel = \"gpt-5.6-sol\"\ndefaultProvider = \"openai-codex\"")
+                .unwrap();
+        let selection = settings.model_selection().unwrap().unwrap();
+        assert_eq!(selection.provider, "openai-codex");
+        assert_eq!(selection.model, "gpt-5.6-sol");
+    }
+
+    #[test]
+    fn parses_pi_thinking_level() {
+        let settings: Settings = toml::from_str("defaultThinkingLevel = \"high\"").unwrap();
+        assert_eq!(settings.thinking_level(), ThinkingLevel::High);
+        assert_eq!(settings.thinking_level().reasoning_effort(), Some("high"));
     }
 
     #[test]

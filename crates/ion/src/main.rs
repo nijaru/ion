@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 use clap::Parser;
 use ion::enable_children;
+use ion::openai_codex::{CodexCredential, OpenAICodexProvider};
 use ion::openrouter::OpenRouterProvider;
 use ion::print::PrintFrontend;
-use ion::settings::Settings;
+use ion::settings::{ModelSelection, Settings};
 use ion::tui;
 use ion::{CliProvider, acp};
 use ion_core::{
@@ -26,8 +27,8 @@ struct Cli {
     /// Run one prompt through print mode and exit.
     #[arg(short = 'p', long = "print", value_name = "PROMPT")]
     print: Option<String>,
-    /// Run against a real OpenRouter model (e.g. stealth/ox-alpha)
-    /// instead of the scripted provider. Requires OPENROUTER_API_KEY.
+    /// Run against a real provider/model (e.g. openai-codex/gpt-5.6-luna
+    /// or openrouter/stealth/ox-alpha) instead of the scripted provider.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
     /// Reopen the most recent persisted session in the interactive
@@ -153,26 +154,28 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync>;
     let model_name: Option<String>;
     match resolve_model(cli.model.clone(), settings) {
-        Ok(Some(model)) => {
-            let key = match std::env::var("OPENROUTER_API_KEY") {
-                Ok(key) => key,
-                Err(_) => {
-                    let _ = writeln!(io::stderr(), "model requires OPENROUTER_API_KEY to be set");
+        Ok(Some(selection)) => {
+            let material = match provider_material(&selection, settings) {
+                Ok(material) => material,
+                Err(err) => {
+                    let _ = writeln!(io::stderr(), "{err}");
                     return ExitCode::from(2);
                 }
             };
+            let default_provider = selection.provider.clone();
+            let make_material = material.clone();
             let make: Arc<dyn Fn(String) -> CliProvider + Send + Sync> =
-                Arc::new(move |model: String| {
-                    CliProvider::OpenRouter(OpenRouterProvider::new(model, key.clone()))
+                Arc::new(move |model_ref: String| {
+                    make_cli_provider(&model_ref, &default_provider, &make_material)
                 });
+            let initial = selection.model.clone();
             root_provider = Arc::new(ion_core::SwitchingProvider::switchable(
-                model.clone(),
-                make(model.clone()),
+                initial.clone(),
+                make(initial.clone()),
                 Arc::clone(&make),
             ));
-            let initial = model.clone();
             make_provider = Arc::new(move || make(initial.clone()));
-            model_name = Some(model);
+            model_name = Some(selection.model);
         }
         Ok(None) => {
             let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(|| {
@@ -319,11 +322,18 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
 
 /// `--model` wins; otherwise the settings default (pi-style: the
 /// compiled-in defaults mirror the maintainer's pi settings).
-fn resolve_model(cli_model: Option<String>, settings: &Settings) -> Result<Option<String>, String> {
-    if cli_model.is_some() {
-        return Ok(cli_model);
-    }
-    settings.openrouter_model()
+fn resolve_model(
+    cli_model: Option<String>,
+    settings: &Settings,
+) -> Result<Option<ModelSelection>, String> {
+    let configured = settings.model_selection()?;
+    let Some(cli_model) = cli_model else {
+        return Ok(configured);
+    };
+    let default_provider = configured
+        .as_ref()
+        .map_or("openrouter", |selection| selection.provider.as_str());
+    parse_model_reference(&cli_model, default_provider).map(Some)
 }
 
 /// The provider factory shared by the root session and any children it
@@ -332,14 +342,13 @@ fn provider_factory(
     cli: &Cli,
     settings: &Settings,
 ) -> Result<Arc<dyn Fn() -> CliProvider + Send + Sync>, String> {
-    let model = resolve_model(cli.model.clone(), settings)?;
-    Ok(match model {
-        Some(model) => {
-            let key = std::env::var("OPENROUTER_API_KEY")
-                .map_err(|_| "model requires OPENROUTER_API_KEY to be set".to_owned())?;
-            Arc::new(move || {
-                CliProvider::OpenRouter(OpenRouterProvider::new(model.clone(), key.clone()))
-            })
+    let selection = resolve_model(cli.model.clone(), settings)?;
+    Ok(match selection {
+        Some(selection) => {
+            let material = provider_material(&selection, settings)?;
+            let default_provider = selection.provider.clone();
+            let model_ref = selection.model.clone();
+            Arc::new(move || make_cli_provider(&model_ref, &default_provider, &material))
         }
         None => Arc::new(|| {
             CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
@@ -347,6 +356,89 @@ fn provider_factory(
             )]))
         }),
     })
+}
+
+#[derive(Clone, Default)]
+struct ProviderMaterial {
+    openrouter_key: Option<String>,
+    codex_credential: Option<CodexCredential>,
+    reasoning_effort: Option<String>,
+}
+
+fn provider_material(
+    selection: &ModelSelection,
+    settings: &Settings,
+) -> Result<ProviderMaterial, String> {
+    match selection.provider.as_str() {
+        "openai-codex" => Ok(ProviderMaterial {
+            codex_credential: Some(CodexCredential::from_environment_or_pi()?),
+            reasoning_effort: settings
+                .thinking_level()
+                .reasoning_effort()
+                .map(str::to_owned),
+            ..ProviderMaterial::default()
+        }),
+        "openrouter" => Ok(ProviderMaterial {
+            openrouter_key: Some(
+                std::env::var("OPENROUTER_API_KEY")
+                    .map_err(|_| "model requires OPENROUTER_API_KEY to be set".to_owned())?,
+            ),
+            ..ProviderMaterial::default()
+        }),
+        provider => Err(format!("unsupported provider {provider:?}")),
+    }
+}
+
+fn parse_model_reference(raw: &str, default_provider: &str) -> Result<ModelSelection, String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Err("model reference cannot be empty".to_owned());
+    }
+    for provider in ["openai-codex", "openrouter"] {
+        let prefix = format!("{provider}/");
+        if let Some(model) = raw.strip_prefix(&prefix) {
+            if model.is_empty() {
+                return Err(format!("model reference {raw:?} has no model id"));
+            }
+            return Ok(ModelSelection {
+                provider: provider.to_owned(),
+                model: model.to_owned(),
+            });
+        }
+    }
+    Ok(ModelSelection {
+        provider: default_provider.to_owned(),
+        model: raw.to_owned(),
+    })
+}
+
+fn make_cli_provider(
+    model_ref: &str,
+    default_provider: &str,
+    material: &ProviderMaterial,
+) -> CliProvider {
+    let selection = match parse_model_reference(model_ref, default_provider) {
+        Ok(selection) => selection,
+        Err(err) => return CliProvider::Unavailable(err),
+    };
+    match selection.provider.as_str() {
+        "openai-codex" => match &material.codex_credential {
+            Some(credential) => CliProvider::OpenAICodex(
+                OpenAICodexProvider::from_credential(selection.model, credential.clone())
+                    .with_reasoning_effort(material.reasoning_effort.clone()),
+            ),
+            None => CliProvider::Unavailable(
+                "OpenAI Codex credential is unavailable for this model".to_owned(),
+            ),
+        },
+        "openrouter" => match &material.openrouter_key {
+            Some(key) => CliProvider::OpenRouter(OpenRouterProvider::new(selection.model, key)),
+            None => CliProvider::Unavailable(
+                "OPENROUTER_API_KEY is unavailable for this model".to_owned(),
+            ),
+        },
+        provider => CliProvider::Unavailable(format!("unsupported provider {provider:?}")),
+    }
 }
 
 async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {

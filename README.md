@@ -15,13 +15,17 @@ Requires a Rust stable toolchain.
 cargo run -p ion
 ```
 
-This opens the interactive TUI with the scripted provider — no model
-key needed. To use a real model, set `OPENROUTER_API_KEY` and either
-put `defaultModel` in `~/.config/ion/settings.toml` or pass it:
+This uses the compiled-in Pi-aligned default, `openai-codex/gpt-5.6-luna`.
+Ion reads an existing Pi OAuth credential from `~/.pi/agent/auth.json`
+without modifying it. To use OpenRouter instead, set
+`OPENROUTER_API_KEY` and pass a provider/model reference:
 
 ```sh
-cargo run -p ion -- --model stealth/ox-alpha
+cargo run -p ion -- --model openrouter/stealth/ox-alpha
 ```
+
+For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
+`OPENAI_CODEX_ACCOUNT_ID`. Ion does not refresh or rewrite Pi credentials.
 
 ## Usage
 
@@ -54,7 +58,9 @@ Settings live at `~/.config/ion/settings.toml`. Minimal example:
 
 ```toml
 theme = "dark"
-defaultModel = "stealth/ox-alpha"
+defaultProvider = "openai-codex"
+defaultModel = "gpt-5.6-luna"
+defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
 
 [[mcp_servers]]

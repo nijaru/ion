@@ -1225,6 +1225,7 @@ dependencies = [
 name = "ion"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "clap",
  "etcetera",
  "futures-util",
