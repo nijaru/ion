@@ -4,6 +4,7 @@
 
 use std::path::PathBuf;
 
+use ion_core::SandboxMode;
 use serde::Deserialize;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -45,6 +46,9 @@ pub struct Keybindings {
 pub struct Settings {
     default_model: Option<String>,
     default_provider: Option<String>,
+    /// Native shell enforcement. `auto` selects the strongest backend
+    /// available on the host; it never upgrades project trust or approval.
+    sandbox: Option<SandboxMode>,
     theme: Option<Theme>,
     #[serde(default)]
     pub keybindings: Keybindings,
@@ -96,6 +100,7 @@ impl Settings {
         Settings {
             default_model: Some("stealth/ox-alpha".to_owned()),
             default_provider: Some("openrouter".to_owned()),
+            sandbox: None,
             theme: None,
             keybindings: Keybindings::default(),
             mcp_servers: Vec::new(),
@@ -120,6 +125,7 @@ impl Settings {
         Self {
             default_model: None,
             default_provider: None,
+            sandbox: None,
             theme: None,
             keybindings: crate::settings::Keybindings::default(),
             mcp_servers: Vec::new(),
@@ -168,6 +174,13 @@ impl Settings {
     pub fn theme(&self) -> Theme {
         self.theme.unwrap_or(Theme::Auto)
     }
+
+    /// The resolved native-shell enforcement requested by this settings
+    /// source. `Auto` is resolved when the tool catalog is constructed.
+    #[must_use]
+    pub fn sandbox_mode(&self) -> SandboxMode {
+        self.sandbox.unwrap_or(SandboxMode::Auto)
+    }
 }
 
 #[cfg(test)]
@@ -212,6 +225,12 @@ mod tests {
     fn non_openrouter_provider_is_refused() {
         let settings: Settings = toml::from_str("defaultProvider = \"anthropic\"").unwrap();
         assert!(settings.openrouter_model().is_err());
+    }
+
+    #[test]
+    fn parses_sandbox_mode() {
+        let settings: Settings = toml::from_str("sandbox = \"seatbelt\"").unwrap();
+        assert_eq!(settings.sandbox_mode(), SandboxMode::Seatbelt);
     }
 
     #[test]

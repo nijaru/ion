@@ -26,13 +26,12 @@ use serde_json::{Value, json};
 use sha2::Digest;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
-use tokio::process::Command;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ids::OperationId;
-use crate::process::ProcessGuard;
+use crate::process::{ProcessGuard, SandboxMode};
 
 /// Identifier for an in-flight tool call. Monotonic per provider.
 pub type ToolCallId = u64;
@@ -541,8 +540,15 @@ impl ToolRegistry {
     /// Build a registry rooted at `cwd` with the core tool set registered.
     #[must_use]
     pub fn with_cwd(cwd: impl AsRef<Path>) -> Self {
+        Self::with_cwd_and_sandbox(cwd, SandboxMode::Auto)
+    }
+
+    /// Build a registry with an explicit native-shell enforcement mode.
+    /// `Auto` is resolved once so capability descriptions are truthful.
+    #[must_use]
+    pub fn with_cwd_and_sandbox(cwd: impl AsRef<Path>, sandbox: SandboxMode) -> Self {
         let cwd: Arc<Path> = Arc::from(cwd.as_ref());
-        let entries = core_tools(&cwd);
+        let entries = core_tools(&cwd, sandbox.resolve());
         Self {
             cwd,
             entries: Arc::new(entries),
@@ -555,7 +561,7 @@ impl ToolRegistry {
     #[must_use]
     pub fn read_only(cwd: impl AsRef<Path>) -> Self {
         let cwd: Arc<Path> = Arc::from(cwd.as_ref());
-        let mut all = core_tools(&cwd);
+        let mut all = core_tools(&cwd, SandboxMode::Auto.resolve());
         all.retain(|name, _| matches!(name.as_str(), "read" | "search" | "find"));
         Self {
             cwd,
@@ -740,7 +746,13 @@ impl ToolCatalog {
     /// A catalog over `cwd` with only the core tool set.
     #[must_use]
     pub fn with_cwd(cwd: impl AsRef<Path>) -> Self {
-        Self::from(ToolRegistry::with_cwd(cwd))
+        Self::with_cwd_and_sandbox(cwd, SandboxMode::Auto)
+    }
+
+    /// A catalog with an explicit native-shell enforcement mode.
+    #[must_use]
+    pub fn with_cwd_and_sandbox(cwd: impl AsRef<Path>, sandbox: SandboxMode) -> Self {
+        Self::from(ToolRegistry::with_cwd_and_sandbox(cwd, sandbox))
     }
 
     /// A read-only catalog over `cwd` (§20.4): the bounded research
@@ -895,7 +907,7 @@ pub fn target_from_arguments(name: &str, arguments: &Value) -> Option<String> {
     })
 }
 
-fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
+fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
     // Recovery classes per DESIGN.md §12.2/§12.3: reads are
     // replay-safe; bash never replays automatically (§12.4); write/edit
@@ -924,6 +936,7 @@ fn core_tools(cwd: &Path) -> HashMap<String, ToolEntry> {
         (
             Arc::new(BashTool {
                 cwd: cwd_path.clone(),
+                sandbox,
             }),
             RecoveryClass::NeverReplay,
         ),
@@ -1530,6 +1543,7 @@ impl Tool for EditTool {
 
 pub struct BashTool {
     cwd: Arc<Path>,
+    sandbox: SandboxMode,
 }
 
 impl BashTool {
@@ -1548,7 +1562,10 @@ impl Tool for BashTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "bash".to_owned(),
-            description: "Run a shell command and return its combined output".to_owned(),
+            description: format!(
+                "Run a shell command and return its combined output (sandbox: {})",
+                self.sandbox
+            ),
             input_schema: Self::input_schema(),
         }
     }
@@ -1567,7 +1584,14 @@ impl Tool for BashTool {
                 .get("__ion_artifact_root")
                 .and_then(Value::as_str)
                 .map(PathBuf::from);
-            run_shell(&self.cwd, &command, artifact_root.as_deref(), cancel).await
+            run_shell(
+                &self.cwd,
+                &command,
+                self.sandbox,
+                artifact_root.as_deref(),
+                cancel,
+            )
+            .await
         })
     }
 }
@@ -1856,14 +1880,15 @@ async fn collect_process_output(
 async fn run_shell(
     cwd: &Path,
     command: &str,
+    sandbox: SandboxMode,
     artifact_root: Option<&Path>,
     cancel: CancellationToken,
 ) -> ToolOutcome {
-    let mut cmd = Command::new("sh");
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(cwd)
-        .stdin(Stdio::null())
+    let mut cmd = match sandbox.command(cwd, "sh", &["-c", command]) {
+        Ok(command) => command,
+        Err(err) => return ToolOutcome::error(format!("sandbox ({sandbox}) unavailable: {err}")),
+    };
+    cmd.stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut process = match ProcessGuard::spawn(&mut cmd) {
@@ -2321,6 +2346,7 @@ mod preview_bound_tests {
         let outcome = run_shell(
             Path::new("."),
             "i=0; while [ \"$i\" -lt 20000 ]; do printf x; i=$((i+1)); done",
+            SandboxMode::Unconfined,
             Some(artifacts.path()),
             CancellationToken::new(),
         )
@@ -2364,6 +2390,7 @@ mod preview_bound_tests {
         let outcome = run_shell(
             Path::new("."),
             r#"printf '\377A'"#,
+            SandboxMode::Unconfined,
             Some(artifacts.path()),
             CancellationToken::new(),
         )
@@ -2378,6 +2405,7 @@ mod preview_bound_tests {
         let task = tokio::spawn(run_shell(
             Path::new("."),
             "trap '' TERM; sleep 30",
+            SandboxMode::Unconfined,
             None,
             cancel.clone(),
         ));
@@ -2390,5 +2418,41 @@ mod preview_bound_tests {
             .expect("shell task must join");
         assert!(outcome.is_error, "{outcome:?}");
         assert_eq!(outcome.output, "cancelled");
+    }
+
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn seatbelt_allows_workspace_writes_and_denies_escape_writes() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let sibling = tempfile::tempdir_in(workspace.path().parent().expect("workspace parent"))
+            .expect("sibling workspace");
+        let sibling_name = sibling
+            .path()
+            .file_name()
+            .expect("sibling name")
+            .to_string_lossy();
+        let outcome = run_shell(
+            workspace.path(),
+            &format!(
+                "printf inside > workspace-file; printf outside > ../{sibling_name}/escape-file"
+            ),
+            SandboxMode::Seatbelt,
+            None,
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert!(outcome.is_error, "sandbox escape must fail: {outcome:?}");
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("workspace-file"))
+                .expect("workspace write"),
+            "inside"
+        );
+        assert!(!sibling.path().join("escape-file").exists());
+
+        let spec = ToolCatalog::with_cwd_and_sandbox(workspace.path(), SandboxMode::Seatbelt)
+            .get("bash")
+            .expect("bash spec");
+        assert!(spec.description.contains("sandbox: seatbelt"));
     }
 }

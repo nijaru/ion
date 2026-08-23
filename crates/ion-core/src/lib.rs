@@ -33,6 +33,7 @@ pub use extensions::{ExtensionDef, ExtensionService};
 pub use ids::{OperationId, RuntimeCursor, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
+pub use process::SandboxMode;
 pub use provider::{
     EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, ScriptedMessage,
     ScriptedProvider, SwitchingProvider, TokenUsage,

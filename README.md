@@ -55,6 +55,7 @@ Settings live at `~/.config/ion/settings.toml`. Minimal example:
 ```toml
 theme = "dark"
 defaultModel = "stealth/ox-alpha"
+sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
 
 [[mcp_servers]]
 name = "docs"
@@ -63,6 +64,8 @@ args = ["-y", "@some/mcp-docs-server"]
 ```
 
 Malformed settings are a hard error, never silently ignored.
+`auto` selects Seatbelt on macOS or Bubblewrap on Linux when available;
+explicit sandbox modes fail closed if their backend is unavailable.
 Project-local extensions load only behind explicit `--trust-project`.
 
 ## Development

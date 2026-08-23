@@ -121,7 +121,8 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 /// server's published tools. A failing server logs and is skipped -
 /// one broken server never blocks startup (DESIGN.md §19.1).
 async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog {
-    let tools = ion_core::ToolCatalog::default();
+    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
+    let tools = ion_core::ToolCatalog::with_cwd_and_sandbox(cwd, settings.sandbox_mode());
     if !settings.mcp_servers.is_empty() {
         let defs: Vec<ion_core::ServerDef> = settings
             .mcp_servers
