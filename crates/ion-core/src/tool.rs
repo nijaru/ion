@@ -740,6 +740,58 @@ impl ToolRegistry {
 pub struct ToolCatalog {
     core: ToolRegistry,
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    lifetime: Arc<CatalogLifetime>,
+}
+
+struct CatalogLifetime {
+    cancel: CancellationToken,
+}
+
+impl Drop for CatalogLifetime {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
+}
+
+#[derive(Clone)]
+pub(crate) struct CatalogService {
+    dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    lifetime: std::sync::Weak<CatalogLifetime>,
+}
+
+impl CatalogService {
+    pub(crate) fn register_scope(&self, scope: String, tools: Vec<Arc<dyn Tool>>) {
+        let entries = tools
+            .into_iter()
+            .map(|tool| {
+                let spec = tool.spec();
+                let recovery_class = RecoveryClass::NeverReplay;
+                ToolEntry {
+                    tool,
+                    spec,
+                    recovery_class,
+                }
+            })
+            .collect();
+        self.dynamic
+            .write()
+            .expect("tool catalog poisoned")
+            .insert(scope, entries);
+    }
+
+    pub(crate) fn remove_scope(&self, scope: &str) -> bool {
+        self.dynamic
+            .write()
+            .expect("tool catalog poisoned")
+            .remove(scope)
+            .is_some()
+    }
+
+    pub(crate) fn lifetime(&self) -> Option<CancellationToken> {
+        self.lifetime
+            .upgrade()
+            .map(|lifetime| lifetime.cancel.clone())
+    }
 }
 
 impl ToolCatalog {
@@ -797,6 +849,16 @@ impl ToolCatalog {
             .expect("tool catalog poisoned")
             .remove(scope)
             .is_some()
+    }
+
+    /// A detached capability-registration handle for service supervisors.
+    /// It holds only a weak catalog lifetime, so a supervisor cannot keep a
+    /// dropped catalog or its subprocesses alive.
+    pub(crate) fn service_handle(&self) -> CatalogService {
+        CatalogService {
+            dynamic: Arc::clone(&self.dynamic),
+            lifetime: Arc::downgrade(&self.lifetime),
+        }
     }
 
     /// The merged immutable snapshot: core plus every live scope. Name
@@ -878,6 +940,9 @@ impl From<ToolRegistry> for ToolCatalog {
         Self {
             core,
             dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            lifetime: Arc::new(CatalogLifetime {
+                cancel: CancellationToken::new(),
+            }),
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::json;
 use tokio::sync::mpsc;
@@ -3665,6 +3665,18 @@ fn fake_mcp_server() -> crate::ServerDef {
     }
 }
 
+fn restarting_mcp_server(marker: &std::path::Path) -> crate::ServerDef {
+    let script = format!(
+        "{}/tests/fixtures/restarting_mcp_server.py",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    crate::ServerDef {
+        name: "restarting".to_owned(),
+        command: "python3".to_owned(),
+        args: vec![script, marker.to_string_lossy().into_owned()],
+    }
+}
+
 #[tokio::test]
 async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
     let catalog = crate::ToolCatalog::default();
@@ -3701,6 +3713,37 @@ async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
         .await;
     assert!(outcome.is_error);
     assert!(outcome.output.contains("forced failure"));
+}
+
+#[tokio::test]
+async fn mcp_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let marker = temp.path().join("restarted");
+    let catalog = crate::ToolCatalog::default();
+    crate::McpService::new()
+        .start_into(&[restarting_mcp_server(&marker)], &catalog)
+        .await;
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut outcome = None;
+    while Instant::now() < deadline {
+        if marker.exists() && catalog.get("restarting__echo").is_some() {
+            let candidate = catalog
+                .execute(
+                    "restarting__echo",
+                    &json!({"message":"after restart"}),
+                    CancellationToken::new(),
+                )
+                .await;
+            if !candidate.is_error {
+                outcome = Some(candidate);
+                break;
+            }
+        }
+        sleep(Duration::from_millis(25)).await;
+    }
+    let outcome = outcome.expect("the peer must recover after its first discovery crash");
+    assert_eq!(outcome.output, "echo: after restart");
 }
 
 #[tokio::test]

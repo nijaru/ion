@@ -14,17 +14,21 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use tokio::sync::{oneshot, watch};
 use tokio_util::sync::CancellationToken;
 
 use std::future::Future;
 use std::pin::Pin;
 
 use crate::rpc::{CloseHandler, PeerDef, StdioRpc, client_info};
-use crate::tool::{Tool, ToolCatalog, ToolOutcome};
+use crate::tool::{CatalogService, Tool, ToolCatalog, ToolOutcome};
 
 /// Handshake and discovery timeouts: a slow server delays startup once,
 /// visibly, then is skipped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RESTARTS: u32 = 3;
+const RESTART_BASE_BACKOFF: Duration = Duration::from_millis(100);
+const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(2);
 
 /// One configured MCP server (settings.toml `[mcp_servers.<name>]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,14 +41,12 @@ pub struct ServerDef {
 /// Owns every configured MCP server's lifecycle and published
 /// capabilities (§19.1).
 #[derive(Default)]
-pub struct McpService {
-    _marker: (),
-}
+pub struct McpService;
 
 impl McpService {
     #[must_use]
     pub fn new() -> Self {
-        Self { _marker: () }
+        Self
     }
 
     /// Start `defs`, discover their tools, and register them into
@@ -52,56 +54,139 @@ impl McpService {
     /// warning and is skipped: one broken server never blocks startup.
     pub async fn start_into(&self, defs: &[ServerDef], catalog: &ToolCatalog) {
         for def in defs {
-            let scope = format!("mcp:{}", def.name);
-            let callback_scope = scope.clone();
-            let callback_catalog = catalog.clone();
-            let on_closed: CloseHandler = Arc::new(move || {
-                callback_catalog.remove_scope(&callback_scope);
+            let (ready_tx, ready_rx) = oneshot::channel();
+            let def = def.clone();
+            let service = catalog.service_handle();
+            tokio::spawn(async move {
+                supervise_server(def, service, Some(ready_tx)).await;
             });
-            let peer = PeerDef {
-                name: def.name.clone(),
-                command: def.command.clone(),
-                args: def.args.clone(),
-            };
-            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT, on_closed)
-                .await
-            {
-                Ok(rpc) => rpc,
-                Err(err) => {
-                    tracing::warn!(server = %def.name, error = %err, "MCP server failed to start");
-                    continue;
+            // Wait only for the first discovery attempt. Restart/backoff
+            // belongs to the service task and never delays the rest of the
+            // host after the initial bounded startup decision.
+            let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;
+        }
+    }
+}
+
+async fn supervise_server(
+    def: ServerDef,
+    service: CatalogService,
+    mut ready: Option<oneshot::Sender<()>>,
+) {
+    let scope = format!("mcp:{}", def.name);
+    let mut failures = 0;
+    loop {
+        let Some(lifetime) = service.lifetime() else {
+            return;
+        };
+
+        let (closed_tx, mut closed_rx) = watch::channel(false);
+        let callback_scope = scope.clone();
+        let callback_service = service.clone();
+        let on_closed: CloseHandler = Arc::new(move || {
+            callback_service.remove_scope(&callback_scope);
+            let _ = closed_tx.send(true);
+        });
+        let peer = PeerDef {
+            name: def.name.clone(),
+            command: def.command.clone(),
+            args: def.args.clone(),
+        };
+        let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT, on_closed).await {
+            Ok(rpc) => Arc::new(rpc),
+            Err(err) => {
+                tracing::warn!(server = %def.name, error = %err, "MCP server failed to start");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
                 }
-            };
-            let arc = Arc::new(rpc);
-            match arc.list_tools().await {
-                Ok(tools) => {
-                    let scoped: Vec<Arc<dyn Tool>> = tools
-                        .into_iter()
-                        .map(|spec| {
-                            Arc::new(McpTool {
-                                connection: Arc::clone(&arc),
-                                // Namespaced so two servers cannot collide.
-                                exposed_name: format!("{}__{}", def.name, spec.name),
-                                remote_name: spec.name.clone(),
-                                spec,
-                            }) as Arc<dyn Tool>
-                        })
-                        .collect();
-                    tracing::info!(
-                        server = %def.name,
-                        tools = scoped.len(),
-                        "MCP server ready"
-                    );
-                    catalog.register_scope(scope.clone(), scoped);
-                    if arc.is_closed() {
-                        catalog.remove_scope(&scope);
+                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
+                    return;
+                }
+                continue;
+            }
+        };
+
+        let tools = match tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()).await {
+            Ok(Ok(tools)) => tools,
+            Ok(Err(err)) => {
+                tracing::warn!(server = %def.name, error = %err, "MCP tools/list failed");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
+                }
+                drop(rpc);
+                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
+                    return;
+                }
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!(server = %def.name, "MCP tools/list timed out");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
+                }
+                drop(rpc);
+                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
+                    return;
+                }
+                continue;
+            }
+        };
+
+        let scoped: Vec<Arc<dyn Tool>> = tools
+            .into_iter()
+            .map(|spec| {
+                Arc::new(McpTool {
+                    connection: Arc::clone(&rpc),
+                    // Namespaced so two servers cannot collide.
+                    exposed_name: format!("{}__{}", def.name, spec.name),
+                    remote_name: spec.name.clone(),
+                    spec,
+                }) as Arc<dyn Tool>
+            })
+            .collect();
+        tracing::info!(
+            server = %def.name,
+            tools = scoped.len(),
+            "MCP server ready"
+        );
+        service.register_scope(scope.clone(), scoped);
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
+        if rpc.is_closed() {
+            service.remove_scope(&scope);
+        } else {
+            tokio::select! {
+                result = closed_rx.changed() => {
+                    if result.is_err() {
+                        service.remove_scope(&scope);
                     }
                 }
-                Err(err) => {
-                    tracing::warn!(server = %def.name, error = %err, "MCP tools/list failed");
-                }
+                () = lifetime.cancelled() => return,
             }
         }
+        drop(rpc);
+        if lifetime.is_cancelled() {
+            return;
+        }
+        if !schedule_restart(&def.name, &lifetime, &mut failures).await {
+            return;
+        }
+    }
+}
+
+async fn schedule_restart(name: &str, lifetime: &CancellationToken, failures: &mut u32) -> bool {
+    if *failures >= MAX_RESTARTS {
+        tracing::warn!(server = %name, "MCP restart limit reached; capability circuit is open");
+        return false;
+    }
+    *failures += 1;
+    let multiplier = 1_u32 << failures.saturating_sub(1).min(4);
+    let delay = (RESTART_BASE_BACKOFF * multiplier).min(RESTART_MAX_BACKOFF);
+    tracing::warn!(server = %name, attempt = *failures, ?delay, "MCP server restarting");
+    tokio::select! {
+        () = lifetime.cancelled() => false,
+        () = tokio::time::sleep(delay) => true,
     }
 }
 
