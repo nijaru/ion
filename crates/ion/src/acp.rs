@@ -5,11 +5,10 @@
 //! mode use, with the same streaming, cancellation, and durability
 //! semantics.
 //!
-//! Supported v1 surface: `initialize`, `session/new`, `session/prompt`
-//! (`session/update` streaming), and `session/cancel`. Session load/
-//! resume over ACP is deferred: ion persists sessions in its own
-//! store; replaying them as ACP updates is additional frontend
-//! surface, not new runtime capability.
+//! Supported v1 surface: `initialize`, `session/new`, `session/load`,
+//! `session/prompt` (`session/update` streaming), and `session/cancel`.
+//! Loading restores Ion's durable runtime and replays its semantic history;
+//! it does not create a second transcript or mutation path.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -44,7 +43,7 @@ struct AcpSession {
     #[allow(dead_code)] // owns the runtime task until process exit
     runtime: Runtime,
     /// The in-flight prompt turn, if any: (JSON-RPC id, operation id).
-    active_prompt: Option<(Value, OperationId)>,
+    active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 }
 
 /// Serve ACP over `input`/`output` until the peer disconnects.
@@ -89,7 +88,7 @@ where
                         "id": id,
                         "result": {
                             "protocolVersion": PROTOCOL_VERSION,
-                            "agentCapabilities": { "loadSession": false },
+                            "agentCapabilities": { "loadSession": true },
                             "agentInfo": {
                                 "name": "ion",
                                 "version": env!("CARGO_PKG_VERSION"),
@@ -117,6 +116,36 @@ where
                     error_response(&output, id, -32000, &err).await;
                 }
             },
+            Some("session/load") => {
+                let already_loaded = params
+                    .get("sessionId")
+                    .and_then(Value::as_str)
+                    .is_some_and(|session_id| sessions.contains_key(session_id));
+                if already_loaded {
+                    error_response(&output, id, -32002, "session is already loaded").await;
+                } else {
+                    match session_load(&config, &params).await {
+                        Ok((session_id_string, session, history)) => {
+                            for update_payload in history {
+                                update(&output, &session_id_string, update_payload).await;
+                            }
+                            sessions.insert(session_id_string, session);
+                            write(
+                                &output,
+                                json!({
+                                    "jsonrpc": "2.0",
+                                    "id": id,
+                                    "result": {},
+                                }),
+                            )
+                            .await;
+                        }
+                        Err(err) => {
+                            error_response(&output, id, -32000, &err).await;
+                        }
+                    }
+                }
+            }
             Some("session/prompt") => {
                 let Some(session_id) = params.get("sessionId").and_then(|v| v.as_str()) else {
                     error_response(&output, id, -32602, "missing sessionId").await;
@@ -137,16 +166,30 @@ where
                     .await;
                     continue;
                 };
+                let Some(request_id) = id.clone() else {
+                    continue;
+                };
                 // Subscribe before submit: recovery events are live-only.
                 let (_snapshot, events) = session.handle.subscribe().await.expect("subscribe");
                 match session.handle.submit_if_idle(text).await {
                     Ok(operation_id) => {
-                        session.active_prompt = Some((id.clone().expect("request"), operation_id));
+                        let active_prompt = Arc::clone(&session.active_prompt);
+                        active_prompt
+                            .lock()
+                            .await
+                            .replace((request_id.clone(), operation_id));
                         let output = Arc::clone(&output);
                         let session_id = session_id.to_owned();
                         tokio::spawn(async move {
                             let stop = pump_turn(events, operation_id, &session_id, &output).await;
-                            finish_prompt(&output, id, session_id, stop).await;
+                            finish_prompt(
+                                &output,
+                                Some(request_id),
+                                session_id,
+                                stop,
+                                active_prompt,
+                            )
+                            .await;
                         });
                     }
                     Err(err) => {
@@ -161,11 +204,14 @@ where
                 // The pump observes OperationCancelled and answers
                 // session/prompt with stopReason "cancelled".
                 let active = sessions
-                    .get_mut(session_id)
-                    .and_then(|s| s.active_prompt.take());
+                    .get(session_id)
+                    .map(|s| Arc::clone(&s.active_prompt));
                 let handle = sessions.get(session_id).map(|s| &s.handle);
-                if let (Some((_, operation_id)), Some(handle)) = (active, handle) {
-                    let _ = handle.cancel(operation_id).await;
+                if let (Some(active), Some(handle)) = (active, handle) {
+                    let operation_id = active.lock().await.as_ref().map(|(_, id)| *id);
+                    if let Some(operation_id) = operation_id {
+                        let _ = handle.cancel(operation_id).await;
+                    }
                 }
             }
             _ => {
@@ -287,9 +333,11 @@ async fn finish_prompt<W>(
     id: Option<Value>,
     session_id: String,
     stop: TurnStop,
+    active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 ) where
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    active_prompt.lock().await.take();
     match stop {
         TurnStop::EndTurn => {
             write(
@@ -347,29 +395,7 @@ where
         .and_then(|v| v.as_str())
         .ok_or("missing cwd")?;
     let catalog = ToolCatalog::with_cwd(std::path::PathBuf::from(cwd));
-    let servers: Vec<ion_core::ServerDef> = params
-        .get("mcpServers")
-        .and_then(|v| v.as_array())
-        .into_iter()
-        .flatten()
-        .filter_map(|server| {
-            let name = server.get("name").and_then(|v| v.as_str())?;
-            let command = server.get("command").and_then(|v| v.as_str())?;
-            Some(ion_core::ServerDef {
-                name: name.to_owned(),
-                command: command.to_owned(),
-                args: server
-                    .get("args")
-                    .and_then(|v| v.as_array())
-                    .map(|args| {
-                        args.iter()
-                            .filter_map(|a| a.as_str().map(str::to_owned))
-                            .collect()
-                    })
-                    .unwrap_or_default(),
-            })
-        })
-        .collect();
+    let servers = parse_mcp_servers(params);
     if !servers.is_empty() {
         ion_core::McpService::new()
             .start_into(&servers, &catalog)
@@ -401,9 +427,168 @@ where
         AcpSession {
             handle,
             runtime,
-            active_prompt: None,
+            active_prompt: Arc::new(Mutex::new(None)),
         },
     ))
+}
+
+/// Load one durable Ion session and return the semantic history that ACP
+/// clients need to reconstruct their presentation.
+async fn session_load<P>(
+    config: &AcpConfig<P>,
+    params: &Value,
+) -> Result<(String, AcpSession, Vec<Value>), String>
+where
+    P: Provider,
+{
+    let session_id_text = params
+        .get("sessionId")
+        .and_then(Value::as_str)
+        .ok_or("missing sessionId")?;
+    let session_id = parse_session_id(session_id_text)?;
+    let cwd = params
+        .get("cwd")
+        .and_then(Value::as_str)
+        .ok_or("missing cwd")?;
+    let cwd_path = std::path::Path::new(cwd);
+    if !cwd_path.is_absolute() {
+        return Err("cwd must be absolute".to_owned());
+    }
+    let loaded = config
+        .store
+        .load(session_id)
+        .await
+        .map_err(|err| format!("load session: {err}"))?;
+    if loaded.session.cwd != cwd {
+        return Err(format!(
+            "cwd does not match the persisted session ({})",
+            loaded.session.cwd
+        ));
+    }
+
+    let catalog = ToolCatalog::with_cwd(cwd_path);
+    let servers = parse_mcp_servers(params);
+    if !servers.is_empty() {
+        ion_core::McpService::new()
+            .start_into(&servers, &catalog)
+            .await;
+    }
+    let trusted_resources = ion_core::load_trusted_resources(cwd_path, config.trust_project)?;
+    let runtime = Runtime::open_session_with_resources(
+        (config.make_provider)(),
+        catalog.clone(),
+        (*config.store).clone(),
+        session_id,
+        trusted_resources.clone(),
+    )
+    .await
+    .map_err(|err| format!("open session: {err}"))?;
+    let factory = Arc::clone(&config.make_provider);
+    crate::enable_children(
+        &catalog,
+        &config.store,
+        Arc::new(move || factory()),
+        session_id,
+        trusted_resources,
+    );
+    let history = replay_history(&loaded.entries);
+    let handle = runtime.session();
+    Ok((
+        session_id_text.to_owned(),
+        AcpSession {
+            handle,
+            runtime,
+            active_prompt: Arc::new(Mutex::new(None)),
+        },
+        history,
+    ))
+}
+
+fn parse_mcp_servers(params: &Value) -> Vec<ion_core::ServerDef> {
+    params
+        .get("mcpServers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|server| {
+            let name = server.get("name").and_then(Value::as_str)?;
+            let command = server.get("command").and_then(Value::as_str)?;
+            Some(ion_core::ServerDef {
+                name: name.to_owned(),
+                command: command.to_owned(),
+                args: server
+                    .get("args")
+                    .and_then(Value::as_array)
+                    .map(|args| {
+                        args.iter()
+                            .filter_map(|arg| arg.as_str().map(str::to_owned))
+                            .collect()
+                    })
+                    .unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn parse_session_id(value: &str) -> Result<ion_core::SessionId, String> {
+    value
+        .strip_prefix("session-")
+        .and_then(ion_core::SessionId::parse)
+        .ok_or_else(|| format!("invalid sessionId {value:?}"))
+}
+
+fn replay_history(entries: &[(u64, ion_core::SessionEntry)]) -> Vec<Value> {
+    let results: HashMap<u64, &ion_core::ToolResult> = entries
+        .iter()
+        .filter_map(|(_, entry)| match entry {
+            ion_core::SessionEntry::ToolResult { result } => Some((result.call_id(), result)),
+            _ => None,
+        })
+        .collect();
+    let mut updates = Vec::new();
+    for (_, entry) in entries {
+        match entry {
+            ion_core::SessionEntry::UserMessage { text } => updates.push(json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": { "type": "text", "text": text },
+            })),
+            ion_core::SessionEntry::AssistantMessage { text } => updates.push(json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": { "type": "text", "text": text },
+            })),
+            ion_core::SessionEntry::Compaction { summary, .. } => updates.push(json!({
+                "sessionUpdate": "agent_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": format!("[Context summary]\n{summary}"),
+                },
+            })),
+            ion_core::SessionEntry::ToolCall { call } => {
+                let result = results.get(&call.call_id);
+                updates.push(json!({
+                    "sessionUpdate": "tool_call",
+                    "toolCallId": call.call_id.to_string(),
+                    "title": call.name,
+                    "kind": tool_kind(&call.name),
+                    "status": result.map_or("pending", |result| {
+                        if result.is_ok() { "completed" } else { "failed" }
+                    }),
+                    "rawInput": call.arguments,
+                }));
+                if let Some(result) = result {
+                    updates.push(json!({
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": call.call_id.to_string(),
+                        "status": if result.is_ok() { "completed" } else { "failed" },
+                        "rawOutput": result.model_text(),
+                    }));
+                }
+            }
+            ion_core::SessionEntry::ToolResult { .. }
+            | ion_core::SessionEntry::ModelChanged { .. } => {}
+        }
+    }
+    updates
 }
 
 /// Join the prompt's text blocks; non-text content needs capabilities

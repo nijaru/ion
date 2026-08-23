@@ -72,6 +72,14 @@ impl TestClient {
 }
 
 async fn start_agent() -> TestClient {
+    let (client, _task) =
+        start_agent_with_store(Arc::new(SessionStore::open_in_memory().expect("store"))).await;
+    client
+}
+
+async fn start_agent_with_store(
+    store: Arc<SessionStore>,
+) -> (TestClient, tokio::task::JoinHandle<std::io::Result<()>>) {
     let (client_write, server_in) = tokio::io::duplex(64 * 1024);
     let (server_out, client_read) = tokio::io::duplex(64 * 1024);
     // The server only ever writes its output stream.
@@ -81,21 +89,20 @@ async fn start_agent() -> TestClient {
             ion_core::ScriptedMessage::text("hello "),
             ion_core::ScriptedMessage::text("world"),
         ]),
-        store: Arc::new(SessionStore::open_in_memory().expect("store")),
+        store,
         policy: Arc::new(AllowlistPolicy::new(["read"])),
         trust_project: false,
     };
-    tokio::spawn(async move {
-        ion::acp::serve(server_in, server_write, config)
-            .await
-            .expect("serve");
-    });
+    let task = tokio::spawn(async move { ion::acp::serve(server_in, server_write, config).await });
     let (read, _unused_write) = tokio::io::split(client_read);
-    TestClient {
-        write: client_write,
-        read,
-        buf: Vec::new(),
-    }
+    (
+        TestClient {
+            write: client_write,
+            read,
+            buf: Vec::new(),
+        },
+        task,
+    )
 }
 
 #[tokio::test]
@@ -143,6 +150,99 @@ async fn acp_initialize_session_and_prompt_turn() {
     let (response, updates) = client.collect_until_response(2).await;
     assert_eq!(response["result"]["stopReason"], "end_turn", "{response}");
     assert_eq!(TestClient::text_chunks(&updates), "hello world");
+}
+
+#[tokio::test]
+async fn acp_load_replays_durable_history_and_accepts_a_new_prompt() {
+    let store = Arc::new(SessionStore::open_in_memory().expect("store"));
+    let (mut client, first_task) = start_agent_with_store(Arc::clone(&store)).await;
+    client
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": { "protocolVersion": 1, "clientCapabilities": {} },
+        }))
+        .await;
+    let _ = client.recv().await;
+    let cwd = std::env::current_dir().expect("cwd");
+    client
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "session/new",
+            "params": { "cwd": cwd.to_string_lossy(), "mcpServers": [] },
+        }))
+        .await;
+    let session_id = client.recv().await["result"]["sessionId"]
+        .as_str()
+        .expect("session id")
+        .to_owned();
+    client
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{ "type": "text", "text": "persist this" }],
+            },
+        }))
+        .await;
+    let (prompt_response, _) = client.collect_until_response(2).await;
+    assert_eq!(prompt_response["result"]["stopReason"], "end_turn");
+    drop(client);
+    first_task
+        .await
+        .expect("first server task")
+        .expect("first server");
+
+    let (mut resumed, second_task) = start_agent_with_store(store).await;
+    resumed
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 0,
+            "method": "initialize",
+            "params": { "protocolVersion": 1, "clientCapabilities": {} },
+        }))
+        .await;
+    let init = resumed.recv().await;
+    assert_eq!(init["result"]["agentCapabilities"]["loadSession"], true);
+    resumed
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 3,
+            "method": "session/load",
+            "params": { "sessionId": session_id, "cwd": cwd.to_string_lossy(), "mcpServers": [] },
+        }))
+        .await;
+    let (load_response, updates) = resumed.collect_until_response(3).await;
+    assert_eq!(load_response["result"], json!({}));
+    assert!(updates.iter().any(|update| {
+        update["sessionUpdate"] == "user_message_chunk"
+            && update["content"]["text"] == "persist this"
+    }));
+    assert_eq!(TestClient::text_chunks(&updates), "hello world");
+
+    resumed
+        .send(json!({
+            "jsonrpc": "2.0",
+            "id": 4,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": session_id,
+                "prompt": [{ "type": "text", "text": "continue" }],
+            },
+        }))
+        .await;
+    let (response, updates) = resumed.collect_until_response(4).await;
+    assert_eq!(response["result"]["stopReason"], "end_turn");
+    assert_eq!(TestClient::text_chunks(&updates), "hello world");
+    drop(resumed);
+    second_task
+        .await
+        .expect("second server task")
+        .expect("second server");
 }
 
 #[tokio::test]
