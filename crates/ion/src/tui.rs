@@ -1318,21 +1318,20 @@ pub async fn run(
     // lines never change once appended (§22 line-diff model).
     let mut transcript = Transcript::new(term_w);
 
-    // Resume: project the persisted transcript into the committed array.
-    let mut durable_prefix = 0usize; // presentation lines atop transcript
-    if let Some(session_id) = resume_session {
-        let loaded = store
+    // Load only the entry boundary used to place the resume marker. The
+    // snapshot below remains the sole source for rendered durable history;
+    // mixing entry counts with rendered-line counts caused lag recovery to
+    // duplicate or drop resumed history.
+    let resume_entry_count = if let Some(session_id) = resume_session {
+        store
             .load(session_id)
             .await
-            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-        durable_prefix += loaded.entries.len(); // entry count, not line count
-        let mut restored: Vec<Line<'static>> = Vec::new();
-        for (_, entry) in loaded.entries {
-            push_entry_lines(&entry, &mut restored);
-        }
-        restored.push(Line::from(format!("— resumed session {session_id} —")).dim());
-        transcript.extend(restored);
-    }
+            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?
+            .entries
+            .len()
+    } else {
+        0
+    };
 
     // The EventStream is the sole terminal reader, so crossterm parses
     // cursor-position responses itself; blocking cursor queries (used
@@ -1354,11 +1353,14 @@ pub async fn run(
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
     // §21.4/§31.14: the initial snapshot is authoritative for durable
-    // history. Entries settled between the resume load and this
-    // subscribe are appended; a fresh session's snapshot is empty.
-    if snapshot.entries.len() > durable_prefix {
-        transcript.extend(entry_lines(&snapshot.entries[durable_prefix..]));
-    }
+    // history. Entries settled between the resume load and this subscribe
+    // are placed after the resume marker.
+    append_snapshot_entries(
+        &mut transcript,
+        &snapshot.entries,
+        resume_entry_count,
+        resume_session,
+    );
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
         OperationStatus::Idle => None,
@@ -1470,13 +1472,16 @@ pub async fn run(
                                 };
                                 state.resync_after_lag(&snapshot);
                                 // §21.4/§31.14: the snapshot is also
-                                // authoritative for committed history;
-                                // presentation prefix is preserved.
-                                let prefix: Vec<Line<'static>> =
-                                    transcript.raw[..durable_prefix].to_vec();
+                                // authoritative for committed history. The
+                                // resume marker is a presentation boundary,
+                                // not a rendered-line prefix.
                                 transcript.clear();
-                                transcript.extend(prefix);
-                                transcript.extend(entry_lines(&snapshot.entries));
+                                append_snapshot_entries(
+                                    &mut transcript,
+                                    &snapshot.entries,
+                                    resume_entry_count,
+                                    resume_session,
+                                );
                             }
                             Err(err) => {
                                 result = Err(err.into());
@@ -1591,6 +1596,24 @@ async fn dispatch(
             }
         }
     }
+}
+
+fn append_snapshot_entries(
+    transcript: &mut Transcript,
+    entries: &[ion_core::SessionEntry],
+    resume_entry_count: usize,
+    resume_session: Option<ion_core::SessionId>,
+) {
+    let boundary = if resume_session.is_some() {
+        resume_entry_count.min(entries.len())
+    } else {
+        0
+    };
+    transcript.extend(entry_lines(&entries[..boundary]));
+    if let Some(session_id) = resume_session {
+        transcript.push(Line::from(format!("— resumed session {session_id} —")).dim());
+    }
+    transcript.extend(entry_lines(&entries[boundary..]));
 }
 
 fn entry_lines(entries: &[ion_core::SessionEntry]) -> Vec<Line<'static>> {
@@ -1988,6 +2011,37 @@ pub(crate) mod tests {
                 .any(|line| line.to_string().contains("ion « hello"))
         );
         assert!(state.draft.is_empty());
+    }
+
+    #[test]
+    fn snapshot_projection_keeps_resume_marker_at_entry_boundary() {
+        let session_id = ion_core::SessionId::generate();
+        let entries = vec![
+            ion_core::SessionEntry::UserMessage {
+                text: "a".repeat(100),
+            },
+            ion_core::SessionEntry::AssistantMessage {
+                text: "old answer".to_owned(),
+            },
+            ion_core::SessionEntry::UserMessage {
+                text: "new prompt".to_owned(),
+            },
+        ];
+        let mut transcript = Transcript::new(40);
+        append_snapshot_entries(&mut transcript, &entries, 2, Some(session_id));
+
+        let marker = format!("— resumed session {session_id} —");
+        let marker_index = transcript
+            .raw
+            .iter()
+            .position(|line| line.to_string() == marker)
+            .expect("resume marker");
+        let history_lines = entry_lines(&entries[..2]);
+        assert_eq!(marker_index, history_lines.len());
+        assert_eq!(
+            transcript.raw[marker_index + 1..],
+            entry_lines(&entries[2..])
+        );
     }
 
     #[test]
