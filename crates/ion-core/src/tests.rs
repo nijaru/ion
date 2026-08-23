@@ -1083,6 +1083,53 @@ async fn new_runtime_persists_explicit_workspace_identity() {
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 
+#[tokio::test]
+async fn reopened_runtime_gets_a_new_instance_identity() {
+    let db = temp_db("runtime-instance-id");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let first = runtime
+        .session()
+        .snapshot()
+        .await
+        .expect("first snapshot")
+        .runtime_instance_id;
+    runtime
+        .session()
+        .close()
+        .await
+        .expect("close first runtime");
+    runtime.join().await.expect("join first runtime");
+
+    let reopened = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store,
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let second = reopened
+        .session()
+        .snapshot()
+        .await
+        .expect("second snapshot")
+        .runtime_instance_id;
+    assert_ne!(first, second);
+    reopened
+        .session()
+        .close()
+        .await
+        .expect("close reopened runtime");
+    reopened.join().await.expect("join reopened runtime");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
 // ---- Tool registry unit tests ----
 
 #[tokio::test]

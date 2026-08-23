@@ -24,7 +24,7 @@ use crate::context::{
     CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource, project_with_manifest,
 };
 use crate::error::{CommandError, RuntimeError};
-use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, SessionId};
+use crate::ids::{EffectId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
 use crate::provider::{
     EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, TokenUsage,
@@ -185,6 +185,9 @@ pub enum OperationStatus {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionSnapshot {
     pub cursor: RuntimeCursor,
+    /// Identity of the loaded runtime incarnation. It changes on reopen even
+    /// when the durable session id stays the same.
+    pub runtime_instance_id: RuntimeInstanceId,
     pub operation: OperationStatus,
     pub entries: Vec<SessionEntry>,
     /// The session's durable model selection; authoritative across
@@ -469,6 +472,7 @@ impl<P: Provider> Composition<P> {
 
     fn spawn(mut self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
         let initial_model_ref = self.provider.initial_model_ref();
+        let runtime_instance_id = RuntimeInstanceId::generate();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
@@ -489,6 +493,7 @@ impl<P: Provider> Composition<P> {
         let join = tokio::spawn(async move {
             SessionRuntime::new(
                 session_id,
+                runtime_instance_id,
                 cwd,
                 SessionDeps {
                     provider,
@@ -774,6 +779,7 @@ struct SessionDeps<P> {
 
 struct SessionRuntime<P> {
     session_id: SessionId,
+    runtime_instance_id: RuntimeInstanceId,
     cwd: String,
     provider: Arc<P>,
     /// Authoritative model selection for future steps. The initial id
@@ -859,6 +865,7 @@ struct SessionRuntime<P> {
 impl<P: Provider> SessionRuntime<P> {
     fn new(
         session_id: SessionId,
+        runtime_instance_id: RuntimeInstanceId,
         cwd: String,
         deps: SessionDeps<P>,
         commands: mpsc::Receiver<SessionCommand>,
@@ -880,6 +887,7 @@ impl<P: Provider> SessionRuntime<P> {
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut runtime = Self {
             session_id,
+            runtime_instance_id,
             cwd,
             provider,
             selected_model_ref: initial_model_ref,
@@ -3002,6 +3010,7 @@ impl<P: Provider> SessionRuntime<P> {
     fn snapshot(&self) -> SessionSnapshot {
         SessionSnapshot {
             cursor: self.cursor,
+            runtime_instance_id: self.runtime_instance_id,
             operation: match &self.operation {
                 None => OperationStatus::Idle,
                 Some(active) => OperationStatus::Active {

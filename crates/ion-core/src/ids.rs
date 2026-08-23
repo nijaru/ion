@@ -132,3 +132,28 @@ impl fmt::Display for RuntimeCursor {
         write!(f, "cursor-{}", self.0)
     }
 }
+
+/// Process-local identity of one loaded session runtime incarnation.
+///
+/// A reopened session starts its live cursor at zero again, so frontends use
+/// this identity to reject stale events from an earlier runtime instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct RuntimeInstanceId(Uuid);
+
+impl RuntimeInstanceId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl fmt::Display for RuntimeInstanceId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "runtime-{}", self.0)
+    }
+}

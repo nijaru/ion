@@ -1587,7 +1587,7 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use ion_core::{OperationId, RuntimeCursor};
+    use ion_core::{OperationId, RuntimeCursor, RuntimeInstanceId};
     use ratatui::style::{Color, Modifier};
 
     pub(crate) fn key(code: KeyCode) -> UiMessage {
@@ -1721,6 +1721,7 @@ pub(crate) mod tests {
         );
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
             operation: OperationStatus::Active {
                 operation_id: OperationId::generate(),
                 prompt: "do things".to_owned(),
@@ -1752,6 +1753,7 @@ pub(crate) mod tests {
         state.draft = "partial".to_owned();
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
@@ -1784,6 +1786,7 @@ pub(crate) mod tests {
         let operation_id = OperationId::generate();
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
             operation: OperationStatus::Active {
                 operation_id,
                 prompt: "do things".to_owned(),
