@@ -7,28 +7,21 @@
 //! effects call back into the session. The terminal is restored by one
 //! RAII owner, never scattered across widgets.
 
-use std::fs::File;
-use std::io::{self, Write};
-use std::path::{Path, PathBuf};
+use std::io::Write;
 use std::sync::Arc;
 
-use futures_util::StreamExt;
-
-use ratatui::crossterm::event::{
-    DisableBracketedPaste, EnableBracketedPaste, Event as TermEvent, EventStream, KeyCode,
-    KeyEvent, KeyModifiers,
-};
-use ratatui::crossterm::{execute, terminal};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
-use crate::screen::{Frame, Screen};
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
     SessionStore,
+};
+use ion_terminal::{
+    Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
 };
 
 /// Host-provided configuration for one launch. Cloneable handles;
@@ -113,15 +106,15 @@ pub enum Action {
 /// defaults match pi's editor defaults where they overlap.
 #[derive(Debug, Clone)]
 pub struct KeyMap {
-    bindings: Vec<(Action, KeyCode, KeyModifiers)>,
+    bindings: Vec<(Action, KeyCode, Modifiers)>,
 }
 
 impl Default for KeyMap {
     fn default() -> Self {
-        let bind = |map: &mut Vec<(Action, KeyCode, KeyModifiers)>,
+        let bind = |map: &mut Vec<(Action, KeyCode, Modifiers)>,
                     action: Action,
                     code: KeyCode,
-                    modifiers: KeyModifiers| {
+                    modifiers: Modifiers| {
             map.push((action, code, modifiers));
         };
         let mut bindings = Vec::new();
@@ -129,109 +122,104 @@ impl Default for KeyMap {
             &mut bindings,
             Action::Quit,
             KeyCode::Char('d'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
-        bind(
-            &mut bindings,
-            Action::Cancel,
-            KeyCode::Esc,
-            KeyModifiers::NONE,
-        );
+        bind(&mut bindings, Action::Cancel, KeyCode::Esc, Modifiers::NONE);
         bind(
             &mut bindings,
             Action::Cancel,
             KeyCode::Char('c'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::Submit,
             KeyCode::Enter,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::HistoryPrevious,
             KeyCode::Up,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::HistoryNext,
             KeyCode::Down,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::CursorLeft,
             KeyCode::Left,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::CursorRight,
             KeyCode::Right,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::CursorHome,
             KeyCode::Home,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::CursorHome,
             KeyCode::Char('a'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::CursorEnd,
             KeyCode::End,
-            KeyModifiers::NONE,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
             Action::CursorEnd,
             KeyCode::Char('e'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::KillToEnd,
             KeyCode::Char('k'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::KillToStart,
             KeyCode::Char('u'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::KillWord,
             KeyCode::Char('w'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::Yank,
             KeyCode::Char('y'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::ToggleToolOutput,
             KeyCode::Char('o'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
             Action::ToggleThinking,
             KeyCode::Char('t'),
-            KeyModifiers::CONTROL,
+            Modifiers::CONTROL,
         );
         KeyMap { bindings }
     }
@@ -286,14 +274,14 @@ impl KeyMap {
 }
 
 /// Parse a keybinding string like `ctrl+k`, `alt+left`, or `enter`.
-fn parse_key(spec: &str) -> Result<(KeyCode, KeyModifiers), String> {
-    let mut modifiers = KeyModifiers::NONE;
+fn parse_key(spec: &str) -> Result<(KeyCode, Modifiers), String> {
+    let mut modifiers = Modifiers::NONE;
     let mut key = None;
     for part in spec.split('+') {
         match part.to_ascii_lowercase().as_str() {
-            "ctrl" => modifiers |= KeyModifiers::CONTROL,
-            "alt" => modifiers |= KeyModifiers::ALT,
-            "shift" => modifiers |= KeyModifiers::SHIFT,
+            "ctrl" => modifiers |= Modifiers::CONTROL,
+            "alt" => modifiers |= Modifiers::ALT,
+            "shift" => modifiers |= Modifiers::SHIFT,
             "enter" => key = Some(KeyCode::Enter),
             "esc" | "escape" => key = Some(KeyCode::Esc),
             "tab" => key = Some(KeyCode::Tab),
@@ -435,7 +423,7 @@ fn handle_key(state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
             insert_at_cursor(&mut state, " ");
             (state, None)
         }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
             let mut state = state;
             insert_at_cursor(&mut state, &ch.to_string());
             (state, None)
@@ -892,123 +880,13 @@ impl UiState {
     }
 }
 
-/// RAII owner of terminal restoration (§22.4). One guard owns raw
-/// mode, bracketed paste, and the inline viewport teardown.
-pub struct TerminalGuard {
-    restored: bool,
-}
-
-struct TerminalOutput<W> {
-    output: W,
-    capture: Option<File>,
-}
-
-impl<W: Write> TerminalOutput<W> {
-    fn new(output: W, capture_path: Option<&Path>) -> io::Result<Self> {
-        let capture = capture_path
-            .map(|path| {
-                File::create(path).map_err(|err| {
-                    io::Error::new(
-                        err.kind(),
-                        format!("terminal capture {}: {err}", path.display()),
-                    )
-                })
-            })
-            .transpose()?;
-        Ok(Self { output, capture })
-    }
-
-    fn from_environment(output: W) -> io::Result<Self> {
-        let capture_path = std::env::var_os("ION_TERMINAL_CAPTURE").map(PathBuf::from);
-        Self::new(output, capture_path.as_deref())
-    }
-
-    fn record_external(&mut self, bytes: &[u8]) -> io::Result<()> {
-        if let Some(capture) = &mut self.capture {
-            capture.write_all(bytes)?;
-        }
-        Ok(())
-    }
-}
-
-impl<W: Write> Write for TerminalOutput<W> {
-    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
-        let written = self.output.write(bytes)?;
-        if written > 0
-            && let Some(capture) = &mut self.capture
-        {
-            capture.write_all(&bytes[..written])?;
-        }
-        Ok(written)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.output.flush()?;
-        if let Some(capture) = &mut self.capture {
-            capture.flush()?;
-        }
-        Ok(())
-    }
-}
-
-impl TerminalGuard {
-    /// Enter raw mode and enable bracketed paste.
-    pub fn enter() -> io::Result<Self> {
-        terminal::enable_raw_mode()?;
-        execute!(io::stdout(), EnableBracketedPaste)?;
-        Ok(Self { restored: false })
-    }
-
-    fn restore(&mut self) -> io::Result<()> {
-        if self.restored {
-            return Ok(());
-        }
-        self.restored = true;
-        let mut first_error = None;
-        if let Err(err) = execute!(io::stdout(), DisableBracketedPaste) {
-            first_error = Some(err);
-        }
-        if let Err(err) = terminal::disable_raw_mode()
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        if let Err(err) = io::stdout().flush()
-            && first_error.is_none()
-        {
-            first_error = Some(err);
-        }
-        first_error.map_or(Ok(()), Err)
-    }
-}
-
-impl Drop for TerminalGuard {
-    fn drop(&mut self) {
-        let _ = self.restore();
-    }
-}
-
+// Terminal lifecycle and output ownership live in ion_terminal.
 fn merge_shutdown_error(slot: &mut Option<RuntimeError>, next: RuntimeError) {
     if let Some(previous) = slot.take() {
         *slot = Some(RuntimeError::OperationFailed(format!("{previous}; {next}")));
     } else {
         *slot = Some(next);
     }
-}
-
-/// Install a panic hook that restores the terminal before the default
-/// hook runs, so a recoverable panic cannot leave raw mode behind.
-pub fn install_panic_hook() {
-    let previous = std::panic::take_hook();
-    std::panic::set_hook(Box::new(move |info| {
-        let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableBracketedPaste, crossterm::cursor::Show,);
-        // SGR reset: a draw interrupted mid-style must not tint the
-        // panic message or the shell prompt.
-        let _ = io::stdout().write_all(b"\x1b[0m");
-        let _ = io::stdout().flush();
-        previous(info);
-    }));
 }
 
 /// Colors for the live viewport, chosen once from the theme setting.
@@ -1247,8 +1125,8 @@ impl Transcript {
 /// Enter the terminal before any session state is touched: the
 /// close-on-error path suspends open operations, so a failed launch
 /// must never get as far as opening or resuming a session.
-pub fn setup_terminal() -> Result<TerminalGuard, RuntimeError> {
-    let guard = TerminalGuard::enter()
+pub fn setup_terminal() -> Result<TerminalSession, RuntimeError> {
+    let session = TerminalSession::enter()
         .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
     install_panic_hook();
     // Test-only hook: the PTY restoration test drives a real panic
@@ -1256,7 +1134,7 @@ pub fn setup_terminal() -> Result<TerminalGuard, RuntimeError> {
     if std::env::var_os("ION_TEST_PANIC").is_some() {
         panic!("ION_TEST_PANIC");
     }
-    Ok(guard)
+    Ok(session)
 }
 
 /// The TUI event loop: runtime events and terminal keys into the
@@ -1269,16 +1147,13 @@ pub async fn run(
     theme: Theme,
     keymap: KeyMap,
     host: HostConfig,
-    mut guard: TerminalGuard,
+    mut terminal: TerminalSession,
 ) -> Result<(), RuntimeError> {
     let switching_available = host.model_name.is_some();
 
     let palette = palette(theme);
 
-    let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut out = TerminalOutput::from_environment(io::stdout()).map_err(|err| {
-        RuntimeError::OperationFailed(format!("terminal output setup failed: {err}"))
-    })?;
+    let (term_w, term_h) = terminal.size().unwrap_or((80, 24));
 
     // The banner is committed straight to native scrollback above the
     // region (§22.3 inline semantics): completed content never lives in
@@ -1288,28 +1163,39 @@ pub async fn run(
     } else {
         "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
     };
-    writeln!(out, "{banner}")
-        .map_err(|err| RuntimeError::OperationFailed(format!("terminal output failed: {err}")))?;
-    out.flush()
-        .map_err(|err| RuntimeError::OperationFailed(format!("terminal flush failed: {err}")))?;
+    {
+        let out = terminal.output();
+        writeln!(out, "{banner}").map_err(|err| {
+            RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
+        })?;
+        out.flush().map_err(|err| {
+            RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
+        })?;
+    }
 
     // Anchor the region at the launch cursor. Queried before the
     // EventStream exists, so no competing stdin reader.
-    out.record_external(b"\x1b[6n")
+    terminal
+        .output()
+        .record_external(b"\x1b[6n")
         .map_err(|err| RuntimeError::OperationFailed(format!("terminal capture failed: {err}")))?;
-    let (_, cursor_row) = crossterm::cursor::position()
+    let (_, cursor_row) = terminal
+        .cursor_position()
         .map_err(|err| RuntimeError::OperationFailed(format!("cursor query failed: {err}")))?;
     let mut origin = cursor_row;
     // Keep a minimal usable region above the screen bottom.
     const MIN_REGION_ROWS: u16 = 4;
     if term_h.saturating_sub(origin) < MIN_REGION_ROWS {
         let push = MIN_REGION_ROWS - (term_h - origin);
-        write!(out, "{}", "\n".repeat(push as usize)).map_err(|err| {
-            RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
-        })?;
-        out.flush().map_err(|err| {
-            RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
-        })?;
+        {
+            let out = terminal.output();
+            write!(out, "{}", "\n".repeat(push as usize)).map_err(|err| {
+                RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
+            })?;
+            out.flush().map_err(|err| {
+                RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
+            })?;
+        }
         origin = origin.saturating_sub(push);
     }
     let mut screen = Screen::new(term_w, origin, term_h);
@@ -1336,7 +1222,7 @@ pub async fn run(
     // The EventStream is the sole terminal reader, so crossterm parses
     // cursor-position responses itself; blocking cursor queries (used
     // by Terminal::clear) cannot deadlock against key reads.
-    let mut key_stream = EventStream::new();
+    let mut key_stream = terminal.input();
 
     // One live UiState for the whole loop; host-provided display
     // config seeds it here and nowhere else.
@@ -1375,7 +1261,7 @@ pub async fn run(
     loop {
         // Size changes are polled directly: resize events ride the same
         // fragile stream as keys.
-        if let Ok((w, h)) = crossterm::terminal::size() {
+        if let Ok((w, h)) = terminal.size() {
             screen.resize(w, h);
         }
         transcript.rewrap_if_needed(screen.size().0);
@@ -1390,7 +1276,7 @@ pub async fn run(
         let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
         screen
             .draw(
-                &mut out,
+                terminal.output(),
                 &Frame {
                     committed: &transcript.wrapped,
                     live: &live,
@@ -1406,7 +1292,7 @@ pub async fn run(
         tokio::select! {
             maybe_key = key_stream.next() => {
                 match maybe_key {
-                    Some(Ok(TermEvent::Key(key))) => {
+                    Some(Ok(InputEvent::Key(key))) => {
                         stream_recreations = 0;
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
@@ -1414,7 +1300,7 @@ pub async fn run(
                             dispatch(&session, &mut state, active_operation, effect).await;
                         }
                     }
-                    Some(Ok(TermEvent::Paste(text))) => {
+                    Some(Ok(InputEvent::Paste(text))) => {
                         stream_recreations = 0;
                         let (next, _) = update(state, UiMessage::Paste(text));
                         state = next;
@@ -1433,7 +1319,7 @@ pub async fn run(
                             ));
                             break;
                         }
-                        key_stream = EventStream::new();
+                        key_stream = terminal.input();
                     }
                 }
             }
@@ -1499,9 +1385,9 @@ pub async fn run(
         }
     }
 
-    let finish_result = screen.finish(&mut out);
-    let flush_result = out.flush();
-    let restore_result = guard.restore();
+    let finish_result = screen.finish(terminal.output());
+    let flush_result = terminal.output().flush();
+    let restore_result = terminal.restore();
     let close_result = match session.close().await {
         Ok(()) | Err(CommandError::Closed) => Ok(()),
         Err(err) => Err(err.into()),
@@ -1660,11 +1546,11 @@ pub(crate) mod tests {
     use ratatui::style::{Color, Modifier};
 
     pub(crate) fn key(code: KeyCode) -> UiMessage {
-        UiMessage::Key(KeyEvent::new(code, KeyModifiers::NONE))
+        UiMessage::Key(KeyEvent::new(code, Modifiers::NONE))
     }
 
     pub(crate) fn ctrl(ch: char) -> UiMessage {
-        UiMessage::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
+        UiMessage::Key(KeyEvent::new(KeyCode::Char(ch), Modifiers::CONTROL))
     }
 
     pub(crate) fn type_text(state: UiState, text: &str) -> UiState {
@@ -1744,15 +1630,15 @@ pub(crate) mod tests {
     fn parse_key_handles_modifiers_and_names() {
         assert_eq!(
             parse_key("ctrl+k").unwrap(),
-            (KeyCode::Char('k'), KeyModifiers::CONTROL)
+            (KeyCode::Char('k'), Modifiers::CONTROL)
         );
         assert_eq!(
             parse_key("alt+left").unwrap(),
-            (KeyCode::Left, KeyModifiers::ALT)
+            (KeyCode::Left, Modifiers::ALT)
         );
         assert_eq!(
             parse_key("enter").unwrap(),
-            (KeyCode::Enter, KeyModifiers::NONE)
+            (KeyCode::Enter, Modifiers::NONE)
         );
         assert!(parse_key("ctrl+nope").is_err());
     }
@@ -1761,19 +1647,19 @@ pub(crate) mod tests {
     fn keymap_override_rebinds_action() {
         let overrides: crate::settings::Keybindings = toml::from_str("quit = \"ctrl+q\"").unwrap();
         let map = KeyMap::from_settings(&overrides).unwrap();
-        let ctrl_q = KeyEvent::new(KeyCode::Char('q'), KeyModifiers::CONTROL);
+        let ctrl_q = KeyEvent::new(KeyCode::Char('q'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_q), Some(Action::Quit));
         // The old binding is gone.
-        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), KeyModifiers::CONTROL);
+        let ctrl_d = KeyEvent::new(KeyCode::Char('d'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_d), None);
     }
 
     #[test]
     fn default_keymap_matches_pi_overlap() {
         let map = KeyMap::default();
-        let up = KeyEvent::new(KeyCode::Up, KeyModifiers::NONE);
+        let up = KeyEvent::new(KeyCode::Up, Modifiers::NONE);
         assert_eq!(map.action_for(&up), Some(Action::HistoryPrevious));
-        let ctrl_y = KeyEvent::new(KeyCode::Char('y'), KeyModifiers::CONTROL);
+        let ctrl_y = KeyEvent::new(KeyCode::Char('y'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_y), Some(Action::Yank));
     }
 
@@ -1956,14 +1842,14 @@ pub(crate) mod tests {
         };
         let (_, effect) = update(
             state,
-            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
         );
         assert_eq!(effect, Some(UiEffect::Cancel));
         // After cancel the operation goes idle; the next ctrl-c quits.
         let state = UiState::new();
         let (_, effect) = update(
             state,
-            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL)),
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
         );
         assert_eq!(effect, Some(UiEffect::Quit));
     }
@@ -2104,8 +1990,8 @@ pub(crate) mod tests {
     #[test]
     fn terminal_capture_records_emitted_bytes_when_opted_in() {
         let capture = tempfile::NamedTempFile::new().expect("capture file");
-        let mut output =
-            TerminalOutput::new(Vec::new(), Some(capture.path())).expect("capture setup");
+        let mut output = ion_terminal::TerminalOutput::new(Vec::new(), Some(capture.path()))
+            .expect("capture setup");
 
         output.write_all(b"frame bytes").expect("write");
         output.flush().expect("flush");

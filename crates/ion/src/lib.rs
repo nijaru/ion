@@ -4,9 +4,10 @@
 pub mod acp;
 pub mod openrouter;
 pub mod print;
-pub mod screen;
 pub mod settings;
 pub mod tui;
+
+pub use ion_terminal::screen;
 
 use std::future::Future;
 use std::sync::Arc;

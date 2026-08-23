@@ -1151,10 +1151,10 @@ name = "ion"
 version = "0.0.0"
 dependencies = [
  "clap",
- "crossterm",
  "etcetera",
  "futures-util",
  "ion-core",
+ "ion-terminal",
  "libc",
  "nix 0.31.3",
  "ratatui",
@@ -1191,6 +1191,16 @@ dependencies = [
  "tracing",
  "uuid",
  "walkdir",
+]
+
+[[package]]
+name = "ion-terminal"
+version = "0.0.0"
+dependencies = [
+ "crossterm",
+ "futures-util",
+ "ratatui",
+ "vt100",
 ]
 
 [[package]]
