@@ -1647,8 +1647,8 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
         }
     };
     if let Some(line) = line {
-        for chunk in line.chars().collect::<Vec<_>>().chunks(80) {
-            out.push(Line::from(chunk.iter().collect::<String>()));
+        for logical_line in line.split('\n') {
+            out.push(Line::from(logical_line.to_owned()));
         }
     }
 }
@@ -2042,6 +2042,25 @@ pub(crate) mod tests {
             transcript.raw[marker_index + 1..],
             entry_lines(&entries[2..])
         );
+    }
+
+    #[test]
+    fn durable_entries_reflow_with_terminal_width() {
+        let entries = [ion_core::SessionEntry::AssistantMessage {
+            text: "a".repeat(100),
+        }];
+        let lines = entry_lines(&entries);
+        assert_eq!(
+            lines.len(),
+            1,
+            "entry projection must not impose 80 columns"
+        );
+
+        let mut transcript = Transcript::new(120);
+        transcript.extend(lines);
+        assert_eq!(transcript.wrapped.len(), 1);
+        transcript.rewrap_if_needed(40);
+        assert_eq!(transcript.wrapped.len(), 3);
     }
 
     #[test]
