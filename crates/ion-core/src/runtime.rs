@@ -42,6 +42,7 @@ use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
+const INDETERMINATE_MESSAGE: &str = "external effect is indeterminate; inspect it before retrying";
 /// Broadcast buffer per subscriber (§21.4): a slow UI never blocks or
 /// grows the runtime; overflow surfaces as a reliable lag error.
 const SUBSCRIBER_CAPACITY: usize = 64;
@@ -197,6 +198,10 @@ pub struct SessionSnapshot {
     /// Identity of the loaded runtime incarnation. It changes on reopen even
     /// when the durable session id stays the same.
     pub runtime_instance_id: RuntimeInstanceId,
+    /// An unresolved external effect that was settled as indeterminate.
+    /// Recovery can finish before a frontend subscribes, so this warning is
+    /// carried in the snapshot as well as the live event.
+    pub indeterminate: Option<IndeterminateWarning>,
     pub operation: OperationStatus,
     pub entries: Vec<SessionEntry>,
     /// The session's durable model selection; authoritative across
@@ -225,6 +230,14 @@ pub struct LiveOperationState {
     pub draft_thinking: String,
     /// Started-but-unsettled tool calls, oldest first.
     pub pending_tools: Vec<PendingTool>,
+}
+
+/// Durable recovery warning for an external effect whose final outcome is
+/// unknown. There is deliberately no automatic retry operation here.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IndeterminateWarning {
+    pub operation_id: OperationId,
+    pub message: String,
 }
 
 pub struct EventSubscription {
@@ -866,6 +879,9 @@ struct SessionRuntime<P> {
     /// mirrors emitted ToolStarted/ToolSettled for snapshot
     /// reconstruction (§21.4).
     live_tools: Vec<PendingTool>,
+    /// Persisted indeterminate outcomes that must remain visible to a
+    /// frontend attaching after startup recovery.
+    indeterminate_warning: Option<IndeterminateWarning>,
     closed: bool,
     /// True when reopened from the store; the session row already exists.
     resumed: bool,
@@ -935,6 +951,7 @@ impl<P: Provider> SessionRuntime<P> {
             model_step: 0,
             events,
             live_tools: Vec::new(),
+            indeterminate_warning: None,
             closed: false,
             resumed: false,
         };
@@ -961,6 +978,15 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = max_seq + 1;
         for operation in loaded.operations {
             let (state_seq, payload) = operation.latest;
+            if matches!(
+                payload.state,
+                OperationState::Finished(OperationOutcome::Indeterminate)
+            ) {
+                self.indeterminate_warning = Some(IndeterminateWarning {
+                    operation_id: operation.id,
+                    message: INDETERMINATE_MESSAGE.to_owned(),
+                });
+            }
             if matches!(payload.state, OperationState::Finished(_)) {
                 // Terminal operations stay in the transcript only.
                 continue;
@@ -2997,11 +3023,14 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
                 OperationOutcome::Indeterminate => {
+                    self.indeterminate_warning = Some(IndeterminateWarning {
+                        operation_id,
+                        message: INDETERMINATE_MESSAGE.to_owned(),
+                    });
                     self.emit(RuntimeEvent::OperationIndeterminate {
                         cursor: RuntimeCursor::default(),
                         operation_id,
-                        message: "external effect is indeterminate; inspect it before retrying"
-                            .to_owned(),
+                        message: INDETERMINATE_MESSAGE.to_owned(),
                     });
                 }
             }
@@ -3021,6 +3050,7 @@ impl<P: Provider> SessionRuntime<P> {
         SessionSnapshot {
             cursor: self.cursor,
             runtime_instance_id: self.runtime_instance_id,
+            indeterminate: self.indeterminate_warning.clone(),
             operation: match &self.operation {
                 None => OperationStatus::Idle,
                 Some(active) => OperationStatus::Active {

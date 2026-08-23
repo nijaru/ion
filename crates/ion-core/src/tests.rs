@@ -2430,6 +2430,11 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     let session = runtime.session();
     let snapshot = session.snapshot().await.expect("snapshot");
     assert_eq!(snapshot.operation, OperationStatus::Idle);
+    let warning = snapshot
+        .indeterminate
+        .as_ref()
+        .expect("recovery warning must survive until a frontend attaches");
+    assert!(warning.message.contains("inspect it before retrying"));
 
     let loaded = store.load(session_id).await.expect("load");
     let (_, checkpoint) = &loaded.operations[0].latest;

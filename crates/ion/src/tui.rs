@@ -1280,6 +1280,16 @@ pub async fn run(
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
+    if let Some(warning) = &snapshot.indeterminate {
+        state.pending_scrollback.push(
+            Line::from(format!(
+                "! indeterminate operation {}: {}",
+                warning.operation_id, warning.message
+            ))
+            .yellow()
+            .bold(),
+        );
+    }
     // §21.4/§31.14: the initial snapshot is authoritative for durable
     // history. Entries settled between the resume load and this subscribe
     // are placed after the resume marker.
@@ -1732,6 +1742,7 @@ pub(crate) mod tests {
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
             operation: OperationStatus::Active {
                 operation_id: OperationId::generate(),
                 prompt: "do things".to_owned(),
@@ -1764,6 +1775,7 @@ pub(crate) mod tests {
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
@@ -1797,6 +1809,7 @@ pub(crate) mod tests {
         let snapshot = SessionSnapshot {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
             operation: OperationStatus::Active {
                 operation_id,
                 prompt: "do things".to_owned(),
