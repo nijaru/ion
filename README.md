@@ -43,6 +43,11 @@ Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
 cancellation, and model selection survive restarts.
 
+For opt-in terminal diagnosis, set `ION_TERMINAL_CAPTURE` to a file
+path before launching the TUI. The capture contains emitted terminal
+bytes, including rendered prompt text, so do not enable it for
+untrusted or sensitive sessions.
+
 ## Configuration
 
 Settings live at `~/.config/ion/settings.toml`. Minimal example:

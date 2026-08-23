@@ -7,7 +7,9 @@
 //! effects call back into the session. The terminal is restored by one
 //! RAII owner, never scattered across widgets.
 
+use std::fs::File;
 use std::io::{self, Write};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use futures_util::StreamExt;
@@ -19,7 +21,7 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::{execute, terminal};
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
-use unicode_width::UnicodeWidthChar as _;
+use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
 use crate::screen::{Frame, Screen};
@@ -896,6 +898,59 @@ pub struct TerminalGuard {
     restored: bool,
 }
 
+struct TerminalOutput<W> {
+    output: W,
+    capture: Option<File>,
+}
+
+impl<W: Write> TerminalOutput<W> {
+    fn new(output: W, capture_path: Option<&Path>) -> io::Result<Self> {
+        let capture = capture_path
+            .map(|path| {
+                File::create(path).map_err(|err| {
+                    io::Error::new(
+                        err.kind(),
+                        format!("terminal capture {}: {err}", path.display()),
+                    )
+                })
+            })
+            .transpose()?;
+        Ok(Self { output, capture })
+    }
+
+    fn from_environment(output: W) -> io::Result<Self> {
+        let capture_path = std::env::var_os("ION_TERMINAL_CAPTURE").map(PathBuf::from);
+        Self::new(output, capture_path.as_deref())
+    }
+
+    fn record_external(&mut self, bytes: &[u8]) -> io::Result<()> {
+        if let Some(capture) = &mut self.capture {
+            capture.write_all(bytes)?;
+        }
+        Ok(())
+    }
+}
+
+impl<W: Write> Write for TerminalOutput<W> {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let written = self.output.write(bytes)?;
+        if written > 0
+            && let Some(capture) = &mut self.capture
+        {
+            capture.write_all(&bytes[..written])?;
+        }
+        Ok(written)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.output.flush()?;
+        if let Some(capture) = &mut self.capture {
+            capture.flush()?;
+        }
+        Ok(())
+    }
+}
+
 impl TerminalGuard {
     /// Enter raw mode and enable bracketed paste.
     pub fn enter() -> io::Result<Self> {
@@ -992,8 +1047,8 @@ fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     for span in &line.spans {
         let style = span.style;
         let mut chunk = String::new();
-        for ch in span.content.chars() {
-            let cw = ch.width().unwrap_or(0);
+        for grapheme in span.content.graphemes(true) {
+            let cw = grapheme.width();
             if cur_width + cw > width && cur_width > 0 {
                 if !chunk.is_empty() {
                     cur.push(Span::styled(std::mem::take(&mut chunk), style));
@@ -1001,7 +1056,7 @@ fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
                 rows.push(Line::from(std::mem::take(&mut cur)));
                 cur_width = 0;
             }
-            chunk.push(ch);
+            chunk.push_str(grapheme);
             cur_width += cw;
         }
         if !chunk.is_empty() {
@@ -1201,7 +1256,9 @@ pub async fn run(
     let palette = palette(theme);
 
     let (term_w, term_h) = crossterm::terminal::size().unwrap_or((80, 24));
-    let mut out = io::stdout();
+    let mut out = TerminalOutput::from_environment(io::stdout()).map_err(|err| {
+        RuntimeError::OperationFailed(format!("terminal output setup failed: {err}"))
+    })?;
 
     // The banner is committed straight to native scrollback above the
     // region (§22.3 inline semantics): completed content never lives in
@@ -1211,11 +1268,15 @@ pub async fn run(
     } else {
         "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
     };
-    println!("{banner}");
-    io::stdout().flush().ok();
+    writeln!(out, "{banner}")
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal output failed: {err}")))?;
+    out.flush()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal flush failed: {err}")))?;
 
     // Anchor the region at the launch cursor. Queried before the
     // EventStream exists, so no competing stdin reader.
+    out.record_external(b"\x1b[6n")
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal capture failed: {err}")))?;
     let (_, cursor_row) = crossterm::cursor::position()
         .map_err(|err| RuntimeError::OperationFailed(format!("cursor query failed: {err}")))?;
     let mut origin = cursor_row;
@@ -1223,8 +1284,12 @@ pub async fn run(
     const MIN_REGION_ROWS: u16 = 4;
     if term_h.saturating_sub(origin) < MIN_REGION_ROWS {
         let push = MIN_REGION_ROWS - (term_h - origin);
-        print!("{}", "\n".repeat(push as usize));
-        io::stdout().flush().ok();
+        write!(out, "{}", "\n".repeat(push as usize)).map_err(|err| {
+            RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
+        })?;
+        out.flush().map_err(|err| {
+            RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
+        })?;
         origin = origin.saturating_sub(push);
     }
     let mut screen = Screen::new(term_w, origin, term_h);
@@ -1907,6 +1972,31 @@ pub(crate) mod tests {
         let (row, col) = cursor.expect("cursor");
         assert!(text[row].starts_with("› hello world"), "{}", text[row]);
         assert_eq!(col as usize, 2 + "hello world".width());
+    }
+
+    #[test]
+    fn wrapping_keeps_zwj_graphemes_atomic() {
+        let family = "👩‍💻";
+        let rows = wrap_line(&Line::from(format!("{family}x")), 2);
+
+        assert_eq!(rows.len(), 2, "grapheme must occupy one display row");
+        assert_eq!(rows[0].to_string(), family);
+        assert_eq!(rows[1].to_string(), "x");
+    }
+
+    #[test]
+    fn terminal_capture_records_emitted_bytes_when_opted_in() {
+        let capture = tempfile::NamedTempFile::new().expect("capture file");
+        let mut output =
+            TerminalOutput::new(Vec::new(), Some(capture.path())).expect("capture setup");
+
+        output.write_all(b"frame bytes").expect("write");
+        output.flush().expect("flush");
+
+        assert_eq!(
+            std::fs::read(capture.path()).expect("read capture"),
+            b"frame bytes"
+        );
     }
 }
 

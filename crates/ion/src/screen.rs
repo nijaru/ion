@@ -158,7 +158,7 @@ impl Screen {
             if row >= offset {
                 let screen_row = row - offset;
                 if screen_row < h {
-                    let at = (screen_row as u16, col);
+                    let at = (self.origin + screen_row as u16, col);
                     if painted || !self.cursor_shown || self.cursor_at != Some(at) {
                         write!(out, "\x1b[{};{}H", at.0 + 1, at.1 + 1)?;
                         if !self.cursor_shown {
@@ -385,6 +385,48 @@ mod tests {
     }
 
     #[test]
+    fn stateful_terminal_tracks_committed_scroll_without_duplicates() {
+        let c2: Vec<Line> = (0..4).map(|i| line(&format!("row{i}"))).collect();
+        let mut c3 = c2.clone();
+        c3.extend((4..8).map(|i| line(&format!("row{i}"))));
+        let live = [line("status")];
+        let mut screen = Screen::new(40, 0, 6);
+        let mut terminal = vt100::Parser::new(6, 40, 16);
+
+        for committed in [&c2, &c3] {
+            let mut bytes = Vec::new();
+            screen
+                .draw(
+                    &mut bytes,
+                    &Frame {
+                        committed,
+                        live: &live,
+                        cursor: None,
+                    },
+                )
+                .expect("draw");
+            terminal.process(&bytes);
+        }
+
+        let rows: Vec<String> = terminal
+            .screen()
+            .rows(0, 40)
+            .map(|row| row.trim_end().to_owned())
+            .collect();
+        assert_eq!(
+            rows,
+            vec![
+                "row3".to_owned(),
+                "row4".to_owned(),
+                "row5".to_owned(),
+                "row6".to_owned(),
+                "row7".to_owned(),
+                "status".to_owned(),
+            ]
+        );
+    }
+
+    #[test]
     fn live_band_growth_never_scrolls_or_duplicates_history() {
         // The composer wrapping from one row to two must not push the
         // transcript into scrollback (Sol review P1.2).
@@ -416,6 +458,37 @@ mod tests {
         let s = String::from_utf8(out).expect("utf8");
         assert!(s.contains("\x1b[5;3H"), "cursor at screen row 5 col 3: {s}");
         assert!(s.contains("\x1b[?25h"));
+    }
+
+    #[test]
+    fn cursor_translation_includes_the_anchored_origin() {
+        // The visible row is relative to the line-diff window, but the
+        // terminal cursor position is absolute. A nonzero origin models
+        // launching Ion below existing shell scrollback.
+        let out = {
+            let mut out = Vec::new();
+            let mut screen = Screen::new(40, 3, 10);
+            screen
+                .draw(
+                    &mut out,
+                    &Frame {
+                        committed: &[],
+                        live: &[line("status"), line("› ")],
+                        cursor: Some((1, 2)),
+                    },
+                )
+                .expect("draw");
+            out
+        };
+        let s = String::from_utf8(out).expect("utf8");
+        assert!(
+            s.contains("\x1b[5;3H"),
+            "cursor must include the anchored origin: {s:?}"
+        );
+        assert!(
+            !s.contains("\x1b[2;3H"),
+            "cursor must not jump above the anchored window: {s:?}"
+        );
     }
 
     #[test]

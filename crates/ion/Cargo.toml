@@ -26,12 +26,14 @@ tokio-util.workspace = true
 toml = "1.1.4"
 tracing.workspace = true
 tracing-subscriber.workspace = true
+unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
 [dev-dependencies]
 libc = "0.2.189"
 nix = { version = "0.31.3", features = ["fs", "term"] }
 tempfile = "3.27.0"
+vt100 = "0.16.2"
 
 [lints]
 workspace = true
