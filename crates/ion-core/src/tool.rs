@@ -7,8 +7,8 @@
 //! Execution happens in a spawned tool task: the controller never awaits
 //! tool I/O on its loop.
 
-use std::collections::HashMap;
 use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -740,6 +740,7 @@ impl ToolRegistry {
 pub struct ToolCatalog {
     core: ToolRegistry,
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    active_mcp_scopes: Arc<std::sync::RwLock<HashSet<String>>>,
     lifetime: Arc<CatalogLifetime>,
 }
 
@@ -851,6 +852,51 @@ impl ToolCatalog {
             .is_some()
     }
 
+    /// Activate one configured MCP server for future model-step snapshots.
+    /// Server lifecycle and discovery remain owned by [`crate::McpService`].
+    /// An unknown name is harmless: a later discovery can publish the scope.
+    pub fn activate_mcp_server(&self, name: impl AsRef<str>) {
+        let name = name.as_ref().trim();
+        if !name.is_empty() {
+            self.active_mcp_scopes
+                .write()
+                .expect("active MCP scope set poisoned")
+                .insert(format!("mcp:{name}"));
+        }
+    }
+
+    /// Replace the active MCP server set used by future model-step snapshots.
+    /// The set is intentionally explicit and may be empty.
+    pub fn set_active_mcp_servers<I, S>(&self, names: I)
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let scopes = names
+            .into_iter()
+            .map(|name| name.as_ref().trim().to_owned())
+            .filter(|name| !name.is_empty())
+            .map(|name| format!("mcp:{name}"))
+            .collect();
+        *self
+            .active_mcp_scopes
+            .write()
+            .expect("active MCP scope set poisoned") = scopes;
+    }
+
+    /// Deactivate one MCP server. Its live process may remain supervised, but
+    /// its tools disappear from future model-step snapshots.
+    pub fn deactivate_mcp_server(&self, name: impl AsRef<str>) -> bool {
+        let name = name.as_ref().trim();
+        if name.is_empty() {
+            return false;
+        }
+        self.active_mcp_scopes
+            .write()
+            .expect("active MCP scope set poisoned")
+            .remove(&format!("mcp:{name}"))
+    }
+
     /// A detached capability-registration handle for service supervisors.
     /// It holds only a weak catalog lifetime, so a supervisor cannot keep a
     /// dropped catalog or its subprocesses alive.
@@ -866,7 +912,18 @@ impl ToolCatalog {
     #[must_use]
     pub fn snapshot(&self) -> ToolRegistry {
         let mut entries: HashMap<String, ToolEntry> = self.core.entries.as_ref().clone();
-        for scoped in self.dynamic.read().expect("tool catalog poisoned").values() {
+        let active_mcp_scopes = self
+            .active_mcp_scopes
+            .read()
+            .expect("active MCP scope set poisoned")
+            .clone();
+        for (scope, scoped) in self.dynamic.read().expect("tool catalog poisoned").iter() {
+            // MCP servers can expose broad APIs. Keep their lifecycle
+            // separate from the deliberately small active set sent to a
+            // model step; extension/delegate scopes remain host-composed.
+            if scope.starts_with("mcp:") && !active_mcp_scopes.contains(scope) {
+                continue;
+            }
             for entry in scoped {
                 entries
                     .entry(entry.spec.name.clone())
@@ -940,6 +997,7 @@ impl From<ToolRegistry> for ToolCatalog {
         Self {
             core,
             dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            active_mcp_scopes: Arc::new(std::sync::RwLock::new(HashSet::new())),
             lifetime: Arc::new(CatalogLifetime {
                 cancel: CancellationToken::new(),
             }),
@@ -2302,6 +2360,24 @@ mod catalog_tests {
         assert!(catalog.remove_scope("server-a"));
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
         assert!(!catalog.remove_scope("server-a"), "double remove is false");
+    }
+
+    #[test]
+    fn mcp_snapshots_use_only_the_explicit_active_set() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("mcp:docs", vec![Arc::new(EchoTool)]);
+        assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+
+        catalog.activate_mcp_server("docs");
+        assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+
+        assert!(catalog.deactivate_mcp_server("docs"));
+        assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+
+        catalog.set_active_mcp_servers(["docs", "unknown", " "]);
+        assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
+        assert!(catalog.deactivate_mcp_server("unknown"));
+        assert!(!catalog.deactivate_mcp_server("unknown"));
     }
 
     #[test]

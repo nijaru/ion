@@ -63,10 +63,13 @@ defaultModel = "gpt-5.6-luna"
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
 
-[[mcp_servers]]
+[[mcpServers]]
 name = "docs"
 command = "npx"
 args = ["-y", "@some/mcp-docs-server"]
+
+# Keep the model-facing MCP set explicit and small.
+activeMcpServers = ["docs"]
 ```
 
 Malformed settings are a hard error, never silently ignored.

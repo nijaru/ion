@@ -3,9 +3,10 @@
 //! [`McpService`] owns server definitions, process/transport
 //! lifecycle, protocol negotiation, and published tool descriptors.
 //! Sessions never supervise MCP processes: the service registers each
-//! server's tools into the [`ToolCatalog`] under a dedicated scope,
-//! and invocations flow through the normal policy/effect path like
-//! any other tool.
+//! server's tools into the [`ToolCatalog`] under a dedicated scope. The
+//! catalog exposes only host-selected active MCP scopes to model steps,
+//! and invocations flow through the normal policy/effect path like any other
+//! tool.
 //!
 //! Wire protocol: MCP stdio transport, carried by the official `rmcp`
 //! client through the shared [`StdioRpc`] adapter (§24.2).
@@ -50,8 +51,10 @@ impl McpService {
     }
 
     /// Start `defs`, discover their tools, and register them into
-    /// `catalog` under `mcp:<name>` scopes. A failing server logs a
-    /// warning and is skipped: one broken server never blocks startup.
+    /// `catalog` under `mcp:<name>` scopes. A failing server logs a warning
+    /// and is skipped: one broken server never blocks startup. Hosts choose
+    /// which registered scopes enter model-step snapshots with
+    /// [`ToolCatalog::set_active_mcp_servers`].
     pub async fn start_into(&self, defs: &[ServerDef], catalog: &ToolCatalog) {
         for def in defs {
             let (ready_tx, ready_rx) = oneshot::channel();

@@ -82,6 +82,11 @@ pub struct Settings {
     pub keybindings: Keybindings,
     #[serde(default)]
     pub mcp_servers: Vec<McpServerConfig>,
+    /// Names of configured MCP servers whose tools may enter model-step
+    /// capability snapshots. An omitted/empty set keeps all MCP tools
+    /// inactive until the host explicitly selects them.
+    #[serde(default)]
+    pub active_mcp_servers: Vec<String>,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
     /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock).
@@ -139,6 +144,7 @@ impl Settings {
             theme: None,
             keybindings: Keybindings::default(),
             mcp_servers: Vec::new(),
+            active_mcp_servers: Vec::new(),
             extensions: Vec::new(),
             hide_thinking_block: true,
         }
@@ -165,6 +171,7 @@ impl Settings {
             theme: None,
             keybindings: crate::settings::Keybindings::default(),
             mcp_servers: Vec::new(),
+            active_mcp_servers: Vec::new(),
             extensions: Vec::new(),
             hide_thinking_block: false,
         }
@@ -303,6 +310,17 @@ mod tests {
     fn parses_sandbox_mode() {
         let settings: Settings = toml::from_str("sandbox = \"seatbelt\"").unwrap();
         assert_eq!(settings.sandbox_mode(), SandboxMode::Seatbelt);
+    }
+
+    #[test]
+    fn parses_explicit_active_mcp_servers() {
+        let settings: Settings = toml::from_str(
+            r#"
+            activeMcpServers = ["docs", "repo"]
+            "#,
+        )
+        .unwrap();
+        assert_eq!(settings.active_mcp_servers, ["docs", "repo"]);
     }
 
     #[test]
