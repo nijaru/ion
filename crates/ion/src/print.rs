@@ -20,7 +20,7 @@ impl<W: Write> PrintFrontend<W> {
         prompt: impl Into<String>,
     ) -> Result<(), RuntimeError> {
         let (_snapshot, mut events) = session.subscribe().await?;
-        session.submit(prompt).await?;
+        session.submit_if_idle(prompt).await?;
         loop {
             match events.recv().await? {
                 RuntimeEvent::AssistantTextDelta { text, .. } => {

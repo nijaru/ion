@@ -234,15 +234,15 @@ impl EventSubscription {
 }
 
 enum SessionCommand {
-    Submit {
+    SubmitIfIdle {
+        prompt: String,
+        reply: oneshot::Sender<Result<OperationId, CommandError>>,
+    },
+    Enqueue {
         prompt: String,
         reply: oneshot::Sender<Result<OperationId, CommandError>>,
     },
     Steer {
-        text: String,
-        reply: oneshot::Sender<Result<(), CommandError>>,
-    },
-    FollowUp {
         text: String,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
@@ -316,11 +316,28 @@ impl fmt::Debug for SessionHandle {
 }
 
 impl SessionHandle {
-    /// Accept a prompt durably and open a new operation when idle.
-    pub async fn submit(&self, prompt: impl Into<String>) -> Result<OperationId, CommandError> {
+    /// Accept a prompt durably and open a new operation only when idle.
+    pub async fn submit_if_idle(
+        &self,
+        prompt: impl Into<String>,
+    ) -> Result<OperationId, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .try_send(SessionCommand::Submit {
+            .try_send(SessionCommand::SubmitIfIdle {
+                prompt: prompt.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Accept a prompt durably. If another operation is active, the new
+    /// operation waits in acceptance order and is promoted after the active
+    /// operation reaches a terminal outcome.
+    pub async fn enqueue(&self, prompt: impl Into<String>) -> Result<OperationId, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::Enqueue {
                 prompt: prompt.into(),
                 reply,
             })
@@ -334,20 +351,6 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::Steer {
-                text: text.into(),
-                reply,
-            })
-            .map_err(command_send_error)?;
-        rx.await.map_err(|_| CommandError::RuntimeDropped)?
-    }
-
-    /// Queue input applied after the current response reaches its
-    /// follow-up boundary; the same operation continues until idle
-    /// (DESIGN.md §9.3).
-    pub async fn follow_up(&self, text: impl Into<String>) -> Result<(), CommandError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx
-            .try_send(SessionCommand::FollowUp {
                 text: text.into(),
                 reply,
             })
@@ -676,7 +679,7 @@ impl Runtime {
 }
 
 /// Does a provider failure message indicate the context exceeded the
-/// model's window (14.7.5)? Conservative substring match over the
+/// model's window (14.7.4)? Conservative substring match over the
 /// common provider phrasings; unknown phrasings fail visibly instead
 /// of triggering a speculative compaction.
 fn is_context_overflow(message: &str) -> bool {
@@ -685,40 +688,6 @@ fn is_context_overflow(message: &str) -> bool {
         || lowered.contains("context window")
         || lowered.contains("too many token")
         || lowered.contains("prompt is too long")
-}
-
-/// A model-invoked compaction request parsed from `compact` tool
-/// arguments (DESIGN.md §14.7.3).
-#[derive(Debug, Clone)]
-struct PendingCompact {
-    instructions: Option<String>,
-    continue_after: bool,
-}
-
-/// Parse `compact` tool arguments. A malformed payload is a
-/// model-visible denial, not a harness failure.
-fn parse_compact_arguments(arguments: &serde_json::Value) -> Result<PendingCompact, String> {
-    let Some(object) = arguments.as_object() else {
-        return Err("compact arguments must be an object".to_owned());
-    };
-    let instructions = match object.get("instructions") {
-        None | Some(serde_json::Value::Null) => None,
-        Some(value @ serde_json::Value::String(_)) => {
-            Some(value.as_str().expect("string").to_owned())
-        }
-        Some(_) => return Err("compact instructions must be a string".to_owned()),
-    };
-    let continue_after = match object.get("continue_after_compaction") {
-        None | Some(serde_json::Value::Null) => false,
-        Some(serde_json::Value::Bool(flag)) => *flag,
-        Some(_) => {
-            return Err("continue_after_compaction must be a boolean".to_owned());
-        }
-    };
-    Ok(PendingCompact {
-        instructions,
-        continue_after,
-    })
 }
 
 /// The live, in-memory side of the active operation. Cloned whole to
@@ -733,7 +702,6 @@ struct ActiveOperation {
     open_effect: Option<EffectRecord>,
     /// Inbox items durably accepted but not yet applied.
     pending_steers: Vec<InboxId>,
-    pending_followups: Vec<InboxId>,
 }
 
 /// The single-writer owner of one loaded session's mutable live state
@@ -803,6 +771,10 @@ struct SessionRuntime<P> {
     /// Next storage-assigned entry sequence.
     next_entry_seq: u64,
     operation: Option<ActiveOperation>,
+    /// Accepted operations waiting for the single active operation to
+    /// reach a terminal outcome. Each remains a complete durable
+    /// `Accepted` checkpoint until promotion.
+    queued_operations: Vec<ActiveOperation>,
     /// Ephemeral draft of the in-flight model step; never durable.
     draft_text: String,
     /// Live reasoning text for the current step; cleared at settlement.
@@ -813,12 +785,8 @@ struct SessionRuntime<P> {
     /// settlement boundary (DESIGN.md §27.2).
     draft_usage: Option<TokenUsage>,
     /// Full token cost (input + output + cache) of the most recent
-    /// settled step; anchors usage hints and the safety net (14.7).
+    /// settled step; anchors the safety net (14.7.3).
     last_context_tokens: Option<u64>,
-    /// Context size at the most recent emitted usage hint; the hint
-    /// throttle anchor. In-memory only: losing it costs one extra
-    /// hint after restart, never a missed one.
-    last_hint_tokens: Option<u64>,
     /// Stable-prefix fingerprint used to explain prompt-cache expectations
     /// at the next model-step boundary.
     last_prefix_fingerprint: Option<String>,
@@ -827,9 +795,9 @@ struct SessionRuntime<P> {
     context_window: Option<u64>,
     /// Cached model capability metadata, keyed by the selected model.
     model_capabilities: Option<(String, ModelCapabilities)>,
-    /// A model-invoked compaction (14.7.3) waiting for the run to
-    /// settle; consumed at the next continuation boundary.
-    pending_compact: Option<PendingCompact>,
+    /// A user-requested compaction waiting for the run to settle; consumed
+    /// at the next continuation boundary.
+    pending_compact: Option<Option<String>>,
     /// Reopened Suspended operations awaiting durable settlement
     /// (§9.5); empty unless --resume found one.
     suspended_operations: Vec<(
@@ -838,14 +806,8 @@ struct SessionRuntime<P> {
         crate::store::CheckpointPayload,
         CapabilitySnapshot,
     )>,
-    /// Whether the consumed compaction should be followed by a hidden
-    /// recovery turn.
-    recovery_after_compaction: bool,
-    /// The running compaction was model-invoked (14.7.3); without a
-    /// recovery request it finishes the operation instead of prompting.
-    compaction_was_model_invoked: bool,
     /// An overflow already triggered the one compaction+retry
-    /// (14.7.5); a second overflow fails the operation visibly.
+    /// (14.7.4); a second overflow fails the operation visibly.
     overflow_retry_used: bool,
     /// The previous step was compaction itself; prevents the
     /// compaction step's own usage from re-triggering compaction.
@@ -910,19 +872,17 @@ impl<P: Provider> SessionRuntime<P> {
             entries: Vec::new(),
             next_entry_seq: 1,
             operation: None,
+            queued_operations: Vec::new(),
             draft_text: String::new(),
             draft_thinking: String::new(),
             draft_calls: Vec::new(),
             draft_usage: None,
             last_context_tokens: None,
-            last_hint_tokens: None,
             last_prefix_fingerprint: None,
             context_window: None,
             model_capabilities: None,
             pending_compact: None,
             suspended_operations: Vec::new(),
-            recovery_after_compaction: false,
-            compaction_was_model_invoked: false,
             overflow_retry_used: false,
             last_step_was_compaction: false,
             model_step: 0,
@@ -971,30 +931,10 @@ impl<P: Provider> SessionRuntime<P> {
                 ));
                 continue;
             }
-            // Mid-flight operations are recoverable state (§9.5); they
-            // rebuild and surface.
-            if self.operation.is_some() {
-                error!(
-                    session = %self.session_id,
-                    operation = %operation.id,
-                    "multiple open operations in durable state; refusing to guess"
-                );
-                self.closed = true;
-                return;
-            }
             let steers: Vec<InboxItem> = loaded
                 .pending_inbox
                 .iter()
                 .filter(|item| item.kind == InboxKind::Steer)
-                .map(|item| InboxItem {
-                    kind: item.kind.clone(),
-                    text: item.text.clone(),
-                })
-                .collect();
-            let followups: Vec<InboxItem> = loaded
-                .pending_inbox
-                .iter()
-                .filter(|item| item.kind == InboxKind::FollowUp)
                 .map(|item| InboxItem {
                     kind: item.kind.clone(),
                     text: item.text.clone(),
@@ -1007,7 +947,6 @@ impl<P: Provider> SessionRuntime<P> {
                 payload.state.clone(),
                 payload.cancel_requested,
                 steers,
-                followups,
             );
             info!(
                 session = %self.session_id,
@@ -1015,7 +954,7 @@ impl<P: Provider> SessionRuntime<P> {
                 state = ?payload.state,
                 "reopened an open operation; recovery is Step 3 work"
             );
-            self.operation = Some(ActiveOperation {
+            let active = ActiveOperation {
                 machine,
                 cancel: self.cancel_root.child_token(),
                 state_seq,
@@ -1026,13 +965,20 @@ impl<P: Provider> SessionRuntime<P> {
                     .filter(|item| item.kind == InboxKind::Steer)
                     .map(|item| item.id)
                     .collect(),
-                pending_followups: loaded
-                    .pending_inbox
-                    .iter()
-                    .filter(|item| item.kind == InboxKind::FollowUp)
-                    .map(|item| item.id)
-                    .collect(),
-            });
+            };
+            if matches!(payload.state, OperationState::Accepted) {
+                // Accepted-but-not-started operations are durable queued
+                // work, not competing active transition authorities.
+                self.queued_operations.push(active);
+            } else if self.operation.replace(active).is_some() {
+                error!(
+                    session = %self.session_id,
+                    operation = %operation.id,
+                    "multiple non-queued open operations in durable state; refusing to guess"
+                );
+                self.closed = true;
+                return;
+            }
         }
     }
 
@@ -1056,8 +1002,14 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
         info!(session = %self.session_id, "session opened");
-        if self.operation.is_some() {
+        if self.operation.is_some() || !self.suspended_operations.is_empty() {
             self.recover_open_operation().await;
+        }
+        if self.operation.is_none()
+            && !self.queued_operations.is_empty()
+            && self.promote_next_queued()
+        {
+            self.advance().await;
         }
         loop {
             tokio::select! {
@@ -1088,16 +1040,16 @@ impl<P: Provider> SessionRuntime<P> {
     /// Returns true when the session loop must exit.
     async fn handle_command(&mut self, command: SessionCommand) -> bool {
         match command {
-            SessionCommand::Submit { prompt, reply } => {
-                let _ = reply.send(self.submit(prompt).await);
+            SessionCommand::SubmitIfIdle { prompt, reply } => {
+                let _ = reply.send(self.submit_if_idle(prompt).await);
+                false
+            }
+            SessionCommand::Enqueue { prompt, reply } => {
+                let _ = reply.send(self.enqueue(prompt).await);
                 false
             }
             SessionCommand::Steer { text, reply } => {
                 let _ = reply.send(self.enqueue_inbox(InboxKind::Steer, text).await);
-                false
-            }
-            SessionCommand::FollowUp { text, reply } => {
-                let _ = reply.send(self.enqueue_inbox(InboxKind::FollowUp, text).await);
                 false
             }
             SessionCommand::Cancel {
@@ -1114,11 +1066,8 @@ impl<P: Provider> SessionRuntime<P> {
                 let requested = self.operation.is_some();
                 if requested {
                     // Consumed at the next continuation boundary by the
-                    // same path the model's own compact tool uses.
-                    self.pending_compact = Some(PendingCompact {
-                        instructions,
-                        continue_after: false,
-                    });
+                    // harness-owned maintenance path.
+                    self.pending_compact = Some(instructions);
                 }
                 let _ = reply.send(Ok(requested));
                 false
@@ -1141,7 +1090,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    async fn submit(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+    async fn submit_if_idle(&mut self, prompt: String) -> Result<OperationId, CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -1150,6 +1099,25 @@ impl<P: Provider> SessionRuntime<P> {
                 operation_id: active.machine.operation_id(),
             });
         }
+        if let Some(queued) = self.queued_operations.first() {
+            return Err(CommandError::Busy {
+                operation_id: queued.machine.operation_id(),
+            });
+        }
+        self.accept_operation(prompt).await
+    }
+
+    /// Accept one prompt as a distinct durable operation. The operation is
+    /// started immediately when the session is idle; otherwise it remains
+    /// in `Accepted` state until the current operation settles.
+    async fn enqueue(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        self.accept_operation(prompt).await
+    }
+
+    async fn accept_operation(&mut self, prompt: String) -> Result<OperationId, CommandError> {
         let operation_id = OperationId::generate();
         let (machine, applied) =
             OperationMachine::accept(operation_id, prompt.clone(), self.tools.specs());
@@ -1184,27 +1152,49 @@ impl<P: Provider> SessionRuntime<P> {
             state_seq: 1,
             open_effect: None,
             pending_steers: Vec::new(),
-            pending_followups: Vec::new(),
         };
         self.entries.extend(applied.entries.iter().cloned());
         self.next_entry_seq += 1;
-        self.emit(RuntimeEvent::OperationStarted {
-            cursor: RuntimeCursor::default(),
-            operation_id,
-            prompt,
-        });
+        if self.operation.is_none() && self.queued_operations.is_empty() {
+            self.start_active(active);
+            self.advance().await;
+        } else {
+            self.queued_operations.push(active);
+        }
+        Ok(operation_id)
+    }
+
+    fn start_active(&mut self, active: ActiveOperation) {
+        let operation_id = active.machine.operation_id();
+        let prompt = active.machine.prompt().to_owned();
         self.operation = Some(active);
         self.draft_text.clear();
         self.draft_thinking.clear();
         self.draft_calls.clear();
         self.draft_usage = None;
         self.live_tools.clear();
+        self.pending_compact = None;
         self.overflow_retry_used = false;
+        self.last_step_was_compaction = false;
+        self.model_step = 0;
         self.operation_tool_calls = 0;
-        // Usage/hint/compaction anchors are session-level: context
-        // persists across operations, so they survive a new submit.
-        self.advance().await;
-        Ok(operation_id)
+        self.emit(RuntimeEvent::OperationStarted {
+            cursor: RuntimeCursor::default(),
+            operation_id,
+            prompt,
+        });
+    }
+
+    fn promote_next_queued(&mut self) -> bool {
+        if self.operation.is_some() {
+            return false;
+        }
+        if self.queued_operations.is_empty() {
+            return false;
+        }
+        let next = self.queued_operations.remove(0);
+        self.start_active(next);
+        true
     }
 
     async fn switch_model(&mut self, model_ref: String) -> Result<String, CommandError> {
@@ -1234,7 +1224,6 @@ impl<P: Provider> SessionRuntime<P> {
         // selection boundary.
         self.context_window = None;
         self.model_capabilities = None;
-        self.last_hint_tokens = None;
         self.last_prefix_fingerprint = None;
         Ok(previous)
     }
@@ -1296,7 +1285,6 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             match kind {
                 InboxKind::Steer => staged.pending_steers.push(inbox_id),
-                InboxKind::FollowUp => staged.pending_followups.push(inbox_id),
                 InboxKind::Prompt => {}
             }
         }
@@ -1856,6 +1844,9 @@ impl<P: Provider> SessionRuntime<P> {
             match state {
                 OperationState::Finished(_) => {
                     self.operation.take();
+                    if self.promote_next_queued() {
+                        continue;
+                    }
                     return;
                 }
                 OperationState::Accepted | OperationState::NeedAssistant => {
@@ -1864,23 +1855,21 @@ impl<P: Provider> SessionRuntime<P> {
                         .as_ref()
                         .is_some_and(|active| active.machine.has_queued_steers())
                     {
-                        if !self.drain_queued(false).await {
+                        if !self.drain_queued().await {
                             return;
                         }
                         continue;
                     }
                     if let Some(request) = self.pending_compact.take() {
-                        // §14.7.3: the run has settled; compact now with
-                        // the caller's preservation instructions.
-                        self.recovery_after_compaction = request.continue_after;
-                        self.compaction_was_model_invoked = true;
-                        if !self.start_compaction(request.instructions).await {
+                        // The run has settled; compact now with the
+                        // caller's preservation instructions.
+                        if !self.start_compaction(request).await {
                             return;
                         }
                         return;
                     }
                     if self.safety_net_compaction_due() {
-                        // §14.7.4: compact at the continuation boundary
+                        // §14.7.3: compact at the continuation boundary
                         // when the context nears the model's window.
                         if !self.start_compaction(None).await {
                             return;
@@ -1898,7 +1887,7 @@ impl<P: Provider> SessionRuntime<P> {
                         .as_ref()
                         .is_some_and(|active| active.machine.has_queued_inbox())
                     {
-                        if !self.drain_queued(true).await {
+                        if !self.drain_queued().await {
                             return;
                         }
                         continue;
@@ -1916,26 +1905,17 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    /// Drain queued inbox items as one durable transaction. Steers drain
-    /// at reasoning boundaries; follow-ups only at the follow-up
+    /// Drain queued steers as one durable transaction at a reasoning
     /// boundary. Returns false when persistence failed.
-    async fn drain_queued(&mut self, include_followups: bool) -> bool {
+    async fn drain_queued(&mut self) -> bool {
         let (mut staged, drained, request, new_entry_seq) = {
             let active = self.operation.clone().expect("drain needs an operation");
             let mut staged = active.clone();
-            let mut drained = staged.machine.drain_steers().expect("steer drain");
-            let mut applied_ids = staged
+            let drained = staged.machine.drain_steers().expect("steer drain");
+            let applied_ids = staged
                 .pending_steers
                 .drain(..drained.len())
                 .collect::<Vec<_>>();
-            if include_followups {
-                let more = staged
-                    .machine
-                    .drain_followups()
-                    .expect("follow-up drain at the follow-up boundary");
-                applied_ids.extend(staged.pending_followups.drain(..more.len()));
-                drained.extend(more);
-            }
             let mut entries = Vec::new();
             for applied in &drained {
                 entries.extend(applied.entries.iter().cloned());
@@ -1968,10 +1948,9 @@ impl<P: Provider> SessionRuntime<P> {
         true
     }
 
-    /// Project the model-step input and append the context-usage hint
-    /// when one is due (14.7.2). Both the fresh start and the recovery
-    /// re-projection go through here so a recovered step sees the same
-    /// trailing-edge hint policy. The hint is derived, never persisted.
+    /// Project the model-step input from canonical entries and the current
+    /// manifest. Compaction is harness-owned; no synthetic model message
+    /// is injected into this projection.
     async fn current_model_config(&mut self) -> ModelConfig {
         if self
             .model_capabilities
@@ -2023,25 +2002,15 @@ impl<P: Provider> SessionRuntime<P> {
         manifest: &ContextManifest,
     ) -> crate::context::ContextPlan {
         let _ = self.current_model_config().await;
-        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), manifest);
-        let hint = crate::context::usage_hint(
-            self.last_context_tokens.unwrap_or(0),
-            self.context_window,
-            self.last_hint_tokens,
-        );
-        if let Some(hint) = hint {
-            self.last_hint_tokens = self.last_context_tokens;
-            crate::context::push_hint(&mut plan, hint);
-        }
-        plan
+        project_with_manifest(&self.entries, self.first_entry_seq(), manifest)
     }
 
-    /// Safety-net compaction check (§14.7.4), evaluated at
+    /// Safety-net compaction check (§14.7.3), evaluated at
     /// continuation boundaries only: compact when the measured context
     /// is within the reserve of the model's actual window. A fixed
     /// token threshold would be wrong for every model except the one
     /// it was tuned for. Unknown windows disable the net; overflow
-    /// recovery (14.7.5) is the backstop.
+    /// recovery (14.7.4) is the backstop.
     fn safety_net_compaction_due(&self) -> bool {
         const RESERVE_TOKENS: u64 = 16_000;
         if self.last_step_was_compaction {
@@ -2113,7 +2082,6 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         self.operation = Some(staged);
         self.last_step_was_compaction = true;
-        self.last_hint_tokens = None;
         self.last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
@@ -2262,41 +2230,23 @@ impl<P: Provider> SessionRuntime<P> {
             self.closed = true;
             return false;
         };
-        // The compact tool is a harness maintenance action (14.7.3):
-        // always allowed, never a capability grant. Its arguments are
-        // parsed here and consumed at the next continuation boundary;
-        // execution itself settles as a normal no-op tool result.
-        let mut compact_request: Option<Result<PendingCompact, String>> = None;
-        if call.name == "compact" {
-            compact_request = Some(parse_compact_arguments(&call.arguments));
-        }
         let canonical = self.tools.canonicalize(&call.name, &call.arguments);
-        let decision = match &compact_request {
-            Some(Ok(_)) => PolicyDecision::Allow,
-            // Malformed compact arguments deny model-visibly with the
-            // parse message, before the policy gate sees the tool.
-            Some(Err(message)) => PolicyDecision::Deny(message.clone()),
-            None => match &canonical {
-                // Delegation is a structural capability (§20.4): every
-                // effect a child can produce is individually gated
-                // inside the child, so spawning one needs no grant -
-                // same reasoning as compact.
-                Ok(_) if call.name == "delegate" => PolicyDecision::Allow,
-                Ok(target) => self.policy.decide(&call.name, target),
-                // Canonicalization failure is a model-visible denial,
-                // not a harness failure: the model produced an unusable
-                // input.
-                Err(message) => PolicyDecision::Deny(message.clone()),
-            },
+        let decision = match &canonical {
+            // Delegation is a structural capability (§20.4): every
+            // effect a child can produce is individually gated inside the
+            // child, so spawning one needs no grant.
+            Ok(_) if call.name == "delegate" => PolicyDecision::Allow,
+            Ok(target) => self.policy.decide(&call.name, target),
+            // Canonicalization failure is a model-visible denial, not a
+            // harness failure: the model produced an unusable input.
+            Err(message) => PolicyDecision::Deny(message.clone()),
         };
         // Tool-call budget (§20.5): spent budget denies further calls
-        // model-visibly; the model can still finish its turn. Compact
-        // stays exempt: it is harness maintenance, not a capability.
-        let over_tool_budget = compact_request.is_none()
-            && self
-                .budget
-                .max_tool_calls
-                .is_some_and(|max| self.operation_tool_calls >= max);
+        // model-visibly; the model can still finish its turn.
+        let over_tool_budget = self
+            .budget
+            .max_tool_calls
+            .is_some_and(|max| self.operation_tool_calls >= max);
         let decision = if over_tool_budget {
             PolicyDecision::Deny("operation tool-call budget exhausted".to_owned())
         } else {
@@ -2344,14 +2294,7 @@ impl<P: Provider> SessionRuntime<P> {
 
         let mut denial: Option<String> = match decision {
             PolicyDecision::Deny(message) => Some(message),
-            PolicyDecision::Allow => match compact_request {
-                Some(Ok(request)) => {
-                    self.pending_compact = Some(request);
-                    None
-                }
-                Some(Err(message)) => Some(message),
-                None => self.tools.validate(&call.name, &call.arguments).err(),
-            },
+            PolicyDecision::Allow => self.tools.validate(&call.name, &call.arguments).err(),
             PolicyDecision::ApprovalRequired => unreachable!("handled above"),
         };
         // §12.3: file-mutating effects persist reconciliation evidence
@@ -2585,7 +2528,7 @@ impl<P: Provider> SessionRuntime<P> {
                     && !self.overflow_retry_used
                     && !self.last_step_was_compaction
                 {
-                    // 14.7.5: one compaction, one retry. The failed
+                    // 14.7.4: one compaction, one retry. The failed
                     // attempt produced no durable effect beyond its
                     // intent; its partial request state is discarded.
                     self.settle_overflow_to_compaction().await;
@@ -2682,7 +2625,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.advance().await;
     }
 
-    /// Settle a context-overflow failure into a compaction (14.7.5):
+    /// Settle a context-overflow failure into a compaction (14.7.4):
     /// the failed attempt's effect settles without entries, the
     /// Compaction intent commits in the same transaction, and the
     /// retry is the natural continuation after the summary lands.
@@ -2750,7 +2693,6 @@ impl<P: Provider> SessionRuntime<P> {
         self.draft_calls.clear();
         self.draft_usage = None;
         self.last_step_was_compaction = true;
-        self.last_hint_tokens = None;
         self.last_prefix_fingerprint = None;
         warn!(%operation_id, "context overflow; compacting once and retrying");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
@@ -2820,51 +2762,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.entries.extend(applied.entries);
-        if self.compaction_was_model_invoked && !self.recovery_after_compaction {
-            // 14.7.3: the compact tool call ended the run's planning;
-            // without a recovery request the operation is done.
-            self.compaction_was_model_invoked = false;
-            let mut staged = staged;
-            let applied = staged
-                .machine
-                .apply(Transition::FinishAfterCompaction)
-                .expect("finish after model-invoked compaction");
-            let (request, new_entry_seq) = build_commit_request(
-                self.session_id,
-                &staged,
-                staged.state_seq + 1,
-                new_entry_seq,
-                applied.entries.clone(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-            );
-            if let Err(err) = self.store.commit(request).await {
-                self.fail_operation_on_persistence(err).await;
-                return;
-            }
-            self.next_entry_seq = new_entry_seq;
-            self.entries.extend(applied.entries);
-            self.emit_terminal_state(&applied.state);
-            self.operation.take();
-            return;
-        }
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
-        if self.recovery_after_compaction {
-            self.recovery_after_compaction = false;
-            // §14.7.3: one hidden recovery turn that resumes only
-            // unfinished work without repeating settled effects.
-            if let Err(err) = self
-                .enqueue_inbox(InboxKind::Steer, crate::context::RESUME_MESSAGE.to_owned())
-                .await
-            {
-                warn!(?err, "recovery turn could not be enqueued");
-            }
-        }
         self.advance().await;
     }
 
@@ -3430,7 +3329,7 @@ impl RuntimeHandle {
     fn fill_queue(&self) -> Result<(), CommandError> {
         let (reply, _rx) = oneshot::channel();
         self.tx
-            .try_send(SessionCommand::Submit {
+            .try_send(SessionCommand::SubmitIfIdle {
                 prompt: String::from("fill"),
                 reply,
             })

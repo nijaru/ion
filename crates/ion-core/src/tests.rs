@@ -421,57 +421,6 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
 }
 
 #[test]
-fn follow_up_continues_the_same_operation() {
-    let (mut machine, _) = machine_with_tools("goal", vec![]);
-    machine
-        .apply(Transition::StartModelStep {
-            model: step_model(),
-            plan: ContextPlan {
-                system: String::new(),
-                messages: Vec::new(),
-            },
-        })
-        .expect("start");
-    machine
-        .apply(Transition::ApplyInbox {
-            item: InboxItem {
-                kind: InboxKind::FollowUp,
-                text: "now summarize".to_owned(),
-            },
-        })
-        .expect("follow-up");
-    machine
-        .apply(Transition::ProviderCompleted {
-            text: "first".to_owned(),
-            tool_calls: Vec::new(),
-        })
-        .expect("complete");
-    assert_eq!(machine.state(), &OperationState::NeedContinuation);
-    machine.drain_followups().expect("follow-up drain");
-    machine
-        .apply(Transition::StartModelStep {
-            model: step_model(),
-            plan: ContextPlan {
-                system: String::new(),
-                messages: vec![ContextMessage::User {
-                    content: "user: goal\nuser: now summarize".to_owned(),
-                }],
-            },
-        })
-        .expect("step 2");
-    machine
-        .apply(Transition::ProviderCompleted {
-            text: "second".to_owned(),
-            tool_calls: Vec::new(),
-        })
-        .expect("complete");
-    assert_eq!(
-        machine.state(),
-        &OperationState::Finished(OperationOutcome::Completed)
-    );
-}
-
-#[test]
 fn cancel_request_sets_effects_updating_and_settles_cancelled() {
     // During a model step.
     let (mut machine, _) = machine_with_tools("goal", vec![]);
@@ -804,7 +753,7 @@ async fn streams_scripted_text_in_order() {
     let (snapshot, mut events) = session.subscribe().await.expect("subscribe");
     assert_eq!(snapshot.operation, OperationStatus::Idle);
 
-    let operation_id = session.submit("hi").await.expect("submit");
+    let operation_id = session.submit_if_idle("hi").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(
         kinds(&recorded),
@@ -838,7 +787,7 @@ async fn cancel_stops_provider_before_later_chunks() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("slow").await.expect("submit");
+    let operation_id = session.submit_if_idle("slow").await.expect("submit");
 
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
@@ -874,8 +823,11 @@ async fn busy_submit_is_rejected() {
         ToolRegistry::default(),
     );
     let session = runtime.session();
-    let first = session.submit("a").await.expect("first submit");
-    let err = session.submit("b").await.expect_err("second submit");
+    let first = session.submit_if_idle("a").await.expect("first submit");
+    let err = session
+        .submit_if_idle("b")
+        .await
+        .expect_err("second submit");
     assert_eq!(
         err,
         CommandError::Busy {
@@ -888,15 +840,116 @@ async fn busy_submit_is_rejected() {
 }
 
 #[tokio::test]
-async fn steer_and_follow_up_require_an_active_operation() {
+async fn enqueue_promotes_distinct_operations_in_acceptance_order() {
+    let runtime = start_runtime(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::delayed(Duration::from_millis(100), "first"),
+            ScriptedMessage::text("second"),
+        ]),
+        ToolRegistry::default(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let first = session.submit_if_idle("one").await.expect("first submit");
+    sleep(STEP).await;
+    let second = session.enqueue("two").await.expect("enqueue");
+    assert_ne!(first, second);
+
+    let mut starts = Vec::new();
+    let mut finishes = Vec::new();
+    while finishes.len() < 2 {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        match event {
+            RuntimeEvent::OperationStarted { operation_id, .. } => starts.push(operation_id),
+            RuntimeEvent::OperationFinished { operation_id, .. } => finishes.push(operation_id),
+            _ => {}
+        }
+    }
+    assert_eq!(starts, vec![first, second]);
+    assert_eq!(finishes, vec![first, second]);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn queued_operation_survives_close_and_promotes_after_reopen() {
+    let db = temp_db("queued-reopen");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_secs(30),
+            "active never settles",
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let first = session.submit_if_idle("active").await.expect("submit");
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::AssistantEffectPending)
+    })
+    .await;
+    let second = session.enqueue("queued").await.expect("enqueue");
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let loaded = store.load(session_id).await.expect("load queued state");
+    assert_eq!(loaded.operations.len(), 2);
+    assert_eq!(loaded.operations[0].id, first);
+    assert_eq!(loaded.operations[1].id, second);
+    assert_eq!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Suspended
+    );
+    assert_eq!(
+        loaded.operations[1].latest.1.state,
+        OperationState::Accepted
+    );
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("queued result")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(recorded.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::OperationFinished { operation_id, .. } if *operation_id == second
+    )));
+
+    let loaded = store.load(session_id).await.expect("load settled state");
+    assert_eq!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Finished(OperationOutcome::Cancelled)
+    );
+    assert_eq!(
+        loaded.operations[1].latest.1.state,
+        OperationState::Finished(OperationOutcome::Completed)
+    );
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn steer_requires_an_active_operation() {
     let runtime = tool_runtime();
     let session = runtime.session();
     assert_eq!(
         session.steer("nope").await,
-        Err(CommandError::NoActiveOperation)
-    );
-    assert_eq!(
-        session.follow_up("nope").await,
         Err(CommandError::NoActiveOperation)
     );
     session.close().await.expect("close");
@@ -915,7 +968,7 @@ async fn close_rejects_new_work_and_joins() {
     let runtime = tool_runtime();
     let session = runtime.session();
     session.close().await.expect("close");
-    let err = session.submit("after").await.expect_err("closed");
+    let err = session.submit_if_idle("after").await.expect_err("closed");
     assert_eq!(err, CommandError::Closed);
     runtime.join().await.expect("join");
 }
@@ -931,7 +984,7 @@ async fn delayed_chunk_respects_cancel_without_waiting_full_delay() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("wait").await.expect("submit");
+    let operation_id = session.submit_if_idle("wait").await.expect("submit");
     sleep(STEP).await;
     session.cancel(operation_id).await.expect("cancel");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
@@ -948,13 +1001,13 @@ async fn session_returns_to_idle_after_finish_and_accepts_next_operation() {
     let runtime = start_runtime(ScriptedProvider::echo(), ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let first = session.submit("a").await.expect("first");
+    let first = session.submit_if_idle("a").await.expect("first");
     let _ = collect_until_terminal(&mut events).await.expect("first op");
 
     let snapshot = session.snapshot().await.expect("snapshot");
     assert_eq!(snapshot.operation, OperationStatus::Idle);
 
-    let second = session.submit("b").await.expect("second");
+    let second = session.submit_if_idle("b").await.expect("second");
     assert_ne!(first, second);
     let recorded = collect_until_terminal(&mut events)
         .await
@@ -966,6 +1019,44 @@ async fn session_returns_to_idle_after_finish_and_accepts_next_operation() {
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn operation_state_is_one_replaceable_authoritative_row() {
+    let db = temp_db("replaceable-operation-state");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit_if_idle("state me").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("settle");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+    drop(store);
+
+    let connection = rusqlite::Connection::open(&db).expect("open sqlite");
+    let count: i64 = connection
+        .query_row(
+            "SELECT COUNT(*) FROM operation_state WHERE operation_id = ?1",
+            [operation_id.as_uuid().to_string()],
+            |row| row.get(0),
+        )
+        .expect("count operation state rows");
+    assert_eq!(count, 1);
+    let kind: String = connection
+        .query_row(
+            "SELECT kind FROM operation_state WHERE operation_id = ?1",
+            [operation_id.as_uuid().to_string()],
+            |row| row.get(0),
+        )
+        .expect("read operation state");
+    assert_eq!(kind, "finished");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 
 // ---- Tool registry unit tests ----
@@ -981,6 +1072,7 @@ async fn registry_exposes_core_tool_specs() {
     assert!(names.contains(&"bash"));
     assert!(names.contains(&"search"));
     assert!(names.contains(&"find"));
+    assert!(!names.contains(&"compact"));
 }
 
 #[tokio::test]
@@ -1246,7 +1338,7 @@ async fn tool_loop_success_admits_tools_and_finishes() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("go").await.expect("submit");
+    let operation_id = session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
 
     assert!(matches!(
@@ -1295,7 +1387,7 @@ async fn file_backed_runtime_persists_bounded_result_and_raw_artifact() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -1340,7 +1432,7 @@ async fn tool_error_is_model_visible_and_operation_continues() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("go").await.expect("submit");
+    let operation_id = session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     // An expected tool failure is a model-visible outcome, not a harness
     // failure (DESIGN.md §16.5): the operation completes.
@@ -1371,7 +1463,7 @@ async fn malformed_args_are_denied_before_the_effect_starts() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     // No ToolStarted: the effect never started (DESIGN.md §17.3).
     assert!(
@@ -1401,7 +1493,7 @@ async fn unknown_tool_is_denied_before_the_effect_starts() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         !recorded
@@ -1433,7 +1525,7 @@ async fn cancel_during_tool_cancels_operation_and_kills_process() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("go").await.expect("submit");
+    let operation_id = session.submit_if_idle("go").await.expect("submit");
 
     // Wait until the tool effect has actually started.
     loop {
@@ -1474,7 +1566,7 @@ async fn tool_loop_multiple_calls_run_sequentially_in_one_operation() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("go").await.expect("submit");
+    let operation_id = session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -1515,7 +1607,7 @@ async fn model_step_request_carries_frozen_tool_specs() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -1544,7 +1636,7 @@ async fn steer_projection_reaches_the_next_model_step() {
     let runtime = start_runtime(provider.clone(), ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     session.steer("and also check tests").await.expect("steer");
     let _ = collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
@@ -1591,7 +1683,7 @@ async fn close_while_operating_suspends_instead_of_cancelling() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("slow").await.expect("submit");
+    session.submit_if_idle("slow").await.expect("submit");
     sleep(STEP).await;
 
     session.close().await.expect("close");
@@ -1646,7 +1738,7 @@ async fn restart_reproduces_the_logical_transcript() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("read it").await.expect("submit");
+    session.submit_if_idle("read it").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -1693,14 +1785,20 @@ async fn durable_admission_failure_is_visible_and_non_corrupting() {
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     store.fail_next_write();
 
-    let err = session.submit("lost").await.expect_err("submit must fail");
+    let err = session
+        .submit_if_idle("lost")
+        .await
+        .expect_err("submit must fail");
     assert!(matches!(err, CommandError::Persistence(_)));
     // No operation was installed: the session is still idle and usable.
     let snapshot = session.snapshot().await.expect("snapshot");
     assert_eq!(snapshot.operation, OperationStatus::Idle);
     assert!(snapshot.entries.is_empty());
 
-    let operation_id = session.submit("kept").await.expect("retry succeeds");
+    let operation_id = session
+        .submit_if_idle("kept")
+        .await
+        .expect("retry succeeds");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -1720,7 +1818,7 @@ async fn mid_operation_persistence_failure_fails_the_operation_visibly() {
     let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store.clone());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     // Wait for the tool effect to start, then fail its settlement commit.
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
@@ -1765,7 +1863,7 @@ async fn cancel_request_is_durable() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("slow").await.expect("submit");
+    let operation_id = session.submit_if_idle("slow").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -1806,7 +1904,7 @@ async fn steer_is_durable_as_pending_inbox() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -1918,7 +2016,7 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -1981,7 +2079,10 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
         OperationState::Finished(_) | OperationState::Suspended
     ));
     // New work is accepted immediately.
-    session.submit("new").await.expect("submit after settle");
+    session
+        .submit_if_idle("new")
+        .await
+        .expect("submit after settle");
     collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -2027,7 +2128,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -2098,7 +2199,7 @@ async fn crash_during_model_step_recovers_by_replay() {
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     wait_for_state(&session, |state| {
         matches!(state, OperationState::AssistantEffectPending)
     })
@@ -2162,7 +2263,7 @@ async fn crash_during_replayable_tool_recovers_by_reexecution() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("read it").await.expect("submit");
+    session.submit_if_idle("read it").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -2227,7 +2328,7 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("run").await.expect("submit");
+    session.submit_if_idle("run").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -2272,7 +2373,7 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
 
     // The session accepts new work after the indeterminate settlement.
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("next").await.expect("submit");
+    let operation_id = session.submit_if_idle("next").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -2345,7 +2446,7 @@ async fn trusted_resources_enter_future_model_steps_only_when_host_supplies_them
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         provider
@@ -2379,7 +2480,7 @@ async fn usage_persists_with_the_settlement() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -2420,7 +2521,7 @@ async fn usage_survives_a_failed_operation() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     // The step fails visibly; the usage row must still be committed.
     collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
@@ -2445,11 +2546,11 @@ async fn cache_expectation_records_cold_start_then_stable_prefix_reuse() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("one").await.expect("first submit");
+    session.submit_if_idle("one").await.expect("first submit");
     collect_until_terminal(&mut events)
         .await
         .expect("first collect");
-    session.submit("two").await.expect("second submit");
+    session.submit_if_idle("two").await.expect("second submit");
     collect_until_terminal(&mut events)
         .await
         .expect("second collect");
@@ -2573,7 +2674,7 @@ async fn default_policy_terminates_bash_as_approval_required() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded.iter().any(
@@ -2619,7 +2720,7 @@ async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -2655,7 +2756,7 @@ async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     collect_until_terminal(&mut events).await.expect("collect");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -3323,14 +3424,14 @@ impl Provider for CompactionProbe {
 #[tokio::test]
 async fn large_context_compacts_at_the_continuation_boundary() {
     // 200k usage against a 128k window trips the safety net
-    // (context_tokens > window - 16k reserve, 14.7.4).
+    // (context_tokens > window - 16k reserve, 14.7.3).
     let probe = CompactionProbe::with_window(128_000);
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     // Steer while step 1 streams so the operation continues; compaction
     // before an idle operation buys nothing.
     loop {
@@ -3401,300 +3502,7 @@ fn entry_kind_name(entry: &SessionEntry) -> &'static str {
     }
 }
 
-// ---- Context-usage hints (DESIGN.md §14.7.2) ----
-
-#[derive(Clone)]
-struct HintProbe {
-    log: Arc<Mutex<Vec<crate::provider::ProviderRequest>>>,
-}
-
-impl Provider for HintProbe {
-    fn run(
-        &self,
-        request: crate::provider::ProviderRequest,
-        _cancel: CancellationToken,
-        out: mpsc::Sender<EngineSignal>,
-    ) -> impl Future<Output = ()> + Send {
-        let operation_id = request.operation_id;
-        let step = request.step;
-        self.log.lock().expect("log poisoned").push(request);
-        async move {
-            if step == 1 {
-                let _ = out
-                    .send(EngineSignal::UsageUpdate {
-                        operation_id,
-                        step,
-                        usage: crate::provider::TokenUsage {
-                            input: 200_000,
-                            output: 40_000,
-                            cache_read: 0,
-                            cache_write: 0,
-                        },
-                    })
-                    .await;
-            }
-            let _ = out
-                .send(EngineSignal::TextDelta {
-                    operation_id,
-                    step,
-                    text: "ok".to_owned(),
-                })
-                .await;
-            let _ = out
-                .send(EngineSignal::Completed { operation_id, step })
-                .await;
-        }
-    }
-
-    async fn context_window(&self) -> Option<u64> {
-        Some(1_000_000)
-    }
-}
-
-#[tokio::test]
-async fn usage_hints_are_derived_trailing_messages_never_persisted() {
-    let probe = HintProbe {
-        log: Arc::new(Mutex::new(Vec::new())),
-    };
-    let store = SessionStore::open_in_memory().expect("store");
-    let runtime = start_runtime_with_store(probe.clone(), ToolRegistry::default(), store.clone());
-    let session_id = runtime.session_id();
-    let session = runtime.session();
-    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-
-    // First operation: usage lands (240k total), no hint yet — the
-    // hint rides the NEXT model step's projection.
-    session.submit("one").await.expect("submit");
-    collect_until_terminal(&mut events).await.expect("collect");
-    for _ in 0..100 {
-        if session.snapshot().await.expect("snapshot").operation == OperationStatus::Idle {
-            break;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-
-    // Second operation: the projection now carries the trailing hint.
-    session.submit("two").await.expect("submit");
-    collect_until_terminal(&mut events).await.expect("collect");
-    for _ in 0..100 {
-        if session.snapshot().await.expect("snapshot").operation == OperationStatus::Idle {
-            break;
-        }
-        sleep(Duration::from_millis(20)).await;
-    }
-
-    session.close().await.expect("close");
-    runtime.join().await.expect("join");
-
-    let requests = probe.log.lock().expect("log poisoned").clone();
-    assert!(requests.len() >= 2, "two operations, at least two steps");
-    let first = &requests[0];
-    assert!(
-        !first
-            .plan
-            .messages
-            .iter()
-            .any(|m| m.prompt_text().contains("[ctx")),
-        "the first step has no prior usage; no hint may appear"
-    );
-    let later = &requests[1];
-    let hinted = later
-        .plan
-        .messages
-        .last()
-        .map(|m| m.prompt_text().contains("[ctx 240k/1m] [>200k]"))
-        .unwrap_or(false);
-    assert!(
-        hinted,
-        "second projection must carry the trailing-edge hint; got {:?}",
-        later.plan.messages.last().map(|m| m.prompt_text())
-    );
-
-    // The hint is derived: the durable transcript has no hint entry.
-    let loaded = store.load(session_id).await.expect("load");
-    assert!(
-        loaded.entries.iter().all(|entry| {
-            !serde_json::to_string(entry)
-                .map(|text| text.contains("[ctx"))
-                .unwrap_or(true)
-        }),
-        "hints are never persisted"
-    );
-}
-
-// ---- Model-invoked compaction (DESIGN.md §14.7.3) ----
-
-#[derive(Clone)]
-struct CompactToolProbe {
-    log: Arc<Mutex<Vec<ProviderRequest>>>,
-    compact_arguments: serde_json::Value,
-}
-
-impl CompactToolProbe {
-    fn requests(&self) -> Vec<ProviderRequest> {
-        self.log.lock().expect("log poisoned").clone()
-    }
-}
-
-impl Provider for CompactToolProbe {
-    fn run(
-        &self,
-        request: ProviderRequest,
-        _cancel: CancellationToken,
-        out: mpsc::Sender<EngineSignal>,
-    ) -> impl Future<Output = ()> + Send {
-        let operation_id = request.operation_id;
-        let step = request.step;
-        let is_compaction = request.plan.messages.iter().any(|message| {
-            matches!(message, crate::context::ContextMessage::User { content }
-                if content.contains("Summarize the conversation"))
-        });
-        self.log.lock().expect("log poisoned").push(request);
-        async move {
-            if step == 1 {
-                let _ = out
-                    .send(EngineSignal::ToolCallCompleted {
-                        operation_id,
-                        step,
-                        call: crate::tool::ToolCall {
-                            operation_id,
-                            call_id: 1,
-                            name: "compact".to_owned(),
-                            arguments: self.compact_arguments.clone(),
-                        },
-                    })
-                    .await;
-            }
-            let text = if is_compaction {
-                "compact-summary: decisions kept; next step known"
-            } else {
-                "recovery complete"
-            };
-            let _ = out
-                .send(EngineSignal::TextDelta {
-                    operation_id,
-                    step,
-                    text: text.to_owned(),
-                })
-                .await;
-            let _ = out
-                .send(EngineSignal::Completed { operation_id, step })
-                .await;
-        }
-    }
-}
-
-async fn run_compact_tool_test(
-    arguments: serde_json::Value,
-) -> (Vec<ProviderRequest>, SessionStore, crate::SessionId) {
-    let probe = CompactToolProbe {
-        log: Arc::new(Mutex::new(Vec::new())),
-        compact_arguments: arguments,
-    };
-    let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
-    let session_id = runtime.session_id();
-    let session = runtime.session();
-    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
-    let recorded = collect_until_terminal(&mut events).await.expect("collect");
-    assert!(
-        recorded
-            .iter()
-            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. })),
-        "operation must finish cleanly: {recorded:?}"
-    );
-    session.close().await.expect("close");
-    runtime.join().await.expect("join");
-    (probe.requests(), store, session_id)
-}
-
-#[tokio::test]
-async fn compact_tool_compacts_with_instructions_and_recovers() {
-    let (requests, store, session_id) = run_compact_tool_test(json!({
-        "instructions": "keep the file paths and the decision",
-        "continue_after_compaction": true
-    }))
-    .await;
-
-    // Step 1: plain. Step 2: compaction with the caller's instructions.
-    // Step 3: the hidden recovery turn over the summary baseline.
-    assert_eq!(
-        requests.len(),
-        3,
-        "tool -> compaction -> recovery: {requests:?}"
-    );
-    let summarize = &requests[1].plan.messages;
-    assert!(
-        summarize.iter().any(|m| m
-            .prompt_text()
-            .contains("keep the file paths and the decision")),
-        "preservation instructions must ride the summarize step"
-    );
-    let recovery = &requests[2].plan.messages;
-    assert!(
-        recovery
-            .iter()
-            .any(|m| m.prompt_text().contains("compact-summary")),
-        "recovery projects the summary baseline"
-    );
-    assert!(
-        recovery
-            .iter()
-            .any(|m| m.prompt_text().contains("Resume only the unfinished work")),
-        "recovery turn carries the resume instruction: {recovery:?}"
-    );
-
-    // The compaction entry is durable.
-    let loaded = store.load(session_id).await.expect("load");
-    assert!(
-        loaded
-            .entries
-            .iter()
-            .any(|(_, entry)| matches!(entry, crate::session::SessionEntry::Compaction { .. })),
-        "compaction must be a durable semantic entry"
-    );
-}
-
-#[tokio::test]
-async fn compact_tool_without_continue_does_not_recover() {
-    let (requests, _store, _session_id) =
-        run_compact_tool_test(json!({ "instructions": "keep it short" })).await;
-    assert_eq!(
-        requests.len(),
-        2,
-        "no recovery turn without continue_after_compaction: {requests:?}"
-    );
-}
-
-#[tokio::test]
-async fn malformed_compact_arguments_deny_model_visibly() {
-    let (requests, store, session_id) = run_compact_tool_test(json!({ "instructions": 42 })).await;
-    assert_eq!(
-        requests.len(),
-        2,
-        "the denial result feeds one continuation step, no compaction: {requests:?}"
-    );
-    assert!(
-        !requests.iter().any(|request| request
-            .plan
-            .messages
-            .iter()
-            .any(|m| m.prompt_text().contains("Summarize the conversation"))),
-        "a denied compact must never start compaction"
-    );
-    let loaded = store.load(session_id).await.expect("load");
-    assert!(
-        loaded.entries.iter().any(
-            |(_, entry)| matches!(entry, crate::session::SessionEntry::ToolResult { result }
-                if matches!(result, crate::tool::ToolResult::Err { error, .. }
-                    if error.contains("instructions must be a string")))
-        ),
-        "the denial must be model-visible as a tool error"
-    );
-}
-
-// ---- Overflow recovery: one compaction, one retry (DESIGN.md §14.7.5) ----
+// ---- Overflow recovery: one compaction, one retry (DESIGN.md §14.7.4) ----
 
 #[derive(Clone)]
 struct OverflowProbe {
@@ -3773,7 +3581,7 @@ async fn context_overflow_compacts_once_and_retries() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -3816,7 +3624,7 @@ async fn repeated_overflow_fails_visibly() {
     let runtime = Runtime::start_with_store(probe.clone(), ToolRegistry::default(), store.clone());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -3934,7 +3742,7 @@ async fn mcp_tool_flows_through_the_normal_operation_path() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -3976,7 +3784,7 @@ async fn default_policy_requires_approval_for_mcp_tools() {
     let runtime = Runtime::start_with_store(provider, catalog, store);
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded.iter().any(
@@ -4019,7 +3827,7 @@ async fn model_step_budget_fails_the_operation_visibly() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded.iter().any(
@@ -4070,7 +3878,7 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -4160,7 +3968,7 @@ async fn two_read_only_children_run_and_report_lineage() {
 
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("fan out").await.expect("submit");
+    session.submit_if_idle("fan out").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -4221,7 +4029,7 @@ async fn child_cannot_widen_capabilities() {
 
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("escape").await.expect("submit");
+    session.submit_if_idle("escape").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -4294,7 +4102,7 @@ async fn budget_stops_a_runaway_child() {
 
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("run away").await.expect("submit");
+    session.submit_if_idle("run away").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -4377,7 +4185,7 @@ async fn parent_cancel_cancels_running_children() {
 
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("cancel me").await.expect("submit");
+    let operation_id = session.submit_if_idle("cancel me").await.expect("submit");
     // Wait for the child provider to record its token, then cancel.
     for _ in 0..100 {
         if !tokens.lock().expect("tokens").is_empty() {
@@ -4493,7 +4301,7 @@ async fn thinking_deltas_stream_but_stay_out_of_the_transcript() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("hi").await.expect("submit");
+    session.submit_if_idle("hi").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
 
     let mut thinking = Vec::new();
@@ -4532,7 +4340,7 @@ async fn tool_settled_event_carries_a_bounded_preview() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
 
     let previews: Vec<Option<String>> = recorded
@@ -4570,7 +4378,7 @@ async fn switching_provider_swaps_models_at_step_boundaries() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(
         texts(&recorded),
@@ -4595,13 +4403,13 @@ async fn switching_provider_swaps_models_at_step_boundaries() {
     let runtime = start_runtime(provider, ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(texts(&recorded), vec!["first\n".to_owned()]);
 
     let previous = session.switch_model("b").await.expect("switch");
     assert_eq!(previous, "a");
-    session.submit("again").await.expect("submit");
+    session.submit_if_idle("again").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(texts(&recorded), vec!["switched-to-b\n".to_owned()]);
 
@@ -4622,7 +4430,7 @@ async fn model_switch_refuses_an_id_the_resolver_cannot_build() {
     assert!(matches!(err, Err(crate::CommandError::UnsupportedModel(_))));
     // The accepted model is unchanged and still works.
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert_eq!(texts(&recorded), vec!["ok".to_owned()]);
 
@@ -4648,7 +4456,7 @@ async fn reasoning_draft_clears_on_provider_failure() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(matches!(
         recorded.last(),
@@ -4657,7 +4465,7 @@ async fn reasoning_draft_clears_on_provider_failure() {
 
     // The next operation must not resurrect the failed step's reasoning
     // (the exhausted script completes silently with no deltas).
-    session.submit("again").await.expect("submit");
+    session.submit_if_idle("again").await.expect("submit");
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(
         recorded
@@ -4697,7 +4505,7 @@ async fn crash_recovery_replays_with_the_persisted_model_not_the_launch_default(
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
     wait_for_state(&session, |state| {
         matches!(state, OperationState::AssistantEffectPending)
     })
@@ -4838,7 +4646,7 @@ async fn event_lag_is_signaled_reliably_and_snapshot_carries_live_draft() {
     let runtime = start_runtime(ScriptedProvider::new(messages), ToolRegistry::default());
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("goal").await.expect("submit");
+    session.submit_if_idle("goal").await.expect("submit");
 
     // Do not read while 80 deltas overflow the 64-slot ring.
     sleep(Duration::from_millis(300)).await;
@@ -4882,7 +4690,7 @@ async fn cancel_during_lag_is_visible_after_resubscribe() {
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    let operation_id = session.submit("goal").await.expect("submit");
+    let operation_id = session.submit_if_idle("goal").await.expect("submit");
     // Overflow the ring without reading, then cancel mid-step.
     sleep(Duration::from_millis(300)).await;
     session.cancel(operation_id).await.expect("cancel");

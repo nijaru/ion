@@ -82,7 +82,7 @@ model generation
     ↓
 zero or more tool/effect cycles
     ↓
-steer / follow-up / approval / cancellation
+steer / queued operation / approval / cancellation
     ↓
 settle operation
     ↓
@@ -169,7 +169,7 @@ This is the key synthesis of OTP-style ownership with Durable-Object-style persi
 
 ## P4. Accepted intent is durable before acknowledgment
 
-When `submit`, `steer`, `follow_up`, an approval decision, or semantic cancellation returns success, the runtime must already contain enough durable state to recover that acceptance after process failure.
+When `submit_if_idle`, `enqueue`, `steer`, an approval decision, or semantic cancellation returns success, the runtime must already contain enough durable state to recover that acceptance after process failure.
 
 Do not acknowledge queue insertion and persist later.
 
@@ -389,7 +389,7 @@ The currently loaded in-process owner of one session's mutable live state.
 
 The durable unit of accepted work while a session is busy.
 
-For an interactive run, an operation begins with an accepted prompt and includes all automatic continuations needed to return the session to idle: model steps, tool calls, accepted steering, accepted follow-ups, approvals, retries, and automatic compaction.
+For an interactive run, an operation begins with an accepted prompt and includes all automatic continuations needed to return the session to idle: model steps, tool calls, accepted steering, approvals, retries, and automatic compaction. A later prompt is a distinct queued operation, not a continuation of the current operation.
 
 Manual maintenance actions such as an explicit compaction MAY later be represented as other operation kinds.
 
@@ -419,9 +419,8 @@ Durably accepted input that has not yet been applied to model-visible session hi
 
 Kinds initially:
 
-- `Prompt` — opens an operation when idle;
-- `Steer` — joins the active operation and is applied at the next safe continuation boundary;
-- `FollowUp` — joins the active operation but is applied after the current response/continuation reaches its follow-up boundary.
+- `Prompt` — the root input for one accepted operation;
+- `Steer` — joins the active operation and is applied at the next safe continuation boundary.
 
 ## Effect
 
@@ -533,7 +532,7 @@ RuntimeHandle
 SessionHandle
   submit(...)
   steer(...)
-  follow_up(...)
+  enqueue(...)
   switch_model(...)
   cancel(...)
   approve(...)
@@ -554,7 +553,7 @@ Commands with correctness significance use request/reply semantics.
 Example:
 
 ```text
-SessionHandle.submit(message)
+SessionHandle.submit_if_idle(message)
     ↓ mailbox
 SessionRuntime validates admission
     ↓
@@ -580,7 +579,7 @@ All runtime channels are bounded.
 Never silently drop:
 
 - user input;
-- steer/follow-up;
+- steer/queued operation;
 - cancellation;
 - approval decision;
 - effect outcome;
@@ -590,7 +589,7 @@ A full correctness channel applies backpressure or returns a visible overload er
 
 ---
 
-# 9. Input, steering, follow-up, and cancellation
+# 9. Input, steering, queued operations, and cancellation
 
 ## 9.1 Prompt
 
@@ -615,13 +614,17 @@ Rules:
 - v0 does not attempt magical mid-token provider injection;
 - if a provider later supports a clean native steering primitive, the adapter may optimize without changing semantic ordering.
 
-## 9.3 Follow-up
+## 9.3 Queued operation
 
-A `follow_up` accepted while an operation is active belongs to that operation. It is delivered after the current response/continuation reaches the follow-up checkpoint, then the same operation continues until idle.
+`enqueue` always creates one distinct durable operation. If an operation is
+active, the new operation stays in `Accepted` state until the current
+operation reaches a terminal outcome; promotion follows acceptance order.
+If the session is idle, `enqueue` may start immediately. `submit_if_idle`
+rejects when any active or queued operation exists.
 
-This keeps one serialized unit of work per session while preserving durable user intent.
-
-If the session is idle, the UI should use `submit`; the core MAY normalize an idle follow-up to submit or reject it explicitly, but must not invent ambiguous ordering.
+`steer` is the only active-operation inbox path. It modifies the current
+operation's next safe reasoning boundary and never creates a queued
+operation.
 
 ## 9.4 Cancellation
 
@@ -717,7 +720,7 @@ AssistantEffectPending
   → stream ephemeral draft events
   → provider completes
   → atomically commit completed assistant semantic output + usage + next state
-      ├─ no tool calls → checkpoint / follow-up / finish
+      ├─ no tool calls → checkpoint / finish
       └─ tool calls    → ToolsPlanned
 ```
 
@@ -833,9 +836,9 @@ accepted_at
 root_inbox_id
 ```
 
-### `operation_states`
+### `operation_state`
 
-Append-only **total** checkpoints:
+One replaceable **total** checkpoint per operation:
 
 ```text
 operation_id
@@ -843,10 +846,13 @@ state_seq
 state_kind
 state_payload
 created_at
-PRIMARY KEY(operation_id, state_seq)
+PRIMARY KEY(operation_id)
 ```
 
-Each row is enough to know exactly what may happen next. Do not store a chain of tiny patches that must be replayed correctly to infer recovery state.
+Each row is enough to know exactly what may happen next. `state_seq` is a
+diagnostic transition counter, not a second history. Do not store a chain of
+tiny patches that must be replayed correctly to infer recovery state; entries
+and effects retain the semantic and external-effect history.
 
 ### `inbox_items`
 
@@ -854,7 +860,7 @@ Each row is enough to know exactly what may happen next. Do not store a chain of
 id
 session_id
 operation_id
-kind: prompt | steer | follow_up
+kind: prompt | steer
 accepted_seq/order
 payload
 status: pending | applied | rejected
@@ -1141,7 +1147,7 @@ Stable-prefix rules:
 - avoid adding/removing/reordering tools every turn;
 - make compaction an explicit cache reset;
 - record provider cache-read/cache-write metrics when available. This
-  is required, not optional: the compaction safety net (14.7.4)
+  is required, not optional: the compaction safety net (14.7.3)
   computes `context_tokens` from full usage including cache reads.
 
 Tool/config changes that invalidate the prefix should be observable as such.
@@ -1196,69 +1202,28 @@ Do not aggressively prune arbitrary middle history by default. It harms both evi
 
 ### 14.7.1 Who decides to compact
 
-Compaction is decided at three levels, in order of preference:
+The initial Ion baseline keeps compaction harness-owned and predictable:
 
-1. **The model, at a genuine task boundary**, informed by usage hints
-   (14.7.2) and acting through the `compact` tool (14.7.3). This is the
-   primary path: the model knows whether it is mid-refactor or between
-   tasks; a fixed token count does not.
-2. **The harness, as a safety net** (14.7.4), only when measured usage
-   approaches the model's actual context window. The threshold is
-   relative to the window, never a fixed token count: a fixed number is
-   wrong for every model except the one it was tuned for.
-3. **Overflow recovery** (14.7.5), when the provider rejects a request
-   because the context exceeded the window despite the estimates.
+1. an explicit user request at a safe continuation boundary;
+2. the harness pressure threshold, relative to the selected model's actual
+   context window;
+3. one bounded overflow recovery when the provider rejects an oversized
+   request.
 
-### 14.7.2 Context-usage hints
+The baseline does not expose a model-directed `compact` tool or synthetic
+context-usage hints. A future extension/provider integration MAY add model-aware or
+provider-native compaction only when it retains a readable local summary and
+does not become the sole semantic source.
 
-The projector MAY append a synthetic trailing user message carrying
-usage data, so the model can reason about its own context budget:
+### 14.7.2 Explicit compaction
 
-```text
-[ctx 128k/1m]
-```
+`SessionHandle.compact(instructions?)` records a maintenance request while an
+operation is active. The harness consumes it at the next continuation
+boundary, commits a ReplaySafe compaction effect, and persists a readable
+summary entry. The request does not create a hidden recovery turn; ordinary
+continuation proceeds from the summary baseline.
 
-- Data only. No priming language ("context is growing"); the number is
-  the signal. Labels prime reflexive compaction.
-- A `[>200k]` marker flags the higher-cost tier; it does not request
-  action.
-- Hints are derived, never persisted: they are computed at projection
-  time from the usage ledger (14.4) exactly like the system section,
-  and re-derivable from durable usage entries. They must sit at the
-  trailing edge of the prompt so they do not invalidate prefix-cache
-  reuse of earlier content.
-- Thresholds: the first hint when usage crosses `min(0.5 × window,
-  128k)` tokens; subsequent hints are throttled so they do not repeat
-  on every step — emit again only when usage has grown by a material
-  delta (on the order of 5% of the window or 25k tokens, whichever is
-  smaller).
-- If the model's context window is unknown, hint at the 128k absolute
-  threshold and omit the denominator (`[ctx 128k/?]`).
-
-### 14.7.3 Model-invoked compaction
-
-Expose a `compact` tool to the model:
-
-```text
-compact(instructions?: string, continue_after_compaction?: bool)
-```
-
-- Policy: always allowed; compaction is a harness maintenance action,
-  not a capability grant.
-- Semantics: the tool call ends the current run's planning. The harness
-  lets the run settle (durable settlement of the current operation),
-  then commits the Compaction effect intent (ReplaySafe, §12) with the
-  caller's instructions recorded in `effective_input`.
-- `continue_after_compaction`: when true, after the compaction commits
-  the harness starts one hidden recovery turn whose prompt instructs
-  the model to resume only unfinished work without repeating settled
-  effects, then give a final response. The recovery turn is a normal
-  accepted operation marked hidden in presentation; it is durable like
-  any other.
-- Failure follows the existing rule: continue without a baseline
-  (warn), unless cancel was requested.
-
-### 14.7.4 Safety-net automatic compaction
+### 14.7.3 Safety-net automatic compaction
 
 At continuation boundaries only (run settled, before the next model
 step — compacting mid-run buys nothing), the harness compacts when:
@@ -1274,11 +1239,11 @@ context_tokens > context_window − reserve_tokens
   and is configurable.
 - Requires a known context window from model metadata (15.x). When the
   window is unknown, the safety net is disabled and overflow recovery
-  (14.7.5) is the backstop.
+  (14.7.4) is the backstop.
 - The re-compaction guard stands: never compact twice in a row on the
   same boundary.
 
-### 14.7.5 Overflow recovery
+### 14.7.4 Overflow recovery
 
 When the provider rejects a request because the context exceeded the
 window, the harness MAY run one compaction and retry the step once.
@@ -1293,9 +1258,9 @@ retry fails the operation visibly; it must not loop.
 
 Provider adapters expose per-model metadata, minimally the context
 window size, as part of the adapter contract (15.x). The compaction
-hints (14.7.2) and safety net (14.7.4) consume it; unknown windows
-degrade gracefully (absolute hint threshold, safety net disabled,
-overflow recovery as backstop). Adapters MUST NOT guess a window.
+harness compaction (14.7.3) consumes it; unknown windows disable the
+safety net and leave overflow recovery as the backstop. Adapters MUST NOT
+guess a window.
 
 The host-selected launch model is only an initial default. Once a
 session exists, `SessionRuntime` is the sole authority for the selected
@@ -1321,7 +1286,7 @@ selection authority. It selects from the immutable request, releases any
 cache lock before metadata or generation I/O, and never holds a lock for
 a whole model step.
 
-Changing models resets model-relative derived hint/compaction metadata.
+Changing models resets model-relative derived compaction metadata.
 A context window cached for one model MUST NOT be reused for another.
 
 ---
@@ -2074,7 +2039,7 @@ For v0 one-shot mode the code may still instantiate only one session task, but o
 
 ### Current turn-centric execution
 
-Replace “one live turn” as the top-level correctness unit with durable `Operation` state spanning model steps, tools, steer/follow-up, cancellation, and recovery.
+Replace “one live turn” as the top-level correctness unit with durable `Operation` state spanning model steps, tools, steering, queued operations, cancellation, and recovery.
 
 ### Counter IDs
 
@@ -2116,7 +2081,7 @@ before effect intent commit
 after effect intent commit / before effect starts
 after external effect / before settlement commit
 after settlement commit
-while applying steer/follow-up
+while applying steering or promoting queued work
 while cancelling
 while compacting
 while closing
@@ -2293,9 +2258,9 @@ is the full context architecture:
 - prompt-cache discipline/metrics;
 - provider capability flags;
 - strict tool-call handling;
-- readable compaction per 14.7: usage hints, the model-invoked
-  `compact` tool, the window-relative safety net, overflow recovery,
-  and full usage capture (cache reads) in the ledger;
+- readable compaction per 14.7: explicit/harness-owned maintenance, the
+  window-relative safety net, bounded overflow recovery, and full usage
+  capture (cache reads) in the ledger;
 - instruction/context changes at safe boundaries;
 - trust + approval pipeline.
 
@@ -2419,9 +2384,9 @@ revisited.
 These should be resolved by evidence during their owning implementation work:
 
 1. Exact Rust variants/fields of total `OperationState`.
-2. Whether `operation_states` remains append-only total snapshots forever or later gets compaction.
+2. Whether the replaceable `operation_state` row needs a separate diagnostic transition log later.
 3. Exact context manifest storage encoding/content-addressing scheme.
-4. ~~Exact automatic compaction thresholds~~ Resolved (2026-08-20, §14.7.1–14.7.5): hints at min(50% window, 128k) throttled by delta; safety net at `window − reserve_tokens` (16k default); overflow recovery retries once. Summarization prompt remains open until live tuning.
+4. ~~Exact automatic compaction thresholds~~ Resolved (2026-08-23, §14.7.1–14.7.4): harness safety net at `window − reserve_tokens` (16k default); overflow recovery retries once. Model-directed tools and synthetic hints remain deferred until a provider/extension contract justifies them.
 5. Exact default child concurrency/depth/token budgets.
 6. Exact initial child workspace modes and when worktree support becomes worth it.
 7. OS credential backend and migration from environment variables.
@@ -2445,7 +2410,7 @@ This design intentionally does **not** average the architecture of popular codin
 Why it matters:
 
 - closest product philosophy to Ion;
-- current redesign directly addresses durable accepted operations, single-writer session ownership, recovery, steering/follow-up, and external-effect uncertainty;
+- current redesign directly addresses durable accepted operations, single-writer session ownership, recovery, steering, queued work, and external-effect uncertainty;
 - maintains a minimal model-facing harness while adding durable substrate.
 
 Primary material:
@@ -2647,4 +2612,3 @@ THEN
 context/provider semantics → TUI/print/JSON → MCP → bounded children → ACP →
 subprocess extensions → optional daemon/remote → WASM only if justified.
 ```
-

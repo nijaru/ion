@@ -15,14 +15,11 @@ use crate::tool::{ToolCall, ToolResult, ToolSpec};
 /// session history (DESIGN.md §6).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum InboxKind {
-    /// Opens an operation when idle.
+    /// Root input for an accepted operation.
     Prompt,
     /// Joins the active operation; applied at the next safe continuation
     /// boundary (the next model step).
     Steer,
-    /// Joins the active operation; applied after the current response
-    /// reaches its follow-up boundary.
-    FollowUp,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -144,12 +141,8 @@ pub enum Transition {
     ApplyInbox {
         item: InboxItem,
     },
-    /// Finish the operation after a model-invoked compaction without
-    /// `continue_after_compaction` (14.7.3): the tool call ended the
-    /// run's planning, so there is nothing left to prompt.
-    FinishAfterCompaction,
     /// The provider rejected the step because the context exceeded the
-    /// window (14.7.5): settle the failed attempt without entries and
+    /// window (14.7.4): settle the failed attempt without entries and
     /// move to compaction; the retry is the natural continuation after
     /// the summary baseline lands.
     OverflowCompaction {
@@ -273,9 +266,6 @@ pub struct OperationMachine {
     /// Accepted steers, applied at the next reasoning boundary (the next
     /// model step, including tool continuations) — §9.2.
     steers: Vec<InboxItem>,
-    /// Accepted follow-ups, applied only after the current response
-    /// reaches its follow-up boundary (NeedContinuation) — §9.3.
-    followups: Vec<InboxItem>,
     /// Immutable capability snapshot for every model step of this
     /// operation (DESIGN.md §18.2).
     tools: Vec<ToolSpec>,
@@ -306,7 +296,6 @@ impl OperationMachine {
             cancel_requested: false,
             state: OperationState::Accepted,
             steers: Vec::new(),
-            followups: Vec::new(),
             tools,
             prompt,
         };
@@ -323,14 +312,12 @@ impl OperationMachine {
         state: OperationState,
         cancel_requested: bool,
         steers: Vec<InboxItem>,
-        followups: Vec<InboxItem>,
     ) -> Self {
         Self {
             operation_id,
             prompt,
             state,
             steers,
-            followups,
             tools,
             cancel_requested,
         }
@@ -380,16 +367,10 @@ impl OperationMachine {
         !self.steers.is_empty()
     }
 
-    /// True when queued follow-ups wait for the follow-up boundary.
-    #[must_use]
-    pub fn has_queued_followups(&self) -> bool {
-        !self.followups.is_empty()
-    }
-
     /// True when any accepted inbox item is still pending.
     #[must_use]
     pub fn has_queued_inbox(&self) -> bool {
-        self.has_queued_steers() || self.has_queued_followups()
+        self.has_queued_steers()
     }
 
     /// Apply one transition. Invalid state/transition pairs are typed
@@ -418,7 +399,6 @@ impl OperationMachine {
                 covers_through_seq,
             } => self.compaction_completed(summary, covers_through_seq),
             Transition::CompactionFailed => self.compaction_failed(),
-            Transition::FinishAfterCompaction => self.finish_after_compaction(),
             Transition::SettleSuspended => self.settle_suspended(),
             Transition::OverflowCompaction { plan } => self.overflow_compaction(plan),
             Transition::Suspend => self.suspend(),
@@ -434,9 +414,6 @@ impl OperationMachine {
                     | OperationState::NeedAssistant
                     | OperationState::NeedContinuation
             ),
-            // Follow-up waits for the response's follow-up boundary
-            // (§9.3); it never joins between tool continuations.
-            InboxKind::FollowUp => matches!(self.state, OperationState::NeedContinuation),
             InboxKind::Prompt => {
                 return Err(TransitionError {
                     state: state_name(&self.state),
@@ -463,7 +440,6 @@ impl OperationMachine {
         ) {
             match item.kind {
                 InboxKind::Steer => self.steers.push(item),
-                InboxKind::FollowUp => self.followups.push(item),
                 InboxKind::Prompt => unreachable!("rejected above"),
             }
             Ok(Applied {
@@ -833,22 +809,6 @@ impl OperationMachine {
         })
     }
 
-    fn finish_after_compaction(&mut self) -> Result<Applied, TransitionError> {
-        if !matches!(self.state, OperationState::NeedAssistant) {
-            return Err(TransitionError {
-                state: state_name(&self.state),
-                transition: "finish_after_compaction",
-            });
-        }
-        self.state = OperationState::Finished(OperationOutcome::Completed);
-        Ok(Applied {
-            state: self.state.clone(),
-            entries: Vec::new(),
-            intents: Vec::new(),
-            cancel_effects: false,
-        })
-    }
-
     fn compaction_failed(&mut self) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::CompactionPending) {
             return Err(TransitionError {
@@ -891,17 +851,6 @@ impl OperationMachine {
         let mut applied = Vec::new();
         while let Some(item) = self.steers.first().cloned() {
             self.steers.remove(0);
-            applied.push(self.apply_inbox(item)?);
-        }
-        Ok(applied)
-    }
-
-    /// Drain queued follow-ups at the follow-up boundary
-    /// ([`OperationState::NeedContinuation`]).
-    pub fn drain_followups(&mut self) -> Result<Vec<Applied>, TransitionError> {
-        let mut applied = Vec::new();
-        while let Some(item) = self.followups.first().cloned() {
-            self.followups.remove(0);
             applied.push(self.apply_inbox(item)?);
         }
         Ok(applied)

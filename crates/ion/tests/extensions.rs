@@ -73,7 +73,7 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit("go").await.expect("submit");
+    session.submit_if_idle("go").await.expect("submit");
     loop {
         let Ok(event) = events.recv().await else {
             break;

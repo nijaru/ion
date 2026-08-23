@@ -139,7 +139,7 @@ where
                 };
                 // Subscribe before submit: recovery events are live-only.
                 let (_snapshot, events) = session.handle.subscribe().await.expect("subscribe");
-                match session.handle.submit(text).await {
+                match session.handle.submit_if_idle(text).await {
                     Ok(operation_id) => {
                         session.active_prompt = Some((id.clone().expect("request"), operation_id));
                         let output = Arc::clone(&output);

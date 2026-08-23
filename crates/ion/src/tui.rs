@@ -51,6 +51,7 @@ impl HostConfig {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
     Submit { text: String },
+    Enqueue { text: String },
     Steer { text: String },
     Compact { instructions: Option<String> },
     SwitchModel { model: String },
@@ -67,6 +68,8 @@ pub enum UiMessage {
     Paste(String),
     SubmitAccepted,
     SubmitRejected(String),
+    EnqueueAccepted,
+    EnqueueRejected(String),
     CompactAccepted,
     SteerAccepted,
     SteerRejected(String),
@@ -88,6 +91,7 @@ pub enum Action {
     Quit,
     Cancel,
     Submit,
+    SteerCurrent,
     ToggleToolOutput,
     ToggleThinking,
     HistoryPrevious,
@@ -136,6 +140,12 @@ impl Default for KeyMap {
             Action::Submit,
             KeyCode::Enter,
             Modifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::SteerCurrent,
+            KeyCode::Enter,
+            Modifiers::SHIFT,
         );
         bind(
             &mut bindings,
@@ -398,7 +408,16 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.composer.clear();
             (state, None)
         }
-        UiMessage::SubmitRejected(message) | UiMessage::SteerRejected(message) => {
+        UiMessage::EnqueueAccepted => {
+            state
+                .pending_scrollback
+                .push(Line::from("queued for the next operation").dim());
+            state.composer.clear();
+            (state, None)
+        }
+        UiMessage::SubmitRejected(message)
+        | UiMessage::EnqueueRejected(message)
+        | UiMessage::SteerRejected(message) => {
             state
                 .pending_scrollback
                 .push(Line::from(format!("! {message}")).red());
@@ -459,6 +478,8 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
                 "/model [id]             - show or switch the model",
+                "enter                   - submit or queue the next operation",
+                "shift+enter             - steer the active operation",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
                 "/help                   - this list",
@@ -537,8 +558,20 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             state.history.push(text.clone());
             match &state.status {
                 UiStatus::Idle => (state, Some(UiEffect::Submit { text })),
-                UiStatus::Working { .. } => (state, Some(UiEffect::Steer { text })),
+                UiStatus::Working { .. } => (state, Some(UiEffect::Enqueue { text })),
             }
+        }
+        Action::SteerCurrent => {
+            let text = state.composer.trim().to_owned();
+            if text.is_empty() || matches!(state.status, UiStatus::Idle) {
+                return (state, None);
+            }
+            state.composer.clear();
+            state.cursor = 0;
+            state.history_index = None;
+            state.history_stash = None;
+            state.history.push(text.clone());
+            (state, Some(UiEffect::Steer { text }))
         }
         Action::CursorLeft if state.cursor > 0 => {
             state.cursor -= 1;
@@ -1430,7 +1463,7 @@ async fn dispatch(
         UiEffect::Quit => {
             state.quit_requested = true;
         }
-        UiEffect::Submit { text } => match session.submit(text).await {
+        UiEffect::Submit { text } => match session.submit_if_idle(text).await {
             Ok(_) => {
                 let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
                 *state = next;
@@ -1439,6 +1472,19 @@ async fn dispatch(
                 let (next, _) = update(
                     std::mem::take(state),
                     UiMessage::SubmitRejected(err.to_string()),
+                );
+                *state = next;
+            }
+        },
+        UiEffect::Enqueue { text } => match session.enqueue(text).await {
+            Ok(_) => {
+                let (next, _) = update(std::mem::take(state), UiMessage::EnqueueAccepted);
+                *state = next;
+            }
+            Err(err) => {
+                let (next, _) = update(
+                    std::mem::take(state),
+                    UiMessage::EnqueueRejected(err.to_string()),
                 );
                 *state = next;
             }
@@ -1803,13 +1849,32 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn working_composer_steers_instead_of_submitting() {
+    fn working_composer_queues_on_plain_enter() {
         let mut state = UiState::new();
         state.status = UiStatus::Working {
             operation: "thinking".to_owned(),
         };
         state.composer = "wait".to_owned();
         let (_, effect) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::Enqueue {
+                text: "wait".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn working_composer_steers_on_shift_enter() {
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "thinking".to_owned(),
+        };
+        state.composer = "wait".to_owned();
+        let (_, effect) = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Enter, Modifiers::SHIFT)),
+        );
         assert_eq!(
             effect,
             Some(UiEffect::Steer {

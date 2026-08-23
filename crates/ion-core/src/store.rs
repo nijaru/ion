@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 8;
+const SCHEMA_VERSION: i64 = 10;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database
@@ -91,16 +91,17 @@ CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
     kind TEXT NOT NULL,
-    accepted_at INTEGER NOT NULL
+    accepted_at INTEGER NOT NULL,
+    accepted_seq INTEGER NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS operation_states (
+CREATE TABLE IF NOT EXISTS operation_state (
     operation_id TEXT NOT NULL REFERENCES operations(id),
     state_seq INTEGER NOT NULL,
     kind TEXT NOT NULL,
     payload TEXT NOT NULL,
     created_at INTEGER NOT NULL,
-    PRIMARY KEY (operation_id, state_seq)
+    PRIMARY KEY (operation_id)
 );
 
 CREATE TABLE IF NOT EXISTS inbox_items (
@@ -287,6 +288,7 @@ pub struct LoadedSession {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LoadedOperation {
     pub id: OperationId,
+    pub accepted_seq: u64,
     pub latest: (u64, CheckpointPayload),
     pub capability_snapshot: crate::context::CapabilitySnapshot,
 }
@@ -656,12 +658,19 @@ fn begin_operation(
     entry: &EntryRecord,
 ) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
+    let accepted_seq: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(accepted_seq), 0) + 1 FROM operations WHERE session_id = ?1",
+        [session_id.as_uuid().to_string()],
+        |row| row.get(0),
+    )?;
     tx.execute(
-        "INSERT INTO operations (id, session_id, kind, accepted_at) VALUES (?1, ?2, 'run', ?3)",
+        "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+         VALUES (?1, ?2, 'run', ?3, ?4)",
         rusqlite::params![
             operation_id.as_uuid().to_string(),
             session_id.as_uuid().to_string(),
-            now_ms()
+            now_ms(),
+            accepted_seq,
         ],
     )?;
     insert_inbox(&tx, session_id, operation_id, root_inbox)?;
@@ -983,8 +992,13 @@ fn insert_checkpoint(
     let payload = serde_json::to_string(&checkpoint.payload)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     connection.execute(
-        "INSERT INTO operation_states (operation_id, state_seq, kind, payload, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5)",
+        "INSERT INTO operation_state (operation_id, state_seq, kind, payload, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(operation_id) DO UPDATE SET
+             state_seq = excluded.state_seq,
+             kind = excluded.kind,
+             payload = excluded.payload,
+             created_at = excluded.created_at",
         rusqlite::params![
             operation_id.as_uuid().to_string(),
             checkpoint.state_seq as i64,
@@ -1062,17 +1076,21 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     }
 
     let mut statement = connection.prepare(
-        "SELECT o.id, s.state_seq, s.payload FROM operations o
-         JOIN operation_states s ON s.operation_id = o.id
+        "SELECT o.id, o.accepted_seq, s.state_seq, s.payload FROM operations o
+         JOIN operation_state s ON s.operation_id = o.id
          WHERE o.session_id = ?1
-         AND s.state_seq = (SELECT MAX(state_seq) FROM operation_states WHERE operation_id = o.id)",
+         ORDER BY o.accepted_seq",
     )?;
     let mut operations = Vec::new();
     let mut op_rows = statement.query(rusqlite::params![id])?;
     while let Some(row) = op_rows.next()? {
         let op_id: String = row.get(0)?;
-        let state_seq: i64 = row.get(1)?;
-        let payload: String = row.get(2)?;
+        let accepted_seq: i64 = row.get(1)?;
+        let state_seq: i64 = row.get(2)?;
+        let payload: String = row.get(3)?;
+        let accepted_seq = u64::try_from(accepted_seq).map_err(|_| {
+            StoreError::Sqlite(format!("corrupt operation accepted seq {accepted_seq}"))
+        })?;
         let checkpoint: CheckpointPayload = decode("checkpoint", payload)?;
         let snapshot_payload: String = connection.query_row(
             "SELECT payload FROM capability_snapshots WHERE id = ?1",
@@ -1090,6 +1108,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             .map_err(|err| StoreError::Sqlite(format!("corrupt operation id: {err}")))?;
         operations.push(LoadedOperation {
             id: OperationId::from_uuid(uuid),
+            accepted_seq,
             latest: (state_seq as u64, checkpoint),
             capability_snapshot,
         });

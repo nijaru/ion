@@ -212,7 +212,7 @@ where
         Some(seed) => format!("{}\n\nContext:\n{seed}", spec.objective),
         None => spec.objective.clone(),
     };
-    let Ok(operation_id) = session.submit(prompt).await else {
+    let Ok(operation_id) = session.submit_if_idle(prompt).await else {
         return format!("child failed: submit rejected ({child_id})");
     };
 
