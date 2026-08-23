@@ -32,7 +32,11 @@ for line in sys.stdin:
         send({
             "jsonrpc": "2.0",
             "id": req["id"],
-            "result": {"protocolVersion": req["params"]["protocolVersion"]},
+            "result": {
+                "protocolVersion": req["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "fake-extension", "version": "1.0.0"},
+            },
         })
     elif method == "tools/list":
         send({"jsonrpc": "2.0", "id": req["id"], "result": {"tools": TOOLS}})

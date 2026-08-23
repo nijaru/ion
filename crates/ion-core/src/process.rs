@@ -9,7 +9,7 @@
 use std::path::Path;
 use std::process::ExitStatus;
 
-use tokio::process::{ChildStderr, ChildStdin, ChildStdout, Command};
+use tokio::process::{ChildStderr, ChildStdout, Command};
 
 /// OS enforcement selected for native shell effects.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Deserialize)]
@@ -186,10 +186,6 @@ impl ProcessGuard {
             process_group,
             armed: true,
         })
-    }
-
-    pub(crate) fn take_stdin(&mut self) -> Option<ChildStdin> {
-        self.child.stdin.take()
     }
 
     pub(crate) fn take_stdout(&mut self) -> Option<ChildStdout> {

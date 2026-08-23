@@ -20,7 +20,11 @@ for line in sys.stdin:
         send({
             "jsonrpc": "2.0",
             "id": req["id"],
-            "result": {"protocolVersion": req["params"]["protocolVersion"]},
+            "result": {
+                "protocolVersion": req["params"]["protocolVersion"],
+                "capabilities": {"tools": {}},
+                "serverInfo": {"name": "crashing-extension", "version": "1.0.0"},
+            },
         })
     elif method == "tools/list":
         send({

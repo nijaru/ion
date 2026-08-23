@@ -16,22 +16,18 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::rpc::{PeerDef, StdioRpc};
+use crate::rpc::{PeerDef, StdioRpc, client_info};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
 /// Handshake timeout: a slow extension delays startup once, visibly,
 /// then is skipped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Protocol version requested during initialize; matches the MCP
-/// handshake shape so the two transports share one wire contract.
-const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// One configured extension (settings or trusted project manifest).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,11 +60,7 @@ impl ExtensionService {
                 command: def.command.clone(),
                 args: def.args.clone(),
             };
-            let client_info = json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "clientInfo": { "name": "ion", "version": env!("CARGO_PKG_VERSION") },
-            });
-            let rpc = match StdioRpc::spawn(&peer, client_info, HANDSHAKE_TIMEOUT).await {
+            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT).await {
                 Ok(rpc) => rpc,
                 Err(err) => {
                     tracing::warn!(extension = %def.name, error = %err, "extension failed to start");
@@ -136,7 +128,9 @@ impl Tool for ExtensionTool {
                     Ok(text) => ToolOutcome::text(text),
                     // Typed failure: the extension's own error vs. a
                     // dead process are distinguishable to the model.
-                    Err(err) if err.contains("server closed") => ToolOutcome::error(format!(
+                    Err(err)
+                        if err.contains("server closed") || err.contains("Transport closed") =>
+                    ToolOutcome::error(format!(
                         "extension `{}` crashed",
                         self.extension_name
                     )),

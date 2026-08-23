@@ -7,29 +7,24 @@
 //! and invocations flow through the normal policy/effect path like
 //! any other tool.
 //!
-//! Wire protocol: MCP stdio transport - newline-delimited JSON-RPC 2.0
-//! over the server's stdin/stdout (spec 2025-11-25), carried by the
-//! shared [`StdioRpc`] client (§24.2).
+//! Wire protocol: MCP stdio transport, carried by the official `rmcp`
+//! client through the shared [`StdioRpc`] adapter (§24.2).
 
 use std::sync::Arc;
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::rpc::{PeerDef, StdioRpc};
+use crate::rpc::{PeerDef, StdioRpc, client_info};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
 /// Handshake and discovery timeouts: a slow server delays startup once,
 /// visibly, then is skipped.
 const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// Protocol version requested during `initialize`. Bumped deliberately;
-/// per §19.4 today's version never shapes core storage or semantics.
-const PROTOCOL_VERSION: &str = "2025-11-25";
 
 /// One configured MCP server (settings.toml `[mcp_servers.<name>]`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -62,22 +57,13 @@ impl McpService {
                 command: def.command.clone(),
                 args: def.args.clone(),
             };
-            let client_info = json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": { "name": "ion", "version": env!("CARGO_PKG_VERSION") },
-            });
-            let rpc = match StdioRpc::spawn(&peer, client_info, HANDSHAKE_TIMEOUT).await {
+            let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT).await {
                 Ok(rpc) => rpc,
                 Err(err) => {
                     tracing::warn!(server = %def.name, error = %err, "MCP server failed to start");
                     continue;
                 }
             };
-            // MCP clients must send notifications/initialized after a
-            // successful handshake (spec 2025-11-25).
-            rpc.notify("notifications/initialized").await;
-
             let arc = Arc::new(rpc);
             match arc.list_tools().await {
                 Ok(tools) => {
