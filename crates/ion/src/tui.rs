@@ -959,20 +959,40 @@ impl TerminalGuard {
         Ok(Self { restored: false })
     }
 
-    fn restore(&mut self) {
+    fn restore(&mut self) -> io::Result<()> {
         if self.restored {
-            return;
+            return Ok(());
         }
         self.restored = true;
-        let _ = execute!(io::stdout(), DisableBracketedPaste);
-        let _ = terminal::disable_raw_mode();
-        let _ = io::stdout().flush();
+        let mut first_error = None;
+        if let Err(err) = execute!(io::stdout(), DisableBracketedPaste) {
+            first_error = Some(err);
+        }
+        if let Err(err) = terminal::disable_raw_mode()
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+        if let Err(err) = io::stdout().flush()
+            && first_error.is_none()
+        {
+            first_error = Some(err);
+        }
+        first_error.map_or(Ok(()), Err)
     }
 }
 
 impl Drop for TerminalGuard {
     fn drop(&mut self) {
-        self.restore();
+        let _ = self.restore();
+    }
+}
+
+fn merge_shutdown_error(slot: &mut Option<RuntimeError>, next: RuntimeError) {
+    if let Some(previous) = slot.take() {
+        *slot = Some(RuntimeError::OperationFailed(format!("{previous}; {next}")));
+    } else {
+        *slot = Some(next);
     }
 }
 
@@ -1474,13 +1494,37 @@ pub async fn run(
         }
     }
 
-    screen.finish(&mut out).ok();
-    guard.restore();
-    result?;
-    match session.close().await {
+    let finish_result = screen.finish(&mut out);
+    let flush_result = out.flush();
+    let restore_result = guard.restore();
+    let close_result = match session.close().await {
         Ok(()) | Err(CommandError::Closed) => Ok(()),
         Err(err) => Err(err.into()),
+    };
+
+    let mut shutdown_error = result.err();
+    if let Err(err) = finish_result {
+        merge_shutdown_error(
+            &mut shutdown_error,
+            RuntimeError::OperationFailed(format!("terminal finish failed: {err}")),
+        );
     }
+    if let Err(err) = flush_result {
+        merge_shutdown_error(
+            &mut shutdown_error,
+            RuntimeError::OperationFailed(format!("terminal flush failed: {err}")),
+        );
+    }
+    if let Err(err) = restore_result {
+        merge_shutdown_error(
+            &mut shutdown_error,
+            RuntimeError::OperationFailed(format!("terminal restore failed: {err}")),
+        );
+    }
+    if let Err(err) = close_result {
+        merge_shutdown_error(&mut shutdown_error, err);
+    }
+    shutdown_error.map_or(Ok(()), Err)
 }
 
 /// Execute one reducer effect against the session; acceptance and
