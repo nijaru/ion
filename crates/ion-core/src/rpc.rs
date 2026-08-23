@@ -15,6 +15,9 @@ use std::time::Duration;
 use serde_json::Value;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{Mutex, mpsc, oneshot, watch};
+use tokio_util::sync::CancellationToken;
+
+use crate::process::ProcessGuard;
 
 /// In-flight JSON-RPC requests keyed by id.
 type Pending = Arc<Mutex<HashMap<u64, oneshot::Sender<Result<Value, String>>>>>;
@@ -25,8 +28,9 @@ pub(crate) struct StdioRpc {
     next_id: AtomicU64,
     pending: Pending,
     closed: watch::Sender<bool>,
-    /// Owns the child wait/kill lifecycle; dropping aborts the waiter and
-    /// therefore drops the kill-on-drop child.
+    /// Cancels the peer guardian on owner drop. The guardian remains alive
+    /// long enough to kill and reap the process group.
+    shutdown: CancellationToken,
     _waiter: tokio::task::JoinHandle<()>,
 }
 
@@ -46,18 +50,18 @@ impl StdioRpc {
         client_info: Value,
         timeout: Duration,
     ) -> Result<Self, String> {
-        let mut child = tokio::process::Command::new(&def.command)
+        let mut command = tokio::process::Command::new(&def.command);
+        command
             .args(&def.args)
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             // stderr belongs to the peer's own logs, not the wire.
-            .stderr(std::process::Stdio::inherit())
-            .kill_on_drop(true)
-            .spawn()
+            .stderr(std::process::Stdio::inherit());
+        let mut process = ProcessGuard::spawn(&mut command)
             .map_err(|err| format!("spawn {}: {err}", def.command))?;
 
-        let stdin = child.stdin.take().ok_or("no stdin")?;
-        let stdout = child.stdout.take().ok_or("no stdout")?;
+        let stdin = process.take_stdin().ok_or("no stdin")?;
+        let stdout = process.take_stdout().ok_or("no stdout")?;
         let (stdin_tx, mut stdin_rx) = mpsc::channel::<String>(64);
         let pending: Pending = Arc::new(Mutex::new(HashMap::new()));
         let (closed, _) = watch::channel(false);
@@ -102,9 +106,17 @@ impl StdioRpc {
 
         let waiter_pending = Arc::clone(&pending);
         let waiter_closed = closed.clone();
+        let shutdown = CancellationToken::new();
+        let waiter_shutdown = shutdown.child_token();
         let waiter = tokio::spawn(async move {
-            let _ = child.wait().await;
+            let reaped = tokio::select! {
+                result = process.wait() => result.is_ok(),
+                () = waiter_shutdown.cancelled() => process.kill_and_wait().await.is_ok(),
+            };
             close_connection(&waiter_pending, &waiter_closed).await;
+            if reaped {
+                process.disarm();
+            }
         });
 
         let rpc = Self {
@@ -112,6 +124,7 @@ impl StdioRpc {
             next_id: AtomicU64::new(1),
             pending,
             closed,
+            shutdown,
             _waiter: waiter,
         };
 
@@ -240,7 +253,7 @@ async fn close_connection(pending: &Pending, closed: &watch::Sender<bool>) {
 
 impl Drop for StdioRpc {
     fn drop(&mut self) {
-        self._waiter.abort();
+        self.shutdown.cancel();
     }
 }
 
@@ -260,5 +273,83 @@ fn extract_text(result: &Value) -> String {
         result.to_string()
     } else {
         texts.join("\n")
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::*;
+
+    fn shell_quote(value: &str) -> String {
+        format!("'{}'", value.replace('\'', "'\\''"))
+    }
+
+    #[allow(unsafe_code)]
+    fn process_probe(pid: i32) -> Result<bool, i32> {
+        if unsafe { libc::kill(pid, 0) } == 0 {
+            Ok(true)
+        } else {
+            Err(std::io::Error::last_os_error()
+                .raw_os_error()
+                .expect("kill errno"))
+        }
+    }
+
+    #[tokio::test]
+    async fn dropping_a_peer_kills_and_reaps_its_process_group() {
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let pid_path = directory.path().join("peer.pid");
+        let response = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": { "protocolVersion": "test" },
+        })
+        .to_string();
+        let script = format!(
+            "printf '%s\\n' \"$$\" > {}; printf '%s\\n' {}; trap '' TERM; sleep 30",
+            shell_quote(&pid_path.to_string_lossy()),
+            shell_quote(&response),
+        );
+        let peer = PeerDef {
+            name: "drop-test".to_owned(),
+            command: "sh".to_owned(),
+            args: vec!["-c".to_owned(), script],
+        };
+
+        let rpc = StdioRpc::spawn(&peer, serde_json::json!({}), Duration::from_secs(2))
+            .await
+            .expect("peer handshake");
+        let pid = tokio::fs::read_to_string(&pid_path)
+            .await
+            .expect("peer pid")
+            .trim()
+            .parse::<i32>()
+            .expect("numeric peer pid");
+        drop(rpc);
+
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                // The guardian must reap the shell after killing its group;
+                // ESRCH is stronger evidence than merely observing SIGKILL.
+                let exited = match process_probe(pid) {
+                    Ok(true) => false,
+                    Err(errno) => {
+                        assert_eq!(
+                            errno,
+                            libc::ESRCH,
+                            "peer must not be hidden by a permission error"
+                        );
+                        true
+                    }
+                    Ok(false) => unreachable!("kill probe cannot return false"),
+                };
+                if exited {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("dropped peer must be killed and reaped");
     }
 }

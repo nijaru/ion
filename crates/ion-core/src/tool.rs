@@ -13,7 +13,7 @@ use std::future::Future;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::{ExitStatus, Stdio};
+use std::process::Stdio;
 use std::sync::Arc;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -32,6 +32,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ids::OperationId;
+use crate::process::ProcessGuard;
 
 /// Identifier for an in-flight tool call. Monotonic per provider.
 pub type ToolCallId = u64;
@@ -1849,67 +1850,6 @@ async fn collect_process_output(
     spool.finish().await
 }
 
-/// Own a spawned process until it has been waited or explicitly terminated.
-///
-/// The guard has two cleanup layers. Tokio kills the direct child if the
-/// owning future is dropped, while the Unix process-group cleanup also kills
-/// descendants. The normal and cancellation paths still wait explicitly so
-/// the direct child is reaped rather than left as a zombie.
-struct ProcessGuard {
-    child: tokio::process::Child,
-    process_group: Option<i32>,
-    armed: bool,
-}
-
-impl ProcessGuard {
-    fn spawn(command: &mut Command) -> Result<Self, std::io::Error> {
-        let child = command.kill_on_drop(true).spawn()?;
-        let process_group = child.id().map(|pid| pid as i32);
-        Ok(Self {
-            child,
-            process_group,
-            armed: true,
-        })
-    }
-
-    fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
-        self.child.stdout.take()
-    }
-
-    fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
-        self.child.stderr.take()
-    }
-
-    fn kill_owned_processes(&mut self) {
-        if let Some(process_group) = self.process_group {
-            kill_process_group(process_group);
-        }
-    }
-
-    async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
-        self.child.wait().await
-    }
-
-    async fn kill_and_wait(&mut self) -> Result<ExitStatus, std::io::Error> {
-        self.kill_owned_processes();
-        #[cfg(not(unix))]
-        self.child.kill().await?;
-        self.child.wait().await
-    }
-
-    fn disarm(&mut self) {
-        self.armed = false;
-    }
-}
-
-impl Drop for ProcessGuard {
-    fn drop(&mut self) {
-        if self.armed {
-            self.kill_owned_processes();
-        }
-    }
-}
-
 /// Spawn a shell command under cwd, killing the child on cancel.
 /// Model-visible output is bounded; larger raw output is atomically
 /// published as a bounded artifact when the session store provides a root.
@@ -1926,11 +1866,6 @@ async fn run_shell(
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    // Put the child in its own process group so cancellation can kill the
-    // whole tree (including orphaned grandchildren like a forked `sleep`)
-    // rather than only the direct `sh`.
-    #[cfg(unix)]
-    cmd.process_group(0);
     let mut process = match ProcessGuard::spawn(&mut cmd) {
         Ok(child) => child,
         Err(err) => return ToolOutcome::error(format!("spawn failed: {err}")),
@@ -2005,23 +1940,6 @@ async fn run_shell(
             }
             ToolOutcome::error(message).with_artifact(collected.artifact)
         }
-    }
-}
-
-/// Kill a child process group. On Unix, a negative pid targets the whole
-/// group, so orphaned grandchildren (e.g. a `sleep` forked by `sh -c`) die
-/// too. A race with a naturally-finishing command is harmless (ESRCH is
-/// ignored). Non-Unix falls back to killing nothing here; the caller also
-/// reaps the direct child.
-fn kill_process_group(pgid: i32) {
-    #[cfg(unix)]
-    #[allow(unsafe_code)] // libc::kill on our own child's process group
-    unsafe {
-        let _ = libc::kill(-pgid, libc::SIGKILL);
-    }
-    #[cfg(not(unix))]
-    {
-        let _ = pgid;
     }
 }
 

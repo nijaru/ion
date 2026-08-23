@@ -15,6 +15,7 @@ mod extensions;
 mod ids;
 mod mcp;
 mod policy;
+mod process;
 mod provider;
 mod rpc;
 mod runtime;
