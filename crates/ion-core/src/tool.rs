@@ -23,15 +23,40 @@ use nix::fcntl::{OFlag, open, openat};
 use nix::sys::stat::{Mode, mkdirat};
 use regex::Regex;
 use serde_json::{Value, json};
+use sha2::Digest;
 use tokio::fs;
-use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::process::Command;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
+use uuid::Uuid;
 
 use crate::ids::OperationId;
 
 /// Identifier for an in-flight tool call. Monotonic per provider.
 pub type ToolCallId = u64;
+
+/// Hard upper bound for the semantic text sent to the model for one tool
+/// result. The complete byte stream, when available, is retained separately
+/// as a bounded artifact.
+const MODEL_RESULT_MAX_BYTES: usize = 16 * 1024;
+const MODEL_RESULT_MAX_LINES: usize = MODEL_RESULT_MAX_BYTES;
+const MODEL_SAMPLE_MAX_BYTES: usize = 12 * 1024;
+const MODEL_SAMPLE_HEAD_BYTES: usize = MODEL_SAMPLE_MAX_BYTES / 2;
+const MODEL_SAMPLE_TAIL_BYTES: usize = MODEL_SAMPLE_MAX_BYTES - MODEL_SAMPLE_HEAD_BYTES;
+const ARTIFACT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+const OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
+
+/// A durable locator for raw output externalized from the model-visible
+/// result. The URI is semantic; the backing path remains store-owned.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolArtifact {
+    pub uri: String,
+    pub stored_bytes: u64,
+    pub total_bytes: u64,
+    pub sha256: String,
+    pub truncated: bool,
+}
 
 /// Static description of a tool: name, short doc, and JSON-Schema for its
 /// input object. The schema's top-level `"required"` array drives argument
@@ -57,11 +82,39 @@ pub struct ToolCall {
 /// (DESIGN.md §16.4): exactly what the model will see.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ToolResult {
-    Ok { call_id: ToolCallId, output: String },
-    Err { call_id: ToolCallId, error: String },
+    Ok {
+        call_id: ToolCallId,
+        output: String,
+        artifact: Option<ToolArtifact>,
+    },
+    Err {
+        call_id: ToolCallId,
+        error: String,
+        artifact: Option<ToolArtifact>,
+    },
 }
 
 impl ToolResult {
+    /// Classify one tool outcome at the persistence boundary. Every
+    /// runtime-settled result stores bounded model text; native shell
+    /// output may additionally carry a lossless artifact reference.
+    pub(crate) fn from_outcome(call_id: ToolCallId, outcome: ToolOutcome) -> Self {
+        let output = bounded_stored_output(outcome.output, outcome.artifact.is_some());
+        if outcome.is_error {
+            Self::Err {
+                call_id,
+                error: output,
+                artifact: outcome.artifact,
+            }
+        } else {
+            Self::Ok {
+                call_id,
+                output,
+                artifact: outcome.artifact,
+            }
+        }
+    }
+
     /// The call id this result answers.
     #[must_use]
     pub const fn call_id(&self) -> ToolCallId {
@@ -78,23 +131,69 @@ impl ToolResult {
     /// Render the result to a single string (success output or error text).
     #[must_use]
     pub fn into_text(self) -> String {
-        match self {
-            Self::Ok { output, .. } => output,
-            Self::Err { error, .. } => error,
+        self.model_text()
+    }
+
+    /// The exact bounded text projected to the model, including the stable
+    /// locator for any externalized raw output.
+    #[must_use]
+    pub fn model_text(&self) -> String {
+        let (text, artifact) = match self {
+            Self::Ok {
+                output, artifact, ..
+            } => (output.as_str(), artifact.as_ref()),
+            Self::Err {
+                error, artifact, ..
+            } => (error.as_str(), artifact.as_ref()),
+        };
+        let suffix = artifact.map_or_else(String::new, |artifact| {
+            format!(
+                "\nfull result: {} ({} of {} bytes, sha256={}, {})",
+                artifact.uri,
+                artifact.stored_bytes,
+                artifact.total_bytes,
+                artifact.sha256,
+                if artifact.truncated {
+                    "artifact truncated at the configured limit"
+                } else {
+                    "complete artifact"
+                }
+            )
+        });
+        let combined = format!("{text}{suffix}");
+        if combined.len() <= MODEL_RESULT_MAX_BYTES {
+            combined
+        } else {
+            truncate_tail(&combined, MODEL_RESULT_MAX_BYTES, MODEL_RESULT_MAX_BYTES)
+                .unwrap_or_default()
         }
     }
 
     /// Bounded display text for frontend rendering: the tail of the
-    /// result, never the full body. Purely presentational - the model
-    /// always sees the complete settled output from the session entry.
+    /// bounded model result, never the full body. The full raw shell
+    /// stream, when available, is addressed by the artifact locator.
     #[must_use]
     pub fn display_preview(&self) -> Option<String> {
-        let text = match self {
-            Self::Ok { output, .. } => output,
-            Self::Err { error, .. } => error,
-        };
-        truncate_tail(text, PREVIEW_MAX_LINES, PREVIEW_MAX_BYTES)
+        let text = self.model_text();
+        truncate_tail(&text, PREVIEW_MAX_LINES, PREVIEW_MAX_BYTES)
     }
+}
+
+fn bounded_stored_output(mut output: String, has_artifact: bool) -> String {
+    if output.len() <= MODEL_RESULT_MAX_BYTES {
+        return output;
+    }
+    let marker = if has_artifact {
+        ""
+    } else {
+        "[tool output abbreviated; full result was not externalized]\n"
+    };
+    let budget = MODEL_RESULT_MAX_BYTES.saturating_sub(marker.len());
+    let sampled = truncate_tail(&output, MODEL_RESULT_MAX_LINES, budget).unwrap_or_default();
+    output.clear();
+    output.push_str(marker);
+    output.push_str(&sampled);
+    output
 }
 
 /// Frontend preview bounds (pi-parity: tail-truncated so errors and
@@ -156,6 +255,7 @@ fn truncate_tail(text: &str, max_lines: usize, max_bytes: usize) -> Option<Strin
 pub struct ToolOutcome {
     pub output: String,
     pub is_error: bool,
+    pub artifact: Option<ToolArtifact>,
 }
 
 impl ToolOutcome {
@@ -164,6 +264,7 @@ impl ToolOutcome {
         Self {
             output: output.into(),
             is_error: false,
+            artifact: None,
         }
     }
 
@@ -172,7 +273,14 @@ impl ToolOutcome {
         Self {
             output: message.into(),
             is_error: true,
+            artifact: None,
         }
+    }
+
+    #[must_use]
+    fn with_artifact(mut self, artifact: Option<ToolArtifact>) -> Self {
+        self.artifact = artifact;
+        self
     }
 }
 
@@ -589,17 +697,25 @@ impl ToolRegistry {
         name: &str,
         arguments: &Value,
         reconciliation: Option<&Value>,
+        artifact_root: Option<&Path>,
         cancel: CancellationToken,
     ) -> ToolOutcome {
-        if !matches!(name, "write" | "edit") || reconciliation.is_none() {
+        if !matches!(name, "write" | "edit" | "bash")
+            || (reconciliation.is_none() && artifact_root.is_none())
+        {
             return self.execute(name, arguments, cancel).await;
         }
         let mut enriched = arguments.clone();
         if let Some(object) = enriched.as_object_mut() {
-            object.insert(
-                "__ion_reconciliation".to_owned(),
-                reconciliation.cloned().expect("checked above"),
-            );
+            if let Some(reconciliation) = reconciliation {
+                object.insert("__ion_reconciliation".to_owned(), reconciliation.clone());
+            }
+            if let Some(artifact_root) = artifact_root {
+                object.insert(
+                    "__ion_artifact_root".to_owned(),
+                    Value::String(artifact_root.to_string_lossy().into_owned()),
+                );
+            }
         }
         self.execute(name, &enriched, cancel).await
     }
@@ -773,10 +889,11 @@ impl ToolCatalog {
         name: &str,
         arguments: &Value,
         reconciliation: Option<&Value>,
+        artifact_root: Option<&Path>,
         cancel: CancellationToken,
     ) -> ToolOutcome {
         self.snapshot()
-            .execute_with_reconciliation(name, arguments, reconciliation, cancel)
+            .execute_with_reconciliation(name, arguments, reconciliation, artifact_root, cancel)
             .await
     }
 }
@@ -1487,14 +1604,303 @@ impl Tool for BashTool {
                 Some(c) => c.to_owned(),
                 None => return ToolOutcome::error("missing argument: command"),
             };
-            run_shell(&self.cwd, &command, cancel).await
+            let artifact_root = arguments
+                .get("__ion_artifact_root")
+                .and_then(Value::as_str)
+                .map(PathBuf::from);
+            run_shell(&self.cwd, &command, artifact_root.as_deref(), cancel).await
         })
     }
 }
 
-/// Spawn `sh -c command` under `cwd`, killing the child on cancel.
-/// Returns combined stdout/stderr as text.
-async fn run_shell(cwd: &Path, command: &str, cancel: CancellationToken) -> ToolOutcome {
+struct OutputPreview {
+    inline: Vec<u8>,
+    head: Vec<u8>,
+    tail: VecDeque<u8>,
+    total_bytes: u64,
+    truncated: bool,
+}
+
+impl OutputPreview {
+    fn new() -> Self {
+        Self {
+            inline: Vec::new(),
+            head: Vec::new(),
+            tail: VecDeque::with_capacity(MODEL_SAMPLE_TAIL_BYTES),
+            total_bytes: 0,
+            truncated: false,
+        }
+    }
+
+    fn append(&mut self, bytes: &[u8]) {
+        self.total_bytes = self
+            .total_bytes
+            .saturating_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX));
+        if !self.truncated
+            && self.inline.len().saturating_add(bytes.len()) <= MODEL_SAMPLE_MAX_BYTES
+        {
+            self.inline.extend_from_slice(bytes);
+            return;
+        }
+        if !self.truncated {
+            self.head = self.inline[..MODEL_SAMPLE_HEAD_BYTES.min(self.inline.len())].to_vec();
+            self.tail
+                .extend(self.inline[self.head.len()..].iter().copied());
+            self.inline.clear();
+            self.truncated = true;
+        }
+        for byte in bytes {
+            if self.head.len() < MODEL_SAMPLE_HEAD_BYTES {
+                self.head.push(*byte);
+                continue;
+            }
+            if self.tail.len() == MODEL_SAMPLE_TAIL_BYTES {
+                self.tail.pop_front();
+            }
+            self.tail.push_back(*byte);
+        }
+    }
+
+    fn render(&mut self) -> String {
+        if !self.truncated {
+            return String::from_utf8_lossy(&self.inline).into_owned();
+        }
+        format!(
+            "[tool output abbreviated; {} bytes total]\n{}\n… omitted middle …\n{}",
+            self.total_bytes,
+            String::from_utf8_lossy(&self.head),
+            String::from_utf8_lossy(self.tail.make_contiguous()),
+        )
+    }
+}
+
+struct ArtifactWriter {
+    id: String,
+    temp_path: PathBuf,
+    final_path: PathBuf,
+    file: fs::File,
+    hasher: sha2::Sha256,
+    stored_bytes: u64,
+    truncated: bool,
+}
+
+impl ArtifactWriter {
+    async fn create(root: &Path) -> Result<Self, String> {
+        fs::create_dir_all(root)
+            .await
+            .map_err(|err| format!("create artifact directory: {err}"))?;
+        let id = Uuid::now_v7().to_string();
+        let temp_path = root.join(format!(".{id}.part"));
+        let final_path = root.join(&id);
+        let file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+            .await
+            .map_err(|err| format!("create artifact spool: {err}"))?;
+        Ok(Self {
+            id,
+            temp_path,
+            final_path,
+            file,
+            hasher: sha2::Sha256::default(),
+            stored_bytes: 0,
+            truncated: false,
+        })
+    }
+
+    async fn append(&mut self, bytes: &[u8]) -> Result<(), String> {
+        let remaining = ARTIFACT_MAX_BYTES.saturating_sub(self.stored_bytes);
+        let take = remaining.min(u64::try_from(bytes.len()).unwrap_or(u64::MAX)) as usize;
+        if take > 0 {
+            self.file
+                .write_all(&bytes[..take])
+                .await
+                .map_err(|err| format!("write artifact spool: {err}"))?;
+            self.hasher.update(&bytes[..take]);
+            self.stored_bytes = self
+                .stored_bytes
+                .saturating_add(u64::try_from(take).unwrap_or(u64::MAX));
+        }
+        if take < bytes.len() {
+            self.truncated = true;
+        }
+        Ok(())
+    }
+
+    async fn finish(mut self, total_bytes: u64) -> Result<ToolArtifact, String> {
+        if let Err(err) = self.file.flush().await {
+            let _ = fs::remove_file(&self.temp_path).await;
+            return Err(format!("flush artifact spool: {err}"));
+        }
+        if let Err(err) = self.file.sync_all().await {
+            let _ = fs::remove_file(&self.temp_path).await;
+            return Err(format!("sync artifact spool: {err}"));
+        }
+        drop(self.file);
+        if let Err(err) = fs::rename(&self.temp_path, &self.final_path).await {
+            let _ = fs::remove_file(&self.temp_path).await;
+            return Err(format!("publish artifact: {err}"));
+        }
+        let digest = hex(&self.hasher.finalize());
+        Ok(ToolArtifact {
+            uri: format!("artifact://{}", self.id),
+            stored_bytes: self.stored_bytes,
+            total_bytes,
+            sha256: digest,
+            truncated: self.truncated,
+        })
+    }
+}
+
+struct CollectedOutput {
+    output: String,
+    artifact: Option<ToolArtifact>,
+    capture_error: Option<String>,
+}
+
+struct OutputSpool {
+    preview: OutputPreview,
+    artifact_root: Option<PathBuf>,
+    artifact: Option<ArtifactWriter>,
+    capture_error: Option<String>,
+}
+
+impl OutputSpool {
+    fn new(artifact_root: Option<PathBuf>) -> Self {
+        Self {
+            preview: OutputPreview::new(),
+            artifact_root,
+            artifact: None,
+            capture_error: None,
+        }
+    }
+
+    async fn append(&mut self, bytes: &[u8]) {
+        if self.artifact.is_none()
+            && self.capture_error.is_none()
+            && self.preview.total_bytes.saturating_add(bytes.len() as u64)
+                > MODEL_SAMPLE_MAX_BYTES as u64
+            && let Some(root) = self.artifact_root.as_deref()
+        {
+            match ArtifactWriter::create(root).await {
+                Ok(mut artifact) => {
+                    let prefix = std::mem::take(&mut self.preview.inline);
+                    let result = artifact.append(&prefix).await;
+                    let result = if result.is_ok() {
+                        artifact.append(bytes).await
+                    } else {
+                        result
+                    };
+                    if let Err(err) = result {
+                        let _ = fs::remove_file(&artifact.temp_path).await;
+                        self.capture_error = Some(err);
+                    } else {
+                        self.artifact = Some(artifact);
+                    }
+                    self.preview.inline = prefix;
+                }
+                Err(err) => self.capture_error = Some(err),
+            }
+        } else if let Some(mut artifact) = self.artifact.take() {
+            match artifact.append(bytes).await {
+                Ok(()) => self.artifact = Some(artifact),
+                Err(err) => {
+                    let _ = fs::remove_file(&artifact.temp_path).await;
+                    self.capture_error = Some(err);
+                }
+            }
+        }
+        self.preview.append(bytes);
+    }
+
+    async fn finish(mut self) -> CollectedOutput {
+        let total_bytes = self.preview.total_bytes;
+        let artifact = if let Some(artifact) = self.artifact.take() {
+            match artifact.finish(total_bytes).await {
+                Ok(artifact) => Some(artifact),
+                Err(err) => {
+                    self.capture_error = Some(err);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        CollectedOutput {
+            output: self.preview.render(),
+            artifact,
+            capture_error: self.capture_error,
+        }
+    }
+}
+
+async fn drain_pipe<R: AsyncRead + Unpin>(
+    mut reader: R,
+    tx: mpsc::Sender<Vec<u8>>,
+) -> Result<(), String> {
+    let mut buffer = [0_u8; OUTPUT_CHUNK_BYTES];
+    loop {
+        let read = reader
+            .read(&mut buffer)
+            .await
+            .map_err(|err| format!("read process output: {err}"))?;
+        if read == 0 {
+            return Ok(());
+        }
+        tx.send(buffer[..read].to_vec())
+            .await
+            .map_err(|_| "output collector stopped".to_owned())?;
+    }
+}
+
+async fn collect_process_output(
+    stdout: Option<tokio::process::ChildStdout>,
+    stderr: Option<tokio::process::ChildStderr>,
+    artifact_root: Option<PathBuf>,
+) -> CollectedOutput {
+    let (tx, mut rx) = mpsc::channel(8);
+    let mut readers = Vec::with_capacity(2);
+    if let Some(stdout) = stdout {
+        readers.push(tokio::spawn(drain_pipe(stdout, tx.clone())));
+    }
+    if let Some(stderr) = stderr {
+        readers.push(tokio::spawn(drain_pipe(stderr, tx.clone())));
+    }
+    drop(tx);
+
+    let mut spool = OutputSpool::new(artifact_root);
+    while let Some(chunk) = rx.recv().await {
+        spool.append(&chunk).await;
+    }
+    for reader in readers {
+        match reader.await {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                if spool.capture_error.is_none() {
+                    spool.capture_error = Some(err);
+                }
+            }
+            Err(err) => {
+                if spool.capture_error.is_none() {
+                    spool.capture_error = Some(format!("output reader task failed: {err}"));
+                }
+            }
+        }
+    }
+    spool.finish().await
+}
+
+/// Spawn a shell command under cwd, killing the child on cancel.
+/// Model-visible output is bounded; larger raw output is atomically
+/// published as a bounded artifact when the session store provides a root.
+async fn run_shell(
+    cwd: &Path,
+    command: &str,
+    artifact_root: Option<&Path>,
+    cancel: CancellationToken,
+) -> ToolOutcome {
+    // The process group is reaped below on completion or cancellation.
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(command)
@@ -1518,31 +1924,44 @@ async fn run_shell(cwd: &Path, command: &str, cancel: CancellationToken) -> Tool
 
     // Drain both pipes concurrently. Waiting for EOF first would deadlock on
     // a silent long-running command and make cancellation uninterruptible.
-    let read_task = tokio::spawn(async move {
-        let mut buf = String::new();
-        if let Some(mut s) = stdout {
-            let _ = s.read_to_string(&mut buf).await;
-        }
-        if let Some(mut e) = stderr {
-            let mut err_text = String::new();
-            let _ = e.read_to_string(&mut err_text).await;
-            buf.push_str(&err_text);
-        }
-        buf
-    });
+    let read_task = tokio::spawn(collect_process_output(
+        stdout,
+        stderr,
+        artifact_root.map(Path::to_path_buf),
+    ));
 
     tokio::select! {
         status = child.wait() => {
-            let out = read_task.await.unwrap_or_default();
+            let collected = match read_task.await {
+                Ok(collected) => collected,
+                Err(err) => CollectedOutput {
+                    output: String::new(),
+                    artifact: None,
+                    capture_error: Some(format!("output collector task failed: {err}")),
+                },
+            };
+            let CollectedOutput {
+                output: captured,
+                artifact,
+                capture_error,
+            } = collected;
             let code = match status {
                 Ok(s) => s.code().unwrap_or(-1),
                 Err(_) => -1,
             };
-            if code == 0 {
-                ToolOutcome::text(out)
+            let output = if code == 0 {
+                captured
             } else {
-                ToolOutcome::error(format!("command exited with code {code}\n{out}"))
-            }
+                format!("command exited with code {code}\n{captured}")
+            };
+            let outcome = if let Some(error) = capture_error {
+                ToolOutcome::error(format!("output capture failed: {error}\n{output}"))
+            } else if code == 0 {
+                ToolOutcome::text(output)
+            } else {
+                ToolOutcome::error(output)
+            };
+            outcome.with_artifact(artifact)
         }
         _ = cancel.cancelled() => {
             if let Some(pid) = pid {
@@ -1551,8 +1970,19 @@ async fn run_shell(cwd: &Path, command: &str, cancel: CancellationToken) -> Tool
             // Reap the killed child so it does not linger as a zombie.
             let _ = child.wait().await;
             // Killing the group closes the pipes, so the read task finishes.
-            let _ = read_task.await;
-            ToolOutcome::error("cancelled".to_owned())
+            let collected = match read_task.await {
+                Ok(collected) => collected,
+                Err(err) => CollectedOutput {
+                    output: String::new(),
+                    artifact: None,
+                    capture_error: Some(format!("output collector task failed: {err}")),
+                },
+            };
+            let message = collected.capture_error.map_or_else(
+                || "cancelled".to_owned(),
+                |error| format!("cancelled; output capture failed: {error}"),
+            );
+            ToolOutcome::error(message).with_artifact(collected.artifact)
         }
     }
 }
@@ -1903,6 +2333,7 @@ mod preview_bound_tests {
         ToolResult::Ok {
             call_id: 1,
             output: output.to_owned(),
+            artifact: None,
         }
     }
 
@@ -1931,5 +2362,74 @@ mod preview_bound_tests {
         assert!(!preview.contains("line-0\n"));
         assert!(preview.lines().count() <= PREVIEW_MAX_LINES + 1);
         assert!(preview.len() <= PREVIEW_MAX_BYTES);
+    }
+
+    #[test]
+    fn every_persisted_outcome_is_bounded_even_without_an_artifact_store() {
+        let result = ToolResult::from_outcome(1, ToolOutcome::text("x".repeat(100_000)));
+        let text = match &result {
+            ToolResult::Ok { output, .. } => output,
+            ToolResult::Err { error, .. } => error,
+        };
+        assert!(text.len() <= MODEL_RESULT_MAX_BYTES);
+        assert!(text.contains("full result was not externalized"));
+        assert!(result.model_text().len() <= MODEL_RESULT_MAX_BYTES);
+    }
+
+    #[tokio::test]
+    async fn shell_output_spills_raw_bytes_and_bounds_model_text() {
+        let artifacts = tempfile::tempdir().expect("artifact directory");
+        let outcome = run_shell(
+            Path::new("."),
+            "i=0; while [ \"$i\" -lt 20000 ]; do printf x; i=$((i+1)); done",
+            Some(artifacts.path()),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(!outcome.is_error, "{outcome:?}");
+        assert!(outcome.output.contains("tool output abbreviated"));
+        let artifact = outcome.artifact.expect("large output artifact");
+        assert_eq!(artifact.total_bytes, 20_000);
+        assert_eq!(artifact.stored_bytes, 20_000);
+        assert!(!artifact.truncated);
+
+        let id = artifact
+            .uri
+            .strip_prefix("artifact://")
+            .expect("artifact URI");
+        let raw = std::fs::read(artifacts.path().join(id)).expect("published artifact");
+        assert_eq!(raw, vec![b'x'; 20_000]);
+        assert!(
+            std::fs::read_dir(artifacts.path())
+                .expect("artifact directory entries")
+                .all(|entry| !entry
+                    .expect("entry")
+                    .file_name()
+                    .to_string_lossy()
+                    .ends_with(".part"))
+        );
+
+        let result = ToolResult::Ok {
+            call_id: 1,
+            output: outcome.output,
+            artifact: Some(artifact),
+        };
+        let model_text = result.model_text();
+        assert!(model_text.len() <= MODEL_RESULT_MAX_BYTES);
+        assert!(model_text.contains("full result: artifact://"));
+    }
+
+    #[tokio::test]
+    async fn shell_output_decodes_invalid_utf8_without_panicking() {
+        let artifacts = tempfile::tempdir().expect("artifact directory");
+        let outcome = run_shell(
+            Path::new("."),
+            r#"printf '\377A'"#,
+            Some(artifacts.path()),
+            CancellationToken::new(),
+        )
+        .await;
+        assert!(!outcome.is_error, "{outcome:?}");
+        assert_eq!(outcome.output, "�A");
     }
 }

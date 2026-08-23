@@ -110,10 +110,8 @@ pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
                 }
             }
             SessionEntry::ToolResult { result } => {
-                let (call_id, content) = match result {
-                    crate::tool::ToolResult::Ok { call_id, output } => (*call_id, output.clone()),
-                    crate::tool::ToolResult::Err { call_id, error } => (*call_id, error.clone()),
-                };
+                let call_id = result.call_id();
+                let content = result.model_text();
                 messages.push(ContextMessage::Tool { call_id, content });
             }
         }

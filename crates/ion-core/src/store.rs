@@ -327,6 +327,10 @@ enum StoreCommand {
 #[derive(Clone)]
 pub struct SessionStore {
     tx: mpsc::Sender<StoreCommand>,
+    /// Durable sibling directory for large tool-output artifacts. In-memory
+    /// stores intentionally have no artifact root; their tool results still
+    /// obey the bounded model-result limit.
+    artifact_root: Option<Arc<Path>>,
     /// Test hook: fail the next mutating command (DESIGN.md §30.5).
     fail_next_write: Arc<AtomicBool>,
     _join: Arc<JoinHandle<()>>,
@@ -347,16 +351,23 @@ impl SessionStore {
             let _ = std::fs::create_dir_all(parent);
         }
         let connection = Connection::open(&path)?;
-        Self::start(connection)
+        let artifact_root = path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .join("artifacts");
+        Self::start(connection, Some(Arc::from(artifact_root)))
     }
 
     /// In-memory store for tests.
     pub fn open_in_memory() -> Result<Self, StoreError> {
         let connection = Connection::open_in_memory()?;
-        Self::start(connection)
+        Self::start(connection, None)
     }
 
-    fn start(mut connection: Connection) -> Result<Self, StoreError> {
+    fn start(
+        mut connection: Connection,
+        artifact_root: Option<Arc<Path>>,
+    ) -> Result<Self, StoreError> {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
@@ -375,9 +386,16 @@ impl SessionStore {
             .map_err(|err| StoreError::Sqlite(err.to_string()))?;
         Ok(Self {
             tx,
+            artifact_root,
             fail_next_write,
             _join: Arc::new(join),
         })
+    }
+
+    /// The root owned by this store for atomically published tool artifacts.
+    #[must_use]
+    pub(crate) fn artifact_root(&self) -> Option<PathBuf> {
+        self.artifact_root.as_deref().map(Path::to_path_buf)
     }
 
     pub async fn create_session(&self, record: SessionRecord) -> Result<(), StoreError> {

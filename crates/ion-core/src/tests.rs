@@ -264,6 +264,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
             result: ToolResult::Ok {
                 call_id: 1,
                 output: "contents".to_owned(),
+                artifact: None,
             },
         })
         .expect("settle 1");
@@ -278,7 +279,8 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
         vec![SessionEntry::ToolResult {
             result: ToolResult::Ok {
                 call_id: 1,
-                output: "contents".to_owned()
+                output: "contents".to_owned(),
+                artifact: None,
             }
         }]
     );
@@ -293,6 +295,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
             result: ToolResult::Ok {
                 call_id: 2,
                 output: "out".to_owned(),
+                artifact: None,
             },
         })
         .expect("settle 2");
@@ -324,6 +327,7 @@ fn tool_error_is_a_model_visible_result_and_continues() {
             result: ToolResult::Err {
                 call_id: 1,
                 error: "read failed".to_owned(),
+                artifact: None,
             },
         })
         .expect("settle");
@@ -333,7 +337,8 @@ fn tool_error_is_a_model_visible_result_and_continues() {
         vec![SessionEntry::ToolResult {
             result: ToolResult::Err {
                 call_id: 1,
-                error: "read failed".to_owned()
+                error: "read failed".to_owned(),
+                artifact: None,
             }
         }]
     );
@@ -514,6 +519,7 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
             result: ToolResult::Ok {
                 call_id: 1,
                 output: "raced".to_owned(),
+                artifact: None,
             },
         })
         .expect("settle");
@@ -617,6 +623,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
             result: ToolResult::Ok {
                 call_id: 1,
                 output: String::new(),
+                artifact: None,
             },
         },
     ] {
@@ -698,6 +705,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
             result: ToolResult::Ok {
                 call_id: 1,
                 output: String::new(),
+                artifact: None,
             },
         },
     ] {
@@ -1002,10 +1010,12 @@ fn tool_result_classifies_ok_and_err() {
     let ok = ToolResult::Ok {
         call_id: 1,
         output: "hi".into(),
+        artifact: None,
     };
     let err = ToolResult::Err {
         call_id: 2,
         error: "boom".into(),
+        artifact: None,
     };
     assert_eq!(ok.call_id(), 1);
     assert!(ok.is_ok());
@@ -1014,7 +1024,8 @@ fn tool_result_classifies_ok_and_err() {
     assert_eq!(
         ToolResult::Ok {
             call_id: 3,
-            output: "x".into()
+            output: "x".into(),
+            artifact: None,
         }
         .into_text(),
         "x"
@@ -1259,6 +1270,61 @@ async fn tool_loop_success_admits_tools_and_finishes() {
             result: ToolResult::Ok { output, .. },
         } if output.contains("tool-said-hello")
     )));
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn file_backed_runtime_persists_bounded_result_and_raw_artifact() {
+    let data = tempfile::tempdir().expect("data directory");
+    let store = SessionStore::open(data.path().join("sessions.db")).expect("file-backed store");
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::tool(
+            "bash",
+            json!({"command":"i=0; while [ \"$i\" -lt 20000 ]; do printf x; i=$((i+1)); done"}),
+        ),
+        ScriptedMessage::text("done\n"),
+    ]);
+    let runtime = Runtime::start_with_policy(
+        provider,
+        ToolRegistry::default(),
+        store,
+        permissive_policy(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::OperationFinished { .. }))
+    );
+
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let (output, artifact) = snapshot
+        .entries
+        .iter()
+        .find_map(|entry| match entry {
+            SessionEntry::ToolResult {
+                result: ToolResult::Ok {
+                    output, artifact, ..
+                },
+            } => Some((output.clone(), artifact.clone())),
+            _ => None,
+        })
+        .expect("durable bash result");
+    let artifact = artifact.expect("durable raw artifact");
+    assert!(output.contains("tool output abbreviated"));
+    assert!(output.len() <= 16 * 1024);
+    assert_eq!(artifact.total_bytes, 20_000);
+    let id = artifact
+        .uri
+        .strip_prefix("artifact://")
+        .expect("artifact URI");
+    let raw = std::fs::read(data.path().join("artifacts").join(id)).expect("raw artifact");
+    assert_eq!(raw, vec![b'x'; 20_000]);
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -2240,6 +2306,7 @@ fn projector_is_deterministic_and_pairs_tool_calls() {
             result: ToolResult::Ok {
                 call_id: 7,
                 output: "contents".to_owned(),
+                artifact: None,
             },
         },
     ];
@@ -2611,6 +2678,7 @@ mod reconcile {
                 "write",
                 &arguments,
                 Some(&evidence),
+                None,
                 tokio_util::sync::CancellationToken::new(),
             )
             .await;

@@ -1522,12 +1522,11 @@ fn push_entry_lines(entry: &ion_core::SessionEntry, out: &mut Vec<Line<'static>>
                 .unwrap_or_else(|| format!("(call {})", call.call_id));
             Some(format!("· {} {target}…", call.name))
         }
-        ion_core::SessionEntry::ToolResult {
-            result: ion_core::ToolResult::Ok { output, .. },
-        } => Some(format!("  = {output}")),
-        ion_core::SessionEntry::ToolResult {
-            result: ion_core::ToolResult::Err { error, .. },
-        } => Some(format!("  ! {error}")),
+        ion_core::SessionEntry::ToolResult { result } => Some(if result.is_ok() {
+            format!("  = {}", result.model_text())
+        } else {
+            format!("  ! {}", result.model_text())
+        }),
         ion_core::SessionEntry::Compaction { summary, .. } => {
             Some(format!("≡ compacted: {summary}"))
         }

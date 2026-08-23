@@ -11,6 +11,7 @@
 //! the mutation line; only bounded local persistence is awaited (§4.3).
 
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc, oneshot};
@@ -460,6 +461,7 @@ impl<P: Provider> Composition<P> {
         let session = SessionHandle { tx };
         let provider = Arc::new(self.provider);
         let tools = Arc::new(self.tools);
+        let artifact_root = self.store.artifact_root();
         let cwd = std::env::current_dir()
             .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or_default();
@@ -471,6 +473,7 @@ impl<P: Provider> Composition<P> {
                     provider,
                     initial_model_ref,
                     tools,
+                    artifact_root,
                     store: self.store,
                     policy: self.policy,
                     budget: self.budget,
@@ -712,6 +715,7 @@ struct SessionDeps<P> {
     provider: Arc<P>,
     initial_model_ref: String,
     tools: Arc<ToolCatalog>,
+    artifact_root: Option<PathBuf>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -727,6 +731,7 @@ struct SessionRuntime<P> {
     /// is in the session row; changes are semantic entries.
     selected_model_ref: String,
     tools: Arc<ToolCatalog>,
+    artifact_root: Option<PathBuf>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -809,6 +814,7 @@ impl<P: Provider> SessionRuntime<P> {
             provider,
             initial_model_ref,
             tools,
+            artifact_root,
             store,
             policy,
             budget,
@@ -823,6 +829,7 @@ impl<P: Provider> SessionRuntime<P> {
             provider,
             selected_model_ref: initial_model_ref,
             tools,
+            artifact_root,
             store,
             policy,
             budget,
@@ -1647,6 +1654,7 @@ impl<P: Provider> SessionRuntime<P> {
                                         result: ToolResult::Ok {
                                             call_id,
                                             output: "recovered: already applied".to_owned(),
+                                            artifact: None,
                                         },
                                     })
                                     .expect("settle an already-applied reconcilable effect");
@@ -2284,6 +2292,7 @@ impl<P: Provider> SessionRuntime<P> {
                 ToolResult::Err {
                     call_id: call.call_id,
                     error: message,
+                    artifact: None,
                 },
             ));
         } else {
@@ -2344,6 +2353,7 @@ impl<P: Provider> SessionRuntime<P> {
             return;
         };
         let tools = Arc::clone(&self.tools);
+        let artifact_root = self.artifact_root.clone();
         let cancel = self
             .operation
             .as_ref()
@@ -2359,19 +2369,15 @@ impl<P: Provider> SessionRuntime<P> {
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
             let outcome = tools
-                .execute_with_reconciliation(&name, &arguments, reconciliation.as_ref(), cancel)
+                .execute_with_reconciliation(
+                    &name,
+                    &arguments,
+                    reconciliation.as_ref(),
+                    artifact_root.as_deref(),
+                    cancel,
+                )
                 .await;
-            let result = if outcome.is_error {
-                ToolResult::Err {
-                    call_id,
-                    error: outcome.output,
-                }
-            } else {
-                ToolResult::Ok {
-                    call_id,
-                    output: outcome.output,
-                }
-            };
+            let result = ToolResult::from_outcome(call_id, outcome);
             let _ = tool_tx.send((effect_id, result)).await;
         });
     }
