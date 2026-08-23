@@ -23,6 +23,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Clear, Paragraph, Widget, Wrap};
 use ratatui::{Frame, Terminal, TerminalOptions, Viewport};
 
+/// Inline viewport height: transcript tail, tool row, status,
+/// composer, plus headroom for multi-line drafts.
+const INLINE_VIEWPORT_ROWS: u16 = 12;
+
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
@@ -1001,11 +1005,14 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
     frame.render_widget(Paragraph::new(tail).wrap(Wrap { trim: false }), rows[0]);
 
     let status = match &state.status {
-        UiStatus::Idle => Line::from(format!(
-            "idle — type a prompt, esc quits  [area {}x{}@{}]",
-            area.width, area.height, area.y
-        ))
-        .style(palette.status_idle),
+        UiStatus::Idle => {
+            let mut line = String::from("idle — type a prompt, esc quits");
+            if let Some(model) = &state.model_name {
+                line.push_str("  ·  ");
+                line.push_str(model);
+            }
+            Line::from(line).style(palette.status_idle)
+        }
         UiStatus::Working { operation } => {
             Line::from(format!("● {operation}")).style(palette.status_working)
         }
@@ -1013,7 +1020,7 @@ pub fn render(state: &UiState, frame: &mut Frame, palette: &Palette) {
     frame.render_widget(status, rows[2]);
     let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
     let composer_line = format!(
-        "{}▏{}",
+        "› {}▏{}",
         &state.composer[..cursor_byte],
         &state.composer[cursor_byte..]
     );
@@ -1054,17 +1061,16 @@ pub async fn run(
 
     let palette = palette(theme);
 
-    // The inline viewport anchors at the cursor; push it to the
-    // bottom of the screen first (ratatui inline-example pattern) so
-    // completed scrollback accumulates above a stable live area.
-    print!("{}", "\n".repeat(8));
+    // The inline viewport anchors at the cursor. Ratatui reserves the
+    // requested rows; completed scrollback accumulates above via
+    // insert_before, so no manual spacing is pushed here.
     io::stdout().flush().ok();
 
     let backend = CrosstermBackend::new(io::stdout());
     let mut terminal = Terminal::with_options(
         backend,
         TerminalOptions {
-            viewport: Viewport::Inline(6),
+            viewport: Viewport::Inline(INLINE_VIEWPORT_ROWS),
         },
     )
     .map_err(|err| RuntimeError::OperationFailed(format!("terminal setup failed: {err}")))?;
@@ -1117,6 +1123,10 @@ pub async fn run(
         OperationStatus::Idle => None,
     };
     let mut result: Result<(), RuntimeError> = Ok(());
+    // Content moved above the viewport this iteration: cells under the
+    // viewport's previous position hold the old frame and must be
+    // erased (inline viewports never clear outside their region).
+    let mut scrolled = resume_session.is_some();
 
     loop {
         // Flush completed content into scrollback, then draw the live
@@ -1127,14 +1137,29 @@ pub async fn run(
             let _ = terminal.insert_before(count, |buf| {
                 Paragraph::new(lines.clone()).render(buf.area, buf);
             });
+            scrolled = true;
             // The viewport moved; the previous buffer no longer matches
             // the screen. Force a full repaint (safe: the EventStream
             // owns terminal reads, so the cursor query cannot deadlock).
             terminal.clear().ok();
         }
-        terminal
+        let frame_area = terminal
             .draw(|frame| render(&state, frame, &palette))
-            .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
+            .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?
+            .area;
+        if scrolled {
+            scrolled = false;
+            let (_, screen_height) =
+                crossterm::terminal::size().unwrap_or((0, frame_area.bottom()));
+            if frame_area.bottom() < screen_height {
+                execute!(
+                    io::stdout(),
+                    crossterm::cursor::MoveTo(0, frame_area.bottom()),
+                    crossterm::terminal::Clear(crossterm::terminal::ClearType::FromCursorDown)
+                )
+                .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+            }
+        }
         #[cfg(debug_assertions)]
         if let Ok(mut log) = std::fs::OpenOptions::new()
             .create(true)
