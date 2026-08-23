@@ -448,6 +448,9 @@ struct Composition<P> {
     budget: RuntimeBudget,
     parent: Option<SessionId>,
     trusted_resources: Vec<TrustedResource>,
+    /// Host-selected workspace identity. A reopened session uses the
+    /// persisted value instead, so process cwd cannot silently change it.
+    cwd: Option<String>,
 }
 
 impl<P: Provider> Composition<P> {
@@ -460,10 +463,11 @@ impl<P: Provider> Composition<P> {
             budget: RuntimeBudget::unbounded(),
             parent: None,
             trusted_resources: Vec::new(),
+            cwd: None,
         }
     }
 
-    fn spawn(self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
+    fn spawn(mut self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
         let initial_model_ref = self.provider.initial_model_ref();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let handle = RuntimeHandle { tx: tx.clone() };
@@ -472,8 +476,15 @@ impl<P: Provider> Composition<P> {
         let tools = Arc::new(self.tools);
         let artifact_root = self.store.artifact_root();
         let trusted_resources = self.trusted_resources;
-        let cwd = std::env::current_dir()
-            .map(|p| p.to_string_lossy().into_owned())
+        let cwd = loaded
+            .as_ref()
+            .map(|loaded| loaded.session.cwd.clone())
+            .or_else(|| self.cwd.take())
+            .or_else(|| {
+                std::env::current_dir()
+                    .ok()
+                    .map(|path| path.to_string_lossy().into_owned())
+            })
             .unwrap_or_default();
         let join = tokio::spawn(async move {
             SessionRuntime::new(
@@ -561,6 +572,25 @@ impl Runtime {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.trusted_resources = trusted_resources;
+        composition.spawn(SessionId::generate(), None)
+    }
+
+    /// Compose a new session with an explicit workspace identity. Hosts such
+    /// as ACP may expose a workspace other than the process cwd; that
+    /// identity must be durable so a later load validates the same session.
+    #[must_use]
+    pub fn start_with_policy_and_resources_in_cwd(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+        cwd: impl Into<String>,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.trusted_resources = trusted_resources;
+        composition.cwd = Some(cwd.into());
         composition.spawn(SessionId::generate(), None)
     }
 

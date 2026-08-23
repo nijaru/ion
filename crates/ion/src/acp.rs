@@ -394,21 +394,25 @@ where
         .get("cwd")
         .and_then(|v| v.as_str())
         .ok_or("missing cwd")?;
-    let catalog = ToolCatalog::with_cwd(std::path::PathBuf::from(cwd));
+    let cwd_path = std::path::Path::new(cwd);
+    if !cwd_path.is_absolute() {
+        return Err("cwd must be absolute".to_owned());
+    }
+    let catalog = ToolCatalog::with_cwd(cwd_path);
     let servers = parse_mcp_servers(params);
     if !servers.is_empty() {
         ion_core::McpService::new()
             .start_into(&servers, &catalog)
             .await;
     }
-    let trusted_resources =
-        ion_core::load_trusted_resources(std::path::Path::new(cwd), config.trust_project)?;
-    let runtime = Runtime::start_with_policy_and_resources(
+    let trusted_resources = ion_core::load_trusted_resources(cwd_path, config.trust_project)?;
+    let runtime = Runtime::start_with_policy_and_resources_in_cwd(
         (config.make_provider)(),
         catalog.clone(),
         (*config.store).clone(),
         Arc::clone(&config.policy),
         trusted_resources.clone(),
+        cwd,
     );
     let session_id = runtime.session_id();
     // ACP sessions can delegate to bounded read-only children (§20).

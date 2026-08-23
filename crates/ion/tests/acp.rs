@@ -165,7 +165,9 @@ async fn acp_load_replays_durable_history_and_accepts_a_new_prompt() {
         }))
         .await;
     let _ = client.recv().await;
-    let cwd = std::env::current_dir().expect("cwd");
+    // Deliberately choose a workspace other than the process cwd. ACP owns
+    // this identity; the runtime must persist it for the later load.
+    let cwd = std::env::temp_dir();
     client
         .send(json!({
             "jsonrpc": "2.0",

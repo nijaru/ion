@@ -1059,6 +1059,30 @@ async fn operation_state_is_one_replaceable_authoritative_row() {
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 
+#[tokio::test]
+async fn new_runtime_persists_explicit_workspace_identity() {
+    let db = temp_db("explicit-cwd");
+    let store = SessionStore::open(&db).expect("open store");
+    let workspace = std::env::temp_dir().join(format!("ion-runtime-cwd-{}", uuid::Uuid::now_v7()));
+    std::fs::create_dir_all(&workspace).expect("workspace");
+    let runtime = Runtime::start_with_policy_and_resources_in_cwd(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(&workspace),
+        store.clone(),
+        permissive_policy(),
+        Vec::new(),
+        workspace.to_string_lossy().into_owned(),
+    );
+    let session_id = runtime.session_id();
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.session.cwd, workspace.to_string_lossy());
+    let _ = std::fs::remove_dir_all(workspace);
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
 // ---- Tool registry unit tests ----
 
 #[tokio::test]
