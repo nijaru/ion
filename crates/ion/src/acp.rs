@@ -320,6 +320,9 @@ where
             RuntimeEvent::OperationFailed { message, .. } => {
                 return TurnStop::Failed(message);
             }
+            RuntimeEvent::OperationIndeterminate { message, .. } => {
+                return TurnStop::Failed(format!("indeterminate operation: {message}"));
+            }
             RuntimeEvent::OperationApprovalRequired { tool, .. } => {
                 return TurnStop::ApprovalRequired(tool);
             }

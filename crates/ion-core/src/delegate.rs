@@ -446,6 +446,9 @@ async fn pump_child(
             crate::RuntimeEvent::OperationFailed { message, .. } => {
                 return ChildTerminal::Failed(message);
             }
+            crate::RuntimeEvent::OperationIndeterminate { message, .. } => {
+                return ChildTerminal::Failed(format!("indeterminate operation: {message}"));
+            }
             crate::RuntimeEvent::OperationApprovalRequired { tool, .. } => {
                 return ChildTerminal::Failed(format!(
                     "approval required for `{tool}` (read-only child)"

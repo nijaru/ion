@@ -116,6 +116,13 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         message: String,
     },
+    /// A repeat-sensitive external effect could not be classified safely
+    /// after process loss. The caller must inspect it before retrying.
+    OperationIndeterminate {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        message: String,
+    },
     OperationCancelled {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -145,6 +152,7 @@ impl RuntimeEvent {
             | Self::ToolSettled { operation_id, .. }
             | Self::OperationFinished { operation_id, .. }
             | Self::OperationFailed { operation_id, .. }
+            | Self::OperationIndeterminate { operation_id, .. }
             | Self::OperationCancelled { operation_id, .. }
             | Self::OperationApprovalRequired { operation_id, .. } => Some(*operation_id),
             Self::SessionClosed { .. } => None,
@@ -161,6 +169,7 @@ impl RuntimeEvent {
             | Self::ToolSettled { cursor, .. }
             | Self::OperationFinished { cursor, .. }
             | Self::OperationFailed { cursor, .. }
+            | Self::OperationIndeterminate { cursor, .. }
             | Self::OperationCancelled { cursor, .. }
             | Self::OperationApprovalRequired { cursor, .. }
             | Self::SessionClosed { cursor } => *cursor,
@@ -2988,10 +2997,11 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
                 OperationOutcome::Indeterminate => {
-                    self.emit(RuntimeEvent::OperationFailed {
+                    self.emit(RuntimeEvent::OperationIndeterminate {
                         cursor: RuntimeCursor::default(),
                         operation_id,
-                        message: "indeterminate".to_owned(),
+                        message: "external effect is indeterminate; inspect it before retrying"
+                            .to_owned(),
                     });
                 }
             }
@@ -3320,6 +3330,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::ToolSettled { cursor: slot, .. }
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
         | RuntimeEvent::OperationFailed { cursor: slot, .. }
+        | RuntimeEvent::OperationIndeterminate { cursor: slot, .. }
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
         | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
@@ -3335,6 +3346,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
+        RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
         RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
         RuntimeEvent::SessionClosed { .. } => "session_closed",

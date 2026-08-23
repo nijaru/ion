@@ -762,6 +762,15 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 .push(Line::from(format!("! failed: {message}")).red());
             state.status = UiStatus::Idle;
         }
+        RuntimeEvent::OperationIndeterminate { message, .. } => {
+            state.flush_draft();
+            state.pending_scrollback.push(
+                Line::from(format!("! indeterminate: {message}"))
+                    .yellow()
+                    .bold(),
+            );
+            state.status = UiStatus::Idle;
+        }
         RuntimeEvent::OperationCancelled { .. } => {
             state.flush_draft();
             state
@@ -1366,6 +1375,7 @@ pub async fn run(
                             event,
                             RuntimeEvent::OperationFinished { .. }
                                 | RuntimeEvent::OperationFailed { .. }
+                                | RuntimeEvent::OperationIndeterminate { .. }
                                 | RuntimeEvent::OperationCancelled { .. }
                                 | RuntimeEvent::OperationApprovalRequired { .. }
                         ) {
@@ -2021,6 +2031,24 @@ pub(crate) mod tests {
         let state = UiState::new();
         let (state, _) = update(state, UiMessage::SubmitRejected("busy".to_owned()));
         assert!(state.pending_scrollback[0].to_string().contains("busy"));
+    }
+
+    #[test]
+    fn indeterminate_outcome_is_visible_as_inspection_required() {
+        let state = apply_runtime_event(
+            UiState::new(),
+            RuntimeEvent::OperationIndeterminate {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                message: "inspect before retrying".to_owned(),
+            },
+        );
+        assert_eq!(state.status, UiStatus::Idle);
+        assert!(
+            state.pending_scrollback[0]
+                .to_string()
+                .contains("indeterminate: inspect before retrying")
+        );
     }
 
     #[test]

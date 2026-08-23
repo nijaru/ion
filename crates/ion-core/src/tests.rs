@@ -47,6 +47,7 @@ async fn collect_until_terminal(
             RuntimeEvent::OperationFinished { .. }
                 | RuntimeEvent::OperationCancelled { .. }
                 | RuntimeEvent::OperationFailed { .. }
+                | RuntimeEvent::OperationIndeterminate { .. }
                 | RuntimeEvent::OperationApprovalRequired { .. }
                 | RuntimeEvent::SessionClosed { .. }
         );
@@ -68,6 +69,7 @@ fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
             RuntimeEvent::OperationFailed { .. } => "operation_failed",
+            RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",
             RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
             RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
             RuntimeEvent::SessionClosed { .. } => "session_closed",

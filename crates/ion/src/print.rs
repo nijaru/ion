@@ -45,6 +45,11 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::OperationFailed { message, .. } => {
                     return Err(RuntimeError::OperationFailed(message));
                 }
+                RuntimeEvent::OperationIndeterminate { message, .. } => {
+                    return Err(RuntimeError::OperationFailed(format!(
+                        "indeterminate operation: {message}"
+                    )));
+                }
                 RuntimeEvent::SessionClosed { .. } => {
                     return Err(RuntimeError::Command(CommandError::Closed));
                 }
