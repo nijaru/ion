@@ -13,7 +13,7 @@ use std::future::Future;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::process::Stdio;
+use std::process::{ExitStatus, Stdio};
 use std::sync::Arc;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -1849,6 +1849,67 @@ async fn collect_process_output(
     spool.finish().await
 }
 
+/// Own a spawned process until it has been waited or explicitly terminated.
+///
+/// The guard has two cleanup layers. Tokio kills the direct child if the
+/// owning future is dropped, while the Unix process-group cleanup also kills
+/// descendants. The normal and cancellation paths still wait explicitly so
+/// the direct child is reaped rather than left as a zombie.
+struct ProcessGuard {
+    child: tokio::process::Child,
+    process_group: Option<i32>,
+    armed: bool,
+}
+
+impl ProcessGuard {
+    fn spawn(command: &mut Command) -> Result<Self, std::io::Error> {
+        let child = command.kill_on_drop(true).spawn()?;
+        let process_group = child.id().map(|pid| pid as i32);
+        Ok(Self {
+            child,
+            process_group,
+            armed: true,
+        })
+    }
+
+    fn take_stdout(&mut self) -> Option<tokio::process::ChildStdout> {
+        self.child.stdout.take()
+    }
+
+    fn take_stderr(&mut self) -> Option<tokio::process::ChildStderr> {
+        self.child.stderr.take()
+    }
+
+    fn kill_owned_processes(&mut self) {
+        if let Some(process_group) = self.process_group {
+            kill_process_group(process_group);
+        }
+    }
+
+    async fn wait(&mut self) -> Result<ExitStatus, std::io::Error> {
+        self.child.wait().await
+    }
+
+    async fn kill_and_wait(&mut self) -> Result<ExitStatus, std::io::Error> {
+        self.kill_owned_processes();
+        #[cfg(not(unix))]
+        self.child.kill().await?;
+        self.child.wait().await
+    }
+
+    fn disarm(&mut self) {
+        self.armed = false;
+    }
+}
+
+impl Drop for ProcessGuard {
+    fn drop(&mut self) {
+        if self.armed {
+            self.kill_owned_processes();
+        }
+    }
+}
+
 /// Spawn a shell command under cwd, killing the child on cancel.
 /// Model-visible output is bounded; larger raw output is atomically
 /// published as a bounded artifact when the session store provides a root.
@@ -1858,7 +1919,6 @@ async fn run_shell(
     artifact_root: Option<&Path>,
     cancel: CancellationToken,
 ) -> ToolOutcome {
-    // The process group is reaped below on completion or cancellation.
     let mut cmd = Command::new("sh");
     cmd.arg("-c")
         .arg(command)
@@ -1871,14 +1931,13 @@ async fn run_shell(
     // rather than only the direct `sh`.
     #[cfg(unix)]
     cmd.process_group(0);
-    let mut child = match cmd.spawn() {
+    let mut process = match ProcessGuard::spawn(&mut cmd) {
         Ok(child) => child,
         Err(err) => return ToolOutcome::error(format!("spawn failed: {err}")),
     };
-    let pid = child.id();
 
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
+    let stdout = process.take_stdout();
+    let stderr = process.take_stderr();
 
     // Drain both pipes concurrently. Waiting for EOF first would deadlock on
     // a silent long-running command and make cancellation uninterruptible.
@@ -1889,7 +1948,8 @@ async fn run_shell(
     ));
 
     tokio::select! {
-        status = child.wait() => {
+        status = process.wait() => {
+            let reaped = status.is_ok();
             let collected = match read_task.await {
                 Ok(collected) => collected,
                 Err(err) => CollectedOutput {
@@ -1919,14 +1979,14 @@ async fn run_shell(
             } else {
                 ToolOutcome::error(output)
             };
+            if reaped {
+                process.disarm();
+            }
             outcome.with_artifact(artifact)
         }
         _ = cancel.cancelled() => {
-            if let Some(pid) = pid {
-                kill_process_group(pid as i32);
-            }
             // Reap the killed child so it does not linger as a zombie.
-            let _ = child.wait().await;
+            let reaped = process.kill_and_wait().await.is_ok();
             // Killing the group closes the pipes, so the read task finishes.
             let collected = match read_task.await {
                 Ok(collected) => collected,
@@ -1940,6 +2000,9 @@ async fn run_shell(
                 || "cancelled".to_owned(),
                 |error| format!("cancelled; output capture failed: {error}"),
             );
+            if reaped {
+                process.disarm();
+            }
             ToolOutcome::error(message).with_artifact(collected.artifact)
         }
     }
@@ -2389,5 +2452,25 @@ mod preview_bound_tests {
         .await;
         assert!(!outcome.is_error, "{outcome:?}");
         assert_eq!(outcome.output, "�A");
+    }
+
+    #[tokio::test]
+    async fn shell_cancellation_kills_and_reaps_owned_process() {
+        let cancel = CancellationToken::new();
+        let task = tokio::spawn(run_shell(
+            Path::new("."),
+            "trap '' TERM; sleep 30",
+            None,
+            cancel.clone(),
+        ));
+
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        cancel.cancel();
+        let outcome = tokio::time::timeout(std::time::Duration::from_secs(2), task)
+            .await
+            .expect("cancellation must not leave a process running")
+            .expect("shell task must join");
+        assert!(outcome.is_error, "{outcome:?}");
+        assert_eq!(outcome.output, "cancelled");
     }
 }
