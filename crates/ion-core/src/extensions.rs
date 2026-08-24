@@ -14,24 +14,16 @@
 //! user-level configuration is trusted by being user-authored.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use serde_json::Value;
-use tokio::sync::{oneshot, watch};
+use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
 
 use std::future::Future;
 use std::pin::Pin;
 
-use crate::rpc::{CloseHandler, PeerDef, StdioRpc, client_info};
-use crate::tool::{CatalogService, Tool, ToolCatalog, ToolOutcome};
-
-/// Handshake timeout: a slow extension delays startup once, visibly,
-/// then is skipped.
-const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
-const MAX_RESTARTS: u32 = 3;
-const RESTART_BASE_BACKOFF: Duration = Duration::from_millis(100);
-const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(2);
+use crate::rpc::{HANDSHAKE_TIMEOUT, PeerDef, StdioRpc, supervise_tool_peer};
+use crate::tool::{Tool, ToolCatalog, ToolOutcome};
 
 /// One configured extension (settings or trusted project manifest).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,143 +52,34 @@ impl ExtensionService {
             let (ready_tx, ready_rx) = oneshot::channel();
             let def = def.clone();
             let service = catalog.service_handle();
+            let name = def.name.clone();
             tokio::spawn(async move {
-                supervise_extension(def, service, Some(ready_tx)).await;
+                supervise_tool_peer(
+                    PeerDef {
+                        name: name.clone(),
+                        command: def.command,
+                        args: def.args,
+                    },
+                    format!("ext:{name}"),
+                    service,
+                    Some(ready_tx),
+                    "extension",
+                    move |connection, spec| {
+                        Arc::new(ExtensionTool {
+                            connection,
+                            exposed_name: format!("{name}__{}", spec.name),
+                            remote_name: spec.name.clone(),
+                            spec,
+                            extension_name: name.clone(),
+                        }) as Arc<dyn Tool>
+                    },
+                )
+                .await;
             });
             // Wait only for the first discovery attempt. Later retries are
             // owned by the service task and do not block other extensions.
             let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;
         }
-    }
-}
-
-async fn supervise_extension(
-    def: ExtensionDef,
-    service: CatalogService,
-    mut ready: Option<oneshot::Sender<()>>,
-) {
-    let scope = format!("ext:{}", def.name);
-    let mut failures = 0;
-    loop {
-        let Some(lifetime) = service.lifetime() else {
-            return;
-        };
-
-        let (closed_tx, mut closed_rx) = watch::channel(false);
-        let callback_scope = scope.clone();
-        let callback_service = service.clone();
-        let on_closed: CloseHandler = Arc::new(move || {
-            callback_service.remove_scope(&callback_scope);
-            let _ = closed_tx.send(true);
-        });
-        let peer = PeerDef {
-            name: def.name.clone(),
-            command: def.command.clone(),
-            args: def.args.clone(),
-        };
-        let rpc = match StdioRpc::spawn(&peer, client_info(), HANDSHAKE_TIMEOUT, on_closed).await {
-            Ok(rpc) => Arc::new(rpc),
-            Err(err) => {
-                tracing::warn!(extension = %def.name, error = %err, "extension failed to start");
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(());
-                }
-                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
-                    return;
-                }
-                continue;
-            }
-        };
-
-        let tools = match tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()).await {
-            Ok(Ok(tools)) => tools,
-            Ok(Err(err)) => {
-                tracing::warn!(extension = %def.name, error = %err, "extension tools/list failed");
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(());
-                }
-                drop(rpc);
-                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
-                    return;
-                }
-                continue;
-            }
-            Err(_) => {
-                tracing::warn!(extension = %def.name, "extension tools/list timed out");
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(());
-                }
-                drop(rpc);
-                if !schedule_restart(&def.name, &lifetime, &mut failures).await {
-                    return;
-                }
-                continue;
-            }
-        };
-
-        let scoped: Vec<Arc<dyn Tool>> = tools
-            .into_iter()
-            .map(|spec| {
-                Arc::new(ExtensionTool {
-                    connection: Arc::clone(&rpc),
-                    exposed_name: format!("{}__{}", def.name, spec.name),
-                    remote_name: spec.name.clone(),
-                    spec,
-                    extension_name: def.name.clone(),
-                }) as Arc<dyn Tool>
-            })
-            .collect();
-        tracing::info!(
-            extension = %def.name,
-            tools = scoped.len(),
-            "extension ready"
-        );
-        service.register_scope(scope.clone(), scoped);
-        if let Some(ready) = ready.take() {
-            let _ = ready.send(());
-        }
-        if rpc.is_closed() {
-            service.remove_scope(&scope);
-        } else {
-            tokio::select! {
-                result = closed_rx.changed() => {
-                    if result.is_err() {
-                        service.remove_scope(&scope);
-                    }
-                }
-                () = lifetime.cancelled() => return,
-            }
-        }
-        drop(rpc);
-        if lifetime.is_cancelled() {
-            return;
-        }
-        if !schedule_restart(&def.name, &lifetime, &mut failures).await {
-            return;
-        }
-    }
-}
-
-async fn schedule_restart(name: &str, lifetime: &CancellationToken, failures: &mut u32) -> bool {
-    if *failures >= MAX_RESTARTS {
-        tracing::warn!(
-            extension = %name,
-            "extension restart limit reached; capability circuit is open"
-        );
-        return false;
-    }
-    *failures += 1;
-    let multiplier = 1_u32 << failures.saturating_sub(1).min(4);
-    let delay = (RESTART_BASE_BACKOFF * multiplier).min(RESTART_MAX_BACKOFF);
-    tracing::warn!(
-        extension = %name,
-        attempt = *failures,
-        ?delay,
-        "extension restarting"
-    );
-    tokio::select! {
-        () = lifetime.cancelled() => false,
-        () = tokio::time::sleep(delay) => true,
     }
 }
 

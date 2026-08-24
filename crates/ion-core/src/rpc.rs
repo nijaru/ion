@@ -18,8 +18,11 @@ use rmcp::service::{Peer, RoleClient};
 use rmcp::transport::{ConfigureCommandExt, TokioChildProcess};
 use serde_json::Value;
 use tokio::process::Command;
+use tokio::sync::{oneshot, watch};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+use crate::tool::{CatalogService, Tool, ToolSpec};
 
 pub(crate) type CloseHandler = Arc<dyn Fn() + Send + Sync + 'static>;
 
@@ -175,6 +178,135 @@ impl StdioRpc {
 impl Drop for StdioRpc {
     fn drop(&mut self) {
         self.shutdown.cancel();
+    }
+}
+
+/// Handshake and discovery timeouts: a slow peer delays startup once,
+/// visibly, then is skipped.
+pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
+/// Bounded restart supervision: three attempts, exponential backoff
+/// 100ms/200ms/400ms capped at 2s, then the capability circuit opens.
+pub(crate) const MAX_RESTARTS: u32 = 3;
+pub(crate) const RESTART_BASE_BACKOFF: Duration = Duration::from_millis(100);
+pub(crate) const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(2);
+
+/// One stdio peer that publishes tools into a [`CatalogService`] scope:
+/// spawn, discover, register, wait for closure or lifetime end, restart
+/// with cancellation-aware backoff, and open the circuit after
+/// [`MAX_RESTARTS`] failures. Shared by MCP servers (§19.1) and
+/// extensions (§24.4); `label` only shapes the log message and
+/// `make_tool` wraps each discovered tool in the peer's typed contract.
+pub(crate) async fn supervise_tool_peer<F>(
+    def: PeerDef,
+    scope: String,
+    service: CatalogService,
+    mut ready: Option<oneshot::Sender<()>>,
+    label: &str,
+    make_tool: F,
+) where
+    F: Fn(Arc<StdioRpc>, ToolSpec) -> Arc<dyn Tool> + Send + Sync + 'static,
+{
+    let mut failures = 0;
+    loop {
+        let Some(lifetime) = service.lifetime() else {
+            return;
+        };
+
+        let (closed_tx, mut closed_rx) = watch::channel(false);
+        let callback_scope = scope.clone();
+        let callback_service = service.clone();
+        let on_closed: CloseHandler = Arc::new(move || {
+            callback_service.remove_scope(&callback_scope);
+            let _ = closed_tx.send(true);
+        });
+        let rpc = match StdioRpc::spawn(&def, client_info(), HANDSHAKE_TIMEOUT, on_closed).await {
+            Ok(rpc) => Arc::new(rpc),
+            Err(err) => {
+                tracing::warn!(peer = %def.name, error = %err, "{label} failed to start");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
+                }
+                if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
+                    return;
+                }
+                continue;
+            }
+        };
+
+        let tools = match tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()).await {
+            Ok(Ok(tools)) => tools,
+            Ok(Err(err)) => {
+                tracing::warn!(peer = %def.name, error = %err, "{label} tools/list failed");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
+                }
+                drop(rpc);
+                if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
+                    return;
+                }
+                continue;
+            }
+            Err(_) => {
+                tracing::warn!(peer = %def.name, "{label} tools/list timed out");
+                if let Some(ready) = ready.take() {
+                    let _ = ready.send(());
+                }
+                drop(rpc);
+                if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
+                    return;
+                }
+                continue;
+            }
+        };
+
+        let scoped: Vec<Arc<dyn Tool>> = tools
+            .into_iter()
+            .map(|spec| make_tool(Arc::clone(&rpc), spec))
+            .collect();
+        tracing::info!(peer = %def.name, tools = scoped.len(), "{label} ready");
+        service.register_scope(scope.clone(), scoped);
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
+        if rpc.is_closed() {
+            service.remove_scope(&scope);
+        } else {
+            tokio::select! {
+                result = closed_rx.changed() => {
+                    if result.is_err() {
+                        service.remove_scope(&scope);
+                    }
+                }
+                () = lifetime.cancelled() => return,
+            }
+        }
+        drop(rpc);
+        if lifetime.is_cancelled() {
+            return;
+        }
+        if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
+            return;
+        }
+    }
+}
+
+async fn schedule_restart(
+    name: &str,
+    lifetime: &CancellationToken,
+    failures: &mut u32,
+    label: &str,
+) -> bool {
+    if *failures >= MAX_RESTARTS {
+        tracing::warn!(peer = %name, "{label} restart limit reached; capability circuit is open");
+        return false;
+    }
+    *failures += 1;
+    let multiplier = 1_u32 << failures.saturating_sub(1).min(4);
+    let delay = (RESTART_BASE_BACKOFF * multiplier).min(RESTART_MAX_BACKOFF);
+    tracing::warn!(peer = %name, attempt = *failures, ?delay, "{label} restarting");
+    tokio::select! {
+        () = lifetime.cancelled() => false,
+        () = tokio::time::sleep(delay) => true,
     }
 }
 
