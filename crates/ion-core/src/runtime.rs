@@ -319,10 +319,7 @@ impl RuntimeHandle {
         build: impl FnOnce(oneshot::Sender<Result<T, CommandError>>) -> SessionCommand,
     ) -> Result<T, CommandError> {
         let (reply, rx) = oneshot::channel();
-        self.tx.try_send(build(reply)).map_err(|err| match err {
-            mpsc::error::TrySendError::Full(_) => CommandError::QueueSaturated,
-            mpsc::error::TrySendError::Closed(_) => CommandError::Closed,
-        })?;
+        self.tx.try_send(build(reply)).map_err(command_send_error)?;
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
 }
@@ -496,7 +493,6 @@ impl<P: Provider> Composition<P> {
         let initial_model_ref = self.provider.initial_model_ref();
         let runtime_instance_id = RuntimeInstanceId::generate();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
-        let handle = RuntimeHandle { tx: tx.clone() };
         let session = SessionHandle { tx };
         let provider = Arc::new(self.provider);
         let tools = Arc::new(self.tools);
@@ -535,7 +531,6 @@ impl<P: Provider> Composition<P> {
             .await;
         });
         Runtime {
-            handle,
             session,
             session_id,
             join,
@@ -546,23 +541,12 @@ impl<P: Provider> Composition<P> {
 /// Process-level runtime: composition and the session registry. v0 keeps
 /// exactly one loaded session (DESIGN.md §32 Step 1).
 pub struct Runtime {
-    handle: RuntimeHandle,
     session: SessionHandle,
     session_id: SessionId,
     join: JoinHandle<()>,
 }
 
 impl Runtime {
-    /// Compose the runtime with one durable session in the default data
-    /// root. Panics if the store cannot be opened; hosts that need
-    /// graceful handling use [`Runtime::start_with_store`].
-    #[must_use]
-    pub fn start(provider: impl Provider, tools: impl Into<ToolCatalog>) -> Self {
-        let store = SessionStore::open(crate::store::default_db_path())
-            .expect("open the default session store");
-        Self::start_with_store(provider, tools, store)
-    }
-
     /// Compose the runtime with one new durable session in `store`.
     #[must_use]
     pub fn start_with_store(
@@ -619,21 +603,6 @@ impl Runtime {
         composition.trusted_resources = trusted_resources;
         composition.cwd = Some(cwd.into());
         composition.spawn(SessionId::generate(), None)
-    }
-
-    /// Compose a bounded child session with durable lineage (§20.1,
-    /// §20.3): the same primitive as a root session - own machine, own
-    /// store record - plus a persisted parent reference.
-    #[must_use]
-    pub fn start_child(
-        provider: impl Provider,
-        tools: impl Into<ToolCatalog>,
-        store: SessionStore,
-        policy: Arc<dyn PolicyEngine>,
-        budget: RuntimeBudget,
-        parent: SessionId,
-    ) -> Self {
-        Self::start_child_with_resources(provider, tools, store, policy, budget, parent, Vec::new())
     }
 
     /// Compose a bounded child with an explicitly inherited trusted-resource
@@ -704,11 +673,6 @@ impl Runtime {
         Ok(composition.spawn(session_id, Some(loaded)))
     }
 
-    #[must_use]
-    pub fn handle(&self) -> RuntimeHandle {
-        self.handle.clone()
-    }
-
     /// The sole loaded session.
     #[must_use]
     pub fn session(&self) -> SessionHandle {
@@ -768,7 +732,7 @@ struct ActiveOperation {
 /// approval policy.
 /// Runtime-enforced budget bounds (§20.5). `None`/zero means
 /// unbounded; exact defaults are configuration, not architecture.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeBudget {
     /// Maximum model steps (provider requests) per operation.
     pub max_model_steps: Option<u32>,
@@ -1122,7 +1086,7 @@ impl<P: Provider> SessionRuntime<P> {
                 false
             }
             SessionCommand::Steer { text, reply } => {
-                let _ = reply.send(self.enqueue_inbox(InboxKind::Steer, text).await);
+                let _ = reply.send(self.enqueue_steer(text).await);
                 false
             }
             SessionCommand::Cancel {
@@ -1301,7 +1265,7 @@ impl<P: Provider> SessionRuntime<P> {
         Ok(previous)
     }
 
-    async fn enqueue_inbox(&mut self, kind: InboxKind, text: String) -> Result<(), CommandError> {
+    async fn enqueue_steer(&mut self, text: String) -> Result<(), CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -1316,7 +1280,7 @@ impl<P: Provider> SessionRuntime<P> {
             .machine
             .apply(Transition::ApplyInbox {
                 item: InboxItem {
-                    kind: kind.clone(),
+                    kind: InboxKind::Steer,
                     text: text.clone(),
                 },
             })
@@ -1325,7 +1289,7 @@ impl<P: Provider> SessionRuntime<P> {
         let applied_entries = applied.entries.clone();
         let record = InboxRecord {
             id: inbox_id,
-            kind: kind.clone(),
+            kind: InboxKind::Steer,
             text,
             status: if applied_now {
                 InboxStatus::Applied
@@ -1356,10 +1320,7 @@ impl<P: Provider> SessionRuntime<P> {
         if applied_now {
             self.entries.extend(applied_entries);
         } else {
-            match kind {
-                InboxKind::Steer => staged.pending_steers.push(inbox_id),
-                InboxKind::Prompt => {}
-            }
+            staged.pending_steers.push(inbox_id);
         }
         self.operation = Some(staged);
         self.advance().await;
@@ -1958,7 +1919,7 @@ impl<P: Provider> SessionRuntime<P> {
                     if self
                         .operation
                         .as_ref()
-                        .is_some_and(|active| active.machine.has_queued_inbox())
+                        .is_some_and(|active| active.machine.has_queued_steers())
                     {
                         if !self.drain_queued().await {
                             return;
@@ -2460,7 +2421,11 @@ impl<P: Provider> SessionRuntime<P> {
                 .and_then(|active| active.open_effect.as_ref())
                 .and_then(|effect| effect.effective_input.get("reconciliation"))
                 .cloned();
-            self.spawn_tool_effect(effect_id_of(self.operation.as_ref()), call, reconciliation);
+            let effect_id = self
+                .operation
+                .as_ref()
+                .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
+            self.spawn_tool_effect(effect_id, call, reconciliation);
         }
         true
     }
@@ -2864,7 +2829,7 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("tool settlement while ToolEffectPending");
         let settled = vec![SettledEffect {
             id: effect_id,
-            settlement: serde_json::json!({ "output": result.into_text() }),
+            settlement: serde_json::json!({ "output": result.model_text() }),
         }];
         let (request, new_entry_seq) = build_commit_request(
             self.session_id,
@@ -3259,10 +3224,6 @@ fn compaction_from_input(input: &serde_json::Value) -> Option<(u64, ModelConfig,
     let model = model_from_input(input.get("model")?)?;
     let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
     Some((step, model, plan))
-}
-
-fn effect_id_of(active: Option<&ActiveOperation>) -> Option<EffectId> {
-    active.and_then(|active| active.open_effect.as_ref().map(|e| e.id))
 }
 
 /// Build the durable record of one staged transition. Entry sequences are

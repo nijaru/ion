@@ -1002,7 +1002,7 @@ fn insert_checkpoint(
         rusqlite::params![
             operation_id.as_uuid().to_string(),
             checkpoint.state_seq as i64,
-            state_kind(&checkpoint.payload.state),
+            checkpoint.payload.state.kind(),
             payload,
             now_ms(),
         ],
@@ -1140,20 +1140,6 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         operations,
         pending_inbox,
     })
-}
-
-fn state_kind(state: &OperationState) -> &'static str {
-    match state {
-        OperationState::Accepted => "accepted",
-        OperationState::NeedAssistant => "need_assistant",
-        OperationState::AssistantEffectPending => "assistant_effect_pending",
-        OperationState::ToolsPlanned { .. } => "tools_planned",
-        OperationState::ToolEffectPending { .. } => "tool_effect_pending",
-        OperationState::NeedContinuation => "need_continuation",
-        OperationState::CompactionPending => "compaction_pending",
-        OperationState::Suspended => "suspended",
-        OperationState::Finished(_) => "finished",
-    }
 }
 
 fn entry_kind(entry: &SessionEntry) -> &'static str {

@@ -128,12 +128,6 @@ impl ToolResult {
         matches!(self, Self::Ok { .. })
     }
 
-    /// Render the result to a single string (success output or error text).
-    #[must_use]
-    pub fn into_text(self) -> String {
-        self.model_text()
-    }
-
     /// The exact bounded text projected to the model, including the stable
     /// locator for any externalized raw output.
     #[must_use]
@@ -339,7 +333,7 @@ pub enum CanonicalTarget {
 
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
 /// can clone the working directory cheaply before invoking a tool.
-fn hex(bytes: &[u8]) -> String {
+pub(crate) fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 

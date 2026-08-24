@@ -169,10 +169,7 @@ fn digest_json<T: serde::Serialize>(value: &T) -> String {
 }
 
 fn digest_bytes(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
+    crate::tool::hex(&Sha256::digest(bytes))
 }
 
 /// One model-facing message in the projected conversation.

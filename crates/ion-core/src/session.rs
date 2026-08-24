@@ -148,10 +148,6 @@ pub enum Transition {
     OverflowCompaction {
         plan: ContextPlan,
     },
-    /// Settle a reopened Suspended operation as cancelled (§9.5):
-    /// suspend means teardown with effects cancelled, so the operation
-    /// can never continue; leaving it open would block the session.
-    SettleSuspended,
     /// Start the next model step from a quiescent state. `plan` is the
     /// model-facing projection the runtime derived from the session
     /// transcript (deterministic, §14/§31 invariant 15).
@@ -367,12 +363,6 @@ impl OperationMachine {
         !self.steers.is_empty()
     }
 
-    /// True when any accepted inbox item is still pending.
-    #[must_use]
-    pub fn has_queued_inbox(&self) -> bool {
-        self.has_queued_steers()
-    }
-
     /// Apply one transition. Invalid state/transition pairs are typed
     /// errors; nothing mutates on error.
     pub fn apply(&mut self, transition: Transition) -> Result<Applied, TransitionError> {
@@ -399,7 +389,6 @@ impl OperationMachine {
                 covers_through_seq,
             } => self.compaction_completed(summary, covers_through_seq),
             Transition::CompactionFailed => self.compaction_failed(),
-            Transition::SettleSuspended => self.settle_suspended(),
             Transition::OverflowCompaction { plan } => self.overflow_compaction(plan),
             Transition::Suspend => self.suspend(),
         }
@@ -416,7 +405,7 @@ impl OperationMachine {
             ),
             InboxKind::Prompt => {
                 return Err(TransitionError {
-                    state: state_name(&self.state),
+                    state: self.state.kind(),
                     transition: "apply_inbox",
                 });
             }
@@ -450,7 +439,7 @@ impl OperationMachine {
             })
         } else {
             Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "apply_inbox",
             })
         }
@@ -477,7 +466,7 @@ impl OperationMachine {
                 })
             }
             ref state => Err(TransitionError {
-                state: state_name(state),
+                state: state.kind(),
                 transition: "start_model_step",
             }),
         }
@@ -490,13 +479,13 @@ impl OperationMachine {
     ) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "provider_completed",
             });
         }
         let mut entries = vec![SessionEntry::AssistantMessage { text }];
         if tool_calls.is_empty() {
-            if self.has_queued_inbox() {
+            if self.has_queued_steers() {
                 self.state = OperationState::NeedContinuation;
             } else {
                 self.state = OperationState::Finished(OperationOutcome::Completed);
@@ -520,7 +509,7 @@ impl OperationMachine {
     fn provider_failed(&mut self, message: String) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "provider_failed",
             });
         }
@@ -536,7 +525,7 @@ impl OperationMachine {
     fn provider_cancelled(&mut self) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "provider_cancelled",
             });
         }
@@ -554,14 +543,14 @@ impl OperationMachine {
             OperationState::ToolsPlanned { pending } => pending.clone(),
             state => {
                 return Err(TransitionError {
-                    state: state_name(state),
+                    state: state.kind(),
                     transition: "admit_next_tool",
                 });
             }
         };
         let Some(call) = pending.first() else {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "admit_next_tool",
             });
         };
@@ -580,7 +569,7 @@ impl OperationMachine {
             OperationState::ToolEffectPending { pending } => pending.clone(),
             state => {
                 return Err(TransitionError {
-                    state: state_name(state),
+                    state: state.kind(),
                     transition: "tool_settled",
                 });
             }
@@ -603,7 +592,7 @@ impl OperationMachine {
     fn cancel_requested_transition(&mut self) -> Result<Applied, TransitionError> {
         if matches!(self.state, OperationState::Finished(_)) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "cancel_requested",
             });
         }
@@ -622,7 +611,7 @@ impl OperationMachine {
             OperationState::Finished(_) | OperationState::Suspended
         ) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "fail_operation",
             });
         }
@@ -642,7 +631,7 @@ impl OperationMachine {
     ) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "recover_model_step",
             });
         }
@@ -664,7 +653,7 @@ impl OperationMachine {
             OperationState::ToolEffectPending { .. } => {}
             state => {
                 return Err(TransitionError {
-                    state: state_name(state),
+                    state: state.kind(),
                     transition: "recover_tool",
                 });
             }
@@ -683,7 +672,7 @@ impl OperationMachine {
             OperationState::AssistantEffectPending | OperationState::ToolEffectPending { .. }
         ) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "settle_indeterminate",
             });
         }
@@ -699,7 +688,7 @@ impl OperationMachine {
     fn approval_required(&mut self, tool: String) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::ToolsPlanned { .. }) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "approval_required",
             });
         }
@@ -727,7 +716,7 @@ impl OperationMachine {
                 })
             }
             ref state => Err(TransitionError {
-                state: state_name(state),
+                state: state.kind(),
                 transition: "start_compaction",
             }),
         }
@@ -740,7 +729,7 @@ impl OperationMachine {
     ) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::CompactionPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "compaction_completed",
             });
         }
@@ -759,7 +748,7 @@ impl OperationMachine {
     fn recover_compaction(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::CompactionPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "recover_compaction",
             });
         }
@@ -777,7 +766,7 @@ impl OperationMachine {
     fn overflow_compaction(&mut self, plan: ContextPlan) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::AssistantEffectPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "overflow_compaction",
             });
         }
@@ -793,26 +782,10 @@ impl OperationMachine {
         })
     }
 
-    fn settle_suspended(&mut self) -> Result<Applied, TransitionError> {
-        if !matches!(self.state, OperationState::Suspended) {
-            return Err(TransitionError {
-                state: state_name(&self.state),
-                transition: "settle_suspended",
-            });
-        }
-        self.state = OperationState::Finished(OperationOutcome::Cancelled);
-        Ok(Applied {
-            state: self.state.clone(),
-            entries: Vec::new(),
-            intents: Vec::new(),
-            cancel_effects: false,
-        })
-    }
-
     fn compaction_failed(&mut self) -> Result<Applied, TransitionError> {
         if !matches!(self.state, OperationState::CompactionPending) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "compaction_failed",
             });
         }
@@ -832,7 +805,7 @@ impl OperationMachine {
     fn suspend(&mut self) -> Result<Applied, TransitionError> {
         if matches!(self.state, OperationState::Finished(_)) {
             return Err(TransitionError {
-                state: state_name(&self.state),
+                state: self.state.kind(),
                 transition: "suspend",
             });
         }
@@ -857,16 +830,20 @@ impl OperationMachine {
     }
 }
 
-fn state_name(state: &OperationState) -> &'static str {
-    match state {
-        OperationState::Accepted => "accepted",
-        OperationState::NeedAssistant => "need_assistant",
-        OperationState::AssistantEffectPending => "assistant_effect_pending",
-        OperationState::ToolsPlanned { .. } => "tools_planned",
-        OperationState::ToolEffectPending { .. } => "tool_effect_pending",
-        OperationState::NeedContinuation => "need_continuation",
-        OperationState::CompactionPending => "compaction_pending",
-        OperationState::Suspended => "suspended",
-        OperationState::Finished(_) => "finished",
+impl OperationState {
+    /// Stable lowercase name used in diagnostics and durable rows.
+    #[must_use]
+    pub(crate) const fn kind(&self) -> &'static str {
+        match self {
+            OperationState::Accepted => "accepted",
+            OperationState::NeedAssistant => "need_assistant",
+            OperationState::AssistantEffectPending => "assistant_effect_pending",
+            OperationState::ToolsPlanned { .. } => "tools_planned",
+            OperationState::ToolEffectPending { .. } => "tool_effect_pending",
+            OperationState::NeedContinuation => "need_continuation",
+            OperationState::CompactionPending => "compaction_pending",
+            OperationState::Suspended => "suspended",
+            OperationState::Finished(_) => "finished",
+        }
     }
 }

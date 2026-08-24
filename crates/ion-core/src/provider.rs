@@ -43,8 +43,6 @@ pub struct ModelCapabilities {
     pub prompt_cache: bool,
     /// The adapter can stream normalized deltas.
     pub streaming: bool,
-    /// A fresh exact request is a supported recovery action after process loss.
-    pub recovery: bool,
 }
 
 impl Default for ModelCapabilities {
@@ -54,7 +52,6 @@ impl Default for ModelCapabilities {
             tool_calls: true,
             prompt_cache: false,
             streaming: true,
-            recovery: true,
         }
     }
 }

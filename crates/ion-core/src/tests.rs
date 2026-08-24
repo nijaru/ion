@@ -372,7 +372,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     // Queued, not applied: the model step is in flight.
     assert_eq!(machine.state(), &OperationState::AssistantEffectPending);
     assert!(applied.entries.is_empty());
-    assert!(machine.has_queued_inbox());
+    assert!(machine.has_queued_steers());
 
     machine
         .apply(Transition::ProviderCompleted {
@@ -1193,10 +1193,10 @@ fn tool_result_classifies_ok_and_err() {
             output: "x".into(),
             artifact: None,
         }
-        .into_text(),
+        .model_text(),
         "x"
     );
-    assert_eq!(err.into_text(), "boom");
+    assert_eq!(err.model_text(), "boom");
 }
 
 #[test]
