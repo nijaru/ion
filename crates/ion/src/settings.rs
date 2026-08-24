@@ -12,7 +12,8 @@ use serde::Deserialize;
 pub enum Theme {
     Light,
     Dark,
-    /// Follow the terminal's light/dark preference (pi's "light/dark").
+    /// Follow the terminal's light/dark preference (pi's "light/dark");
+    /// resolution currently maps to the dark palette.
     #[serde(rename = "light/dark")]
     Auto,
 }

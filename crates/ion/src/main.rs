@@ -83,6 +83,16 @@ async fn main() -> ExitCode {
     }
 }
 
+/// The host's approval policy: default (approval-gated) unless the
+/// caller grants explicit actions (DESIGN.md §17).
+fn policy_for(allow: &[String]) -> Arc<dyn ion_core::PolicyEngine> {
+    if allow.is_empty() {
+        Arc::new(ion_core::DefaultPolicy)
+    } else {
+        Arc::new(ion_core::AllowlistPolicy::new(allow.to_vec()))
+    }
+}
+
 async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
     let make_provider = match provider_factory(cli, settings) {
         Ok(factory) => factory,
@@ -98,11 +108,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
-        Arc::new(ion_core::DefaultPolicy)
-    } else {
-        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
-    };
+    let policy = policy_for(&cli.allow);
     let config = acp::AcpConfig {
         make_provider,
         store,
@@ -120,10 +126,14 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 
 /// Compose the tool surface: core tools plus explicitly active MCP server
 /// tools. A failing server logs and is skipped - one broken server never
-/// blocks startup (DESIGN.md §19.1).
-async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog {
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let tools = ion_core::ToolCatalog::with_cwd_and_sandbox(cwd, settings.sandbox_mode());
+/// blocks startup (DESIGN.md §19.1). The workspace directory is the tool
+/// path boundary, so it must resolve or startup fails.
+async fn build_catalog(
+    settings: &Settings,
+    cli: &Cli,
+) -> Result<ion_core::ToolCatalog, std::io::Error> {
+    let cwd = std::env::current_dir()?;
+    let tools = ion_core::ToolCatalog::with_cwd_and_sandbox(cwd.clone(), settings.sandbox_mode());
     tools.set_active_mcp_servers(&settings.active_mcp_servers);
     if !settings.mcp_servers.is_empty() {
         let defs: Vec<ion_core::ServerDef> = settings
@@ -136,14 +146,14 @@ async fn build_catalog(settings: &Settings, cli: &Cli) -> ion_core::ToolCatalog 
     }
     // Project-local extension manifests load only under an explicit
     // trust grant (§24.5).
-    let cwd = std::env::current_dir().ok();
-    let ext_defs = ion::settings::load_extension_defs(settings, cwd.as_deref(), cli.trust_project);
+    let ext_defs =
+        ion::settings::load_extension_defs(settings, Some(cwd.as_path()), cli.trust_project);
     if !ext_defs.is_empty() {
         ion_core::ExtensionService::new()
             .start_into(&ext_defs, &tools)
             .await;
     }
-    tools
+    Ok(tools)
 }
 
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
@@ -230,9 +240,15 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     } else {
         None
     };
-    let tools = build_catalog(settings, cli).await;
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "cwd: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
+    let tools = match build_catalog(settings, cli).await {
+        Ok(tools) => tools,
         Err(err) => {
             let _ = writeln!(io::stderr(), "cwd: {err}");
             return ExitCode::FAILURE;
@@ -245,11 +261,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
-        Arc::new(ion_core::DefaultPolicy)
-    } else {
-        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
-    };
+    let policy = policy_for(&cli.allow);
     let runtime = if let Some(session_id) = resume_session {
         match Runtime::open_session_with_resources(
             root_provider,
@@ -306,7 +318,9 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     if result.is_err() {
         // The TUI died before its own close path; shut the actor down
         // or join would await a task waiting on this very handle.
-        let _ = session.close().await;
+        if let Err(err) = session.close().await {
+            tracing::warn!(error = %err, "failed to close the session after TUI failure");
+        }
     }
     match result {
         Ok(()) => {
@@ -444,18 +458,16 @@ fn make_cli_provider(
 
 async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
-    let tools = build_catalog(settings, cli).await;
     let cwd =
         std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    let tools = build_catalog(settings, cli)
+        .await
+        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let trusted_resources = ion_core::load_trusted_resources(&cwd, cli.trust_project)
         .map_err(RuntimeError::OperationFailed)?;
     let store = SessionStore::open(default_db_path())
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let policy: Arc<dyn ion_core::PolicyEngine> = if cli.allow.is_empty() {
-        Arc::new(ion_core::DefaultPolicy)
-    } else {
-        Arc::new(ion_core::AllowlistPolicy::new(cli.allow.clone()))
-    };
+    let policy = policy_for(&cli.allow);
     let runtime = Runtime::start_with_policy_and_resources(
         (make_provider)(),
         tools.clone(),

@@ -93,7 +93,6 @@ impl Provider for OpenRouterProvider {
             tool_calls: true,
             prompt_cache: true,
             streaming: true,
-            recovery: true,
         }
     }
 
@@ -522,7 +521,6 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_core::ToolRegistry;
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
@@ -709,7 +707,6 @@ mod tests {
             matches!(signals.last(), Some(EngineSignal::Completed { .. })),
             "live step must complete"
         );
-        let _ = ToolRegistry::default();
     }
     #[tokio::test]
     async fn plan_becomes_role_structured_messages() {

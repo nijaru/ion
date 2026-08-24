@@ -18,7 +18,7 @@ etcetera = "0.11.0"
 futures-util = "0.3.34"
 ion-core.workspace = true
 ion-terminal.workspace = true
-ratatui = { version = "0.30.2", features = ["scrolling-regions"] }
+ratatui = "0.30.2"
 reqwest = { version = "0.13.4", features = ["json", "stream", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
@@ -34,7 +34,6 @@ unicode-width = "0.2.2"
 libc = "0.2.189"
 nix = { version = "0.31.3", features = ["fs", "term"] }
 tempfile = "3.27.0"
-vt100 = "0.16.2"
 
 [lints]
 workspace = true

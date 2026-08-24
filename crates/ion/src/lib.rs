@@ -8,8 +8,6 @@ pub mod print;
 pub mod settings;
 pub mod tui;
 
-pub use ion_terminal::screen;
-
 use std::future::Future;
 use std::sync::Arc;
 
@@ -17,7 +15,7 @@ use ion_core::{EngineSignal, ModelCapabilities, Provider, ProviderRequest, Scrip
 use openai_codex::OpenAICodexProvider;
 use openrouter::OpenRouterProvider;
 
-pub use acp::{AcpConfig, serve as acp_serve};
+pub use acp::AcpConfig;
 pub use settings::Settings;
 
 /// The host's provider choice for one invocation. `Provider` is not
@@ -75,7 +73,6 @@ impl Provider for CliProvider {
                 tool_calls: false,
                 prompt_cache: false,
                 streaming: false,
-                recovery: false,
             },
         }
     }
@@ -110,7 +107,8 @@ pub fn enable_children<P>(
 }
 
 /// Build the scripted-provider factory used when no real model is
-/// configured. Shared by the CLI frontends and tests.
+/// configured; the frontends build their scripted providers inline and
+/// integration tests share this factory.
 pub fn scripted_provider_factory(
     script: Vec<ion_core::ScriptedMessage>,
 ) -> Arc<dyn Fn() -> CliProvider + Send + Sync> {

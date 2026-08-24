@@ -148,7 +148,6 @@ impl Provider for OpenAICodexProvider {
             tool_calls: true,
             prompt_cache: true,
             streaming: true,
-            recovery: true,
         }
     }
 
@@ -460,7 +459,6 @@ impl Provider for OpenAICodexProvider {
 
 #[derive(Default)]
 struct ToolDraft {
-    call_id: String,
     name: String,
     arguments: String,
 }
@@ -483,9 +481,6 @@ fn response_tool_drafts(
 }
 
 fn update_tool_draft(draft: &mut ToolDraft, item: &Value) {
-    if let Some(call_id) = item.get("call_id").and_then(Value::as_str) {
-        draft.call_id = call_id.to_owned();
-    }
     if let Some(name) = item.get("name").and_then(Value::as_str) {
         draft.name = name.to_owned();
     }

@@ -182,14 +182,7 @@ where
                         let session_id = session_id.to_owned();
                         tokio::spawn(async move {
                             let stop = pump_turn(events, operation_id, &session_id, &output).await;
-                            finish_prompt(
-                                &output,
-                                Some(request_id),
-                                session_id,
-                                stop,
-                                active_prompt,
-                            )
-                            .await;
+                            finish_prompt(&output, Some(request_id), stop, active_prompt).await;
                         });
                     }
                     Err(err) => {
@@ -229,7 +222,9 @@ where
     }
 
     for (_, session) in sessions.drain() {
-        let _ = session.handle.close().await;
+        if let Err(err) = session.handle.close().await {
+            tracing::warn!(error = %err, "failed to close an ACP session at shutdown");
+        }
     }
     Ok(())
 }
@@ -334,7 +329,6 @@ where
 async fn finish_prompt<W>(
     output: &Arc<Mutex<W>>,
     id: Option<Value>,
-    session_id: String,
     stop: TurnStop,
     active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 ) where
@@ -381,7 +375,6 @@ async fn finish_prompt<W>(
             .await;
         }
     }
-    let _ = session_id;
 }
 
 /// Create a runtime-backed ACP session from `session/new` params:
@@ -393,11 +386,36 @@ async fn session_new<P>(
 where
     P: Provider,
 {
+    let (cwd, catalog, trusted_resources) = session_tools(config, params).await?;
+    let runtime = Runtime::start_with_policy_and_resources_in_cwd(
+        (config.make_provider)(),
+        catalog.clone(),
+        (*config.store).clone(),
+        Arc::clone(&config.policy),
+        trusted_resources.clone(),
+        cwd,
+    );
+    let session_id = runtime.session_id();
+    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources);
+    Ok((session_id.to_string(), session))
+}
+
+/// Shared ACP session setup from params: validate the absolute cwd, build
+/// the cwd-scoped tool catalog, start client-supplied MCP servers, and
+/// resolve the host's trusted project resources.
+async fn session_tools<P>(
+    config: &AcpConfig<P>,
+    params: &Value,
+) -> Result<(String, ToolCatalog, Vec<ion_core::TrustedResource>), String>
+where
+    P: Provider,
+{
     let cwd = params
         .get("cwd")
         .and_then(|v| v.as_str())
-        .ok_or("missing cwd")?;
-    let cwd_path = std::path::Path::new(cwd);
+        .ok_or("missing cwd")?
+        .to_owned();
+    let cwd_path = std::path::Path::new(&cwd);
     if !cwd_path.is_absolute() {
         return Err("cwd must be absolute".to_owned());
     }
@@ -409,34 +427,33 @@ where
             .await;
     }
     let trusted_resources = ion_core::load_trusted_resources(cwd_path, config.trust_project)?;
-    let runtime = Runtime::start_with_policy_and_resources_in_cwd(
-        (config.make_provider)(),
-        catalog.clone(),
-        (*config.store).clone(),
-        Arc::clone(&config.policy),
-        trusted_resources.clone(),
-        cwd,
-    );
-    let session_id = runtime.session_id();
-    // ACP sessions can delegate to bounded read-only children (§20).
-    let factory = Arc::clone(&config.make_provider);
+    Ok((cwd, catalog, trusted_resources))
+}
+
+/// Attach bounded read-only child delegation (§20) to the catalog and wrap
+/// the runtime in the per-connection ACP state.
+fn attach_session<P>(
+    config: &AcpConfig<P>,
+    catalog: &ToolCatalog,
+    runtime: Runtime,
+    session_id: ion_core::SessionId,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+) -> AcpSession
+where
+    P: Provider,
+{
     crate::enable_children(
-        &catalog,
+        catalog,
         &config.store,
-        Arc::new(move || factory()),
+        Arc::clone(&config.make_provider),
         session_id,
         trusted_resources,
     );
-    let session_id_string = session_id.to_string();
-    let handle = runtime.session();
-    Ok((
-        session_id_string,
-        AcpSession {
-            handle,
-            runtime,
-            active_prompt: Arc::new(Mutex::new(None)),
-        },
-    ))
+    AcpSession {
+        handle: runtime.session(),
+        runtime,
+        active_prompt: Arc::new(Mutex::new(None)),
+    }
 }
 
 /// Load one durable Ion session and return the semantic history that ACP
@@ -453,14 +470,7 @@ where
         .and_then(Value::as_str)
         .ok_or("missing sessionId")?;
     let session_id = parse_session_id(session_id_text)?;
-    let cwd = params
-        .get("cwd")
-        .and_then(Value::as_str)
-        .ok_or("missing cwd")?;
-    let cwd_path = std::path::Path::new(cwd);
-    if !cwd_path.is_absolute() {
-        return Err("cwd must be absolute".to_owned());
-    }
+    let (cwd, catalog, trusted_resources) = session_tools(config, params).await?;
     let loaded = config
         .store
         .load(session_id)
@@ -473,14 +483,6 @@ where
         ));
     }
 
-    let catalog = ToolCatalog::with_cwd(cwd_path);
-    let servers = parse_mcp_servers(params);
-    if !servers.is_empty() {
-        ion_core::McpService::new()
-            .start_into(&servers, &catalog)
-            .await;
-    }
-    let trusted_resources = ion_core::load_trusted_resources(cwd_path, config.trust_project)?;
     let runtime = Runtime::open_session_with_resources(
         (config.make_provider)(),
         catalog.clone(),
@@ -490,25 +492,9 @@ where
     )
     .await
     .map_err(|err| format!("open session: {err}"))?;
-    let factory = Arc::clone(&config.make_provider);
-    crate::enable_children(
-        &catalog,
-        &config.store,
-        Arc::new(move || factory()),
-        session_id,
-        trusted_resources,
-    );
     let history = replay_history(&loaded.entries);
-    let handle = runtime.session();
-    Ok((
-        session_id_text.to_owned(),
-        AcpSession {
-            handle,
-            runtime,
-            active_prompt: Arc::new(Mutex::new(None)),
-        },
-        history,
-    ))
+    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources);
+    Ok((session_id_text.to_owned(), session, history))
 }
 
 fn parse_mcp_servers(params: &Value) -> Vec<ion_core::ServerDef> {

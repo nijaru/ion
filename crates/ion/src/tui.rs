@@ -36,16 +36,6 @@ pub struct HostConfig {
     pub hide_thinking_block: bool,
 }
 
-impl HostConfig {
-    #[must_use]
-    pub fn display_only(model_name: Option<String>, hide_thinking_block: bool) -> Self {
-        Self {
-            model_name,
-            hide_thinking_block,
-        }
-    }
-}
-
 /// What the reducer wants the event loop to do. Effects are the only
 /// path back into the runtime (§22.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -961,9 +951,6 @@ pub fn palette(theme: Theme) -> Palette {
     }
 }
 
-/// Wrap one styled line to `width` columns (display width, char
-/// boundaries). Styles carry over to the continuation rows.
-/// Convert any borrowed Line to an owned `'static` one.
 /// Convert any borrowed Line to an owned `'static` one, folding the
 /// line-level style into each span so wrapping cannot discard it.
 fn clone_static(line: &Line<'_>) -> Line<'static> {
@@ -975,6 +962,8 @@ fn clone_static(line: &Line<'_>) -> Line<'static> {
     )
 }
 
+/// Wrap one styled line to `width` columns (display width, char
+/// boundaries). Styles carry over to the continuation rows.
 fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
