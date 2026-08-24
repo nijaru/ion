@@ -13,8 +13,5 @@ pub struct TerminalCapabilities {
     pub bracketed_paste: CapabilitySupport,
     pub focus_reporting: CapabilitySupport,
     pub mouse: CapabilitySupport,
-    pub synchronized_output: CapabilitySupport,
-    pub true_color: CapabilitySupport,
     pub kitty_keyboard: CapabilitySupport,
-    pub modify_other_keys: CapabilitySupport,
 }

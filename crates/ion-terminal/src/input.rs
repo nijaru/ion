@@ -87,14 +87,8 @@ pub struct FocusEvent {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MouseEvent(event::MouseEvent);
 
-/// Responses from terminal queries, reserved for negotiated input/output
-/// features that are not represented by Crossterm's high-level events.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum TerminalResponse {
-    Unknown(Vec<u8>),
-}
-
-/// All terminal-originated input consumed by a frontend.
+/// All terminal-originated input consumed by a frontend. Stream end is
+/// `None`, not an event.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputEvent {
     Key(KeyEvent),
@@ -102,8 +96,6 @@ pub enum InputEvent {
     Mouse(MouseEvent),
     Focus(FocusEvent),
     Resize(Size),
-    TerminalResponse(TerminalResponse),
-    Closed,
 }
 
 /// The single terminal input reader for a live frontend.

@@ -13,8 +13,7 @@ pub mod screen;
 pub use capabilities::{CapabilitySupport, TerminalCapabilities};
 pub use input::{
     FocusEvent, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseEvent, Size,
-    TerminalResponse,
 };
-pub use requirements::{TerminalRequirements, TerminalSurface};
+pub use requirements::TerminalRequirements;
 pub use screen::{Frame, Screen, Surface};
 pub use session::{TerminalOutput, TerminalSession, install_panic_hook};

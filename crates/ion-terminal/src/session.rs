@@ -118,14 +118,6 @@ impl TerminalSession {
         crossterm::cursor::position()
     }
 
-    pub fn capabilities(&self) -> TerminalCapabilities {
-        self.capabilities
-    }
-
-    pub fn requirements(&self) -> TerminalRequirements {
-        self.requirements
-    }
-
     /// Render one frame under the negotiated output policy. Synchronized
     /// output is opt-in because terminals may ignore the private mode.
     pub fn render(&mut self, screen: &mut Screen, frame: &Frame<'_>) -> io::Result<()> {
@@ -279,9 +271,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn default_requirements_are_inline_and_paste_enabled() {
+    fn default_requirements_enable_paste_and_keyboard() {
         let requirements = TerminalRequirements::default();
-        assert_eq!(requirements.surface, crate::TerminalSurface::Inline);
         assert!(requirements.bracketed_paste);
         assert!(requirements.keyboard_enhancement);
     }
