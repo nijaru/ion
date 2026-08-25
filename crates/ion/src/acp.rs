@@ -16,6 +16,7 @@ use std::sync::Arc;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::Mutex;
+use tokio::task::JoinSet;
 
 use ion_core::{
     EventSubscription, OperationId, Provider, Runtime, RuntimeError, RuntimeEvent, SessionStore,
@@ -57,10 +58,16 @@ where
     let output = Arc::new(Mutex::new(output));
     let mut input = input;
     let mut sessions: HashMap<String, AcpSession> = HashMap::new();
+    let mut prompt_tasks = JoinSet::new();
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
 
     'read: loop {
+        while let Some(result) = prompt_tasks.try_join_next() {
+            if let Err(err) = result {
+                tracing::warn!(error = %err, "ACP prompt task failed");
+            }
+        }
         let Some(line_end) = find_line(&buf) else {
             let read = input.read(&mut chunk).await?;
             if read == 0 {
@@ -181,7 +188,7 @@ where
                             .replace((request_id.clone(), operation_id));
                         let output = Arc::clone(&output);
                         let session_id = session_id.to_owned();
-                        tokio::spawn(async move {
+                        prompt_tasks.spawn(async move {
                             let stop = pump_turn(events, operation_id, &session_id, &output).await;
                             finish_prompt(&output, Some(request_id), stop, active_prompt).await;
                         });
@@ -228,6 +235,7 @@ where
         }
         session.catalog.close().await;
     }
+    prompt_tasks.shutdown().await;
     Ok(())
 }
 

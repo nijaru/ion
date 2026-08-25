@@ -270,7 +270,7 @@ where
     let prompt = compose_child_prompt(&spec, fork_context.as_deref());
     let runtime = Runtime::start_child_with_resources(
         provider,
-        catalog,
+        catalog.clone(),
         config.store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         config.child_budget,
@@ -281,11 +281,23 @@ where
     let session = runtime.session();
 
     // Subscribe before submit: live events predate subscribers.
-    let Ok((_snapshot, mut events)) = session.subscribe().await else {
-        return format!("child failed: could not subscribe ({child_id})");
+    let (_snapshot, mut events) = match session.subscribe().await {
+        Ok(subscription) => subscription,
+        Err(_) => {
+            let _ = session.close().await;
+            let _ = runtime.join().await;
+            catalog.close().await;
+            return format!("child failed: could not subscribe ({child_id})");
+        }
     };
-    let Ok(operation_id) = session.submit_if_idle(prompt).await else {
-        return format!("child failed: submit rejected ({child_id})");
+    let operation_id = match session.submit_if_idle(prompt).await {
+        Ok(operation_id) => operation_id,
+        Err(_) => {
+            let _ = session.close().await;
+            let _ = runtime.join().await;
+            catalog.close().await;
+            return format!("child failed: submit rejected ({child_id})");
+        }
     };
 
     let terminal = tokio::select! {
@@ -298,7 +310,15 @@ where
         }
     };
 
-    let _ = session.close().await;
+    let close_result = session.close().await;
+    let join_result = runtime.join().await;
+    if let Err(err) = close_result {
+        return format!("child failed: close error: {err} [child session: {child_id}]");
+    }
+    if let Err(err) = join_result {
+        return format!("child failed: runtime join error: {err} [child session: {child_id}]");
+    }
+    catalog.close().await;
     match terminal {
         ChildTerminal::Completed(text) => {
             format!("{text}\n\n[child session: {child_id}]")
