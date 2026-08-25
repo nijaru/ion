@@ -13,8 +13,9 @@
 use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use tokio::sync::{broadcast, mpsc, oneshot};
+use tokio::sync::{Notify, broadcast, mpsc, oneshot};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
@@ -50,6 +51,66 @@ const ASSISTANT_FRAME_MAX_BYTES: usize = 64 * 1024;
 /// grows the runtime; overflow surfaces as a reliable lag error.
 const SUBSCRIBER_CAPACITY: usize = 64;
 type SubscribeReply = Result<(SessionSnapshot, EventSubscription), CommandError>;
+
+/// Test-controlled production boundary. The gate only pauses the existing
+/// runtime procedure; it does not replace transitions or persistence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EffectBoundary {
+    ModelExecution,
+    ModelSettlement,
+    ToolExecution,
+    ToolSettlement,
+    CloseSuspendCommit,
+}
+
+#[derive(Clone)]
+pub(crate) struct EffectGate {
+    boundary: EffectBoundary,
+    reached: Arc<AtomicBool>,
+    released: Arc<AtomicBool>,
+    reached_notify: Arc<Notify>,
+    release_notify: Arc<Notify>,
+}
+
+impl EffectGate {
+    #[cfg(test)]
+    pub(crate) fn new(boundary: EffectBoundary) -> Self {
+        Self {
+            boundary,
+            reached: Arc::new(AtomicBool::new(false)),
+            released: Arc::new(AtomicBool::new(false)),
+            reached_notify: Arc::new(Notify::new()),
+            release_notify: Arc::new(Notify::new()),
+        }
+    }
+
+    async fn wait(&self, boundary: EffectBoundary) {
+        if self.boundary != boundary || self.released.load(Ordering::Acquire) {
+            return;
+        }
+        let released = self.release_notify.notified();
+        if !self.reached.swap(true, Ordering::AcqRel) {
+            self.reached_notify.notify_waiters();
+        }
+        if !self.released.load(Ordering::Acquire) {
+            released.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn wait_until_reached(&self) {
+        let reached = self.reached_notify.notified();
+        if !self.reached.load(Ordering::Acquire) {
+            reached.await;
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn release(&self) {
+        self.released.store(true, Ordering::Release);
+        self.release_notify.notify_waiters();
+    }
+}
 enum ToolSignal {
     Progress {
         effect_id: EffectId,
@@ -499,6 +560,7 @@ struct Composition<P> {
     budget: RuntimeBudget,
     parent: Option<SessionId>,
     trusted_resources: Vec<TrustedResource>,
+    effect_gate: Option<Arc<EffectGate>>,
     /// Host-selected workspace identity. A reopened session uses the
     /// persisted value instead, so process cwd cannot silently change it.
     cwd: Option<String>,
@@ -514,6 +576,7 @@ impl<P: Provider> Composition<P> {
             budget: RuntimeBudget::unbounded(),
             parent: None,
             trusted_resources: Vec::new(),
+            effect_gate: None,
             cwd: None,
         }
     }
@@ -527,6 +590,7 @@ impl<P: Provider> Composition<P> {
         let tools = Arc::new(self.tools);
         let artifact_root = self.store.artifact_root();
         let trusted_resources = self.trusted_resources;
+        let effect_gate = self.effect_gate;
         let cwd = loaded
             .as_ref()
             .map(|loaded| loaded.session.cwd.clone())
@@ -548,6 +612,7 @@ impl<P: Provider> Composition<P> {
                     tools,
                     artifact_root,
                     trusted_resources,
+                    effect_gate,
                     store: self.store,
                     policy: self.policy,
                     budget: self.budget,
@@ -584,6 +649,18 @@ impl Runtime {
         store: SessionStore,
     ) -> Self {
         Composition::new(provider, tools, store).spawn(SessionId::generate(), None)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn start_with_effect_gate(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        gate: EffectGate,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.effect_gate = Some(Arc::new(gate));
+        composition.spawn(SessionId::generate(), None)
     }
 
     /// Compose the runtime with an explicit approval policy (DESIGN.md
@@ -791,6 +868,7 @@ struct SessionDeps<P> {
     tools: Arc<ToolCatalog>,
     artifact_root: Option<PathBuf>,
     trusted_resources: Vec<TrustedResource>,
+    effect_gate: Option<Arc<EffectGate>>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -809,6 +887,7 @@ struct SessionRuntime<P> {
     tools: Arc<ToolCatalog>,
     artifact_root: Option<PathBuf>,
     trusted_resources: Vec<TrustedResource>,
+    effect_gate: Option<Arc<EffectGate>>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     budget: RuntimeBudget,
@@ -903,6 +982,7 @@ impl<P: Provider> SessionRuntime<P> {
             tools,
             artifact_root,
             trusted_resources,
+            effect_gate,
             store,
             policy,
             budget,
@@ -920,6 +1000,7 @@ impl<P: Provider> SessionRuntime<P> {
             tools,
             artifact_root,
             trusted_resources,
+            effect_gate,
             store,
             policy,
             budget,
@@ -2115,6 +2196,12 @@ impl<P: Provider> SessionRuntime<P> {
         project_with_manifest(&self.entries, self.first_entry_seq(), manifest)
     }
 
+    async fn wait_effect_boundary(&self, boundary: EffectBoundary) {
+        if let Some(gate) = &self.effect_gate {
+            gate.wait(boundary).await;
+        }
+    }
+
     /// Safety-net compaction check (§14.7.3), evaluated at
     /// continuation boundaries only: compact when the measured context
     /// is within the reserve of the model's actual window. A fixed
@@ -2323,6 +2410,8 @@ impl<P: Provider> SessionRuntime<P> {
             self.fail_operation_on_persistence(err).await;
             return false;
         }
+        self.wait_effect_boundary(EffectBoundary::ModelExecution)
+            .await;
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
@@ -2514,6 +2603,8 @@ impl<P: Provider> SessionRuntime<P> {
                 },
             });
         } else {
+            self.wait_effect_boundary(EffectBoundary::ToolExecution)
+                .await;
             self.operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
@@ -2654,6 +2745,16 @@ impl<P: Provider> SessionRuntime<P> {
         if signal_step(&signal) != self.model_step {
             debug!(?signal, "ignored engine signal from a stale model step");
             return;
+        }
+        if matches!(
+            &signal,
+            EngineSignal::Completed { .. }
+                | EngineSignal::Failed { .. }
+                | EngineSignal::Cancelled { .. }
+                | EngineSignal::ProviderExited { .. }
+        ) {
+            self.wait_effect_boundary(EffectBoundary::ModelSettlement)
+                .await;
         }
         if matches!(active.machine.state(), OperationState::CompactionPending) {
             self.settle_compaction(signal).await;
@@ -2996,6 +3097,8 @@ impl<P: Provider> SessionRuntime<P> {
             debug!(?effect_id, ?expected, "dropped stale tool settlement");
             return;
         }
+        self.wait_effect_boundary(EffectBoundary::ToolSettlement)
+            .await;
         let mut staged = self.operation.clone().expect("settle needs an operation");
         let applied = staged
             .machine
@@ -3244,6 +3347,7 @@ impl<P: Provider> SessionRuntime<P> {
             return Ok(());
         }
         self.closed = true;
+        let close_gate = self.effect_gate.clone();
         if let Some(active) = &mut self.operation {
             let mut staged = active.clone();
             staged
@@ -3264,6 +3368,9 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
             );
+            if let Some(gate) = close_gate {
+                gate.wait(EffectBoundary::CloseSuspendCommit).await;
+            }
             match self.store.commit(request).await {
                 Ok(()) => {
                     self.next_entry_seq = new_entry_seq;

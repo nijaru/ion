@@ -12,7 +12,10 @@ use crate::error::{CommandError, RuntimeError};
 use crate::ids::{EffectId, InboxId, OperationId};
 use crate::policy::{AllowlistPolicy, PolicyEngine};
 use crate::provider::{EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider};
-use crate::runtime::{OperationStatus, Runtime, RuntimeEvent, SaturatedHandle, SessionHandle};
+use crate::runtime::{
+    EffectBoundary, EffectGate, OperationStatus, Runtime, RuntimeEvent, SaturatedHandle,
+    SessionHandle,
+};
 use crate::session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
@@ -2368,6 +2371,241 @@ async fn wait_for_state(session: &SessionHandle, predicate: impl Fn(&OperationSt
         sleep(Duration::from_millis(20)).await;
     }
     panic!("operation never reached the expected state");
+}
+
+#[tokio::test]
+async fn effect_gate_crash_prefix_reopens_after_durable_model_intent() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::ModelExecution);
+    let provider = SharedLogProvider::default();
+    let runtime = Runtime::start_with_effect_gate(
+        provider.clone(),
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, _events) = session.subscribe().await.expect("subscribe");
+    let submit_session = session.clone();
+    let submit = tokio::spawn(async move { submit_session.submit_if_idle("goal").await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("effect gate reached");
+
+    assert!(
+        provider.requests().is_empty(),
+        "the provider must not start before the gate"
+    );
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(checkpoint.state, OperationState::AssistantEffectPending);
+    assert!(checkpoint.open_effect.is_some());
+
+    // Abort exactly at the committed-intent / external-execution boundary.
+    runtime.crash();
+    gate.release();
+    let _ = submit.await.expect("submit task");
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(recorded.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::AssistantTextDelta { text, .. } if text == "recovered\n"
+    )));
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn effect_gate_crash_prefix_reopens_after_model_settlement() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::ModelSettlement);
+    let runtime = Runtime::start_with_effect_gate(
+        ScriptedProvider::new(vec![ScriptedMessage::text("before crash\n")]),
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, _events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("goal").await.expect("submit");
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("effect gate reached");
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(checkpoint.state, OperationState::AssistantEffectPending);
+    assert!(checkpoint.open_effect.is_some());
+
+    runtime.crash();
+    gate.release();
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn effect_gate_crash_prefix_reopens_before_tool_execution() {
+    let dir = std::env::temp_dir().join(format!("ion-gate-read-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("note.txt"), "persisted bytes").expect("write");
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::ToolExecution);
+    let runtime = Runtime::start_with_effect_gate(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "read",
+            json!({"path": "note.txt"}),
+        )]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, _events) = session.subscribe().await.expect("subscribe");
+    let submit_session = session.clone();
+    let submit = tokio::spawn(async move { submit_session.submit_if_idle("read").await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("effect gate reached");
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(matches!(
+        checkpoint.state,
+        OperationState::ToolEffectPending { .. }
+    ));
+    assert!(checkpoint.open_effect.is_some());
+    assert!(
+        !loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+    );
+
+    runtime.crash();
+    gate.release();
+    let _ = submit.await.expect("submit task");
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
+async fn effect_gate_crash_prefix_reopens_after_tool_execution() {
+    let dir = std::env::temp_dir().join(format!("ion-gate-settle-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("note.txt"), "persisted bytes").expect("write");
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::ToolSettlement);
+    let runtime = Runtime::start_with_effect_gate(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "read",
+            json!({"path": "note.txt"}),
+        )]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, _events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("read").await.expect("submit");
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("effect gate reached");
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(matches!(
+        checkpoint.state,
+        OperationState::ToolEffectPending { .. }
+    ));
+    assert!(checkpoint.open_effect.is_some());
+
+    runtime.crash();
+    gate.release();
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(loaded.entries.iter().any(|(_, entry)| matches!(
+        entry,
+        SessionEntry::ToolResult {
+            result: ToolResult::Ok { output, .. }
+        } if output.contains("persisted bytes")
+    )));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(dir);
 }
 
 #[tokio::test]
