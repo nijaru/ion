@@ -1,7 +1,7 @@
 # Ion — Durable Minimal Harness Architecture
 
-**Status:** Proposed target design for the clean-sheet Rust Ion implementation  
-**Date:** 2026-08-20  
+**Status:** Reconciled target design for the Rust Ion implementation
+**Date:** 2026-08-25
 **Scope:** Whole-system architecture. This document supersedes phase-local design assumptions where they conflict with it.  
 **Audience:** Coding agents and maintainers implementing Ion.  
 **Primary implementation target:** stable Rust, Tokio, macOS + Linux first.
@@ -47,6 +47,22 @@ The current Ion implementation already has useful pieces that should be migrated
 - provider/tool I/O already kept outside the controller mutation loop.
 
 The redesign changes the durable execution model and ownership boundaries around those pieces. It does not justify a clean-slate rewrite of working code merely to match new names.
+
+### 0.3 Reconciled additions from the 2026-08-24 handoffs
+
+This document incorporates the ground-up architecture handoff and the SOTA harness addendum supplied on 2026-08-24. They are design inputs, not parallel authorities.
+
+The ground-up handoff confirms the current direction: a small model-facing loop around one durable `SessionRuntime`, explicit `Operation` and `Effect` state, local semantic history as canonical truth, and runtime-owned lifecycle. The addendum extends that design without replacing it:
+
+- correctness semantics remain model- and provider-independent;
+- model-facing heuristics belong in a versioned `HarnessProfile`, snapshotted and persisted per `ModelStep`;
+- compaction changes active projection, never canonical history, which remains queryable;
+- verification records refer to the `WorkspaceGeneration` they observed;
+- session/history, harness policy, and execution workspace are logical boundaries even while local execution remains the only initial backend;
+- future programmatic composition and long-horizon Manage–Execute–Audit are optional host-mediated layers, not the normal loop;
+- harness evolution belongs in offline, held-out, cost-matched evaluation tooling, never live trusted-runtime self-modification.
+
+These additions do not authorize a mandatory Python/Jupyter runtime, a general workflow engine, model-created actors/topology, a service mesh, or speculative parallel reasoning. The implementation order remains correctness first, then ownership/module boundaries, then user-facing runtime work, then measured optional layers.
 
 ---
 
@@ -129,7 +145,10 @@ The following are not part of Ion's core architecture:
 - A sandbox claim without actual OS/process isolation.
 - Automatic git rollback as a correctness mechanism.
 - Dynamic tool churn every model step.
+- A mandatory Python/Jupyter or REPL runtime for model interaction.
+- Live self-editing of trusted harness semantics or policy.
 - Hidden permissive repair of malformed provider/tool data.
+- Verified long-horizon task state in the ordinary operation loop.
 
 ---
 
@@ -358,6 +377,16 @@ OperationState + AcceptedInput/EffectOutcome
 
 The `SessionRuntime` serializes these transitions. `EffectRunner` performs external work.
 
+## 4.5 Optional harness layers and execution seams
+
+The default runtime remains the architecture's center. A future `HarnessProfile` may choose model-facing projection, tool presentation, compaction, or time-budget heuristics, but it cannot alter durable operation semantics, policy, effect admission, settlement, or recovery. The selected profile is frozen with each model step.
+
+A future `WorkspaceBackend` may replace local filesystem/process execution with a sandboxed or remote hand without changing semantic effect types. Credentials are resolved by the host and remain outside an untrusted execution environment unless an explicit policy grants a narrowly scoped capability.
+
+A future `LongHorizonController` may coordinate a manager, fresh executor children, and a read-only auditor around evidence-backed `VerifiedTaskState`. It is not required for ordinary prompts. Any programmatic capability is likewise host-mediated: generated code cannot bypass capability identity, policy, durable effect admission, settlement, recovery, or budgets.
+
+Offline `ion-eval` is the eventual home for harness profiles, traces, verifiers, failure attribution, candidate hypotheses, and held-out regression gates. It is development tooling, not a second production runtime.
+
 ---
 
 # 5. Ownership table
@@ -464,6 +493,30 @@ The stable model-facing resources that define the prefix/configuration for a spa
 ## ContextPlan
 
 The exact semantic projection for one model step: manifest + selected session entries/compaction baseline + model settings.
+
+## HarnessProfile
+
+A versioned model-facing configuration and heuristic set. A profile may affect projection, tool presentation, compaction guidance, or time-budget hints, but never changes Ion's correctness semantics. Every model step records the selected profile identity and fingerprint.
+
+## WorkspaceGeneration
+
+A monotonic logical version of the workspace advanced by admitted mutating workspace effects. Verification records and other workspace-sensitive evidence identify the generation they observed; later mutation makes prior current-workspace verification stale.
+
+## VerifierSpec and VerificationRecord
+
+A deterministic verification request and its durable result. A `VerificationRecord` includes evidence and the observed `WorkspaceGeneration`. Model-declared completion and externally verified completion are distinct facts.
+
+## WorkspaceBackend
+
+The execution boundary for filesystem/process effects. Local execution is the initial backend; sandboxed or remote implementations are future adapters, not a reason to duplicate session semantics.
+
+## ProgrammaticCapability
+
+An optional host-mediated composition surface. It can compose declared capabilities, but every effectful call follows the ordinary policy, durable-intent, settlement, and recovery path.
+
+## VerifiedTaskState
+
+Optional evidence-backed state maintained by a future long-horizon controller. It is not ordinary session history and cannot be advanced by an executor's self-report alone.
 
 ---
 
@@ -1346,6 +1399,16 @@ a whole model step.
 Changing models resets model-relative derived compaction metadata.
 A context window cached for one model MUST NOT be reused for another.
 
+### 14.9 Harness profiles
+
+Model/provider-specific behavior belongs in a versioned `HarnessProfile`, not in durable operation semantics. Even the initial implementation has one explicit default profile rather than hidden global conditionals. Persist its identity and fingerprint with every model step; changing the selected profile applies only at a later safe boundary, and an in-flight step remains frozen.
+
+A profile change is observable in telemetry and evaluation. Profile evolution is not live policy mutation and cannot bypass capability, approval, effect, or recovery invariants.
+
+### 14.10 Canonical history queryability
+
+Compaction changes the active context projection, not canonical session truth. Runtime/context code must be able to query older semantic entries after compaction, switch models or profiles, and reconstruct a provider-neutral continuation without requiring provider opaque state.
+
 ---
 
 # 15. Provider engine
@@ -1475,6 +1538,8 @@ must pass an explicit persisted trust decision before being activated.
 Retrieved/model-produced text cannot grant trust.
 
 Non-interactive operation fails closed when trust or confirmation is required unless the caller supplied an explicit trusted policy through a documented mechanism.
+
+Credentials are host-owned trust material. They must not be copied into an untrusted programmatic capability or execution sandbox by default; any exception requires an explicit, narrow policy and an auditable capability boundary.
 
 ## 17.3 Canonicalize before approval
 
@@ -2020,6 +2085,10 @@ Never log credentials/secrets by default.
 
 Raw provider payload logging is an explicit debugging mode with redaction and retention rules, not baseline tracing.
 
+## 27.4 Harness telemetry
+
+Structured telemetry must make harness changes measurable before Ion claims improvement. At minimum, model-step and operation records should make it possible to attribute token/cache usage, latency, compaction, tool/effect counts, profile identity, workspace generation, and verifier outcomes. Telemetry is diagnostic/evaluation data, not a second semantic authority.
+
 ---
 
 # 28. Code and crate organization
@@ -2073,6 +2142,10 @@ Prefer:
 - comments explaining *why an invariant exists*, not narrating obvious code.
 
 Use `cargo fmt`, `cargo clippy --all-targets --all-features`, and `cargo test --workspace` (or one repository wrapper command invoking them) as obvious gates.
+
+## 28.4 Boundaries for future harness work
+
+Keep the following as named seams only while there is no concrete implementation need: `WorkspaceBackend`, `ProgrammaticCapability`, `VerifiedTaskState`, deferred capability discovery, and offline `ion-eval`. Do not create a crate, task, service, or generic abstraction for a seam before a real dependency, lifecycle, or test boundary exists.
 
 ---
 
@@ -2365,7 +2438,22 @@ Only if needed:
 
 The same durable session model should make this an adapter/lifecycle expansion, not a new agent design.
 
-## Step 11 — WASM only if justified
+## Step 11 — Low-regret harness seams
+
+After the P0 correctness and ownership boundaries are coherent, add only the low-regret primitives that adjacent work justifies:
+
+- persist one explicit `HarnessProfile` identity/fingerprint per model step;
+- expand structured operation/model-step telemetry;
+- advance a logical `WorkspaceGeneration` on admitted mutating workspace effects;
+- add `VerifierSpec` / `VerificationRecord` vocabulary and a deterministic verifier path when completion gates need it;
+- keep canonical semantic history queryable independently of active context projection;
+- extract `WorkspaceBackend` only when it removes real coupling.
+
+## Step 12 — Offline evaluation and optional layers
+
+Before changing defaults or promoting profiles, establish reproducible `ion-eval` comparisons with held-out tasks, separated search/evaluation workloads, explicit hypotheses, and matched token/cost budgets. Only then consider selectable programmatic composition, long-horizon verified task state, deferred capability discovery, or continual profile/memory evolution. These remain optional layers over the ordinary runtime.
+
+## Step 13 — WASM only if justified
 
 Do not prepay Component Model complexity.
 
@@ -2444,6 +2532,10 @@ reinterpreted (§26.3). When Ion first promises on-disk compatibility,
 ordered migrations become a requirement and this decision is
 revisited.
 
+## 33.13 Live harness evolution and mandatory programmability
+
+Rejected as core architecture. A live self-rewriter or mandatory programmable model surface would mix untrusted model-generated behavior with trusted lifecycle, persistence, policy, and recovery authority. Ion may evaluate these ideas offline or expose them as explicitly selected, host-mediated capabilities after the ordinary path is proven.
+
 ---
 
 # 34. Open decisions that do not block the architecture
@@ -2461,6 +2553,10 @@ These should be resolved by evidence during their owning implementation work:
 9. Current ACP and MCP SDK/wire versions at implementation time.
 10. Whether user-facing fork/rewind justifies a tree inside a session or remains separate-session lineage.
 11. Whether a future daemon needs DB writer leases/fencing or can remain sole owner behind a socket.
+12. Exact profile fields/fingerprinting and which heuristics earn promotion from evaluation.
+13. Exact workspace-generation advancement and verifier invalidation semantics.
+14. When `WorkspaceBackend` extraction removes real coupling rather than adding speculative indirection.
+15. Whether a long-horizon controller is justified by measured task-state drift.
 
 None of these should be allowed to introduce a second runtime, transcript, policy path, or cleanup path.
 
@@ -2587,6 +2683,17 @@ DSH is developer preview and rapidly changing.
 
 Used only as experimental independent convergence on a minimal single-transition-authority kernel/effect runner. Public architectural evidence is thinner; do not make Ion depend on its unverified details.
 
+### Harness, verification, and stable execution boundaries
+
+The 2026-08-24 addendum supplied the following design evidence and research leads:
+
+- Prime Agent RLM runtime: https://github.com/PrimeIntellect-ai/prime-agent/blob/main/packages/coding-agent/docs/rlm-runtime.md
+- Anthropic Managed Agents: https://www.anthropic.com/engineering/managed-agents
+- LongHorizon-Harness: https://arxiv.org/abs/2608.01964
+- Harness evolution evaluation: https://arxiv.org/abs/2607.12227
+
+Adopted lessons are limited to host-owned programmability, session/history/context separation, credentials outside untrusted execution, workspace-generation-bound verification, and offline held-out evaluation. These sources do not justify a mandatory Python runtime, live self-modification, or a general orchestration framework.
+
 ## Tier 3 — production Rust sanity checks
 
 Codex and other production Rust agents are useful for:
@@ -2623,6 +2730,9 @@ Before approving any substantial design change, ask these questions in order:
 10. **Does this create another transcript/runtime/policy/cleanup path?** If yes, reject it.
 11. **Can the behavior be tested as a pure transition or with deterministic failure injection?** If not, simplify the boundary.
 12. **Will an agent modifying Ion later be able to find and understand this invariant locally?** If not, improve code structure/documentation.
+13. **If this is model-facing policy, is it versioned, snapshotted, observable, and removable?** If not, keep it out of correctness semantics.
+14. **If this claims completion, what evidence and workspace generation support it?** If none, it is only a model report.
+15. **If this crosses execution boundaries, where do credentials and capability authority live?** They must remain host-owned and explicit.
 
 If a feature cannot pass this test, it should not enter the core.
 
@@ -2676,6 +2786,8 @@ Before TUI/MCP/children: pass crash injection across real provider + read/write/
 boundaries and demonstrate restart/resume without unsafe replay.
 
 THEN
-context/provider semantics → TUI/print/JSON → MCP → bounded children → ACP →
-subprocess extensions → optional daemon/remote → WASM only if justified.
+module/ownership boundaries → context/provider semantics → TUI/print/JSON → MCP →
+bounded children → ACP → subprocess extensions → low-regret profile/telemetry/
+verification seams → offline eval and optional harness layers → optional daemon/remote
+→ WASM only if justified.
 ```
