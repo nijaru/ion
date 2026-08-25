@@ -1,0 +1,278 @@
+//! Store tests.
+
+use super::support::*;
+
+// ---- Durable session store (DESIGN.md §32 Step 2) ----
+
+#[tokio::test]
+async fn restart_reproduces_the_logical_transcript() {
+    let db = temp_db("restart");
+    let store = SessionStore::open(&db).expect("open store");
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::tool("bash", json!({"command":"echo persisted"})),
+        ScriptedMessage::text("final\n"),
+    ]);
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("read it").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    // Reopen the same database: the logical transcript must reproduce.
+    let store = SessionStore::open(&db).expect("reopen store");
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(
+        entry_kinds(&loaded.entries),
+        [
+            "user_message",
+            "assistant_message",
+            "tool_call",
+            "tool_result",
+            "assistant_message",
+        ]
+    );
+    assert_eq!(loaded.operations.len(), 1);
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert_eq!(
+        checkpoint.state,
+        OperationState::Finished(OperationOutcome::Completed)
+    );
+    assert!(!checkpoint.cancel_requested);
+    assert!(loaded.pending_inbox.is_empty());
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn durable_admission_failure_is_visible_and_non_corrupting() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    // Wait until the session row is committed before injecting.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    store.fail_next_write();
+
+    let err = session
+        .submit_if_idle("lost")
+        .await
+        .expect_err("submit must fail");
+    assert!(matches!(err, CommandError::Persistence(_)));
+    // No operation was installed: the session is still idle and usable.
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.operation, OperationStatus::Idle);
+    assert!(snapshot.entries.is_empty());
+
+    let operation_id = session
+        .submit_if_idle("kept")
+        .await
+        .expect("retry succeeds");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { operation_id: id, .. }) if *id == operation_id
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn mid_operation_persistence_failure_fails_the_operation_visibly() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let provider = ScriptedProvider::new(vec![ScriptedMessage::tool(
+        "bash",
+        json!({"command":"sleep 1 && echo slow"}),
+    )]);
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store.clone());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    // Wait for the tool effect to start, then fail its settlement commit.
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::ToolStarted { .. }) {
+            break;
+        }
+    }
+    store.fail_next_write();
+
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    let failed = recorded.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::OperationFailed { message, .. } if message.contains("persistence failed")
+        )
+    });
+    assert!(failed, "persistence failure must be visible: {recorded:?}");
+    assert!(
+        !recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn cancel_request_is_durable() {
+    let db = temp_db("cancel");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("start"),
+            ScriptedMessage::delayed(Duration::from_secs(30), "late"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit_if_idle("slow").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    session.cancel(operation_id).await.expect("cancel");
+    collect_until_terminal(&mut events).await.expect("settle");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let store = SessionStore::open(&db).expect("reopen");
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(
+        checkpoint.cancel_requested,
+        "the cancellation request must be durable"
+    );
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
+async fn steer_is_durable_as_pending_inbox() {
+    let db = temp_db("steer");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("start"),
+            ScriptedMessage::delayed(Duration::from_secs(30), "late"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    session.steer("and also check tests").await.expect("steer");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let store = SessionStore::open(&db).expect("reopen");
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.pending_inbox.len(), 1);
+    assert_eq!(loaded.pending_inbox[0].text, "and also check tests");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[test]
+fn recovery_classes_match_the_design() {
+    let registry = ToolRegistry::default();
+    assert_eq!(registry.recovery_class("read"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("search"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("find"), RecoveryClass::ReplaySafe);
+    assert_eq!(registry.recovery_class("write"), RecoveryClass::Reconcile);
+    assert_eq!(registry.recovery_class("edit"), RecoveryClass::Reconcile);
+    assert_eq!(registry.recovery_class("bash"), RecoveryClass::NeverReplay);
+    assert_eq!(
+        registry.recovery_class("unknown-tool"),
+        RecoveryClass::NeverReplay
+    );
+}
+
+#[test]
+fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
+    for setup in [
+        |m: &mut OperationMachine| {
+            let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
+            });
+        },
+        |m: &mut OperationMachine| {
+            let _ = m.apply(Transition::StartModelStep {
+                model: step_model(),
+                plan: ContextPlan {
+                    system: String::new(),
+                    messages: Vec::new(),
+                },
+            });
+            let _ = m.apply(Transition::ProviderCompleted {
+                text: String::new(),
+                tool_calls: vec![call(1, "read")],
+            });
+        },
+    ] {
+        let (mut machine, _) = machine_with_tools("goal", vec![]);
+        setup(&mut machine);
+        let applied = machine
+            .apply(Transition::FailOperation {
+                message: "harness failure".to_owned(),
+            })
+            .expect("fail from an open state");
+        assert_eq!(
+            machine.state(),
+            &OperationState::Finished(OperationOutcome::Failed("harness failure".to_owned()))
+        );
+        assert!(applied.cancel_effects);
+    }
+    let (mut machine, _) = machine_with_tools("goal", vec![]);
+    machine
+        .apply(Transition::StartModelStep {
+            model: step_model(),
+            plan: ContextPlan {
+                system: String::new(),
+                messages: Vec::new(),
+            },
+        })
+        .expect("start");
+    machine.apply(Transition::ProviderCancelled).expect("done");
+    let err = machine
+        .apply(Transition::FailOperation {
+            message: "late".to_owned(),
+        })
+        .expect_err("finished is terminal");
+    assert_eq!(err.transition, "fail_operation");
+}
