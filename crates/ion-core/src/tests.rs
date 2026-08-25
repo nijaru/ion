@@ -2725,6 +2725,237 @@ async fn effect_gate_crash_prefix_reopens_before_compaction_execution() {
 }
 
 #[tokio::test]
+async fn effect_gate_crash_prefix_reopens_after_durable_cancellation() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::CancellationSignal);
+    let runtime = Runtime::start_with_effect_gate(
+        SharedLogProvider {
+            settle_delay: Duration::from_secs(30),
+            ..SharedLogProvider::default()
+        },
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let operation_id = session.submit_if_idle("cancel me").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+
+    let cancel_session = session.clone();
+    let cancel = tokio::spawn(async move { cancel_session.cancel(operation_id).await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("cancellation gate reached");
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(checkpoint.cancel_requested);
+    assert!(matches!(
+        checkpoint.state,
+        OperationState::AssistantEffectPending
+    ));
+
+    runtime.crash();
+    gate.release();
+    let _ = cancel.await.expect("cancel task");
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("late provider result")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(recorded.iter().any(|event| matches!(
+        event,
+        RuntimeEvent::OperationCancelled { operation_id: id, .. } if *id == operation_id
+    )));
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(matches!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Finished(OperationOutcome::Cancelled)
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn effect_gate_crash_prefix_reopens_with_a_durable_queued_operation() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::QueuedAcceptanceCommit);
+    let runtime = Runtime::start_with_effect_gate(
+        SharedLogProvider {
+            settle_delay: Duration::from_secs(30),
+            ..SharedLogProvider::default()
+        },
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("first").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+
+    let enqueue_session = session.clone();
+    let enqueue = tokio::spawn(async move { enqueue_session.enqueue("second").await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("queue gate reached");
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.operations.len(), 2);
+    assert!(matches!(
+        loaded.operations[1].latest.1.state,
+        OperationState::Accepted
+    ));
+
+    runtime.crash();
+    gate.release();
+    let _ = enqueue.await.expect("enqueue task");
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::text("first recovered"),
+            ScriptedMessage::text("second recovered"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let first = collect_until_terminal(&mut events).await.expect("first");
+    assert!(matches!(
+        first.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    let second = collect_until_terminal(&mut events).await.expect("second");
+    assert!(matches!(
+        second.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(
+        loaded
+            .entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry, SessionEntry::UserMessage { .. }))
+            .count(),
+        2
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn interrupted_recovery_can_restart_from_its_replacement_intent() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let initial_gate = EffectGate::new(EffectBoundary::ModelExecution);
+    let initial = Runtime::start_with_effect_gate(
+        SharedLogProvider::default(),
+        ToolRegistry::default(),
+        store.clone(),
+        initial_gate.clone(),
+    );
+    let session_id = initial.session_id();
+    let session = initial.session();
+    let submit_session = session.clone();
+    let submit = tokio::spawn(async move { submit_session.submit_if_idle("goal").await });
+    timeout(Duration::from_secs(2), initial_gate.wait_until_reached())
+        .await
+        .expect("initial gate reached");
+    initial.crash();
+    initial_gate.release();
+    let _ = submit.await.expect("submit task");
+    drop(session);
+    drop(initial);
+
+    let recovering = SharedLogProvider {
+        settle_delay: Duration::from_secs(30),
+        ..SharedLogProvider::default()
+    };
+    let runtime = Runtime::open_session(
+        recovering.clone(),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("first reopen");
+    for _ in 0..100 {
+        if !recovering.requests().is_empty() {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    assert_eq!(recovering.requests().len(), 1, "recovery provider started");
+    runtime.crash();
+    drop(runtime);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_millis(50),
+            "recovered twice",
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("second reopen");
+    let session = runtime.session();
+    for _ in 0..100 {
+        let loaded = store.load(session_id).await.expect("poll recovery");
+        if matches!(
+            loaded.operations[0].latest.1.state,
+            OperationState::Finished(OperationOutcome::Completed)
+        ) {
+            break;
+        }
+        sleep(Duration::from_millis(20)).await;
+    }
+    let loaded = store.load(session_id).await.expect("load recovered");
+    assert!(
+        matches!(
+            loaded.operations[0].latest.1.state,
+            OperationState::Finished(OperationOutcome::Completed)
+        ),
+        "final recovery state: {:?}",
+        loaded.operations[0].latest.1.state
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn crash_during_model_step_recovers_by_replay() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(

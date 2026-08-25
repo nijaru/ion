@@ -59,6 +59,8 @@ pub(crate) enum EffectBoundary {
     ModelExecution,
     ModelSettlement,
     CompactionExecution,
+    CancellationSignal,
+    QueuedAcceptanceCommit,
     ToolExecution,
     ToolSettlement,
     CloseSuspendCommit,
@@ -1289,6 +1291,7 @@ impl<P: Provider> SessionRuntime<P> {
 
     async fn accept_operation(&mut self, prompt: String) -> Result<OperationId, CommandError> {
         let operation_id = OperationId::generate();
+        let is_queued = self.operation.is_some() || !self.queued_operations.is_empty();
         let tool_registry = self.tools.snapshot();
         let (machine, applied) =
             OperationMachine::accept(operation_id, prompt.clone(), tool_registry.specs());
@@ -1316,6 +1319,10 @@ impl<P: Provider> SessionRuntime<P> {
             .begin_operation(self.session_id, operation_id, root_inbox, checkpoint, entry)
             .await
             .map_err(persistence_command_error)?;
+        if is_queued {
+            self.wait_effect_boundary(EffectBoundary::QueuedAcceptanceCommit)
+                .await;
+        }
 
         let active = ActiveOperation {
             machine,
@@ -1505,8 +1512,14 @@ impl<P: Provider> SessionRuntime<P> {
             .map_err(persistence_command_error)?;
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        staged.cancel.cancel();
         self.operation = Some(staged);
+        self.wait_effect_boundary(EffectBoundary::CancellationSignal)
+            .await;
+        self.operation
+            .as_ref()
+            .expect("cancelled operation installed")
+            .cancel
+            .cancel();
         Ok(())
     }
 
@@ -1619,6 +1632,7 @@ impl<P: Provider> SessionRuntime<P> {
                     effective_input: open.effective_input.clone(),
                     attempt: open.attempt + 1,
                 };
+                staged.open_effect = Some(effect.clone());
                 let (mut request, new_entry_seq) = build_commit_request(
                     self.session_id,
                     &staged,
@@ -1677,6 +1691,7 @@ impl<P: Provider> SessionRuntime<P> {
                     effective_input: open.effective_input.clone(),
                     attempt: open.attempt + 1,
                 };
+                staged.open_effect = Some(effect.clone());
                 let (request, new_entry_seq) = build_commit_request(
                     self.session_id,
                     &staged,
@@ -1732,6 +1747,7 @@ impl<P: Provider> SessionRuntime<P> {
                             effective_input: open.effective_input.clone(),
                             attempt: open.attempt + 1,
                         };
+                        staged.open_effect = Some(effect.clone());
                         let (mut request, new_entry_seq) = build_commit_request(
                             self.session_id,
                             &staged,
@@ -2801,10 +2817,18 @@ impl<P: Provider> SessionRuntime<P> {
                 self.draft_calls.push(call);
             }
             EngineSignal::Completed { .. } => {
+                let cancel_requested = self
+                    .operation
+                    .as_ref()
+                    .is_some_and(|active| active.machine.cancel_requested());
                 let text = std::mem::take(&mut self.draft_text);
                 let tool_calls = std::mem::take(&mut self.draft_calls);
-                self.settle_model_step(Transition::ProviderCompleted { text, tool_calls })
-                    .await;
+                let transition = if cancel_requested {
+                    Transition::ProviderCancelled
+                } else {
+                    Transition::ProviderCompleted { text, tool_calls }
+                };
+                self.settle_model_step(transition).await;
             }
             EngineSignal::Failed { message, .. } => {
                 let cancel_requested = self
