@@ -258,6 +258,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Ok(resources) => resources,
         Err(err) => {
             let _ = writeln!(io::stderr(), "trusted resources: {err}");
+            tools.close().await;
             return ExitCode::FAILURE;
         }
     };
@@ -275,6 +276,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             Ok(runtime) => runtime,
             Err(err) => {
                 let _ = writeln!(io::stderr(), "resume: {err}");
+                tools.close().await;
                 return ExitCode::FAILURE;
             }
         }
@@ -298,6 +300,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Ok(keymap) => keymap,
         Err(err) => {
             let _ = writeln!(io::stderr(), "settings: {err}");
+            tools.close().await;
             return ExitCode::from(2);
         }
     };
@@ -325,10 +328,12 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     match result {
         Ok(()) => {
             let _ = runtime.join().await;
+            tools.close().await;
             ExitCode::SUCCESS
         }
         Err(err) => {
             let _ = runtime.join().await;
+            tools.close().await;
             let _ = writeln!(io::stderr(), "{err}");
             ExitCode::FAILURE
         }
@@ -463,10 +468,20 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let tools = build_catalog(settings, cli)
         .await
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let trusted_resources = ion_core::load_trusted_resources(&cwd, cli.trust_project)
-        .map_err(RuntimeError::OperationFailed)?;
-    let store = SessionStore::open(default_db_path())
-        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {
+        Ok(resources) => resources,
+        Err(err) => {
+            tools.close().await;
+            return Err(RuntimeError::OperationFailed(err));
+        }
+    };
+    let store = match SessionStore::open(default_db_path()) {
+        Ok(store) => store,
+        Err(err) => {
+            tools.close().await;
+            return Err(RuntimeError::OperationFailed(err.to_string()));
+        }
+    };
     let policy = policy_for(&cli.allow);
     let runtime = Runtime::start_with_policy_and_resources(
         (make_provider)(),
@@ -486,6 +501,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;
     let join = runtime.join().await;
+    tools.close().await;
     result?;
     shutdown?;
     join

@@ -31,7 +31,7 @@ pub(crate) struct StdioRpc {
     client: Peer<RoleClient>,
     shutdown: CancellationToken,
     closed: Arc<AtomicBool>,
-    _monitor: JoinHandle<()>,
+    monitor: std::sync::Mutex<Option<JoinHandle<()>>>,
 }
 
 /// Definition of one subprocess peer.
@@ -105,8 +105,26 @@ impl StdioRpc {
             client: peer,
             shutdown,
             closed,
-            _monitor: monitor,
+            monitor: std::sync::Mutex::new(Some(monitor)),
         })
+    }
+
+    /// Cancel the peer and drain its monitor. The monitor owns the rmcp
+    /// client's transport wait, so joining it is the observable completion
+    /// point for subprocess shutdown.
+    pub(crate) async fn close(&self) {
+        self.shutdown.cancel();
+        let Some(mut monitor) = self.monitor.lock().expect("peer monitor poisoned").take() else {
+            return;
+        };
+        if tokio::time::timeout(PEER_DRAIN_TIMEOUT, &mut monitor)
+            .await
+            .is_err()
+        {
+            tracing::warn!("subprocess peer monitor did not drain before shutdown deadline");
+            monitor.abort();
+            let _ = monitor.await;
+        }
     }
 
     #[must_use]
@@ -189,6 +207,7 @@ pub(crate) const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 pub(crate) const MAX_RESTARTS: u32 = 3;
 pub(crate) const RESTART_BASE_BACKOFF: Duration = Duration::from_millis(100);
 pub(crate) const RESTART_MAX_BACKOFF: Duration = Duration::from_secs(2);
+const PEER_DRAIN_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// One stdio peer that publishes tools into a [`CatalogService`] scope:
 /// spawn, discover, register, wait for closure or lifetime end, restart
@@ -219,7 +238,10 @@ pub(crate) async fn supervise_tool_peer<F>(
             callback_service.remove_scope(&callback_scope);
             let _ = closed_tx.send(true);
         });
-        let rpc = match StdioRpc::spawn(&def, client_info(), HANDSHAKE_TIMEOUT, on_closed).await {
+        let rpc = match tokio::select! {
+            () = lifetime.cancelled() => return,
+            result = StdioRpc::spawn(&def, client_info(), HANDSHAKE_TIMEOUT, on_closed) => result,
+        } {
             Ok(rpc) => Arc::new(rpc),
             Err(err) => {
                 tracing::warn!(peer = %def.name, error = %err, "{label} failed to start");
@@ -233,14 +255,20 @@ pub(crate) async fn supervise_tool_peer<F>(
             }
         };
 
-        let tools = match tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()).await {
+        let tools = match tokio::select! {
+            () = lifetime.cancelled() => {
+                rpc.close().await;
+                return;
+            }
+            result = tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()) => result,
+        } {
             Ok(Ok(tools)) => tools,
             Ok(Err(err)) => {
                 tracing::warn!(peer = %def.name, error = %err, "{label} tools/list failed");
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                drop(rpc);
+                rpc.close().await;
                 if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
                     return;
                 }
@@ -251,7 +279,7 @@ pub(crate) async fn supervise_tool_peer<F>(
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                drop(rpc);
+                rpc.close().await;
                 if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
                     return;
                 }
@@ -277,10 +305,12 @@ pub(crate) async fn supervise_tool_peer<F>(
                         service.remove_scope(&scope);
                     }
                 }
-                () = lifetime.cancelled() => return,
+                () = lifetime.cancelled() => {
+                    service.remove_scope(&scope);
+                }
             }
         }
-        drop(rpc);
+        rpc.close().await;
         if lifetime.is_cancelled() {
             return;
         }

@@ -31,8 +31,8 @@ pub struct ServerDef {
     pub args: Vec<String>,
 }
 
-/// Owns every configured MCP server's lifecycle and published
-/// capabilities (§19.1).
+/// Starts configured MCP peers. The [`ToolCatalog`] owns the spawned
+/// supervisors and drains them when its lifetime closes (§19.1).
 #[derive(Default)]
 pub struct McpService;
 
@@ -53,7 +53,8 @@ impl McpService {
             let def = def.clone();
             let service = catalog.service_handle();
             let name = def.name.clone();
-            tokio::spawn(async move {
+            let peer_service = service.clone();
+            let spawned = service.spawn(async move {
                 supervise_tool_peer(
                     PeerDef {
                         name: name.clone(),
@@ -62,7 +63,7 @@ impl McpService {
                     },
                     // Namespaced scope so two servers cannot collide.
                     format!("mcp:{name}"),
-                    service,
+                    peer_service,
                     Some(ready_tx),
                     "MCP server",
                     move |connection, spec| {
@@ -76,6 +77,9 @@ impl McpService {
                 )
                 .await;
             });
+            if !spawned {
+                continue;
+            }
             // Wait only for the first discovery attempt. Restart/backoff
             // belongs to the service task and never delays the rest of the
             // host after the initial bounded startup decision.

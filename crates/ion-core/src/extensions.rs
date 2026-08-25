@@ -33,8 +33,9 @@ pub struct ExtensionDef {
     pub args: Vec<String>,
 }
 
-/// Owns extension subprocesses and publishes their tool contributions
-/// (the supervisor role in the lifecycle hierarchy, §25.1).
+/// Starts extension subprocesses and publishes their tool contributions.
+/// The [`ToolCatalog`] owns the spawned supervisors and drains them when its
+/// lifetime closes (the supervisor role in the lifecycle hierarchy, §25.1).
 #[derive(Default)]
 pub struct ExtensionService;
 
@@ -53,7 +54,8 @@ impl ExtensionService {
             let def = def.clone();
             let service = catalog.service_handle();
             let name = def.name.clone();
-            tokio::spawn(async move {
+            let peer_service = service.clone();
+            let spawned = service.spawn(async move {
                 supervise_tool_peer(
                     PeerDef {
                         name: name.clone(),
@@ -61,7 +63,7 @@ impl ExtensionService {
                         args: def.args,
                     },
                     format!("ext:{name}"),
-                    service,
+                    peer_service,
                     Some(ready_tx),
                     "extension",
                     move |connection, spec| {
@@ -76,6 +78,9 @@ impl ExtensionService {
                 )
                 .await;
             });
+            if !spawned {
+                continue;
+            }
             // Wait only for the first discovery attempt. Later retries are
             // owned by the service task and do not block other extensions.
             let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;

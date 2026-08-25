@@ -14,7 +14,7 @@ use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::process::Stdio;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 #[cfg(unix)]
@@ -27,6 +27,7 @@ use sha2::Digest;
 use tokio::fs;
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::sync::mpsc;
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
@@ -740,7 +741,57 @@ pub struct ToolCatalog {
 
 struct CatalogLifetime {
     cancel: CancellationToken,
+    tasks: Mutex<Option<JoinSet<()>>>,
 }
+
+impl CatalogLifetime {
+    fn spawn<F>(&self, task: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        if self.cancel.is_cancelled() {
+            return false;
+        }
+        let mut tasks = self.tasks.lock().expect("tool catalog poisoned");
+        if self.cancel.is_cancelled() {
+            return false;
+        }
+        tasks
+            .as_mut()
+            .expect("catalog lifetime tasks are available until shutdown")
+            .spawn(task);
+        true
+    }
+
+    async fn shutdown(&self) {
+        self.cancel.cancel();
+        let Some(mut tasks) = self.tasks.lock().expect("tool catalog poisoned").take() else {
+            return;
+        };
+
+        let drain = async {
+            while let Some(result) = tasks.join_next().await {
+                if let Err(err) = result {
+                    tracing::warn!(error = %err, "tool peer supervisor failed during shutdown");
+                }
+            }
+        };
+        if tokio::time::timeout(PEER_DRAIN_TIMEOUT, drain)
+            .await
+            .is_err()
+        {
+            tracing::warn!("tool peer supervisors did not drain before shutdown deadline");
+            tasks.abort_all();
+            while let Some(result) = tasks.join_next().await {
+                if let Err(err) = result {
+                    tracing::debug!(error = %err, "aborted tool peer supervisor");
+                }
+            }
+        }
+    }
+}
+
+const PEER_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl Drop for CatalogLifetime {
     fn drop(&mut self) {
@@ -786,6 +837,15 @@ impl CatalogService {
         self.lifetime
             .upgrade()
             .map(|lifetime| lifetime.cancel.clone())
+    }
+
+    pub(crate) fn spawn<F>(&self, task: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        self.lifetime
+            .upgrade()
+            .is_some_and(|lifetime| lifetime.spawn(task))
     }
 }
 
@@ -893,7 +953,8 @@ impl ToolCatalog {
 
     /// A detached capability-registration handle for service supervisors.
     /// It holds only a weak catalog lifetime, so a supervisor cannot keep a
-    /// dropped catalog or its subprocesses alive.
+    /// dropped catalog or its subprocesses alive. Peer tasks are registered
+    /// with the catalog lifetime and are drained by [`Self::close`].
     pub(crate) fn service_handle(&self) -> CatalogService {
         CatalogService {
             dynamic: Arc::clone(&self.dynamic),
@@ -960,6 +1021,13 @@ impl ToolCatalog {
         self.snapshot().validate(name, arguments)
     }
 
+    /// Stop and drain all MCP and extension peer supervisors owned by this
+    /// catalog. Call this before dropping the host's last catalog handle so
+    /// subprocess cleanup is observable rather than relying on task abort.
+    pub async fn close(&self) {
+        self.lifetime.shutdown().await;
+    }
+
     /// Execute against the current snapshot: a scope removed after
     /// planning but before execution yields a visible unknown-tool
     /// failure (§18.2).
@@ -994,6 +1062,7 @@ impl From<ToolRegistry> for ToolCatalog {
             active_mcp_scopes: Arc::new(std::sync::RwLock::new(HashSet::new())),
             lifetime: Arc::new(CatalogLifetime {
                 cancel: CancellationToken::new(),
+                tasks: Mutex::new(Some(JoinSet::new())),
             }),
         }
     }

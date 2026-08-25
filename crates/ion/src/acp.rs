@@ -42,6 +42,7 @@ struct AcpSession {
     handle: ion_core::SessionHandle,
     #[allow(dead_code)] // owns the runtime task until process exit
     runtime: Runtime,
+    catalog: ToolCatalog,
     /// The in-flight prompt turn, if any: (JSON-RPC id, operation id).
     active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 }
@@ -225,6 +226,7 @@ where
         if let Err(err) = session.handle.close().await {
             tracing::warn!(error = %err, "failed to close an ACP session at shutdown");
         }
+        session.catalog.close().await;
     }
     Ok(())
 }
@@ -452,6 +454,7 @@ where
     AcpSession {
         handle: runtime.session(),
         runtime,
+        catalog: catalog.clone(),
         active_prompt: Arc::new(Mutex::new(None)),
     }
 }
