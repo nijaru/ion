@@ -2656,6 +2656,75 @@ async fn effect_gate_close_waits_for_suspend_commit() {
 }
 
 #[tokio::test]
+async fn effect_gate_crash_prefix_reopens_before_compaction_execution() {
+    let probe = CompactionProbe::with_window(128_000);
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::CompactionExecution);
+    let runtime = Runtime::start_with_effect_gate(
+        probe.clone(),
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    session.steer("and also this").await.expect("steer");
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("compaction gate reached");
+
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(matches!(
+        checkpoint.state,
+        OperationState::CompactionPending
+    ));
+    assert!(checkpoint.open_effect.is_some());
+    assert!(
+        loaded
+            .entries
+            .iter()
+            .all(|(_, entry)| !matches!(entry, SessionEntry::Compaction { .. }))
+    );
+
+    runtime.crash();
+    gate.release();
+    drop(session);
+    drop(runtime);
+
+    let runtime = Runtime::open_session(probe, ToolRegistry::default(), store.clone(), session_id)
+        .await
+        .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(
+        loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, SessionEntry::Compaction { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn crash_during_model_step_recovers_by_replay() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(

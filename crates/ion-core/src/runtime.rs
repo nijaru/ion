@@ -58,6 +58,7 @@ type SubscribeReply = Result<(SessionSnapshot, EventSubscription), CommandError>
 pub(crate) enum EffectBoundary {
     ModelExecution,
     ModelSettlement,
+    CompactionExecution,
     ToolExecution,
     ToolSettlement,
     CloseSuspendCommit,
@@ -2281,6 +2282,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.last_step_was_compaction = true;
         self.last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
+        self.wait_effect_boundary(EffectBoundary::CompactionExecution)
+            .await;
         self.spawn_model_step(operation_id, model, plan, Vec::new());
         true
     }
