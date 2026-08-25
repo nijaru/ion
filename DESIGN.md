@@ -514,6 +514,8 @@ The execution boundary for filesystem/process effects. Local execution is the in
 
 An optional host-mediated composition surface. It can compose declared capabilities, but every effectful call follows the ordinary policy, durable-intent, settlement, and recovery path.
 
+Evaluation target: when promoted past seam status, compare a persistent programmatic working-state/action surface against ordinary structured tool calling on held-out long-context analysis, experiment-loop, and recursive test-time-compute tasks under matched budgets (`ion-eval`, Step 12). The implementation language/runtime is an evidence-driven choice; no specific interpreter is prescribed.
+
 ## VerifiedTaskState
 
 Optional evidence-backed state maintained by a future long-horizon controller. It is not ordinary session history and cannot be advanced by an executor's self-report alone.
@@ -1310,6 +1312,8 @@ Provider-native opaque compaction MAY be retained as an optimization only if the
 
 Do not aggressively prune arbitrary middle history by default. It harms both evidence and prompt-cache reuse.
 
+A single readable prefix summary plus recent verbatim suffix is the baseline projection. Multi-resolution/tiered projection (progressively summarized older tiers indexing back into canonical history) is a candidate `HarnessProfile` experiment to evaluate offline before it can become a selectable profile; it changes only projection, never storage or canonical history.
+
 ### 14.7.1 Who decides to compact
 
 The initial Ion baseline keeps compaction harness-owned and predictable:
@@ -1435,6 +1439,8 @@ Core rule: a provider stream becomes durable semantic assistant content only at 
 Do not execute a tool from partial streamed JSON.
 
 Wait for one complete provider-native tool call, normalize and validate it, then pass it through policy/effect admission.
+
+Speculative execution of partially generated programmatic calls (overlapping tool/subcall latency with continued generation) is a deferred optimization for a future programmatic execution mode only. It must not weaken this validation boundary: speculative work is never semantic until an authoritative program execution consumes it, and speculation is limited to pure/replay-safe calls under explicit budgets.
 
 ## 15.3 Strict validation
 
@@ -1722,6 +1728,8 @@ Keep exact numeric defaults configuration/policy, not architecture. Start conser
 
 Nested child creation SHOULD be disabled or depth-bounded initially.
 
+Descendant accounting invariant: delegation cannot hide resource consumption. Root/operation accounting can aggregate attributable descendant usage through lineage — tokens, cost where known, model steps, tool calls, child count/depth, wall-clock. Usage rows stay normalized per session; aggregation derives from persisted lineage, not duplicated totals.
+
 ## 20.6 Cancellation
 
 Parent operation cancellation cancels descendants.
@@ -1730,6 +1738,20 @@ Child cancellation never implicitly cancels parent or siblings.
 
 A child crash/restart uses its own durable session recovery.
 
+### 20.7 Stable durable child handles
+
+A parent interacts with an asynchronous child through a stable durable handle that identifies the child's session state, never a live task incarnation (P3). The handle remains valid across compaction, restart, unload/reload, and terminal states. Conceptual operations:
+
+```text
+spawn_child(spec) -> ChildHandle { session_id, lineage }
+observe_child(handle)
+message_child(handle, message)
+await_child(handle)
+cancel_child(handle)
+```
+
+This is an API-shape requirement for the future child phase (Step 7), not license to implement children early. A synchronous result-only `run_child` shape that collapses the child into a function call is rejected: parents may continue local work while a child runs, and results are retrieved against durable state rather than a task lifetime.
+
 ---
 
 # 21. Frontends and live event model
@@ -1737,6 +1759,8 @@ A child crash/restart uses its own durable session recovery.
 ## 21.1 One runtime contract
 
 TUI, print mode, JSON/events, ACP, and a future daemon protocol all consume the same `SessionHandle` semantics.
+
+Attachability: any durable session, including a child, is inspectable/attachable through this same runtime contract in the future daemon layer — client detachment does not imply cancellation unless policy says so. No second runtime or frontend state machine is introduced for attachment (test: roots and children share one inspect/attach/detach lifecycle).
 
 No frontend writes the SQLite transcript directly.
 
@@ -2451,7 +2475,7 @@ After the P0 correctness and ownership boundaries are coherent, add only the low
 
 ## Step 12 — Offline evaluation and optional layers
 
-Before changing defaults or promoting profiles, establish reproducible `ion-eval` comparisons with held-out tasks, separated search/evaluation workloads, explicit hypotheses, and matched token/cost budgets. Only then consider selectable programmatic composition, long-horizon verified task state, deferred capability discovery, or continual profile/memory evolution. These remain optional layers over the ordinary runtime.
+Before changing defaults or promoting profiles, establish reproducible `ion-eval` comparisons with held-out tasks, separated search/evaluation workloads, explicit hypotheses, and matched token/cost budgets. Harness/profile/skill changes proposed from trajectories follow a branch/evaluate/promote workflow: candidate changes are tested in an isolated profile/branch against held-out evaluation before promotion into trusted defaults; model-proposed changes never directly mutate trusted harness semantics or policy. Only then consider selectable programmatic composition, long-horizon verified task state, deferred capability discovery, or continual profile/memory evolution. These remain optional layers over the ordinary runtime.
 
 ## Step 13 — WASM only if justified
 
