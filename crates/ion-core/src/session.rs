@@ -262,16 +262,16 @@ pub struct OperationMachine {
     /// Accepted steers, applied at the next reasoning boundary (the next
     /// model step, including tool continuations) — §9.2.
     steers: Vec<InboxItem>,
-    /// Immutable capability snapshot for every model step of this
-    /// operation (DESIGN.md §18.2).
-    tools: Vec<ToolSpec>,
+    /// Capability snapshot for the current model step. The runtime replaces
+    /// this at each safe model-step boundary (DESIGN.md §18.2).
+    step_tools: Vec<ToolSpec>,
     cancel_requested: bool,
 }
 
 impl OperationMachine {
     /// Accept a prompt as a new operation. The user entry is appended
-    /// atomically with acceptance (DESIGN.md §9.1). `tools` is the
-    /// capability snapshot frozen for this operation's model steps.
+    /// atomically with acceptance (DESIGN.md §9.1). `tools` is the initial
+    /// capability snapshot; the runtime replaces it for each model step.
     #[must_use]
     pub fn accept(
         operation_id: OperationId,
@@ -292,7 +292,7 @@ impl OperationMachine {
             cancel_requested: false,
             state: OperationState::Accepted,
             steers: Vec::new(),
-            tools,
+            step_tools: tools,
             prompt,
         };
         (machine, applied)
@@ -314,7 +314,7 @@ impl OperationMachine {
             prompt,
             state,
             steers,
-            tools,
+            step_tools: tools,
             cancel_requested,
         }
     }
@@ -340,13 +340,19 @@ impl OperationMachine {
         }
     }
 
-    /// The capability snapshot frozen for this operation's model steps
+    /// The capability snapshot used for the current model step
     /// (DESIGN.md §18.2).
     #[must_use]
-    pub const fn frozen_tools(&self) -> &Vec<ToolSpec> {
-        &self.tools
+    pub const fn step_tools(&self) -> &Vec<ToolSpec> {
+        &self.step_tools
     }
 
+    /// Replace the capability snapshot at a model-step boundary. A staged
+    /// machine is updated before its transition is committed, so a failed
+    /// persistence write leaves the live snapshot unchanged.
+    pub fn set_step_tools(&mut self, tools: Vec<ToolSpec>) {
+        self.step_tools = tools;
+    }
     #[must_use]
     pub const fn state(&self) -> &OperationState {
         &self.state
@@ -460,7 +466,7 @@ impl OperationMachine {
                         operation_id: self.operation_id,
                         model,
                         plan,
-                        tools: self.tools.clone(),
+                        tools: self.step_tools.clone(),
                     }],
                     cancel_effects: false,
                 })
@@ -642,7 +648,7 @@ impl OperationMachine {
                 operation_id: self.operation_id,
                 model,
                 plan,
-                tools: self.tools.clone(),
+                tools: self.step_tools.clone(),
             }],
             cancel_effects: false,
         })

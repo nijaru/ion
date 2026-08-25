@@ -301,6 +301,7 @@ struct ToolEntry {
     tool: Arc<dyn Tool>,
     spec: ToolSpec,
     recovery_class: RecoveryClass,
+    capability_id: String,
 }
 
 /// How an unresolved effect of this tool may be settled after process
@@ -570,6 +571,19 @@ impl ToolRegistry {
         &self.cwd
     }
 
+    /// Build the durable capability snapshot for this immutable registry.
+    /// The provider-facing tool descriptions and internal identities are
+    /// captured together so a later replacement cannot retarget a call.
+    #[must_use]
+    pub(crate) fn capability_snapshot(&self) -> crate::context::CapabilitySnapshot {
+        crate::context::CapabilitySnapshot::from_entries(
+            self.entries
+                .values()
+                .map(|entry| (entry.spec.clone(), entry.capability_id.clone()))
+                .collect(),
+        )
+    }
+
     /// All registered tool specs, ordered by name. The order is part of
     /// the capability snapshot, so it must be deterministic across
     /// processes for prompt-prefix stability (DESIGN.md P9, §14.4).
@@ -735,6 +749,7 @@ impl ToolRegistry {
 pub struct ToolCatalog {
     core: ToolRegistry,
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    generations: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     active_mcp_scopes: Arc<std::sync::RwLock<HashSet<String>>>,
     lifetime: Arc<CatalogLifetime>,
 }
@@ -802,27 +817,39 @@ impl Drop for CatalogLifetime {
 #[derive(Clone)]
 pub(crate) struct CatalogService {
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
+    generations: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     lifetime: std::sync::Weak<CatalogLifetime>,
+}
+
+fn next_generation(generations: &std::sync::RwLock<HashMap<String, u64>>, scope: &str) -> u64 {
+    let mut generations = generations.write().expect("tool catalog poisoned");
+    let generation = generations.entry(scope.to_owned()).or_default();
+    *generation = generation.saturating_add(1);
+    *generation
+}
+
+fn dynamic_entries(scope: &str, generation: u64, tools: Vec<Arc<dyn Tool>>) -> Vec<ToolEntry> {
+    tools
+        .into_iter()
+        .map(|tool| {
+            let spec = tool.spec();
+            ToolEntry {
+                capability_id: format!("scope:{scope}:{name}@{generation}", name = spec.name),
+                tool,
+                spec,
+                recovery_class: RecoveryClass::NeverReplay,
+            }
+        })
+        .collect()
 }
 
 impl CatalogService {
     pub(crate) fn register_scope(&self, scope: String, tools: Vec<Arc<dyn Tool>>) {
-        let entries = tools
-            .into_iter()
-            .map(|tool| {
-                let spec = tool.spec();
-                let recovery_class = RecoveryClass::NeverReplay;
-                ToolEntry {
-                    tool,
-                    spec,
-                    recovery_class,
-                }
-            })
-            .collect();
+        let generation = next_generation(&self.generations, &scope);
         self.dynamic
             .write()
             .expect("tool catalog poisoned")
-            .insert(scope, entries);
+            .insert(scope.clone(), dynamic_entries(&scope, generation, tools));
     }
 
     pub(crate) fn remove_scope(&self, scope: &str) -> bool {
@@ -878,22 +905,12 @@ impl ToolCatalog {
     /// registration. Publishing at a safe context boundary is the
     /// caller's contract (§19.2).
     pub fn register_scope(&self, scope: impl Into<String>, tools: Vec<Arc<dyn Tool>>) {
-        let entries = tools
-            .into_iter()
-            .map(|tool| {
-                let spec = tool.spec();
-                let recovery_class = RecoveryClass::NeverReplay;
-                ToolEntry {
-                    tool,
-                    spec,
-                    recovery_class,
-                }
-            })
-            .collect();
+        let scope = scope.into();
+        let generation = next_generation(&self.generations, &scope);
         self.dynamic
             .write()
             .expect("tool catalog poisoned")
-            .insert(scope.into(), entries);
+            .insert(scope.clone(), dynamic_entries(&scope, generation, tools));
     }
 
     /// Remove a scope; future snapshots no longer include its tools.
@@ -958,6 +975,7 @@ impl ToolCatalog {
     pub(crate) fn service_handle(&self) -> CatalogService {
         CatalogService {
             dynamic: Arc::clone(&self.dynamic),
+            generations: Arc::clone(&self.generations),
             lifetime: Arc::downgrade(&self.lifetime),
         }
     }
@@ -1039,19 +1057,6 @@ impl ToolCatalog {
     ) -> ToolOutcome {
         self.snapshot().execute(name, arguments, cancel).await
     }
-
-    pub(crate) async fn execute_with_reconciliation(
-        &self,
-        name: &str,
-        arguments: &Value,
-        reconciliation: Option<&Value>,
-        artifact_root: Option<&Path>,
-        cancel: CancellationToken,
-    ) -> ToolOutcome {
-        self.snapshot()
-            .execute_with_reconciliation(name, arguments, reconciliation, artifact_root, cancel)
-            .await
-    }
 }
 
 impl From<ToolRegistry> for ToolCatalog {
@@ -1059,6 +1064,7 @@ impl From<ToolRegistry> for ToolCatalog {
         Self {
             core,
             dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
+            generations: Arc::new(std::sync::RwLock::new(HashMap::new())),
             active_mcp_scopes: Arc::new(std::sync::RwLock::new(HashSet::new())),
             lifetime: Arc::new(CatalogLifetime {
                 cancel: CancellationToken::new(),
@@ -1145,6 +1151,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         map.insert(
             spec.name.clone(),
             ToolEntry {
+                capability_id: format!("core:{}@1", spec.name),
                 tool,
                 spec,
                 recovery_class,
@@ -2441,6 +2448,17 @@ mod catalog_tests {
         assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
         assert!(catalog.deactivate_mcp_server("unknown"));
         assert!(!catalog.deactivate_mcp_server("unknown"));
+    }
+
+    #[test]
+    fn scope_replacement_advances_capability_generation() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let first = catalog.snapshot().capability_snapshot();
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let second = catalog.snapshot().capability_snapshot();
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.identities, second.identities);
     }
 
     #[test]

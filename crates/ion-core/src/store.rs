@@ -24,7 +24,7 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
-const SCHEMA_VERSION: i64 = 10;
+const SCHEMA_VERSION: i64 = 11;
 
 /// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
 /// guarantees: a fresh database gets the current schema, and a database

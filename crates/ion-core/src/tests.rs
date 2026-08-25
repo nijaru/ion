@@ -21,11 +21,13 @@ use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EntryRecord, InboxRecord, SessionRecord,
     SessionStore,
 };
-use crate::tool::{RecoveryClass, ToolCall, ToolRegistry, ToolResult, ToolSpec};
+use crate::tool::{
+    RecoveryClass, Tool, ToolCall, ToolCatalog, ToolOutcome, ToolRegistry, ToolResult, ToolSpec,
+};
 
 const STEP: Duration = Duration::from_millis(50);
 
-/// Frozen model snapshot used by transition tests.
+/// Model snapshot used by transition tests.
 fn step_model() -> crate::provider::ModelConfig {
     crate::provider::ModelConfig {
         model_ref: "test-model".to_owned(),
@@ -1672,7 +1674,7 @@ async fn tool_loop_multiple_calls_run_sequentially_in_one_operation() {
 }
 
 #[tokio::test]
-async fn model_step_request_carries_frozen_tool_specs() {
+async fn model_step_request_carries_step_tool_specs() {
     let provider = ScriptedProvider::new(vec![
         ScriptedMessage::tool("read", json!({"path":"Cargo.toml"})),
         ScriptedMessage::text("done"),
@@ -1694,6 +1696,62 @@ async fn model_step_request_carries_frozen_tool_specs() {
         } if output.contains("ion-core")
     )));
 
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn capability_snapshot_refreshes_at_each_model_step() {
+    struct DynamicTool;
+    impl Tool for DynamicTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "dynamic".to_owned(),
+                description: "dynamic test capability".to_owned(),
+                input_schema: json!({"type": "object", "required": []}),
+            }
+        }
+
+        fn call<'a>(
+            &'a self,
+            _arguments: serde_json::Value,
+            _cancel: CancellationToken,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+            Box::pin(async { ToolOutcome::text("dynamic") })
+        }
+    }
+
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(100),
+        ..SharedLogProvider::default()
+    };
+    let catalog = ToolCatalog::default();
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy(
+        provider.clone(),
+        catalog.clone(),
+        store,
+        permissive_policy(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    catalog.register_scope("dynamic", vec![Arc::new(DynamicTool)]);
+    session.steer("continue").await.expect("steer");
+    collect_until_terminal(&mut events).await.expect("collect");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(!requests[0].tools.iter().any(|tool| tool.name == "dynamic"));
+    assert!(requests[1].tools.iter().any(|tool| tool.name == "dynamic"));
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }

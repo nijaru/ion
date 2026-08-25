@@ -25,19 +25,54 @@ Prefer tools over guessing; report failures plainly.";
 pub struct CapabilitySnapshot {
     pub id: String,
     pub tools: Vec<ToolSpec>,
+    /// Stable internal identity for each tool, aligned with `tools` by name.
+    /// Providers receive only `tools`; recovery uses identities to fence a
+    /// call to the capability generation that produced it.
+    pub identities: Vec<String>,
 }
 
 impl CapabilitySnapshot {
     #[must_use]
-    pub fn new(mut tools: Vec<ToolSpec>) -> Self {
-        tools.sort_by(|left, right| left.name.cmp(&right.name));
-        let id = digest_json(&tools);
-        Self { id, tools }
+    pub fn new(tools: Vec<ToolSpec>) -> Self {
+        let entries = tools.into_iter().map(|tool| {
+            let identity = format!("tool:{}@1", tool.name);
+            (tool, identity)
+        });
+        Self::from_entries(entries.collect())
+    }
+
+    #[must_use]
+    pub(crate) fn from_entries(mut entries: Vec<(ToolSpec, String)>) -> Self {
+        entries.sort_by(|left, right| left.0.name.cmp(&right.0.name));
+        let (tools, identities): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
+        let id = digest_json(&(&tools, &identities));
+        Self {
+            id,
+            tools,
+            identities,
+        }
+    }
+
+    #[must_use]
+    pub fn identity(&self, tool_name: &str) -> Option<&str> {
+        self.tools
+            .iter()
+            .position(|tool| tool.name == tool_name)
+            .and_then(|index| self.identities.get(index))
+            .map(String::as_str)
     }
 
     #[must_use]
     pub fn is_consistent(&self) -> bool {
-        Self::new(self.tools.clone()).id == self.id
+        self.identities.len() == self.tools.len()
+            && Self::from_entries(
+                self.tools
+                    .clone()
+                    .into_iter()
+                    .zip(self.identities.clone())
+                    .collect(),
+            )
+            .id == self.id
     }
 }
 

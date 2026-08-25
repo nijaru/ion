@@ -38,7 +38,7 @@ use crate::store::{
     InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect, StoreError,
     UsageRecord,
 };
-use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolResult, ToolSpec};
+use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolRegistry, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
@@ -52,8 +52,8 @@ type ToolSettlement = (EffectId, ToolResult);
 /// One-line display summary of a call's canonical target (best
 /// effort; None when canonicalization fails — the denial surfaces
 /// elsewhere).
-fn target_summary(
-    tools: &ToolCatalog,
+fn target_summary_registry(
+    tools: &ToolRegistry,
     name: &str,
     arguments: &serde_json::Value,
 ) -> Option<String> {
@@ -717,6 +717,12 @@ fn is_context_overflow(message: &str) -> bool {
 #[derive(Clone)]
 struct ActiveOperation {
     machine: OperationMachine,
+    /// Durable identity of the registry captured for the current model step.
+    capability_snapshot: CapabilitySnapshot,
+    /// Immutable registry captured for the current model step. Tool calls
+    /// are admitted and executed against this registry, never a later live
+    /// catalog generation.
+    tool_registry: ToolRegistry,
     cancel: CancellationToken,
     state_seq: u64,
     /// The one in-flight effect intent, if any.
@@ -993,6 +999,8 @@ impl<P: Provider> SessionRuntime<P> {
             );
             let active = ActiveOperation {
                 machine,
+                capability_snapshot: operation.capability_snapshot.clone(),
+                tool_registry: self.tools.snapshot(),
                 cancel: self.cancel_root.child_token(),
                 state_seq,
                 open_effect: payload.open_effect.clone(),
@@ -1156,9 +1164,10 @@ impl<P: Provider> SessionRuntime<P> {
 
     async fn accept_operation(&mut self, prompt: String) -> Result<OperationId, CommandError> {
         let operation_id = OperationId::generate();
+        let tool_registry = self.tools.snapshot();
         let (machine, applied) =
-            OperationMachine::accept(operation_id, prompt.clone(), self.tools.specs());
-        let capability_snapshot = CapabilitySnapshot::new(machine.frozen_tools().clone());
+            OperationMachine::accept(operation_id, prompt.clone(), tool_registry.specs());
+        let capability_snapshot = tool_registry.capability_snapshot();
         let root_inbox = InboxRecord {
             id: InboxId::generate(),
             kind: InboxKind::Prompt,
@@ -1175,7 +1184,7 @@ impl<P: Provider> SessionRuntime<P> {
                 capability_snapshot_id: capability_snapshot.id.clone(),
                 open_effect: None,
             },
-            capability_snapshot,
+            capability_snapshot: capability_snapshot.clone(),
         };
         // Accepted intent is durable before acknowledgment (P4, §9.1).
         self.store
@@ -1185,6 +1194,8 @@ impl<P: Provider> SessionRuntime<P> {
 
         let active = ActiveOperation {
             machine,
+            capability_snapshot,
+            tool_registry,
             cancel: self.cancel_root.child_token(),
             state_seq: 1,
             open_effect: None,
@@ -1440,8 +1451,7 @@ impl<P: Provider> SessionRuntime<P> {
                     return;
                 };
                 let mut staged = self.operation.clone().expect("operation present");
-                let snapshot_id =
-                    CapabilitySnapshot::new(staged.machine.frozen_tools().to_vec()).id;
+                let snapshot_id = staged.capability_snapshot.id.clone();
                 if snapshot_id != persisted_snapshot_id
                     || persisted_manifest_id.is_empty()
                     || persisted_prefix_fingerprint.is_empty()
@@ -1604,14 +1614,15 @@ impl<P: Provider> SessionRuntime<P> {
                         let effect_id = effect.id;
                         staged.open_effect = Some(effect);
                         self.operation = Some(staged);
+                        let tools = self.tools.snapshot();
                         self.emit_tool_started(
                             operation_id,
                             call.call_id,
                             &call.name,
-                            target_summary(&self.tools, &call.name, &call.arguments),
+                            target_summary_registry(&tools, &call.name, &call.arguments),
                         );
                         warn!(%operation_id, tool = %call.name, attempt = open.attempt + 1, "recovered a pending replay-safe tool by re-execution");
-                        self.spawn_tool_effect(Some(effect_id), call, None);
+                        self.spawn_tool_effect(Some(effect_id), call, None, tools);
                     }
                     RecoveryClass::NeverReplay => {
                         // Side effects cannot be classified (§12.4); an
@@ -1737,16 +1748,18 @@ impl<P: Provider> SessionRuntime<P> {
                                 staged.state_seq += 1;
                                 staged.open_effect = Some(effect.clone());
                                 self.operation = Some(staged);
+                                let tools = self.tools.snapshot();
                                 self.emit_tool_started(
                                     operation_id,
                                     call.call_id,
                                     &call.name,
-                                    target_summary(&self.tools, &call.name, &call.arguments),
+                                    target_summary_registry(&tools, &call.name, &call.arguments),
                                 );
                                 self.spawn_tool_effect(
                                     Some(effect_id),
                                     call,
                                     Some(evidence.clone()),
+                                    tools,
                                 );
                                 info!(%operation_id, "reconciled a pending file mutation by preimage match");
                             }
@@ -2015,7 +2028,7 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn current_context_manifest(&self) -> (CapabilitySnapshot, ContextManifest) {
-        let snapshot = CapabilitySnapshot::new(self.tools.specs());
+        let snapshot = self.tools.snapshot().capability_snapshot();
         let manifest = ContextManifest::new(&snapshot, self.trusted_resources.clone());
         (snapshot, manifest)
     }
@@ -2184,6 +2197,13 @@ impl<P: Provider> SessionRuntime<P> {
         let plan = self.project_model_step_plan(&planning_manifest).await;
         let model = self.current_model_config().await;
         let mut staged = self.operation.clone().expect("step needs an operation");
+        let step_registry = self.tools.snapshot();
+        let capability_snapshot = step_registry.capability_snapshot();
+        staged
+            .machine
+            .set_step_tools(capability_snapshot.tools.clone());
+        staged.tool_registry = step_registry;
+        staged.capability_snapshot = capability_snapshot.clone();
         let applied = staged
             .machine
             .apply(Transition::StartModelStep {
@@ -2200,7 +2220,6 @@ impl<P: Provider> SessionRuntime<P> {
         else {
             panic!("StartModelStep must yield a model-step intent");
         };
-        let capability_snapshot = CapabilitySnapshot::new(tools.clone());
         let context_manifest =
             ContextManifest::new(&capability_snapshot, self.trusted_resources.clone());
         let prefix_fingerprint = context_manifest.stable_prefix_fingerprint(&model.model_ref);
@@ -2264,7 +2283,27 @@ impl<P: Provider> SessionRuntime<P> {
             self.closed = true;
             return false;
         };
-        let canonical = self.tools.canonicalize(&call.name, &call.arguments);
+        let active_capability = self
+            .operation
+            .as_ref()
+            .and_then(|active| active.capability_snapshot.identity(&call.name))
+            .map(str::to_owned);
+        let current_capability = self
+            .tools
+            .snapshot()
+            .capability_snapshot()
+            .identity(&call.name)
+            .map(str::to_owned);
+        let step_tools = self
+            .operation
+            .as_ref()
+            .map(|active| active.tool_registry.clone())
+            .expect("admit needs the current step tool registry");
+        let canonical = if active_capability == current_capability {
+            step_tools.canonicalize(&call.name, &call.arguments)
+        } else {
+            Err(format!("capability `{}` is no longer available", call.name))
+        };
         let decision = match &canonical {
             // Delegation is a structural capability (§20.4): every
             // effect a child can produce is individually gated inside the
@@ -2328,7 +2367,7 @@ impl<P: Provider> SessionRuntime<P> {
 
         let mut denial: Option<String> = match decision {
             PolicyDecision::Deny(message) => Some(message),
-            PolicyDecision::Allow => self.tools.validate(&call.name, &call.arguments).err(),
+            PolicyDecision::Allow => step_tools.validate(&call.name, &call.arguments).err(),
             PolicyDecision::ApprovalRequired => unreachable!("handled above"),
         };
         // §12.3: file-mutating effects persist reconciliation evidence
@@ -2337,7 +2376,7 @@ impl<P: Provider> SessionRuntime<P> {
         // model-visibly instead of admitted blind.
         let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
             match crate::tool::reconciliation_evidence(
-                self.tools.cwd(),
+                step_tools.cwd(),
                 &call.name,
                 &call.arguments,
             )
@@ -2366,7 +2405,7 @@ impl<P: Provider> SessionRuntime<P> {
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: format!("tool:{}", call.name),
-            recovery_class: self.tools.recovery_class(&call.name),
+            recovery_class: step_tools.recovery_class(&call.name),
             effective_input: serde_json::json!({
                 "tool": call.name,
                 "arguments": call.arguments,
@@ -2413,7 +2452,7 @@ impl<P: Provider> SessionRuntime<P> {
             ));
         } else {
             self.operation_tool_calls += 1;
-            let target = target_summary(&self.tools, &call.name, &call.arguments);
+            let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
             let reconciliation = self
                 .operation
@@ -2425,7 +2464,7 @@ impl<P: Provider> SessionRuntime<P> {
                 .operation
                 .as_ref()
                 .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
-            self.spawn_tool_effect(effect_id, call, reconciliation);
+            self.spawn_tool_effect(effect_id, call, reconciliation, step_tools);
         }
         true
     }
@@ -2468,11 +2507,11 @@ impl<P: Provider> SessionRuntime<P> {
         effect_id: Option<EffectId>,
         call: ToolCall,
         reconciliation: Option<serde_json::Value>,
+        tools: ToolRegistry,
     ) {
         let Some(effect_id) = effect_id else {
             return;
         };
-        let tools = Arc::clone(&self.tools);
         let artifact_root = self.artifact_root.clone();
         let cancel = self
             .operation
@@ -3243,7 +3282,7 @@ fn build_commit_request(
     inbox_applied: Vec<InboxId>,
     usage: Vec<UsageRecord>,
 ) -> (CommitRequest, u64) {
-    let capability_snapshot = CapabilitySnapshot::new(staged.machine.frozen_tools().to_vec());
+    let capability_snapshot = staged.capability_snapshot.clone();
     let mut seq = next_entry_seq;
     let entries = entries
         .into_iter()

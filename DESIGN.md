@@ -195,6 +195,19 @@ Do not persist every streaming delta.
 
 Live events are presentation/observability signals and can be regenerated or resynchronized from a snapshot.
 
+Ion distinguishes three state classes:
+
+- **durable canonical authority**: semantic entries, accepted inbox work,
+  total operation state, exact effect intents/settlements, usage, model-step
+  records, context manifests, capability snapshots, approvals, child
+  lineage, and artifact metadata;
+- **durable auxiliary recovery state**: bounded assistant stream frames,
+  tool-progress checkpoints, and other explicitly non-authoritative recovery
+  aids; these never select a restart point or prove effect completion;
+- **ephemeral presentation/runtime state**: live deltas, TUI layout,
+  subscribers, provider clients, sockets, task handles, and in-memory
+  caches.
+
 ## P7. Model-visible context is a projection, not the source of truth
 
 The canonical local session contains semantic entries and context-defining resources. `ContextProjector` derives what a particular model sees at a particular step.
@@ -439,7 +452,10 @@ The durable fact that Ion is allowed/required to perform one repeat-sensitive ex
 
 ## CapabilitySnapshot
 
-The immutable set of tools/capabilities available to one model step.
+The immutable set of tools/capabilities available to one model step. Each
+provider-facing tool name is paired with an internal capability identity and
+generation. A call is resolved against the snapshot that produced it; a
+replacement with the same public name is not an implicit rebind.
 
 ## ContextManifest
 
@@ -680,8 +696,10 @@ Finished { completed | failed | cancelled | declined | indeterminate }
 ```
 
 A checkpoint MUST carry everything needed to rebuild the live machine on
-reopen: the total state, the frozen capability snapshot, the operation
-prompt, pending inbox ownership, and any pending effect intent.
+reopen: the total state, the current model-step capability snapshot, the
+operation prompt, pending inbox ownership, and any pending effect intent.
+The snapshot is refreshed at each safe model-step boundary; it is not an
+operation-wide freeze.
 `Suspended` is recoverable state, not a black hole: reopening rebuilds
 the operation from its checkpoint and surfaces it; what resuming it
 means is recovery policy (Step 3).
@@ -1476,8 +1494,14 @@ RAII guards and explicit owned collections should implement this structurally.
 ## 18.2 Immutable snapshots for operations
 
 A live registry may change, but a model step sees an immutable `CapabilitySnapshot`.
+The snapshot is created and persisted at each model-step boundary, not once
+for the whole operation.
 
 An extension/MCP server disappearing cannot mutate an already-started provider request.
+Each snapshot records a stable internal identity and generation. A planned
+call executes only when that identity is still the current capability; a
+missing or replaced generation produces a visible capability-loss/tool
+failure rather than dispatch by public-name coincidence.
 
 If a capability disappears before its planned call executes, the operation receives a visible capability-loss/tool failure and continues or fails according to policy.
 
@@ -1495,7 +1519,11 @@ MCP is a capability transport/provider, not an agent runtime.
 
 ## 19.1 Ownership
 
-`McpService` owns:
+`McpService` starts configured peers. The `ToolCatalog` owns the spawned
+supervisors for its lifetime and drains them on close; the peer monitor owns
+transport shutdown and is joined with a bounded deadline.
+
+The capability service owns:
 
 - server definitions;
 - process/transport lifecycle;
