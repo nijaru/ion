@@ -103,7 +103,8 @@ The contract is checked at the owning boundary:
 - Maintainer live dogfood is still required for the H0a acceptance verdict;
   automated green tests do not close that human gate.
 
-The remaining substrate work is keyboard/capability negotiation coverage,
-virtual-surface and resize evidence across real terminals, and any concrete
-maintainer defects. Do not claim terminal completion from automated gates
-alone.
+The automated substrate work is complete through keyboard/capability
+negotiation, synchronized output, virtual-surface, PTY restoration, and resize
+regressions. Real-terminal checks and the maintainer's H0a/H0b dogfood verdict
+remain open, as do any concrete defects found there. Do not claim terminal
+completion from automated gates alone.
