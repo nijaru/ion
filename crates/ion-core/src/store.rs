@@ -9,8 +9,8 @@
 //! the transaction fails (§10.2, §26.2).
 
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
 use rusqlite::Connection;
@@ -367,6 +367,9 @@ enum StoreCommand {
     LatestSession {
         reply: oneshot::Sender<Result<Option<SessionId>, StoreError>>,
     },
+    Shutdown {
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
     Usage {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
@@ -387,7 +390,8 @@ pub struct SessionStore {
     artifact_root: Option<Arc<Path>>,
     /// Test hook: fail the next mutating command (DESIGN.md §30.5).
     fail_next_write: Arc<AtomicBool>,
-    _join: Arc<JoinHandle<()>>,
+    join: Arc<Mutex<Option<JoinHandle<()>>>>,
+    closed: Arc<AtomicBool>,
 }
 
 impl std::fmt::Debug for SessionStore {
@@ -434,7 +438,11 @@ impl SessionStore {
             .name("ion-store".to_owned())
             .spawn(move || {
                 while let Some(command) = rx.blocking_recv() {
+                    let shutdown = matches!(&command, StoreCommand::Shutdown { .. });
                     handle_command(&mut connection, command, &fail_flag);
+                    if shutdown {
+                        break;
+                    }
                 }
             })
             .map_err(|err| StoreError::Sqlite(err.to_string()))?;
@@ -442,7 +450,8 @@ impl SessionStore {
             tx,
             artifact_root,
             fail_next_write,
-            _join: Arc::new(join),
+            join: Arc::new(Mutex::new(Some(join))),
+            closed: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -522,6 +531,30 @@ impl SessionStore {
             .await
     }
 
+    /// Stop the dedicated writer thread after all previously queued commands
+    /// finish, then join it. Hosts call this after every runtime using the
+    /// store has joined.
+    pub async fn close(&self) -> Result<(), StoreError> {
+        if self.closed.swap(true, Ordering::SeqCst) {
+            return Ok(());
+        }
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(StoreCommand::Shutdown { reply })
+            .map_err(|_| StoreError::Closed)?;
+        rx.await.map_err(|_| StoreError::Closed)??;
+        let join = self.join.lock().expect("store join poisoned").take();
+        if let Some(join) = join {
+            tokio::task::spawn_blocking(move || {
+                join.join()
+                    .map_err(|_| StoreError::Sqlite("store thread panicked".to_owned()))
+            })
+            .await
+            .map_err(|_| StoreError::Closed)??;
+        }
+        Ok(())
+    }
+
     /// Test hook (DESIGN.md §30.5): the next mutating command fails
     /// visibly and nothing is written.
     pub fn fail_next_write(&self) {
@@ -532,6 +565,9 @@ impl SessionStore {
         &self,
         build: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> StoreCommand,
     ) -> Result<T, StoreError> {
+        if self.closed.load(Ordering::Acquire) {
+            return Err(StoreError::Closed);
+        }
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(build(reply))
@@ -595,6 +631,9 @@ fn handle_command(
         }
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
+        }
+        StoreCommand::Shutdown { reply } => {
+            let _ = reply.send(Ok(()));
         }
         StoreCommand::UpsertAssistantFrame { frame, reply } => {
             let _ = reply.send(check_injected(fail_next_write).and_then(|()| {

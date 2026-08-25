@@ -109,13 +109,18 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let policy = policy_for(&cli.allow);
+    let store_for_shutdown = Arc::clone(&store);
     let config = acp::AcpConfig {
         make_provider,
         store,
         policy,
         trust_project: cli.trust_project,
     };
-    match acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await {
+    let result = acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await;
+    if let Err(err) = store_for_shutdown.close().await {
+        tracing::error!(error = %err, "failed to close the session store");
+    }
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(err) => {
             let _ = writeln!(io::stderr(), "acp: {err}");
@@ -307,7 +312,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let session = runtime.session();
     let result = tui::run(
         session.clone(),
-        store,
+        Arc::clone(&store),
         resume_session,
         settings.theme(),
         keymap,
@@ -327,13 +332,27 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     }
     match result {
         Ok(()) => {
-            let _ = runtime.join().await;
+            let join = runtime.join().await;
             tools.close().await;
+            if let Err(err) = store.close().await {
+                tracing::error!(error = %err, "failed to close the session store");
+                return ExitCode::FAILURE;
+            }
+            if let Err(err) = join {
+                tracing::error!(error = %err, "runtime join failed");
+                return ExitCode::FAILURE;
+            }
             ExitCode::SUCCESS
         }
         Err(err) => {
-            let _ = runtime.join().await;
+            let join = runtime.join().await;
             tools.close().await;
+            if let Err(close_err) = store.close().await {
+                tracing::error!(error = %close_err, "failed to close the session store");
+            }
+            if let Err(join_err) = join {
+                tracing::error!(error = %join_err, "runtime join failed");
+            }
             let _ = writeln!(io::stderr(), "{err}");
             ExitCode::FAILURE
         }
@@ -502,6 +521,10 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let shutdown = session.close().await;
     let join = runtime.join().await;
     tools.close().await;
+    store
+        .close()
+        .await
+        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     result?;
     shutdown?;
     join

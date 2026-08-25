@@ -2249,6 +2249,17 @@ fn store_refuses_a_database_from_a_newer_schema() {
 }
 
 #[tokio::test]
+async fn store_close_joins_writer_and_rejects_later_requests() {
+    let store = SessionStore::open_in_memory().expect("store");
+    store.close().await.expect("close store");
+    assert!(matches!(
+        store.latest_session().await,
+        Err(crate::store::StoreError::Closed)
+    ));
+    store.close().await.expect("idempotent close");
+}
+
+#[tokio::test]
 async fn settlement_must_match_a_pending_effect_of_the_operation() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(
