@@ -30,7 +30,7 @@ const SCHEMA_VERSION: i64 = 12;
 /// guarantees: a fresh database gets the current schema, and a database
 /// written by any other version — older dev build or newer Ion — is
 /// refused, never migrated and never silently reinterpreted (§26.3).
-fn apply_migrations(connection: &mut Connection) -> Result<(), StoreError> {
+fn ensure_schema(connection: &mut Connection) -> Result<(), StoreError> {
     let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
     if version == SCHEMA_VERSION {
         return Ok(());
@@ -456,7 +456,7 @@ impl SessionStore {
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
-        apply_migrations(&mut connection)?;
+        ensure_schema(&mut connection)?;
         let (tx, mut rx) = mpsc::channel(STORE_CAPACITY);
         let fail_next_write = Arc::new(AtomicBool::new(false));
         let fail_flag = Arc::clone(&fail_next_write);

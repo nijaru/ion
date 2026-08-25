@@ -1,6 +1,6 @@
 //! Tools, registry, executor, and core tool implementations.
 //!
-//! Tools are the runtime's "tool service" (see `ai/DESIGN.md`). A tool
+//! Tools are the runtime's "tool service" (see `DESIGN.md`). A tool
 //! exposes a [`ToolSpec`] (name, description, JSON-Schema input) and a
 //! [`Tool::call`] that produces a [`ToolOutcome`]. The [`ToolRegistry`]
 //! owns registered tools and validates arguments before dispatch.

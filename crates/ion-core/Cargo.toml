@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Ion runtime controller and print-mode contract"
+description = "Ion durable runtime, session, tool, and frontend contract"
 
 [dependencies]
 globset = "0.4.20"
