@@ -2609,6 +2609,53 @@ async fn effect_gate_crash_prefix_reopens_after_tool_execution() {
 }
 
 #[tokio::test]
+async fn effect_gate_close_waits_for_suspend_commit() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::CloseSuspendCommit);
+    let runtime = Runtime::start_with_effect_gate(
+        SharedLogProvider {
+            settle_delay: Duration::from_millis(250),
+            ..SharedLogProvider::default()
+        },
+        ToolRegistry::default(),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+
+    let close_session = session.clone();
+    let close = tokio::spawn(async move { close_session.close().await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("suspend gate reached");
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(matches!(
+        checkpoint.state,
+        OperationState::AssistantEffectPending
+    ));
+
+    gate.release();
+    close.await.expect("close task").expect("close");
+    runtime.join().await.expect("join");
+    let loaded = store.load(session_id).await.expect("load");
+    let (_, checkpoint) = &loaded.operations[0].latest;
+    assert!(matches!(checkpoint.state, OperationState::Suspended));
+}
+
+#[tokio::test]
 async fn crash_during_model_step_recovers_by_replay() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(
