@@ -332,41 +332,34 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         // The TUI died before its own close path; shut the actor down
         // or join would await a task waiting on this very handle.
         if let Err(err) = session.close().await {
-            tracing::warn!(error = %err, "failed to close the session after TUI failure");
+            tracing::error!(error = %err, "failed to close the session after TUI failure");
         }
     }
+
+    // Every exit path joins the runtime and closes its owned resources once.
+    // A successful UI run is successful only when all three cleanup steps
+    // complete; an already-failed UI still reports each cleanup failure.
+    let join = runtime.join().await;
+    let catalog_close = tools.close().await;
+    let store_close = store.close().await;
+    let mut cleanup_failed = false;
+    if let Err(err) = catalog_close {
+        cleanup_failed = true;
+        tracing::error!(error = %err, "failed to close the tool catalog");
+    }
+    if let Err(err) = store_close {
+        cleanup_failed = true;
+        tracing::error!(error = %err, "failed to close the session store");
+    }
+    if let Err(err) = join {
+        cleanup_failed = true;
+        tracing::error!(error = %err, "runtime join failed");
+    }
+
     match result {
-        Ok(()) => {
-            let join = runtime.join().await;
-            let catalog_close = tools.close().await;
-            let store_close = store.close().await;
-            if let Err(err) = catalog_close {
-                tracing::error!(error = %err, "failed to close the tool catalog");
-                return ExitCode::FAILURE;
-            }
-            if let Err(err) = store_close {
-                tracing::error!(error = %err, "failed to close the session store");
-                return ExitCode::FAILURE;
-            }
-            if let Err(err) = join {
-                tracing::error!(error = %err, "runtime join failed");
-                return ExitCode::FAILURE;
-            }
-            ExitCode::SUCCESS
-        }
+        Ok(()) if !cleanup_failed => ExitCode::SUCCESS,
+        Ok(()) => ExitCode::FAILURE,
         Err(err) => {
-            let join = runtime.join().await;
-            let catalog_close = tools.close().await;
-            let store_close = store.close().await;
-            if let Err(close_err) = catalog_close {
-                tracing::error!(error = %close_err, "failed to close the tool catalog");
-            }
-            if let Err(close_err) = store_close {
-                tracing::error!(error = %close_err, "failed to close the session store");
-            }
-            if let Err(join_err) = join {
-                tracing::error!(error = %join_err, "runtime join failed");
-            }
             let _ = writeln!(io::stderr(), "{err}");
             ExitCode::FAILURE
         }
