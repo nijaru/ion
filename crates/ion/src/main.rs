@@ -312,7 +312,6 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let session = runtime.session();
     let result = tui::run(
         session.clone(),
-        Arc::clone(&store),
         resume_session,
         settings.theme(),
         keymap,

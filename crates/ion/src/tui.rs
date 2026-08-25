@@ -8,7 +8,6 @@
 //! RAII owner, never scattered across widgets.
 
 use std::io::Write;
-use std::sync::Arc;
 
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
@@ -18,7 +17,6 @@ use unicode_width::UnicodeWidthStr as _;
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
-    SessionStore,
 };
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
@@ -1173,7 +1171,6 @@ pub fn setup_terminal() -> Result<TerminalSession, RuntimeError> {
 /// blocks rendering on provider/tool I/O (§22.2).
 pub async fn run(
     session: SessionHandle,
-    store: Arc<SessionStore>,
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
     keymap: KeyMap,
@@ -1235,21 +1232,6 @@ pub async fn run(
     // lines never change once appended (§22 line-diff model).
     let mut transcript = Transcript::new(term_w);
 
-    // Load only the entry boundary used to place the resume marker. The
-    // snapshot below remains the sole source for rendered durable history;
-    // mixing entry counts with rendered-line counts caused lag recovery to
-    // duplicate or drop resumed history.
-    let resume_entry_count = if let Some(session_id) = resume_session {
-        store
-            .load(session_id)
-            .await
-            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?
-            .entries
-            .len()
-    } else {
-        0
-    };
-
     // The EventStream is the sole terminal reader, so crossterm parses
     // cursor-position responses itself; blocking cursor queries (used
     // by Terminal::clear) cannot deadlock against key reads.
@@ -1263,6 +1245,7 @@ pub async fn run(
     state.thinking_visible = !host.hide_thinking_block;
     state.model_switching_available = switching_available;
     let (snapshot, mut events) = session.subscribe().await?;
+    let resume_entry_count = snapshot.reopen_entry_count.unwrap_or(0);
     // The session's durable selection is authoritative once subscribed;
     // a resumed session may have switched models in an earlier run.
     // Scripted launches keep the host's display fallback.
@@ -1532,8 +1515,10 @@ async fn dispatch(
             }
         },
         UiEffect::Cancel => {
-            if let Some(operation_id) = active_operation {
-                let _ = session.cancel(operation_id).await;
+            if let Some(operation_id) = active_operation
+                && let Err(err) = session.cancel(operation_id).await
+            {
+                notice(state, &format!("cancel failed: {err}"));
             }
         }
     }
@@ -1732,6 +1717,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            reopen_entry_count: None,
             operation: OperationStatus::Active {
                 operation_id: OperationId::generate(),
                 prompt: "do things".to_owned(),
@@ -1765,6 +1751,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            reopen_entry_count: None,
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
@@ -1799,6 +1786,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            reopen_entry_count: None,
             operation: OperationStatus::Active {
                 operation_id,
                 prompt: "do things".to_owned(),

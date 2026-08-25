@@ -2226,6 +2226,11 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
         OperationStatus::Idle,
         "a settled suspended operation must not block the session"
     );
+    assert_eq!(
+        snapshot.reopen_entry_count,
+        Some(before.entries.len()),
+        "the runtime owns the reopen boundary used by frontends"
+    );
     // The transcript reproduced exactly what was committed before close.
     assert_eq!(
         entry_kinds(

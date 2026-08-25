@@ -297,6 +297,11 @@ pub struct SessionSnapshot {
     pub indeterminate: Option<IndeterminateWarning>,
     pub operation: OperationStatus,
     pub entries: Vec<SessionEntry>,
+    /// Number of durable entries present when this runtime was reopened.
+    /// Frontends use it to place a resume boundary without reading the
+    /// session store directly. `None` means this runtime created a new
+    /// session.
+    pub reopen_entry_count: Option<usize>,
     /// The session's durable model selection; authoritative across
     /// resume (§14.8).
     pub model_ref: String,
@@ -968,6 +973,9 @@ struct SessionRuntime<P> {
     closed: bool,
     /// True when reopened from the store; the session row already exists.
     resumed: bool,
+    /// Durable entry count at the reopen boundary for frontend resume
+    /// markers. This is presentation metadata, not session authority.
+    reopen_entry_count: Option<usize>,
 }
 
 impl<P: Provider> SessionRuntime<P> {
@@ -991,6 +999,7 @@ impl<P: Provider> SessionRuntime<P> {
             budget,
             parent,
         } = deps;
+        let reopen_entry_count = loaded.as_ref().map(|loaded| loaded.entries.len());
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
@@ -1040,6 +1049,7 @@ impl<P: Provider> SessionRuntime<P> {
             indeterminate_warning: None,
             closed: false,
             resumed: false,
+            reopen_entry_count,
         };
         if let Some(loaded) = loaded {
             runtime.resumed = true;
@@ -3323,6 +3333,7 @@ impl<P: Provider> SessionRuntime<P> {
             cursor: self.cursor,
             runtime_instance_id: self.runtime_instance_id,
             indeterminate: self.indeterminate_warning.clone(),
+            reopen_entry_count: self.reopen_entry_count,
             operation: match &self.operation {
                 None => OperationStatus::Idle,
                 Some(active) => OperationStatus::Active {
