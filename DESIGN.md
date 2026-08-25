@@ -941,6 +941,23 @@ Frames are ordered snapshots, not a delta journal. They are never treated as
 completion evidence and are removed in the same transaction that settles the
 owning model effect.
 
+### `tool_progress`
+
+Bounded auxiliary checkpoints for long-running tools use the same shape:
+
+```text
+effect_id
+session_id
+operation_id
+call_id
+output tail/preview
+updated_at
+```
+
+A tool controls its checkpoint cadence (the initial bash cadence is about two
+seconds). Progress is drained through the runtime's bounded tool channel,
+never treated as settlement, and deleted with the consuming tool effect.
+
 ### `context_manifests` / resources
 
 Store context-defining material only when it changes, preferably content-addressed:

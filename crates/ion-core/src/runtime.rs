@@ -36,9 +36,11 @@ use crate::session::{
 use crate::store::{
     AssistantFrame, CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord,
     InboxRecord, InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect,
-    StoreError, UsageRecord,
+    StoreError, ToolProgressCheckpoint, UsageRecord,
 };
-use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolRegistry, ToolResult, ToolSpec};
+use crate::tool::{
+    RecoveryClass, ToolCall, ToolCatalog, ToolProgress, ToolRegistry, ToolResult, ToolSpec,
+};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
@@ -48,7 +50,19 @@ const ASSISTANT_FRAME_MAX_BYTES: usize = 64 * 1024;
 /// grows the runtime; overflow surfaces as a reliable lag error.
 const SUBSCRIBER_CAPACITY: usize = 64;
 type SubscribeReply = Result<(SessionSnapshot, EventSubscription), CommandError>;
-type ToolSettlement = (EffectId, ToolResult);
+enum ToolSignal {
+    Progress {
+        effect_id: EffectId,
+        call_id: u64,
+        output: String,
+    },
+    Settled {
+        effect_id: EffectId,
+        result: ToolResult,
+    },
+}
+
+type ToolSettlement = ToolSignal;
 
 /// Keep auxiliary recovery output bounded without splitting UTF-8.
 fn bounded_frame_text(text: &str) -> String {
@@ -1449,6 +1463,11 @@ impl<P: Provider> SessionRuntime<P> {
                     .as_ref()
                     .map(|effect| vec![effect.id])
                     .unwrap_or_default(),
+                tool_progress_delete: payload
+                    .open_effect
+                    .as_ref()
+                    .map(|effect| vec![effect.id])
+                    .unwrap_or_default(),
             };
             if let Err(err) = self.store.commit(request).await {
                 error!(session = %self.session_id, error = %err, "could not settle a suspended operation");
@@ -1631,7 +1650,7 @@ impl<P: Provider> SessionRuntime<P> {
                             effective_input: open.effective_input.clone(),
                             attempt: open.attempt + 1,
                         };
-                        let (request, new_entry_seq) = build_commit_request(
+                        let (mut request, new_entry_seq) = build_commit_request(
                             self.session_id,
                             &staged,
                             staged.state_seq + 1,
@@ -1644,6 +1663,7 @@ impl<P: Provider> SessionRuntime<P> {
                             Vec::new(),
                             Vec::new(),
                         );
+                        request.tool_progress_delete.push(open.id);
                         if let Err(err) = self.store.commit(request).await {
                             self.fail_operation_on_persistence(err).await;
                             return;
@@ -1766,7 +1786,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     attempt: open.attempt + 1,
                                 };
                                 let effect_id = effect.id;
-                                let (request, new_entry_seq) = build_commit_request(
+                                let (mut request, new_entry_seq) = build_commit_request(
                                     self.session_id,
                                     &staged,
                                     staged.state_seq + 1,
@@ -1779,6 +1799,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                     Vec::new(),
                                 );
+                                request.tool_progress_delete.push(open.id);
                                 if let Err(err) = self.store.commit(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
@@ -1829,7 +1850,7 @@ impl<P: Provider> SessionRuntime<P> {
                                         "recovered": "reconciled_postimage_match",
                                     }),
                                 }];
-                                let (request, new_entry_seq) = build_commit_request(
+                                let (mut request, new_entry_seq) = build_commit_request(
                                     self.session_id,
                                     &staged,
                                     staged.state_seq + 1,
@@ -1842,6 +1863,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                     Vec::new(),
                                 );
+                                request.tool_progress_delete.push(open.id);
                                 if let Err(err) = self.store.commit(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
@@ -1866,7 +1888,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     .apply(Transition::SettleIndeterminate)
                                     .expect("settle an unresolved effect as indeterminate");
                                 let indeterminate = vec![open.id];
-                                let (request, new_entry_seq) = build_commit_request(
+                                let (mut request, new_entry_seq) = build_commit_request(
                                     self.session_id,
                                     &staged,
                                     staged.state_seq + 1,
@@ -1879,6 +1901,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                     Vec::new(),
                                 );
+                                request.tool_progress_delete.push(open.id);
                                 if let Err(err) = self.store.commit(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
@@ -2482,14 +2505,14 @@ impl<P: Provider> SessionRuntime<P> {
         if let Some(message) = denial {
             // The denial settles through the normal tool-result path; the
             // tool never started, so no ToolStarted event is emitted.
-            let _ = self.tool_tx.try_send((
+            let _ = self.tool_tx.try_send(ToolSignal::Settled {
                 effect_id,
-                ToolResult::Err {
+                result: ToolResult::Err {
                     call_id: call.call_id,
                     error: message,
                     artifact: None,
                 },
-            ));
+            });
         } else {
             self.operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
@@ -2579,6 +2602,7 @@ impl<P: Provider> SessionRuntime<P> {
             .map(|active| active.cancel.child_token())
             .unwrap_or_else(|| self.cancel_root.child_token());
         let tool_tx = self.tool_tx.clone();
+        let (progress_tx, mut progress_rx) = mpsc::channel::<ToolProgress>(8);
         let ToolCall {
             call_id,
             name,
@@ -2587,17 +2611,34 @@ impl<P: Provider> SessionRuntime<P> {
         } = call;
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
-            let outcome = tools
-                .execute_with_reconciliation(
-                    &name,
-                    &arguments,
-                    reconciliation.as_ref(),
-                    artifact_root.as_deref(),
-                    cancel,
-                )
-                .await;
+            let execute = tools.execute_with_reconciliation(
+                &name,
+                &arguments,
+                reconciliation.as_ref(),
+                artifact_root.as_deref(),
+                cancel,
+                Some(progress_tx),
+            );
+            let forward = async {
+                while let Some(progress) = progress_rx.recv().await {
+                    if tool_tx
+                        .send(ToolSignal::Progress {
+                            effect_id,
+                            call_id,
+                            output: progress.output,
+                        })
+                        .await
+                        .is_err()
+                    {
+                        break;
+                    }
+                }
+            };
+            let (outcome, ()) = tokio::join!(execute, forward);
             let result = ToolResult::from_outcome(call_id, outcome);
-            let _ = tool_tx.send((effect_id, result)).await;
+            let _ = tool_tx
+                .send(ToolSignal::Settled { effect_id, result })
+                .await;
         });
     }
 
@@ -2915,7 +2956,33 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     async fn handle_tool_result(&mut self, settlement: ToolSettlement) {
-        let (effect_id, result) = settlement;
+        let (effect_id, result) = match settlement {
+            ToolSignal::Settled { effect_id, result } => (effect_id, result),
+            ToolSignal::Progress {
+                effect_id,
+                call_id,
+                output,
+            } => {
+                let Some(active) = self.operation.as_ref() else {
+                    return;
+                };
+                if active.open_effect.as_ref().map(|effect| effect.id) != Some(effect_id) {
+                    return;
+                }
+                let operation_id = active.machine.operation_id();
+                let progress = ToolProgressCheckpoint {
+                    effect_id,
+                    session_id: self.session_id,
+                    operation_id,
+                    call_id,
+                    output,
+                };
+                if let Err(err) = self.store.upsert_tool_progress(progress).await {
+                    self.fail_operation_on_persistence(err).await;
+                }
+                return;
+            }
+        };
         let call_id = result.call_id();
         let is_error = matches!(&result, ToolResult::Err { .. });
         let preview = result.display_preview();
@@ -2940,7 +3007,7 @@ impl<P: Provider> SessionRuntime<P> {
             id: effect_id,
             settlement: serde_json::json!({ "output": result.model_text() }),
         }];
-        let (request, new_entry_seq) = build_commit_request(
+        let (mut request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
@@ -2953,6 +3020,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
+        request.tool_progress_delete.push(effect_id);
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
@@ -3388,6 +3456,7 @@ fn build_commit_request(
         usage,
         context_manifests: Vec::new(),
         assistant_frames_delete: Vec::new(),
+        tool_progress_delete: Vec::new(),
     };
     (request, seq)
 }

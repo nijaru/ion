@@ -1383,6 +1383,46 @@ async fn bash_runs_command_and_reports_nonzero_exit() {
 }
 
 #[tokio::test]
+async fn bash_progress_checkpoint_is_bounded_and_cleared() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::tool("bash", json!({"command": "sleep 1 && echo done"})),
+            ScriptedMessage::text("finished"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("run").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::ToolStarted { .. }) {
+            break;
+        }
+    }
+    sleep(Duration::from_millis(100)).await;
+    let loaded = store.load(runtime.session_id()).await.expect("load");
+    assert_eq!(loaded.tool_progress.len(), 1);
+    assert!(loaded.tool_progress[0].output.len() <= 16 * 1024);
+    collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        store
+            .load(runtime.session_id())
+            .await
+            .expect("load after settle")
+            .tool_progress
+            .is_empty()
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn bash_cancel_kills_long_running_command() {
     let registry = ToolRegistry::default();
     let cancel = tokio_util::sync::CancellationToken::new();
@@ -2307,6 +2347,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
             usage: Vec::new(),
             context_manifests: Vec::new(),
             assistant_frames_delete: Vec::new(),
+            tool_progress_delete: Vec::new(),
         })
         .await
         .expect_err("ghost settlement must fail");
@@ -3029,6 +3070,7 @@ mod reconcile {
                 Some(&evidence),
                 None,
                 tokio_util::sync::CancellationToken::new(),
+                None,
             )
             .await;
         assert!(
@@ -3227,6 +3269,7 @@ mod reconcile {
                 usage: Vec::new(),
                 context_manifests: Vec::new(),
                 assistant_frames_delete: Vec::new(),
+                tool_progress_delete: Vec::new(),
             })
             .await
             .expect("commit pending write");

@@ -37,6 +37,15 @@ use crate::process::{ProcessGuard, SandboxMode};
 /// Identifier for an in-flight tool call. Monotonic per provider.
 pub type ToolCallId = u64;
 
+/// Bounded live output emitted by long-running tools. It is auxiliary
+/// progress, never a semantic result or completion signal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolProgress {
+    pub output: String,
+}
+
+pub type ToolProgressSender = mpsc::Sender<ToolProgress>;
+
 /// Hard upper bound for the semantic text sent to the model for one tool
 /// result. The complete byte stream, when available, is retained separately
 /// as a bounded artifact.
@@ -293,6 +302,15 @@ pub trait Tool: Send + Sync {
         arguments: Value,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>>;
+
+    fn call_with_progress<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+        _progress: Option<ToolProgressSender>,
+    ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+        self.call(arguments, cancel)
+    }
 }
 
 /// A callable tool wrapped as a trait object with its spec cached.
@@ -694,6 +712,17 @@ impl ToolRegistry {
         arguments: &Value,
         cancel: CancellationToken,
     ) -> ToolOutcome {
+        self.execute_with_progress(name, arguments, cancel, None)
+            .await
+    }
+
+    pub(crate) async fn execute_with_progress(
+        &self,
+        name: &str,
+        arguments: &Value,
+        cancel: CancellationToken,
+        progress: Option<ToolProgressSender>,
+    ) -> ToolOutcome {
         let entry = match self.entries.get(name) {
             Some(e) => e,
             None => return ToolOutcome::error(format!("unknown tool: {name}")),
@@ -701,7 +730,11 @@ impl ToolRegistry {
         if let Err(msg) = self.validate(name, arguments) {
             return ToolOutcome::error(msg);
         }
-        entry.tool.as_ref().call(arguments.clone(), cancel).await
+        entry
+            .tool
+            .as_ref()
+            .call_with_progress(arguments.clone(), cancel, progress)
+            .await
     }
 
     /// Execute a native mutation with the reconciliation evidence that was
@@ -715,11 +748,14 @@ impl ToolRegistry {
         reconciliation: Option<&Value>,
         artifact_root: Option<&Path>,
         cancel: CancellationToken,
+        progress: Option<ToolProgressSender>,
     ) -> ToolOutcome {
         if !matches!(name, "write" | "edit" | "bash")
             || (reconciliation.is_none() && artifact_root.is_none())
         {
-            return self.execute(name, arguments, cancel).await;
+            return self
+                .execute_with_progress(name, arguments, cancel, progress)
+                .await;
         }
         let mut enriched = arguments.clone();
         if let Some(object) = enriched.as_object_mut() {
@@ -733,7 +769,8 @@ impl ToolRegistry {
                 );
             }
         }
-        self.execute(name, &enriched, cancel).await
+        self.execute_with_progress(name, &enriched, cancel, progress)
+            .await
     }
 }
 
@@ -1768,6 +1805,15 @@ impl Tool for BashTool {
         arguments: Value,
         cancel: CancellationToken,
     ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+        self.call_with_progress(arguments, cancel, None)
+    }
+
+    fn call_with_progress<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+        progress: Option<ToolProgressSender>,
+    ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
         Box::pin(async move {
             let command = match arguments.get("command").and_then(|v| v.as_str()) {
                 Some(c) => c.to_owned(),
@@ -1777,12 +1823,13 @@ impl Tool for BashTool {
                 .get("__ion_artifact_root")
                 .and_then(Value::as_str)
                 .map(PathBuf::from);
-            run_shell(
+            run_shell_with_progress(
                 &self.cwd,
                 &command,
                 self.sandbox,
                 artifact_root.as_deref(),
                 cancel,
+                progress,
             )
             .await
         })
@@ -2034,6 +2081,7 @@ async fn collect_process_output(
     stdout: Option<tokio::process::ChildStdout>,
     stderr: Option<tokio::process::ChildStderr>,
     artifact_root: Option<PathBuf>,
+    mut progress: Option<ToolProgressSender>,
 ) -> CollectedOutput {
     let (tx, mut rx) = mpsc::channel(8);
     let mut readers = Vec::with_capacity(2);
@@ -2046,8 +2094,21 @@ async fn collect_process_output(
     drop(tx);
 
     let mut spool = OutputSpool::new(artifact_root);
-    while let Some(chunk) = rx.recv().await {
-        spool.append(&chunk).await;
+    let mut progress_tick = tokio::time::interval(std::time::Duration::from_secs(2));
+    progress_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            chunk = rx.recv() => match chunk {
+                Some(chunk) => spool.append(&chunk).await,
+                None => break,
+            },
+            _ = progress_tick.tick(), if progress.is_some() => {
+                let update = ToolProgress { output: spool.preview.render() };
+                if progress.as_mut().expect("progress sender present").send(update).await.is_err() {
+                    progress = None;
+                }
+            }
+        }
     }
     for reader in readers {
         match reader.await {
@@ -2070,12 +2131,24 @@ async fn collect_process_output(
 /// Spawn a shell command under cwd, killing the child on cancel.
 /// Model-visible output is bounded; larger raw output is atomically
 /// published as a bounded artifact when the session store provides a root.
+#[cfg(test)]
 async fn run_shell(
     cwd: &Path,
     command: &str,
     sandbox: SandboxMode,
     artifact_root: Option<&Path>,
     cancel: CancellationToken,
+) -> ToolOutcome {
+    run_shell_with_progress(cwd, command, sandbox, artifact_root, cancel, None).await
+}
+
+async fn run_shell_with_progress(
+    cwd: &Path,
+    command: &str,
+    sandbox: SandboxMode,
+    artifact_root: Option<&Path>,
+    cancel: CancellationToken,
+    progress: Option<ToolProgressSender>,
 ) -> ToolOutcome {
     let mut cmd = match sandbox.command(cwd, "sh", &["-c", command]) {
         Ok(command) => command,
@@ -2098,6 +2171,7 @@ async fn run_shell(
         stdout,
         stderr,
         artifact_root.map(Path::to_path_buf),
+        progress,
     ));
 
     tokio::select! {

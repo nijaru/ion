@@ -161,6 +161,15 @@ CREATE TABLE IF NOT EXISTS assistant_frames (
     text TEXT NOT NULL,
     thinking TEXT NOT NULL,
     updated_at INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS tool_progress (
+    effect_id TEXT PRIMARY KEY REFERENCES effects(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    operation_id TEXT NOT NULL REFERENCES operations(id),
+    call_id INTEGER NOT NULL,
+    output TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
 )
 ";
 
@@ -231,6 +240,16 @@ pub struct AssistantFrame {
     pub thinking: String,
 }
 
+/// Bounded auxiliary output for an in-flight tool effect.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolProgressCheckpoint {
+    pub effect_id: EffectId,
+    pub session_id: SessionId,
+    pub operation_id: OperationId,
+    pub call_id: u64,
+    pub output: String,
+}
+
 /// One settled effect: the typed outcome is stored with the effect row
 /// so recovery can classify the crash window (DESIGN.md §12.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -279,6 +298,8 @@ pub struct CommitRequest {
     pub context_manifests: Vec<crate::context::ContextManifest>,
     /// Auxiliary assistant frames removed with settled model effects.
     pub assistant_frames_delete: Vec<EffectId>,
+    /// Auxiliary tool progress removed with settled tool effects.
+    pub tool_progress_delete: Vec<EffectId>,
 }
 
 /// One persisted token-usage row (DESIGN.md §27.2).
@@ -310,6 +331,7 @@ pub struct LoadedSession {
     pub operations: Vec<LoadedOperation>,
     pub pending_inbox: Vec<InboxRecord>,
     pub assistant_frames: Vec<AssistantFrame>,
+    pub tool_progress: Vec<ToolProgressCheckpoint>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -376,6 +398,10 @@ enum StoreCommand {
     },
     UpsertAssistantFrame {
         frame: AssistantFrame,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    UpsertToolProgress {
+        progress: ToolProgressCheckpoint,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
 }
@@ -531,6 +557,14 @@ impl SessionStore {
             .await
     }
 
+    pub async fn upsert_tool_progress(
+        &self,
+        progress: ToolProgressCheckpoint,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::UpsertToolProgress { progress, reply })
+            .await
+    }
+
     /// Stop the dedicated writer thread after all previously queued commands
     /// finish, then join it. Hosts call this after every runtime using the
     /// store has joined.
@@ -640,7 +674,35 @@ fn handle_command(
                 upsert_assistant_frame(connection, &frame).map_err(StoreError::from)
             }));
         }
+        StoreCommand::UpsertToolProgress { progress, reply } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                upsert_tool_progress(connection, &progress).map_err(StoreError::from)
+            }));
+        }
     }
+}
+
+fn upsert_tool_progress(
+    connection: &mut Connection,
+    progress: &ToolProgressCheckpoint,
+) -> Result<(), rusqlite::Error> {
+    connection.execute(
+        "INSERT INTO tool_progress (
+            effect_id, session_id, operation_id, call_id, output, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+         ON CONFLICT(effect_id) DO UPDATE SET
+            output = excluded.output,
+            updated_at = excluded.updated_at",
+        rusqlite::params![
+            progress.effect_id.as_uuid().to_string(),
+            progress.session_id.as_uuid().to_string(),
+            progress.operation_id.as_uuid().to_string(),
+            progress.call_id as i64,
+            progress.output,
+            now_ms(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn upsert_assistant_frame(
@@ -1005,6 +1067,12 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             rusqlite::params![effect_id.as_uuid().to_string()],
         )?;
     }
+    for effect_id in &request.tool_progress_delete {
+        tx.execute(
+            "DELETE FROM tool_progress WHERE effect_id = ?1",
+            rusqlite::params![effect_id.as_uuid().to_string()],
+        )?;
+    }
     tx.commit()?;
     Ok(())
 }
@@ -1273,12 +1341,35 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         });
     }
 
+    let mut statement = connection.prepare(
+        "SELECT effect_id, operation_id, call_id, output
+         FROM tool_progress WHERE session_id = ?1 ORDER BY updated_at",
+    )?;
+    let mut tool_progress = Vec::new();
+    let mut progress_rows = statement.query(rusqlite::params![id])?;
+    while let Some(row) = progress_rows.next()? {
+        let effect_id: String = row.get(0)?;
+        let operation_id: String = row.get(1)?;
+        let effect_id = Uuid::parse_str(&effect_id)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+        let operation_id = Uuid::parse_str(&operation_id)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+        tool_progress.push(ToolProgressCheckpoint {
+            effect_id: EffectId::from_uuid(effect_id),
+            session_id,
+            operation_id: OperationId::from_uuid(operation_id),
+            call_id: row.get::<_, i64>(2)? as u64,
+            output: row.get(3)?,
+        });
+    }
+
     Ok(LoadedSession {
         session,
         entries,
         operations,
         pending_inbox,
         assistant_frames,
+        tool_progress,
     })
 }
 
