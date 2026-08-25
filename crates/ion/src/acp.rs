@@ -229,14 +229,22 @@ where
         }
     }
 
+    let mut shutdown_error = None;
     for (_, session) in sessions.drain() {
         if let Err(err) = session.handle.close().await {
-            tracing::warn!(error = %err, "failed to close an ACP session at shutdown");
+            tracing::error!(error = %err, "failed to close an ACP session at shutdown");
+            shutdown_error.get_or_insert_with(|| format!("ACP session close failed: {err}"));
         }
-        session.catalog.close().await;
+        if let Err(err) = session.catalog.close().await {
+            tracing::error!(error = %err, "failed to close an ACP tool catalog at shutdown");
+            shutdown_error.get_or_insert_with(|| format!("ACP tool catalog close failed: {err}"));
+        }
     }
     prompt_tasks.shutdown().await;
-    Ok(())
+    match shutdown_error {
+        Some(err) => Err(std::io::Error::other(err)),
+        None => Ok(()),
+    }
 }
 
 /// Outcome of one pumped prompt turn.

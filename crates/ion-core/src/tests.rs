@@ -4512,7 +4512,7 @@ async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
         .await;
     assert!(outcome.is_error);
     assert!(outcome.output.contains("forced failure"));
-    catalog.close().await;
+    catalog.close().await.expect("catalog close");
     assert!(catalog.get("fake__echo").is_none());
 }
 

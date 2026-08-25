@@ -286,8 +286,13 @@ where
         Err(_) => {
             let _ = session.close().await;
             let _ = runtime.join().await;
-            catalog.close().await;
-            return format!("child failed: could not subscribe ({child_id})");
+            let catalog_error = catalog.close().await.err();
+            return match catalog_error {
+                Some(err) => format!(
+                    "child failed: could not subscribe; catalog close error: {err} ({child_id})"
+                ),
+                None => format!("child failed: could not subscribe ({child_id})"),
+            };
         }
     };
     let operation_id = match session.submit_if_idle(prompt).await {
@@ -295,8 +300,13 @@ where
         Err(_) => {
             let _ = session.close().await;
             let _ = runtime.join().await;
-            catalog.close().await;
-            return format!("child failed: submit rejected ({child_id})");
+            let catalog_error = catalog.close().await.err();
+            return match catalog_error {
+                Some(err) => format!(
+                    "child failed: submit rejected; catalog close error: {err} ({child_id})"
+                ),
+                None => format!("child failed: submit rejected ({child_id})"),
+            };
         }
     };
 
@@ -318,7 +328,9 @@ where
     if let Err(err) = join_result {
         return format!("child failed: runtime join error: {err} [child session: {child_id}]");
     }
-    catalog.close().await;
+    if let Err(err) = catalog.close().await {
+        return format!("child failed: catalog close error: {err} [child session: {child_id}]");
+    }
     match terminal {
         ChildTerminal::Completed(text) => {
             format!("{text}\n\n[child session: {child_id}]")

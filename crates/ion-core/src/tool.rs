@@ -796,6 +796,15 @@ struct CatalogLifetime {
     tasks: Mutex<Option<JoinSet<()>>>,
 }
 
+/// Failure while joining peer supervisors owned by a tool catalog.
+#[derive(Debug, thiserror::Error)]
+pub enum ToolCatalogError {
+    #[error("tool supervisor task failed during shutdown: {0}")]
+    TaskFailed(String),
+    #[error("tool supervisor tasks did not drain before the shutdown deadline")]
+    DrainTimeout,
+}
+
 impl CatalogLifetime {
     fn spawn<F>(&self, task: F) -> bool
     where
@@ -815,29 +824,28 @@ impl CatalogLifetime {
         true
     }
 
-    async fn shutdown(&self) {
+    async fn shutdown(&self) -> Result<(), ToolCatalogError> {
         self.cancel.cancel();
         let Some(mut tasks) = self.tasks.lock().expect("tool catalog poisoned").take() else {
-            return;
+            return Ok(());
         };
 
         let drain = async {
+            let mut first_error = None;
             while let Some(result) = tasks.join_next().await {
                 if let Err(err) = result {
-                    tracing::warn!(error = %err, "tool peer supervisor failed during shutdown");
+                    first_error.get_or_insert_with(|| err.to_string());
                 }
             }
+            first_error
         };
-        if tokio::time::timeout(PEER_DRAIN_TIMEOUT, drain)
-            .await
-            .is_err()
-        {
-            tracing::warn!("tool peer supervisors did not drain before shutdown deadline");
-            tasks.abort_all();
-            while let Some(result) = tasks.join_next().await {
-                if let Err(err) = result {
-                    tracing::debug!(error = %err, "aborted tool peer supervisor");
-                }
+        match tokio::time::timeout(PEER_DRAIN_TIMEOUT, drain).await {
+            Ok(Some(err)) => Err(ToolCatalogError::TaskFailed(err)),
+            Ok(None) => Ok(()),
+            Err(_) => {
+                tasks.abort_all();
+                while tasks.join_next().await.is_some() {}
+                Err(ToolCatalogError::DrainTimeout)
             }
         }
     }
@@ -1079,8 +1087,8 @@ impl ToolCatalog {
     /// Stop and drain all MCP and extension peer supervisors owned by this
     /// catalog. Call this before dropping the host's last catalog handle so
     /// subprocess cleanup is observable rather than relying on task abort.
-    pub async fn close(&self) {
-        self.lifetime.shutdown().await;
+    pub async fn close(&self) -> Result<(), ToolCatalogError> {
+        self.lifetime.shutdown().await
     }
 
     /// Execute against the current snapshot: a scope removed after
@@ -2582,6 +2590,27 @@ mod catalog_tests {
             "{}",
             outcome.output
         );
+    }
+
+    #[tokio::test]
+    async fn close_reports_supervisor_failure_and_is_idempotent() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        let task = catalog
+            .lifetime
+            .tasks
+            .lock()
+            .expect("catalog lifetime")
+            .as_mut()
+            .expect("catalog tasks")
+            .spawn(std::future::pending::<()>());
+        task.abort();
+
+        let error = catalog
+            .close()
+            .await
+            .expect_err("task failure must surface");
+        assert!(matches!(error, ToolCatalogError::TaskFailed(_)));
+        catalog.close().await.expect("a second close is a no-op");
     }
 }
 
