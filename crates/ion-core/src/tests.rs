@@ -2295,6 +2295,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
             inbox_applied: Vec::new(),
             usage: Vec::new(),
             context_manifests: Vec::new(),
+            assistant_frames_delete: Vec::new(),
         })
         .await
         .expect_err("ghost settlement must fail");
@@ -2321,20 +2322,35 @@ async fn wait_for_state(session: &SessionHandle, predicate: impl Fn(&OperationSt
 async fn crash_during_model_step_recovers_by_replay() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(
-        ScriptedProvider::new(vec![ScriptedMessage::delayed(
-            Duration::from_secs(30),
-            "never arrives",
-        )]),
+        SharedLogProvider {
+            settle_delay: Duration::from_secs(30),
+            ..SharedLogProvider::default()
+        },
         ToolRegistry::default(),
         store.clone(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit_if_idle("goal").await.expect("submit");
-    wait_for_state(&session, |state| {
-        matches!(state, OperationState::AssistantEffectPending)
-    })
-    .await;
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    assert_eq!(
+        store
+            .load(session_id)
+            .await
+            .expect("load")
+            .assistant_frames
+            .len(),
+        1
+    );
 
     // Process loss mid-model-step: no close, no settlement.
     runtime.crash();
@@ -2371,6 +2387,7 @@ async fn crash_during_model_step_recovers_by_replay() {
         checkpoint.state,
         OperationState::Finished(OperationOutcome::Completed)
     );
+    assert!(loaded.assistant_frames.is_empty());
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
@@ -3198,6 +3215,7 @@ mod reconcile {
                 inbox_applied: Vec::new(),
                 usage: Vec::new(),
                 context_manifests: Vec::new(),
+                assistant_frames_delete: Vec::new(),
             })
             .await
             .expect("commit pending write");

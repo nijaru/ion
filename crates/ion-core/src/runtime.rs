@@ -34,20 +34,35 @@ use crate::session::{
     SessionEntry, Transition,
 };
 use crate::store::{
-    CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
-    InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect, StoreError,
-    UsageRecord,
+    AssistantFrame, CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord,
+    InboxRecord, InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect,
+    StoreError, UsageRecord,
 };
 use crate::tool::{RecoveryClass, ToolCall, ToolCatalog, ToolRegistry, ToolResult, ToolSpec};
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
 const INDETERMINATE_MESSAGE: &str = "external effect is indeterminate; inspect it before retrying";
+const ASSISTANT_FRAME_MAX_BYTES: usize = 64 * 1024;
 /// Broadcast buffer per subscriber (§21.4): a slow UI never blocks or
 /// grows the runtime; overflow surfaces as a reliable lag error.
 const SUBSCRIBER_CAPACITY: usize = 64;
 type SubscribeReply = Result<(SessionSnapshot, EventSubscription), CommandError>;
 type ToolSettlement = (EffectId, ToolResult);
+
+/// Keep auxiliary recovery output bounded without splitting UTF-8.
+fn bounded_frame_text(text: &str) -> String {
+    const MARKER: &str = "[earlier output truncated]\n";
+    if text.len() <= ASSISTANT_FRAME_MAX_BYTES {
+        return text.to_owned();
+    }
+    let content_limit = ASSISTANT_FRAME_MAX_BYTES.saturating_sub(MARKER.len());
+    let mut start = text.len().saturating_sub(content_limit);
+    while !text.is_char_boundary(start) {
+        start += 1;
+    }
+    format!("{MARKER}{}", &text[start..])
+}
 
 /// One-line display summary of a call's canonical target (best
 /// effort; None when canonicalization fails — the denial surfaces
@@ -808,6 +823,8 @@ struct SessionRuntime<P> {
     /// Live reasoning text for the current step; cleared at settlement.
     /// Display-only: thinking is never durable assistant content.
     draft_thinking: String,
+    /// Monotonic frame sequence for the current assistant effect.
+    assistant_frame_seq: u64,
     draft_calls: Vec<ToolCall>,
     /// Token usage buffered from the live model step; persisted at the
     /// settlement boundary (DESIGN.md §27.2).
@@ -908,6 +925,7 @@ impl<P: Provider> SessionRuntime<P> {
             queued_operations: Vec::new(),
             draft_text: String::new(),
             draft_thinking: String::new(),
+            assistant_frame_seq: 0,
             draft_calls: Vec::new(),
             draft_usage: None,
             last_context_tokens: None,
@@ -936,6 +954,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// sequence, and — for a non-terminal operation — the complete
     /// machine, its pending inbox, and its pending effect intent.
     fn restore_from(&mut self, loaded: LoadedSession) {
+        let assistant_frames = loaded.assistant_frames;
         self.selected_model_ref = loaded.session.initial_model_ref.clone();
         let mut max_seq = 0;
         for (seq, entry) in loaded.entries {
@@ -1011,6 +1030,16 @@ impl<P: Provider> SessionRuntime<P> {
                     .map(|item| item.id)
                     .collect(),
             };
+            if matches!(payload.state, OperationState::AssistantEffectPending)
+                && let Some(effect_id) = payload.open_effect.as_ref().map(|effect| effect.id)
+                && let Some(frame) = assistant_frames.iter().find(|frame| {
+                    frame.operation_id == operation.id && frame.effect_id == effect_id
+                })
+            {
+                self.draft_text = frame.text.clone();
+                self.draft_thinking = frame.thinking.clone();
+                self.assistant_frame_seq = frame.frame_seq;
+            }
             if matches!(payload.state, OperationState::Accepted) {
                 // Accepted-but-not-started operations are durable queued
                 // work, not competing active transition authorities.
@@ -1218,6 +1247,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation = Some(active);
         self.draft_text.clear();
         self.draft_thinking.clear();
+        self.assistant_frame_seq = 0;
         self.draft_calls.clear();
         self.draft_usage = None;
         self.live_tools.clear();
@@ -1414,6 +1444,11 @@ impl<P: Provider> SessionRuntime<P> {
                 inbox_applied: Vec::new(),
                 usage: Vec::new(),
                 context_manifests: Vec::new(),
+                assistant_frames_delete: payload
+                    .open_effect
+                    .as_ref()
+                    .map(|effect| vec![effect.id])
+                    .unwrap_or_default(),
             };
             if let Err(err) = self.store.commit(request).await {
                 error!(session = %self.session_id, error = %err, "could not settle a suspended operation");
@@ -1471,6 +1506,7 @@ impl<P: Provider> SessionRuntime<P> {
                 let EffectIntent::ModelStep { tools, .. } = applied.intents[0].clone() else {
                     panic!("RecoverModelStep must yield a model-step intent");
                 };
+                // Replace the old pending model effect and its auxiliary frame together.
                 let settled = vec![SettledEffect {
                     id: open.id,
                     settlement: serde_json::json!({ "recovered": "process_loss" }),
@@ -1482,7 +1518,7 @@ impl<P: Provider> SessionRuntime<P> {
                     effective_input: open.effective_input.clone(),
                     attempt: open.attempt + 1,
                 };
-                let (request, new_entry_seq) = build_commit_request(
+                let (mut request, new_entry_seq) = build_commit_request(
                     self.session_id,
                     &staged,
                     staged.state_seq + 1,
@@ -1495,6 +1531,7 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                     Vec::new(),
                 );
+                request.assistant_frames_delete.push(open.id);
                 if let Err(err) = self.store.commit(request).await {
                     self.fail_operation_on_persistence(err).await;
                     return;
@@ -1506,6 +1543,9 @@ impl<P: Provider> SessionRuntime<P> {
                 self.operation = Some(staged);
                 self.model_step = step.saturating_sub(1);
                 self.last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
+                self.draft_text.clear();
+                self.draft_thinking.clear();
+                self.assistant_frame_seq = 0;
                 warn!(%operation_id, model = %model.model_ref, "recovered a pending model step by replay");
                 self.spawn_model_step(operation_id, model, plan, tools);
             }
@@ -2502,6 +2542,26 @@ impl<P: Provider> SessionRuntime<P> {
         });
     }
 
+    async fn persist_assistant_frame(&mut self) -> Result<(), StoreError> {
+        let Some(active) = self.operation.as_ref() else {
+            return Ok(());
+        };
+        let Some(effect) = active.open_effect.as_ref() else {
+            return Ok(());
+        };
+        let frame = AssistantFrame {
+            effect_id: effect.id,
+            session_id: self.session_id,
+            operation_id: active.machine.operation_id(),
+            step: self.model_step,
+            frame_seq: self.assistant_frame_seq.saturating_add(1),
+            text: bounded_frame_text(&self.draft_text),
+            thinking: bounded_frame_text(&self.draft_thinking),
+        };
+        self.assistant_frame_seq = frame.frame_seq;
+        self.store.upsert_assistant_frame(frame).await
+    }
+
     fn spawn_tool_effect(
         &mut self,
         effect_id: Option<EffectId>,
@@ -2566,6 +2626,9 @@ impl<P: Provider> SessionRuntime<P> {
                     operation_id: active.machine.operation_id(),
                     text,
                 });
+                if let Err(err) = self.persist_assistant_frame().await {
+                    self.fail_operation_on_persistence(err).await;
+                }
             }
             EngineSignal::ThinkingDelta { text, .. } => {
                 self.draft_thinking.push_str(&text);
@@ -2574,6 +2637,9 @@ impl<P: Provider> SessionRuntime<P> {
                     operation_id: active.machine.operation_id(),
                     text,
                 });
+                if let Err(err) = self.persist_assistant_frame().await {
+                    self.fail_operation_on_persistence(err).await;
+                }
             }
             EngineSignal::UsageUpdate { usage, .. } => {
                 self.last_context_tokens =
@@ -2653,6 +2719,7 @@ impl<P: Provider> SessionRuntime<P> {
             .machine
             .apply(transition)
             .expect("model-step settlement while AssistantEffectPending");
+        let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let settled = staged
             .open_effect
             .take()
@@ -2677,7 +2744,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }]
             })
             .unwrap_or_default();
-        let (request, new_entry_seq) = build_commit_request(
+        let (mut request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
@@ -2690,6 +2757,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             usage,
         );
+        request.assistant_frames_delete = frame_effect_id.into_iter().collect();
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
@@ -2709,6 +2777,7 @@ impl<P: Provider> SessionRuntime<P> {
     async fn settle_overflow_to_compaction(&mut self) {
         self.overflow_retry_used = true;
         let mut staged = self.operation.clone().expect("settle needs an operation");
+        let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let model = self.current_model_config().await;
         let (_, manifest) = self.current_context_manifest();
         let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), &manifest);
@@ -2743,7 +2812,7 @@ impl<P: Provider> SessionRuntime<P> {
             attempt: 1,
         };
         staged.open_effect = Some(effect.clone());
-        let (request, new_entry_seq) = build_commit_request(
+        let (mut request, new_entry_seq) = build_commit_request(
             self.session_id,
             &staged,
             staged.state_seq + 1,
@@ -2756,6 +2825,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
+        request.assistant_frames_delete = frame_effect_id.into_iter().collect();
         if let Err(err) = self.store.commit(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
@@ -3317,6 +3387,7 @@ fn build_commit_request(
         inbox_applied,
         usage,
         context_manifests: Vec::new(),
+        assistant_frames_delete: Vec::new(),
     };
     (request, seq)
 }

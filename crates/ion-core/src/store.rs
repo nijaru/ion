@@ -151,6 +151,17 @@ CREATE TABLE IF NOT EXISTS model_steps (
     cache_expectation TEXT NOT NULL,
     created_at INTEGER NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS assistant_frames (
+    effect_id TEXT PRIMARY KEY REFERENCES effects(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    operation_id TEXT NOT NULL REFERENCES operations(id),
+    step INTEGER NOT NULL,
+    frame_seq INTEGER NOT NULL,
+    text TEXT NOT NULL,
+    thinking TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+)
 ";
 
 /// One durable session row.
@@ -207,6 +218,19 @@ pub struct EffectRecord {
     pub attempt: u64,
 }
 
+/// Bounded auxiliary output for an in-flight assistant effect. A frame never
+/// proves provider completion or becomes an assistant semantic entry.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssistantFrame {
+    pub effect_id: EffectId,
+    pub session_id: SessionId,
+    pub operation_id: OperationId,
+    pub step: u64,
+    pub frame_seq: u64,
+    pub text: String,
+    pub thinking: String,
+}
+
 /// One settled effect: the typed outcome is stored with the effect row
 /// so recovery can classify the crash window (DESIGN.md §12.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -253,6 +277,8 @@ pub struct CommitRequest {
     /// Context manifests published in the same transaction as their model
     /// effect intent. The effect stores only their content-addressed IDs.
     pub context_manifests: Vec<crate::context::ContextManifest>,
+    /// Auxiliary assistant frames removed with settled model effects.
+    pub assistant_frames_delete: Vec<EffectId>,
 }
 
 /// One persisted token-usage row (DESIGN.md §27.2).
@@ -283,6 +309,7 @@ pub struct LoadedSession {
     pub entries: Vec<(u64, SessionEntry)>,
     pub operations: Vec<LoadedOperation>,
     pub pending_inbox: Vec<InboxRecord>,
+    pub assistant_frames: Vec<AssistantFrame>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -343,6 +370,10 @@ enum StoreCommand {
     Usage {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
+    },
+    UpsertAssistantFrame {
+        frame: AssistantFrame,
+        reply: oneshot::Sender<Result<(), StoreError>>,
     },
 }
 
@@ -485,6 +516,12 @@ impl SessionStore {
             .await
     }
 
+    /// Persist the newest bounded frame for an in-flight assistant effect.
+    pub async fn upsert_assistant_frame(&self, frame: AssistantFrame) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::UpsertAssistantFrame { frame, reply })
+            .await
+    }
+
     /// Test hook (DESIGN.md §30.5): the next mutating command fails
     /// visibly and nothing is written.
     pub fn fail_next_write(&self) {
@@ -559,7 +596,40 @@ fn handle_command(
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
         }
+        StoreCommand::UpsertAssistantFrame { frame, reply } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                upsert_assistant_frame(connection, &frame).map_err(StoreError::from)
+            }));
+        }
     }
+}
+
+fn upsert_assistant_frame(
+    connection: &mut Connection,
+    frame: &AssistantFrame,
+) -> Result<(), rusqlite::Error> {
+    connection.execute(
+        "INSERT INTO assistant_frames (
+            effect_id, session_id, operation_id, step, frame_seq, text, thinking, updated_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+         ON CONFLICT(effect_id) DO UPDATE SET
+            frame_seq = excluded.frame_seq,
+            text = excluded.text,
+            thinking = excluded.thinking,
+            updated_at = excluded.updated_at
+         WHERE excluded.frame_seq > assistant_frames.frame_seq",
+        rusqlite::params![
+            frame.effect_id.as_uuid().to_string(),
+            frame.session_id.as_uuid().to_string(),
+            frame.operation_id.as_uuid().to_string(),
+            frame.step as i64,
+            frame.frame_seq as i64,
+            frame.text,
+            frame.thinking,
+            now_ms(),
+        ],
+    )?;
+    Ok(())
 }
 
 fn latest_session(connection: &mut Connection) -> Result<Option<SessionId>, StoreError> {
@@ -890,6 +960,12 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             rusqlite::params![id.as_uuid().to_string()],
         )?;
     }
+    for effect_id in &request.assistant_frames_delete {
+        tx.execute(
+            "DELETE FROM assistant_frames WHERE effect_id = ?1",
+            rusqlite::params![effect_id.as_uuid().to_string()],
+        )?;
+    }
     tx.commit()?;
     Ok(())
 }
@@ -1134,11 +1210,36 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         });
     }
 
+    let mut statement = connection.prepare(
+        "SELECT effect_id, operation_id, step, frame_seq, text, thinking
+         FROM assistant_frames WHERE session_id = ?1 ORDER BY frame_seq",
+    )?;
+    let mut assistant_frames = Vec::new();
+    let mut frame_rows = statement.query(rusqlite::params![id])?;
+    while let Some(row) = frame_rows.next()? {
+        let effect_id: String = row.get(0)?;
+        let operation_id: String = row.get(1)?;
+        let effect_id = Uuid::parse_str(&effect_id)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+        let operation_id = Uuid::parse_str(&operation_id)
+            .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+        assistant_frames.push(AssistantFrame {
+            effect_id: EffectId::from_uuid(effect_id),
+            session_id,
+            operation_id: OperationId::from_uuid(operation_id),
+            step: row.get::<_, i64>(2)? as u64,
+            frame_seq: row.get::<_, i64>(3)? as u64,
+            text: row.get(4)?,
+            thinking: row.get(5)?,
+        });
+    }
+
     Ok(LoadedSession {
         session,
         entries,
         operations,
         pending_inbox,
+        assistant_frames,
     })
 }
 

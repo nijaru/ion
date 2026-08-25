@@ -742,7 +742,11 @@ AssistantEffectPending
       └─ tool calls    → ToolsPlanned
 ```
 
-Partial assistant output is ephemeral. It is not a completed assistant entry.
+Partial assistant output is never a completed assistant entry. Ion may persist
+bounded auxiliary assistant frames keyed to the pending effect so a reopened
+session can show the interrupted draft. Frames do not prove provider
+completion, do not enter normal model context, and are deleted transactionally
+with the settled effect.
 
 ## 10.4 Tool flow
 
@@ -919,6 +923,24 @@ usage/cache/latency metadata
 provider artifact refs nullable
 ```
 
+### `assistant_frames`
+
+Bounded auxiliary recovery output for an unsettled assistant effect:
+
+```text
+effect_id
+session_id
+operation_id
+step
+frame_seq
+text/thinking bounded draft
+updated_at
+```
+
+Frames are ordered snapshots, not a delta journal. They are never treated as
+completion evidence and are removed in the same transaction that settles the
+owning model effect.
+
 ### `context_manifests` / resources
 
 Store context-defining material only when it changes, preferably content-addressed:
@@ -939,7 +961,7 @@ Append-only model/tool usage and cache metadata sufficient for totals and diagno
 
 Do not persist as correctness state:
 
-- every text delta;
+- every text delta (bounded assistant frames are auxiliary recovery state);
 - spinner/frame/UI state;
 - terminal cells;
 - every internal mailbox wakeup;
