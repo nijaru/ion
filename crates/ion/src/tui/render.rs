@@ -10,6 +10,7 @@ pub struct Palette {
     pub tool_row: Style,
     pub tool_error: Style,
     pub user_entry: Style,
+    pub user_marker: Style,
     pub system_note: Style,
     pub assistant: Style,
     pub separator: Style,
@@ -26,7 +27,8 @@ pub fn palette(theme: Theme) -> Palette {
             status_working: Style::new().cyan(),
             tool_row: Style::new().green(),
             tool_error: Style::new().red(),
-            user_entry: Style::new().add_modifier(ratatui::style::Modifier::DIM),
+            user_entry: Style::new().cyan(),
+            user_marker: Style::new().cyan().bold(),
             system_note: Style::new().dim(),
             assistant: Style::new(),
             separator: Style::new().dark_gray(),
@@ -38,7 +40,8 @@ pub fn palette(theme: Theme) -> Palette {
             status_working: Style::new().blue(),
             tool_row: Style::new().green(),
             tool_error: Style::new().red(),
-            user_entry: Style::new().add_modifier(ratatui::style::Modifier::DIM),
+            user_entry: Style::new().blue(),
+            user_marker: Style::new().blue().bold(),
             system_note: Style::new().dark_gray(),
             assistant: Style::new(),
             separator: Style::new().dark_gray(),
@@ -164,7 +167,7 @@ pub(super) fn build_live(
     let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
     let before = &state.composer[..cursor_byte];
     let after = &state.composer[cursor_byte..];
-    let prompt = "\u{203a} ";
+    let prompt = "> ";
     let target_col = prompt.width() + before.width();
     let composer = Line::from(format!("{prompt}{before}{after}"));
     let composer_rows = wrap_line(&composer, width);
@@ -256,8 +259,15 @@ pub(super) fn build_live(
     lines.push(separator_line(width, palette));
     lines.push(Line::from(format!(" {footer_left}")).style(palette.status_segment));
 
-    let left_width = footer_left.width() + 1;
-    let pad = width.saturating_sub(left_width + provider_model.width());
+    // Right-aligned provider/model: the assembled line is exactly one
+    // inset space + padding + label, ending at the same column as the
+    // rule (width - 1).
+    let content_width = width.saturating_sub(1);
+    let left_width = footer_left.width() + 1; // leading inset space
+    let pad = content_width
+        .saturating_sub(left_width)
+        .saturating_sub(provider_model.width())
+        .saturating_sub(1);
     lines.push(
         Line::from(format!(" {}{}", " ".repeat(pad), provider_model)).style(palette.status_segment),
     );
@@ -382,32 +392,38 @@ fn push_entry_lines(
         // continuation lines indent by the prompt width (Go parity).
         ion_core::SessionEntry::UserMessage { text } => {
             for (i, logical_line) in text.split('\n').enumerate() {
-                let prefix = if i == 0 { "\u{203a} " } else { "  " };
+                let prefix = if i == 0 { "> " } else { "  " };
                 out.push(Line::from(format!("{prefix}{logical_line}")).style(palette.user_entry));
             }
         }
         ion_core::SessionEntry::ModelChanged { model_ref } => {
-            out.push(
-                Line::from(format!("\u{2022} model \u{2192} {model_ref}"))
-                    .style(palette.system_note),
-            );
+            out.push(Line::from(format!("· model → {model_ref}")).style(palette.system_note));
         }
         ion_core::SessionEntry::AssistantMessage { text } => {
-            for logical_line in text.split('\n') {
-                out.push(Line::from(logical_line.to_owned()).style(palette.assistant));
+            let total = text.lines().count();
+            for (i, logical_line) in text.split('\n').enumerate() {
+                if logical_line.is_empty() && (i == 0 || i + 1 == total) {
+                    continue;
+                }
+                let line = if i == 0 {
+                    format!("● {logical_line}")
+                } else {
+                    logical_line.to_owned()
+                };
+                out.push(Line::from(line).style(palette.assistant));
             }
         }
         ion_core::SessionEntry::ToolCall { call } => {
             let target = ion_core::target_from_arguments(&call.name, &call.arguments)
                 .unwrap_or_else(|| format!("(call {})", call.call_id));
-            out.push(
-                Line::from(format!("\u{2022} {} \u{2192} {target}", call.name))
-                    .style(palette.tool_row),
-            );
+            out.push(Line::from(format!("● {} → {target}", call.name)).style(palette.tool_row));
         }
         ion_core::SessionEntry::ToolResult { result } => {
             if result.is_ok() {
                 for logical_line in result.model_text().split('\n') {
+                    if logical_line.is_empty() {
+                        continue;
+                    }
                     out.push(Line::from(format!("  {logical_line}")).style(palette.system_note));
                 }
             } else {
@@ -418,9 +434,7 @@ fn push_entry_lines(
             }
         }
         ion_core::SessionEntry::Compaction { summary, .. } => {
-            out.push(
-                Line::from(format!("\u{2261} compacted: {summary}")).style(palette.system_note),
-            );
+            out.push(Line::from(format!("· compacted: {summary}")).style(palette.system_note));
         }
     }
 }

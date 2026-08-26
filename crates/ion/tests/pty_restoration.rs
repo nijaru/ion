@@ -340,7 +340,7 @@ fn panic_restores_the_terminal() {
 #[test]
 fn clean_exit_restores_the_terminal() {
     let mut session = spawn_ion(&[]);
-    if !session.wait_for_output("idle", std::time::Duration::from_secs(15)) {
+    if !session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)) {
         eprintln!("deadline hit; locking output");
         let buffer = session.output.lock().unwrap();
         eprintln!(
@@ -348,7 +348,7 @@ fn clean_exit_restores_the_terminal() {
             buffer.len(),
             String::from_utf8_lossy(&buffer)
         );
-        panic!("expected the idle banner");
+        panic!("expected the startup header");
     }
     session.master_write.write_all(b"hello\r").expect("submit");
     // Esc only quits from idle; wait for the scripted response first
@@ -389,7 +389,7 @@ fn clean_exit_restores_the_terminal() {
 fn slash_commands_render_notices_without_runtime_calls() {
     let mut session = spawn_ion(&[]);
     assert!(
-        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
     use std::io::Write as _;
@@ -451,7 +451,7 @@ fn slash_commands_render_notices_without_runtime_calls() {
 fn sigstp_suspends_cleanly_and_resume_rearms() {
     let mut session = spawn_ion(&[]);
     assert!(
-        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
 
@@ -501,7 +501,7 @@ fn sigstp_suspends_cleanly_and_resume_rearms() {
 fn resize_storm_survives_and_stays_interactive() {
     let mut session = spawn_ion(&[]);
     assert!(
-        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
     session.master_write.write_all(b"hello\r").expect("submit");
@@ -553,7 +553,7 @@ fn resize_storm_survives_and_stays_interactive() {
 fn dead_tty_ends_the_process() {
     let mut session = spawn_ion(&[]);
     assert!(
-        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
     session.hang_up();

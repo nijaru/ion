@@ -724,7 +724,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         RuntimeEvent::OperationStarted { prompt, .. } => {
             state
                 .pending_scrollback
-                .push(Line::from(format!("\u{203a} {prompt}")).style(palette.user_entry));
+                .push(Line::from(format!("> {prompt}")).style(palette.user_marker));
             state.draft.clear();
             state.tool_rows.clear();
             state.status = UiStatus::Working {
@@ -881,13 +881,19 @@ impl UiState {
             }
         }
         if !self.draft.is_empty() {
+            let mut first = true;
             for line in self.draft.lines() {
-                // Assistant content renders plain, matching durable
-                // history projection; no per-line role prefix.
-                let styled = markdown_line(line.trim_end());
-                if !styled.to_string().is_empty() || !line.is_empty() {
-                    self.pending_scrollback.push(styled);
+                // Assistant content: leading dot on the first line,
+                // blank lines dropped (single-newline spacing).
+                if line.trim().is_empty() {
+                    continue;
                 }
+                let mut styled = markdown_line(line.trim_end());
+                if first {
+                    styled.spans.insert(0, Span::from("\u{25cf} "));
+                    first = false;
+                }
+                self.pending_scrollback.push(styled);
             }
             if self.draft_degraded {
                 self.pending_scrollback.push(
@@ -1042,8 +1048,10 @@ pub async fn run(
         // Key cheats (pi parity): dim lines under the header.
         for cheat in [
             "escape to interrupt",
-            "ctrl+o to expand tools",
-            "ctrl+t to expand thinking",
+            "shift+enter to steer",
+            "ctrl+o tool output",
+            "ctrl+t thinking",
+            "up/down history",
             "ctrl+z to suspend",
             "/ for commands",
             "ctrl+d to quit",
@@ -1785,10 +1793,7 @@ pub(crate) mod tests {
             }),
         );
         assert!(matches!(state.status, UiStatus::Working { .. }));
-        assert_eq!(
-            state.pending_scrollback[0].to_string(),
-            "\u{203a} read the design"
-        );
+        assert_eq!(state.pending_scrollback[0].to_string(), "> read the design");
 
         let (state, _) = update(
             state,
@@ -1910,7 +1915,7 @@ pub(crate) mod tests {
         );
         // cursor sits at the end of the typed text on the composer row
         let (row, col) = cursor.expect("cursor");
-        assert!(text[row].starts_with("› hello world"), "{}", text[row]);
+        assert!(text[row].starts_with("> hello world"), "{}", text[row]);
         assert_eq!(col as usize, 2 + "hello world".width());
     }
 
