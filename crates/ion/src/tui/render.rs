@@ -8,7 +8,9 @@ pub struct Palette {
     pub status_idle: Style,
     pub status_working: Style,
     pub tool_row: Style,
+    pub tool_running: Style,
     pub tool_error: Style,
+    pub agent_marker: Style,
     pub user_entry: Style,
     pub user_marker: Style,
     pub system_note: Style,
@@ -26,7 +28,9 @@ pub fn palette(theme: Theme) -> Palette {
             status_idle: Style::new().dim(),
             status_working: Style::new().cyan(),
             tool_row: Style::new().green(),
+            tool_running: Style::new().yellow(),
             tool_error: Style::new().red(),
+            agent_marker: Style::new().white(),
             user_entry: Style::new().cyan(),
             user_marker: Style::new().cyan().bold(),
             system_note: Style::new().dim(),
@@ -39,7 +43,9 @@ pub fn palette(theme: Theme) -> Palette {
             status_idle: Style::new().dark_gray(),
             status_working: Style::new().blue(),
             tool_row: Style::new().green(),
+            tool_running: Style::new().yellow(),
             tool_error: Style::new().red(),
+            agent_marker: Style::new().dark_gray(),
             user_entry: Style::new().blue(),
             user_marker: Style::new().blue().bold(),
             system_note: Style::new().dark_gray(),
@@ -181,7 +187,7 @@ pub(super) fn build_live(
         let rendered = tool_row_line(
             &latest.tool,
             latest.target.as_deref(),
-            latest.is_error,
+            latest.state,
             preview.as_deref(),
         );
         for line in wrap_line(&rendered, width) {
@@ -214,13 +220,16 @@ pub(super) fn build_live(
 
     // Footer (pi parity): line 1 is `dir (branch)` plus the live
     // progress; line 2 is the provider/model label, right-aligned.
+    let footer_hint = state.hint.clone();
     let mut footer_left = match (&state.cwd_label, &state.branch) {
         (Some(dir), Some(branch)) => format!("{dir} ({branch})"),
         (Some(dir), None) => dir.clone(),
         (None, Some(branch)) => format!("({branch})"),
         (None, None) => String::new(),
     };
-    if let UiStatus::Working { operation } = &state.status {
+    if let Some(hint) = &footer_hint {
+        footer_left = hint.clone();
+    } else if let UiStatus::Working { operation } = &state.status {
         if !footer_left.is_empty() {
             footer_left.push_str("  ");
         }
@@ -257,7 +266,12 @@ pub(super) fn build_live(
     lines.extend(composer_rows);
 
     lines.push(separator_line(width, palette));
-    lines.push(Line::from(format!(" {footer_left}")).style(palette.status_segment));
+    let footer_style = if footer_hint.is_some() {
+        palette.tool_running
+    } else {
+        palette.status_segment
+    };
+    lines.push(Line::from(format!(" {footer_left}")).style(footer_style));
 
     // Right-aligned provider/model: the assembled line is exactly one
     // inset space + padding + label, ending at the same column as the
@@ -277,17 +291,22 @@ pub(super) fn build_live(
 
 /// One tool line (pi style): bold tool name, dim target, red failure
 /// marker; `preview_lines` renders the expanded output block dim.
+/// One tool line: mid-size dot colored by state (yellow running,
+/// green success, red error), bold tool name, dim target; expanded
+/// preview lines render dim.
 pub(super) fn tool_row_line(
     row_tool: &str,
     row_target: Option<&str>,
-    row_error: bool,
+    state: ToolState,
     preview_lines: Option<&[&str]>,
 ) -> Line<'static> {
-    let marker = if row_error { "\u{2717} " } else { "" };
-    let mut spans: Vec<Span> = vec![Span::styled(
-        format!("{marker}{}", row_tool),
-        Style::new().bold(),
-    )];
+    let (marker, dot_style) = match state {
+        ToolState::Running => (String::new(), Style::new().yellow()),
+        ToolState::Ok => (String::new(), Style::new().green()),
+        ToolState::Error => ("\u{2717} ".to_owned(), Style::new().red()),
+    };
+    let mut spans: Vec<Span> = vec![Span::styled(format!("{marker}\u{2022} "), dot_style)];
+    spans.push(Span::styled(row_tool.to_owned(), Style::new().bold()));
     if let Some(target) = row_target {
         spans.push(Span::styled(format!(" {target}"), Style::new().dim()));
     }
@@ -397,7 +416,7 @@ fn push_entry_lines(
             }
         }
         ion_core::SessionEntry::ModelChanged { model_ref } => {
-            out.push(Line::from(format!("· model → {model_ref}")).style(palette.system_note));
+            out.push(Line::from(format!("• model → {model_ref}")).style(palette.system_note));
         }
         ion_core::SessionEntry::AssistantMessage { text } => {
             let total = text.lines().count();
@@ -406,17 +425,17 @@ fn push_entry_lines(
                     continue;
                 }
                 let line = if i == 0 {
-                    format!("● {logical_line}")
+                    Line::from(format!("• {logical_line}")).style(palette.agent_marker)
                 } else {
-                    logical_line.to_owned()
+                    Line::from(logical_line.to_owned()).style(palette.assistant)
                 };
-                out.push(Line::from(line).style(palette.assistant));
+                out.push(line);
             }
         }
         ion_core::SessionEntry::ToolCall { call } => {
             let target = ion_core::target_from_arguments(&call.name, &call.arguments)
                 .unwrap_or_else(|| format!("(call {})", call.call_id));
-            out.push(Line::from(format!("● {} → {target}", call.name)).style(palette.tool_row));
+            out.push(Line::from(format!("• {} → {target}", call.name)).style(palette.tool_row));
         }
         ion_core::SessionEntry::ToolResult { result } => {
             if result.is_ok() {
@@ -434,7 +453,7 @@ fn push_entry_lines(
             }
         }
         ion_core::SessionEntry::Compaction { summary, .. } => {
-            out.push(Line::from(format!("· compacted: {summary}")).style(palette.system_note));
+            out.push(Line::from(format!("• compacted: {summary}")).style(palette.system_note));
         }
     }
 }

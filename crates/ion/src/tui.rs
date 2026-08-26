@@ -94,6 +94,7 @@ pub enum UiStatus {
 pub enum Action {
     Quit,
     Cancel,
+    ClearComposer,
     Submit,
     SteerCurrent,
     ToggleToolOutput,
@@ -135,7 +136,7 @@ impl Default for KeyMap {
         bind(&mut bindings, Action::Cancel, KeyCode::Esc, Modifiers::NONE);
         bind(
             &mut bindings,
-            Action::Cancel,
+            Action::ClearComposer,
             KeyCode::Char('c'),
             Modifiers::CONTROL,
         );
@@ -317,13 +318,22 @@ fn parse_key(spec: &str) -> Result<(KeyCode, Modifiers), String> {
         .ok_or_else(|| format!("empty key binding {spec:?}"))
 }
 
+/// Live tool-line state, driving the marker color: yellow while
+/// running, green on success, red on failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolState {
+    Running,
+    Ok,
+    Error,
+}
+
 /// One started tool effect: its display label plus the bounded output
 /// preview from settlement (rendered only while expanded).
 #[derive(Debug, Clone)]
 struct ToolRow {
     tool: String,
     target: Option<String>,
-    is_error: bool,
+    state: ToolState,
     preview: Option<String>,
 }
 
@@ -373,6 +383,10 @@ pub struct UiState {
     /// when the composer redraws.
     pending_scrollback: Vec<Line<'static>>,
     quit_requested: bool,
+    /// Previous ctrl+c press, for the double-press exit (pi parity).
+    last_clear: Option<std::time::Instant>,
+    /// Transient footer hint (e.g. "ctrl+c again to exit").
+    hint: Option<String>,
 }
 
 impl UiState {
@@ -398,7 +412,10 @@ impl UiState {
 pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>) {
     let mut state = state;
     match message {
-        UiMessage::Key(key) => handle_key(state, key),
+        UiMessage::Key(key) => {
+            state.hint = None;
+            handle_key(state, key)
+        }
         UiMessage::Paste(text) => {
             insert_at_cursor(&mut state, &text);
             (state, None)
@@ -539,9 +556,34 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
                 (state, Some(UiEffect::Cancel))
             }
         }
+        // Pi parity: ctrl+d exits only from an empty, idle composer.
         Action::Quit => {
-            state.quit_requested = true;
-            (state, Some(UiEffect::Quit))
+            if state.composer.is_empty() && matches!(state.status, UiStatus::Idle) {
+                state.quit_requested = true;
+                (state, Some(UiEffect::Quit))
+            } else {
+                (state, None)
+            }
+        }
+        // Pi parity: ctrl+c clears a non-empty composer; a second
+        // press within 2s exits.
+        Action::ClearComposer => {
+            if !state.composer.is_empty() {
+                state.composer.clear();
+                state.cursor = 0;
+                state.hint = None;
+                state.last_clear = None;
+            } else if state
+                .last_clear
+                .is_some_and(|at| at.elapsed() < std::time::Duration::from_secs(2))
+            {
+                state.quit_requested = true;
+                return (state, Some(UiEffect::Quit));
+            } else {
+                state.hint = Some("ctrl+c again to exit".to_owned());
+                state.last_clear = Some(std::time::Instant::now());
+            }
+            (state, None)
         }
         Action::ToggleToolOutput => {
             state.tool_output_expanded = !state.tool_output_expanded;
@@ -746,7 +788,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.tool_rows.push(ToolRow {
                 tool,
                 target,
-                is_error: false,
+                state: ToolState::Running,
                 preview: None,
             });
         }
@@ -755,7 +797,11 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         } => {
             if let Some(row) = state.tool_rows.last_mut() {
                 // The running row is the one this settlement answers.
-                row.is_error = is_error || row.is_error;
+                row.state = if is_error {
+                    ToolState::Error
+                } else {
+                    ToolState::Ok
+                };
                 row.preview = preview;
             }
         }
@@ -870,7 +916,7 @@ impl UiState {
             self.pending_scrollback.push(render::tool_row_line(
                 &row.tool,
                 row.target.as_deref(),
-                row.is_error,
+                row.state,
                 None,
             ));
             if self.tool_output_expanded {
@@ -927,7 +973,7 @@ impl UiState {
                     self.tool_rows.push(ToolRow {
                         tool: pending.tool.clone(),
                         target: pending.target.clone(),
-                        is_error: false,
+                        state: ToolState::Running,
                         preview: None,
                     });
                 }
@@ -1048,13 +1094,14 @@ pub async fn run(
         // Key cheats (pi parity): dim lines under the header.
         for cheat in [
             "escape to interrupt",
+            "ctrl+c to clear · twice to exit",
+            "ctrl+d to exit (empty)",
             "shift+enter to steer",
             "ctrl+o tool output",
             "ctrl+t thinking",
             "up/down history",
             "ctrl+z to suspend",
             "/ for commands",
-            "ctrl+d to quit",
         ] {
             writeln!(out, "{cheat}\r").map_err(|err| {
                 RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
@@ -1761,22 +1808,48 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn ctrl_c_cancels_first_then_quits() {
+    fn ctrl_c_clears_then_double_press_quits() {
         let mut state = UiState::new();
+        state.composer = "draft".to_owned();
+        let (state, effect) = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+        );
+        assert_eq!(effect, None);
+        assert!(state.composer.is_empty());
+
+        // First empty press sets a hint; a second within 2s exits.
+        let (state, effect) = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+        );
+        assert_eq!(effect, None);
+        assert_eq!(state.hint.as_deref(), Some("ctrl+c again to exit"));
+        let (state, effect) = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
+        );
+        assert_eq!(effect, Some(UiEffect::Quit));
+        assert!(state.quit_requested);
+    }
+
+    #[test]
+    fn ctrl_d_quits_only_when_empty_and_idle() {
+        let mut state = UiState::new();
+        state.composer = "text".to_owned();
+        let (state, effect) = update(state, ctrl('d'));
+        assert_eq!(effect, None);
+        assert!(!state.quit_requested);
+        let mut state = state;
+        state.composer.clear();
         state.status = UiStatus::Working {
-            operation: "running".to_owned(),
+            operation: "busy".to_owned(),
         };
-        let (_, effect) = update(
-            state,
-            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
-        );
-        assert_eq!(effect, Some(UiEffect::Cancel));
-        // After cancel the operation goes idle; the next ctrl-c quits.
-        let state = UiState::new();
-        let (_, effect) = update(
-            state,
-            UiMessage::Key(KeyEvent::new(KeyCode::Char('c'), Modifiers::CONTROL)),
-        );
+        let (state, effect) = update(state, ctrl('d'));
+        assert_eq!(effect, None);
+        let mut state = state;
+        state.status = UiStatus::Idle;
+        let (_, effect) = update(state, ctrl('d'));
         assert_eq!(effect, Some(UiEffect::Quit));
     }
 
