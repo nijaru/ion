@@ -302,10 +302,15 @@ impl SessionStore {
             SchemaPlan::ArchiveOlder(old_version) => {
                 drop(connection);
                 let backup = archive_database_files(&path, old_version)?;
+                let file_name = backup
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or_default()
+                    .to_owned();
                 notice = Some(format!(
-                    "session store was from an older Ion build (schema v{old_version}); \
-                     archived untouched to {} and started fresh",
-                    backup.display()
+                    "archived your old session store (schema v{old_version}, \
+                     incompatible with this build) and started fresh; the \
+                     original is saved next to it as {file_name}"
                 ));
                 connection = Connection::open(&path)?;
                 create_fresh(&mut connection)?;

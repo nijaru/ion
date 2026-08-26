@@ -138,7 +138,7 @@ conn.commit()
 conn.close()
 PYEOF
 launch
-wait_for "archived untouched" 15 || fail "schema bump: archive notice not shown"
+wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
 wait_for "idle — type a prompt" 15 || fail "schema bump: session did not start"
 ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
 pass "old store archived, notice shown, session starts"

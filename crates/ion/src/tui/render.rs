@@ -49,30 +49,72 @@ pub(super) fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     if total <= width {
         return vec![clone_static(line)];
     }
-    let mut rows: Vec<Line<'static>> = Vec::new();
-    let mut cur: Vec<Span> = Vec::new();
-    let mut cur_width = 0usize;
+    // Flatten to (grapheme, style) so a break decision can look back for
+    // a word boundary without per-span bookkeeping.
+    let mut items: Vec<(String, ratatui::style::Style)> = Vec::new();
     for span in &line.spans {
-        let style = span.style;
-        let mut chunk = String::new();
         for grapheme in span.content.graphemes(true) {
-            let cw = grapheme.width();
-            if cur_width + cw > width && cur_width > 0 {
-                if !chunk.is_empty() {
-                    cur.push(Span::styled(std::mem::take(&mut chunk), style));
-                }
-                rows.push(Line::from(std::mem::take(&mut cur)));
-                cur_width = 0;
-            }
-            chunk.push_str(grapheme);
-            cur_width += cw;
-        }
-        if !chunk.is_empty() {
-            cur.push(Span::styled(chunk, style));
+            items.push((grapheme.to_owned(), span.style));
         }
     }
-    if !cur.is_empty() {
-        rows.push(Line::from(cur));
+    let mut rows: Vec<Line<'static>> = Vec::new();
+    while !items.is_empty() {
+        // Greedy fill; prefer breaking after the last space when the
+        // row overflows so words are not split mid-token.
+        let mut taken_width = 0usize;
+        let mut take = 0usize;
+        let mut last_space: Option<usize> = None;
+        for (i, (grapheme, _)) in items.iter().enumerate() {
+            let gw = grapheme.width();
+            if taken_width + gw > width {
+                break;
+            }
+            taken_width += gw;
+            take = i + 1;
+            if grapheme == " " && i > 0 {
+                last_space = Some(take);
+            }
+        }
+        // Do not backtrack to a space when the word being cut is itself
+        // wider than a line; hard-breaking through it is the only sane
+        // layout (otherwise every row would break early at the prefix).
+        if last_space.is_some() && take < items.len() {
+            let mut rest = take;
+            while matches!(items.get(rest), Some((g, _)) if g == " ") {
+                rest += 1;
+            }
+            let mut word_width = 0usize;
+            while matches!(items.get(rest), Some((g, _)) if g != " ") {
+                word_width += items[rest].0.width();
+                rest += 1;
+            }
+            if word_width >= width {
+                last_space = None;
+            }
+        }
+        let mut row_items: Vec<(String, ratatui::style::Style)> = if take == items.len() {
+            std::mem::take(&mut items)
+        } else if let Some(break_at) = last_space {
+            items.drain(..break_at).collect()
+        } else {
+            // Unbreakable overflow (long path/URL): hard-break.
+            items.drain(..take.max(1)).collect()
+        };
+        while row_items.last().map(|(g, _)| g == " ").unwrap_or(false) {
+            row_items.pop();
+        }
+        let mut spans: Vec<Span> = Vec::new();
+        for (text, style) in row_items {
+            match spans.last_mut() {
+                Some(last) if last.style == style => {
+                    let mut owned = last.content.to_string();
+                    owned.push_str(&text);
+                    last.content = std::borrow::Cow::Owned(owned);
+                }
+                _ => spans.push(Span::styled(text, style)),
+            }
+        }
+        rows.push(Line::from(spans));
     }
     if rows.is_empty() {
         rows.push(Line::from(String::new()));

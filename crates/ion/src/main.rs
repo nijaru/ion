@@ -238,9 +238,8 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    if let Some(notice) = store.startup_notice() {
-        let _ = writeln!(io::stderr(), "store: {notice}");
-    }
+    // The startup notice is rendered inside the transcript (HostConfig):
+    // stderr here is already raw-mode and would corrupt the screen.
     let resume_session = if cli.resume {
         match store.latest_session().await {
             Ok(Some(id)) => Some(id),
