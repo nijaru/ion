@@ -2491,12 +2491,16 @@ compatibility code (v0 rule: no speculative abstractions, no
 compatibility aliases).
 
 The store keeps an explicit `PRAGMA user_version` gate instead: a
-fresh empty database receives the current schema; a database from any
-other build — older development artifact or newer Ion — is refused
-visibly with a move-it-aside error, never migrated and never silently
-reinterpreted (§26.3). When Ion first promises on-disk compatibility,
-ordered migrations become a requirement and this decision is
-revisited.
+fresh empty database receives the current schema; a database from a
+NEWER build is refused visibly — opening it would silently misread
+data this build does not understand (§26.3). A database from an older
+development build is never migrated and never reinterpreted either:
+the store renames its files untouched to timestamped `.bak` archives
+beside the original and starts fresh, surfacing one visible notice.
+The daily-driver loop must not require manual file surgery after a
+schema bump; the archive preserves every byte for inspection or
+restoration. When Ion first promises on-disk compatibility, ordered
+migrations become a requirement and this decision is revisited.
 
 ## 33.13 Live harness evolution and mandatory programmability
 

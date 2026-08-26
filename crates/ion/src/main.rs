@@ -108,6 +108,9 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(notice) = store.startup_notice() {
+        let _ = writeln!(io::stderr(), "store: {notice}");
+    }
     let policy = policy_for(&cli.allow);
     let store_for_shutdown = Arc::clone(&store);
     let config = acp::AcpConfig {
@@ -230,6 +233,9 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    if let Some(notice) = store.startup_notice() {
+        let _ = writeln!(io::stderr(), "store: {notice}");
+    }
     let resume_session = if cli.resume {
         match store.latest_session().await {
             Ok(Some(id)) => Some(id),
@@ -324,6 +330,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         tui::HostConfig {
             model_name,
             hide_thinking_block: settings.hide_thinking_block,
+            startup_notice: store.startup_notice().map(str::to_owned),
         },
         guard,
     )
@@ -515,6 +522,9 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
             }
             return Err(RuntimeError::OperationFailed(err.to_string()));
         }
+    };
+    if let Some(notice) = store.startup_notice() {
+        eprintln!("store: {notice}");
     };
     let policy = policy_for(&cli.allow);
     let runtime = Runtime::start_with_policy_and_resources(

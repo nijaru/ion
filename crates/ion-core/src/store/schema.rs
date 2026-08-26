@@ -4,14 +4,35 @@ use super::StoreError;
 
 const SCHEMA_VERSION: i64 = 12;
 
-/// Schema gating (DESIGN.md §11.1). Ion is v0 with no compatibility
-/// guarantees: a fresh database gets the current schema, and a database
-/// written by any other version — older dev build or newer Ion — is
-/// refused, never migrated and never silently reinterpreted (§26.3).
-pub(super) fn ensure_schema(connection: &mut Connection) -> Result<(), StoreError> {
-    let version: i64 = connection.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+/// What an existing database needs before the store can open it.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum SchemaPlan {
+    /// No database yet: create the current schema.
+    Fresh,
+    /// Already at the current version.
+    Current,
+    /// Written by an older development build. The caller archives the
+    /// files and reopens fresh; bytes are never migrated or
+    /// reinterpreted.
+    ArchiveOlder(i64),
+}
+
+pub(super) fn schema_version(connection: &Connection) -> Result<i64, StoreError> {
+    connection
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .map_err(StoreError::from)
+}
+
+/// Schema gating (DESIGN.md §11.1, §33.12). Ion is v0 with no
+/// compatibility guarantees: a database from this build is used as-is,
+/// a missing database gets the current schema, and an older dev build's
+/// database is archived untouched so a fresh one can be created. A
+/// database from a NEWER Ion is refused: opening it would mean this
+/// build silently misreading data it does not understand (§26.3).
+pub(super) fn classify(connection: &Connection) -> Result<SchemaPlan, StoreError> {
+    let version = schema_version(connection)?;
     if version == SCHEMA_VERSION {
-        return Ok(());
+        return Ok(SchemaPlan::Current);
     }
     if version == 0
         && connection
@@ -22,14 +43,23 @@ pub(super) fn ensure_schema(connection: &mut Connection) -> Result<(), StoreErro
             )
             .map(|count| count == 0)?
     {
-        connection.execute_batch(SCHEMA)?;
-        connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
-        return Ok(());
+        return Ok(SchemaPlan::Fresh);
+    }
+    if version > 0 && version < SCHEMA_VERSION {
+        return Ok(SchemaPlan::ArchiveOlder(version));
     }
     Err(StoreError::Sqlite(format!(
-        "database schema version {version} does not match this Ion ({SCHEMA_VERSION}); \
-         Ion v0 keeps no compatibility across builds — move the database aside"
+        "database schema version {version} is newer than this Ion ({SCHEMA_VERSION}); \
+         refusing to open it with an older build — use a newer Ion or move the \
+         database aside"
     )))
+}
+
+/// Create the current schema on a fresh (or freshly archived) database.
+pub(super) fn create_fresh(connection: &mut Connection) -> Result<(), StoreError> {
+    connection.execute_batch(SCHEMA)?;
+    connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
+    Ok(())
 }
 
 const SCHEMA: &str = "

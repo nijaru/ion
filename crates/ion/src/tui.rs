@@ -41,6 +41,9 @@ pub struct HostConfig {
     pub model_name: Option<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
+    /// One-time store/startup notice (e.g. archived old-schema
+    /// database) rendered once into the transcript.
+    pub startup_notice: Option<String>,
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -1066,6 +1069,11 @@ pub async fn run(
     state.set_model_name(host.model_name.clone());
     state.thinking_visible = !host.hide_thinking_block;
     state.model_switching_available = switching_available;
+    if let Some(notice) = host.startup_notice {
+        state
+            .pending_scrollback
+            .push(Line::from(format!("! {notice}")).yellow().bold());
+    }
     let (snapshot, mut events) = session.subscribe().await?;
     let resume_entry_count = snapshot.reopen_entry_count.unwrap_or(0);
     // The session's durable selection is authoritative once subscribed;

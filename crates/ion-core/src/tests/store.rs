@@ -276,3 +276,75 @@ fn fail_operation_lands_from_any_open_state_and_never_from_finished() {
         .expect_err("finished is terminal");
     assert_eq!(err.transition, "fail_operation");
 }
+
+// ---- Schema gate: archive older dev stores, refuse newer ones (§33.12) ----
+
+#[test]
+fn older_schema_store_is_archived_and_reopened_fresh() {
+    let db = temp_db("schema-archive");
+    {
+        // Simulate a database written by an older development build.
+        let connection = rusqlite::Connection::open(&db).expect("open old store");
+        connection
+            .execute_batch("CREATE TABLE sessions (id TEXT);")
+            .expect("create marker");
+        connection
+            .pragma_update(None, "user_version", 6)
+            .expect("stamp version");
+    }
+    let store = SessionStore::open(&db).expect("older schema must archive, not refuse");
+    let notice = store.startup_notice().expect("archive notice").to_owned();
+    assert!(
+        notice.contains("v6"),
+        "notice names the old version: {notice}"
+    );
+    assert!(
+        notice.contains("archived"),
+        "notice says archived: {notice}"
+    );
+
+    // The original bytes survive untouched beside the fresh database.
+    let parent = db.parent().unwrap();
+    let backups: Vec<_> = std::fs::read_dir(parent)
+        .expect("list data dir")
+        .filter_map(Result::ok)
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .filter(|name| name.contains(".v6.") && name.ends_with(".bak"))
+        .collect();
+    assert_eq!(backups.len(), 1, "exactly one v6 archive: {backups:?}");
+    let archived = rusqlite::Connection::open(parent.join(&backups[0])).expect("open archive");
+    let version: i64 = archived
+        .query_row("PRAGMA user_version", [], |row| row.get(0))
+        .expect("archive version");
+    assert_eq!(version, 6, "archived bytes keep the old version stamp");
+
+    // The live database is usable at the current version.
+    assert_eq!(store.startup_notice(), Some(notice.as_str()));
+    drop(store);
+    let reopened = SessionStore::open(&db).expect("reopen fresh store");
+    assert!(reopened.startup_notice().is_none(), "no second archive");
+}
+
+#[test]
+fn newer_schema_store_is_refused_visibly() {
+    let db = temp_db("schema-newer");
+    {
+        let connection = rusqlite::Connection::open(&db).expect("open future store");
+        connection
+            .execute_batch("CREATE TABLE sessions (id TEXT);")
+            .expect("create marker");
+        connection
+            .pragma_update(None, "user_version", 99)
+            .expect("stamp future version");
+    }
+    let err = SessionStore::open(&db).expect_err("a newer database must be refused");
+    let message = err.to_string();
+    assert!(message.contains("newer"), "error is explicit: {message}");
+    // Refusal must not touch the database.
+    assert!(
+        !db.parent()
+            .unwrap()
+            .join(format!("{}.v99", db.file_name().unwrap().to_string_lossy()))
+            .exists()
+    );
+}

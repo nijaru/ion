@@ -26,7 +26,7 @@ const STORE_CAPACITY: usize = 64;
 
 mod schema;
 mod sql;
-use schema::ensure_schema;
+use schema::{SchemaPlan, classify, create_fresh};
 use sql::handle_command;
 
 /// One durable session row.
@@ -270,6 +270,8 @@ pub struct SessionStore {
     /// stores intentionally have no artifact root; their tool results still
     /// obey the bounded model-result limit.
     artifact_root: Option<Arc<Path>>,
+    /// One-time notice for frontends (e.g. archived old-schema store).
+    startup_notice: Option<String>,
     /// Test hook: fail the next mutating command (DESIGN.md §30.5).
     fail_next_write: Arc<AtomicBool>,
     join: Arc<Mutex<Option<JoinHandle<()>>>>,
@@ -283,36 +285,61 @@ impl std::fmt::Debug for SessionStore {
 }
 
 impl SessionStore {
-    /// Open (creating or migrating) the database at `path` and start the
-    /// store thread.
+    /// Open (creating or archiving-forward) the database at `path` and
+    /// start the store thread. An older dev build's database is
+    /// archived untouched beside the original; the human-readable
+    /// notice is available via [`Self::startup_notice`].
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let connection = Connection::open(&path)?;
+        let mut connection = Connection::open(&path)?;
+        let mut notice = None;
+        match classify(&connection)? {
+            SchemaPlan::Current => {}
+            SchemaPlan::Fresh => create_fresh(&mut connection)?,
+            SchemaPlan::ArchiveOlder(old_version) => {
+                drop(connection);
+                let backup = archive_database_files(&path, old_version)?;
+                notice = Some(format!(
+                    "session store was from an older Ion build (schema v{old_version}); \
+                     archived untouched to {} and started fresh",
+                    backup.display()
+                ));
+                connection = Connection::open(&path)?;
+                create_fresh(&mut connection)?;
+            }
+        }
         let artifact_root = path
             .parent()
             .unwrap_or_else(|| Path::new("."))
             .join("artifacts");
-        Self::start(connection, Some(Arc::from(artifact_root)))
+        Self::start_with(connection, Some(Arc::from(artifact_root)), notice)
+    }
+
+    /// One-time notice about startup-side state changes (e.g. an
+    /// archived old-schema database), for frontends to surface.
+    pub fn startup_notice(&self) -> Option<&str> {
+        self.startup_notice.as_deref()
     }
 
     /// In-memory store for tests.
     pub fn open_in_memory() -> Result<Self, StoreError> {
-        let connection = Connection::open_in_memory()?;
-        Self::start(connection, None)
+        let mut connection = Connection::open_in_memory()?;
+        create_fresh(&mut connection)?;
+        Self::start_with(connection, None, None)
     }
 
-    fn start(
+    fn start_with(
         mut connection: Connection,
         artifact_root: Option<Arc<Path>>,
+        startup_notice: Option<String>,
     ) -> Result<Self, StoreError> {
         connection.pragma_update(None, "journal_mode", "WAL")?;
         connection.pragma_update(None, "foreign_keys", "ON")?;
         connection.pragma_update(None, "busy_timeout", 5_000)?;
         connection.pragma_update(None, "synchronous", "FULL")?;
-        ensure_schema(&mut connection)?;
         let (tx, mut rx) = mpsc::channel(STORE_CAPACITY);
         let fail_next_write = Arc::new(AtomicBool::new(false));
         let fail_flag = Arc::clone(&fail_next_write);
@@ -331,6 +358,7 @@ impl SessionStore {
         Ok(Self {
             tx,
             artifact_root,
+            startup_notice,
             fail_next_write,
             join: Arc::new(Mutex::new(Some(join))),
             closed: Arc::new(AtomicBool::new(false)),
@@ -464,6 +492,47 @@ impl SessionStore {
             .map_err(|_| StoreError::Closed)?;
         rx.await.map_err(|_| StoreError::Closed)?
     }
+}
+
+/// Rename the database and its WAL/SHM siblings to timestamped
+/// `.v{version}.{unix_ts}.bak` copies of the same names. The bytes are
+/// never opened, migrated, or reinterpreted; the archive is a plain
+/// rename so it is atomic per file and reversible by hand. Returns the
+/// main backup path.
+fn archive_database_files(path: &Path, old_version: i64) -> Result<PathBuf, StoreError> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("sessions.db");
+    let backup_name = format!("{file_name}.v{old_version}.{stamp}.bak");
+    let backup = path.with_file_name(&backup_name);
+    for (source, target) in [
+        (path.to_path_buf(), backup.clone()),
+        (
+            path.with_file_name(format!("{file_name}-wal")),
+            path.with_file_name(format!("{backup_name}-wal")),
+        ),
+        (
+            path.with_file_name(format!("{file_name}-shm")),
+            path.with_file_name(format!("{backup_name}-shm")),
+        ),
+    ] {
+        if source.exists() {
+            std::fs::rename(&source, &target).map_err(|err| {
+                StoreError::Sqlite(format!(
+                    "could not archive {} to {}: {err}; move the old session \
+                     database aside manually and retry",
+                    source.display(),
+                    target.display()
+                ))
+            })?;
+        }
+    }
+    Ok(backup)
 }
 
 /// Default database path under the Ion data root
