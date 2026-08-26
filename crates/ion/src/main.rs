@@ -211,9 +211,8 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 "scripted",
                 CliProvider::Scripted(ScriptedProvider::new(script.clone())),
             ));
-            let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(move || {
-                CliProvider::Scripted(ScriptedProvider::new(script.clone()))
-            });
+            let make: Arc<dyn Fn() -> CliProvider + Send + Sync> =
+                Arc::new(move || CliProvider::Scripted(ScriptedProvider::new(script.clone())));
             make_provider = make;
             model_name = None;
         }
