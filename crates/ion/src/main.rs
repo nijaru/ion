@@ -197,17 +197,23 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             model_name = Some(selection.model);
         }
         Ok(None) => {
-            let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(|| {
-                CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
-                    "scripted provider: build with --model for real answers\n",
-                )]))
-            });
+            // Test hook (smoke checklist): hold each scripted step open
+            // so a kill -9 can land mid-operation deterministically.
+            let delay = std::env::var("ION_TEST_PROVIDER_DELAY_MS")
+                .ok()
+                .and_then(|ms| ms.parse::<u64>().ok())
+                .map_or(std::time::Duration::ZERO, std::time::Duration::from_millis);
+            let script = vec![ScriptedMessage::delayed(
+                delay,
+                "scripted provider: build with --model for real answers\n",
+            )];
             root_provider = Arc::new(ion_core::SwitchingProvider::new(
                 "scripted",
-                CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
-                    "scripted provider: build with --model for real answers\n",
-                )])),
+                CliProvider::Scripted(ScriptedProvider::new(script.clone())),
             ));
+            let make: Arc<dyn Fn() -> CliProvider + Send + Sync> = Arc::new(move || {
+                CliProvider::Scripted(ScriptedProvider::new(script.clone()))
+            });
             make_provider = make;
             model_name = None;
         }
