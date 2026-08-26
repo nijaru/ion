@@ -1,4 +1,4 @@
-//! PTY automation for terminal restoration (§22.4): the TUI must leave
+//! PTY automation for terminal restoration (TERMINAL.md): the TUI must leave
 //! the terminal usable after panic and clean exit. The tests drive the
 //! real binary through a PTY pair. A background thread drains the
 //! master continuously — the child blocks writing its panic backtrace

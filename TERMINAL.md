@@ -1,9 +1,10 @@
 # Ion terminal contract
 
-This document owns terminal lifecycle, input negotiation, capabilities,
-surfaces, and inline rendering. The shared frontend/runtime contract remains
-in `DESIGN.md` §21–§22. The implementation owner is the internal
-`ion-terminal` crate.
+This document owns the terminal substrate and TUI architecture: terminal
+lifecycle, input negotiation, capabilities, surfaces, inline rendering, and
+the frontend's state/reducer structure. The shared frontend/runtime contract
+remains in `DESIGN.md` §21. The implementation owners are the internal
+`ion-terminal` crate and the `ion` TUI.
 
 ## Ownership
 
@@ -21,6 +22,15 @@ modes, decode Crossterm events, or write terminal protocol sequences.
 Resume re-enters the requested modes and refreshes negotiated capability
 state. A frontend must repaint after resume because physical renderer state
 may no longer describe the terminal.
+
+Job control follows the same ownership rule. On suspend, the terminal claim
+is released first — cooked modes restored, negotiated capabilities
+disabled — before the process stops via the default SIGTSTP disposition.
+On wake (SIGCONT or return), modes are re-armed and the next frame is a full
+repaint. Raw mode disables ISIG, so a user's Ctrl+Z arrives as the `0x1a`
+key byte and drives the same path deterministically. In orphaned process
+groups the kernel discards the re-raised stop signal; every step is
+idempotent so both outcomes are correct.
 
 ## Requirements and capabilities
 
@@ -85,7 +95,54 @@ The renderer contract is:
 
 The committed transcript is logical content. The frontend rewraps it from
 that content after a width change; it does not rewrite already-committed
-terminal scrollback as mutable UI state.
+terminal scrollback as mutable UI state. This is the resize/reflow policy:
+committed scrollback is immutable once emitted; only the logical transcript
+is rewrapped.
+
+## TUI architecture
+
+Ion renders its TUI through its own line-diff screen layer over crossterm;
+committed scrollback and the live composer/status region are one growing
+line array, each frame diffed against the previous. Ion owns application
+state/update semantics; the substrate boundary is everything above.
+
+### One UI state owner
+
+One top-level `UiState` / reducer-style update path. Widgets receive state
+and emit UI intents; they do not own independent agent runtimes or hidden
+durable state.
+
+```text
+RuntimeEvent | KeyEvent | Resize | Tick
+        ↓
+update(UiState, UiMessage)
+        ↓
+new UiState + UiEffect
+        ↓
+render(UiState)
+```
+
+### Runtime interaction
+
+UI effects call `SessionHandle`; responses return as messages/events. Model
+changes follow this path; a frontend never owns or swaps the provider
+directly.
+
+The UI never blocks rendering on provider/tool/metadata I/O. Cache locks are
+not step-boundary synchronization and MUST NOT span provider futures.
+
+### Inline-first
+
+The Pi-like inline experience is the first-class mode: completed transcript
+stays useful native terminal scrollback while the live composer/status area
+redraws efficiently. The acceptance contract is the renderer contract in
+"Surface and inline rendering" above; no separate inline semantics exist.
+
+### Restoration and shutdown
+
+Terminal raw-mode/mouse/paste/keyboard protocol changes use an RAII guard
+plus a final panic/error restoration path. Runtime shutdown and terminal
+restoration have one owner each; cleanup is not scattered across widgets.
 
 ## Acceptance checks
 

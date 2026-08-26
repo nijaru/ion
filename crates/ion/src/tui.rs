@@ -1,4 +1,5 @@
-//! Ratatui TUI frontend (DESIGN.md §21, §22).
+//! Ratatui TUI frontend. Shared runtime contract: DESIGN.md §21;
+//! TUI architecture: TERMINAL.md.
 //!
 //! One runtime contract: this frontend consumes `SessionHandle`
 //! semantics only — snapshot plus bounded live events — and never
@@ -43,7 +44,7 @@ pub struct HostConfig {
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
-/// path back into the runtime (§22.2).
+/// path back into the runtime (TERMINAL.md, runtime interaction).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
     Submit { text: String },
@@ -317,7 +318,7 @@ struct ToolRow {
     preview: Option<String>,
 }
 
-/// One UI state owner (§22.1). Plain data; no handles, no hidden state.
+/// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
     /// Composer buffer.
@@ -378,7 +379,7 @@ impl UiState {
     }
 }
 
-/// Pure reducer (§22.1): `update(UiState, UiMessage) -> UiState` plus
+/// Pure reducer: `update(UiState, UiMessage) -> UiState` plus
 /// at most one effect. Deterministic; no I/O.
 #[must_use]
 pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>) {
@@ -989,7 +990,7 @@ fn suspend_and_rearm(
 
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
-/// blocks rendering on provider/tool I/O (§22.2).
+/// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
 pub async fn run(
     session: SessionHandle,
     resume_session: Option<ion_core::SessionId>,
@@ -1005,7 +1006,7 @@ pub async fn run(
     let (term_w, term_h) = terminal.size().unwrap_or((80, 24));
 
     // The banner is committed straight to native scrollback above the
-    // region (§22.3 inline semantics): completed content never lives in
+    // region (inline-first semantics): completed content never lives in
     // the diffed window.
     let banner = if resume_session.is_some() {
         "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
@@ -1050,7 +1051,7 @@ pub async fn run(
     let mut screen = Screen::new(term_w, origin, term_h);
 
     // Committed transcript: restored entries, flushed turns. Committed
-    // lines never change once appended (§22 line-diff model).
+    // lines never change once appended (line-diff model, TERMINAL.md).
     let mut transcript = Transcript::new(term_w);
 
     // The EventStream is the sole terminal reader, so crossterm parses
@@ -1103,7 +1104,7 @@ pub async fn run(
     let mut stream_recreations = 0u32;
     const MAX_STREAM_RECREATIONS: u32 = 64;
 
-    // Job control (§22.4): SIGTSTP must leave the shell a cooked,
+    // Job control (TERMINAL.md): SIGTSTP must leave the shell a cooked,
     // capability-clean terminal while ion is stopped; SIGCONT re-arms
     // the negotiated modes and repaints. In orphaned process groups a
     // re-raised SIGTSTP is discarded by the kernel, so the raise may
@@ -1124,7 +1125,7 @@ pub async fn run(
         transcript.rewrap_if_needed(screen.size().0);
         // Flush completed turns into the committed transcript, then
         // draw committed history + live band as one line-diff frame
-        // (§22).
+        // (line-diff model, TERMINAL.md).
         if !state.pending_scrollback.is_empty() {
             let flushed = std::mem::take(&mut state.pending_scrollback);
             transcript.extend(flushed);

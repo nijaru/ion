@@ -1844,69 +1844,11 @@ be discarded explicitly.
 
 # 22. TUI architecture
 
-Ion renders its TUI through its own line-diff screen layer over crossterm:
-committed scrollback and the live composer/footer region are one growing
-line array; each frame diffs against the previous and writes changed rows.
-This mirrors the pi-tui model proven as a daily driver. Ion owns application
-state/update semantics.
-
-## 22.1 One UI state owner
-
-Use one top-level `UiState` / reducer-style update path.
-
-Widgets/components receive state and emit UI intents. They do not own independent agent runtimes or hidden durable state.
-
-Conceptually:
-
-```text
-RuntimeEvent | KeyEvent | Resize | Tick
-        ↓
-update(UiState, UiMessage)
-        ↓
-new UiState + UiEffect
-        ↓
-render(UiState)
-```
-
-## 22.2 Runtime interaction
-
-UI effects call `SessionHandle`; responses return as messages/events.
-Model changes follow this path; a frontend never owns or swaps the
-provider directly.
-
-The UI never blocks rendering on provider/tool/metadata I/O. Cache locks
-are not step-boundary synchronization and MUST NOT span provider futures.
-
-## 22.3 Inline-first
-
-Ion SHOULD support the Pi-like inline terminal experience as a first-class mode: completed transcript remains useful terminal scrollback while the live composer/status area redraws efficiently.
-
-Use the line-diff screen (§22 intro). The screen layer owns, as an
-acceptance contract:
-
-- **Origin ownership**: the host reserves the window's rows before the
-  first draw (`reserve_rows`); the window occupies the bottom rows of
-  the physical screen and never overwrites content above the launch
-  point.
-- **Committed-vs-mutable scrolling**: physical scroll happens only when
-  committed history advances. The live band is fixed-height, so
-  reversible edits (composer wrapping, preview toggles) redraw in place
-  and can never leak rows into terminal scrollback.
-- **Invalidation**: resize or any loss of previous-window state repaints
-  every row from the fresh buffer; freed rows are erased, never left as
-  ghosts.
-- **Cursor translation**: the hardware cursor maps absolute wrapped row
-  -> visible row by subtracting the window offset; cursors outside the
-  window are hidden, never mispositioned.
-- **Width model**: wrapping, cursor mapping, and cell output use the
-  same display-width model; rows are diffed at row granularity so wide
-  characters and grapheme clusters always render from complete rows.
-
-## 22.4 Terminal restoration
-
-Terminal raw mode/mouse/paste/keyboard protocol changes use an RAII guard and a final panic/error restoration path.
-
-Runtime shutdown and terminal restoration have one owner each; do not scatter cleanup across widgets.
+The TUI architecture and terminal substrate contract live in `TERMINAL.md`:
+one `UiState`/reducer owner, runtime-interaction rules, the inline line-diff
+screen contract, typed input, capability negotiation, job-control suspend,
+and terminal restoration. Frontends consume the shared runtime contract
+(§21); no frontend writes the session store or owns a provider.
 
 ---
 

@@ -88,7 +88,7 @@ fn str_width(line: &Line<'_>) -> usize {
 /// composer. The band is variable-height within this cap; growth
 /// beyond the window scrolls physically (monotonic offset), shrink
 /// blanks freed rows in place — reversible edits never duplicate
-/// committed content into scrollback (§22.3).
+/// committed content into scrollback (TERMINAL.md, inline-first).
 const LIVE_REGION_MAX_ROWS: usize = 6;
 
 /// The live band below the committed transcript. Returns pre-wrapped
