@@ -8,9 +8,7 @@ pub struct Palette {
     pub status_idle: Style,
     pub status_working: Style,
     pub tool_row: Style,
-    pub tool_running: Style,
     pub tool_error: Style,
-    pub agent_marker: Style,
     pub user_entry: Style,
     pub user_marker: Style,
     pub system_note: Style,
@@ -28,9 +26,7 @@ pub fn palette(theme: Theme) -> Palette {
             status_idle: Style::new().dim(),
             status_working: Style::new().cyan(),
             tool_row: Style::new().green(),
-            tool_running: Style::new().yellow(),
             tool_error: Style::new().red(),
-            agent_marker: Style::new().white(),
             user_entry: Style::new().cyan(),
             user_marker: Style::new().cyan().bold(),
             system_note: Style::new().dim(),
@@ -43,9 +39,7 @@ pub fn palette(theme: Theme) -> Palette {
             status_idle: Style::new().dark_gray(),
             status_working: Style::new().blue(),
             tool_row: Style::new().green(),
-            tool_running: Style::new().yellow(),
             tool_error: Style::new().red(),
-            agent_marker: Style::new().dark_gray(),
             user_entry: Style::new().blue(),
             user_marker: Style::new().blue().bold(),
             system_note: Style::new().dark_gray(),
@@ -267,7 +261,7 @@ pub(super) fn build_live(
 
     lines.push(separator_line(width, palette));
     let footer_style = if footer_hint.is_some() {
-        palette.tool_running
+        Style::new().yellow()
     } else {
         palette.status_segment
     };
@@ -301,7 +295,7 @@ pub(super) fn tool_row_line(
     preview_lines: Option<&[&str]>,
 ) -> Line<'static> {
     let (marker, dot_style) = match state {
-        ToolState::Running => (String::new(), Style::new().yellow()),
+        ToolState::Running => (String::new(), Style::new()),
         ToolState::Ok => (String::new(), Style::new().green()),
         ToolState::Error => ("\u{2717} ".to_owned(), Style::new().red()),
     };
@@ -424,12 +418,7 @@ fn push_entry_lines(
                 if logical_line.is_empty() && (i == 0 || i + 1 == total) {
                     continue;
                 }
-                let line = if i == 0 {
-                    Line::from(format!("• {logical_line}")).style(palette.agent_marker)
-                } else {
-                    Line::from(logical_line.to_owned()).style(palette.assistant)
-                };
-                out.push(line);
+                out.push(Line::from(logical_line.to_owned()).style(palette.assistant));
             }
         }
         ion_core::SessionEntry::ToolCall { call } => {

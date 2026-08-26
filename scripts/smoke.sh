@@ -63,7 +63,7 @@ ion_child_pid() {
 }
 
 quit_and_check_exit_code() { # $1 = description
-    tmux send-keys -t "$SESSION" Escape
+    tmux send-keys -t "$SESSION" C-d
     local deadline=$((SECONDS + 10))
     until capture | grep -q "SMOKE_EXIT="; do
         (( SECONDS > deadline )) && fail "$1: ion did not exit after esc"
@@ -94,7 +94,7 @@ pass "turn committed exactly once"
 
 echo "== 3. clean exit =="
 quit_and_check_exit_code "clean exit"
-pass "esc quits with code 0"
+pass "ctrl+d quits with code 0"
 
 echo "== 4. resume shows persisted history =="
 launch "--resume"

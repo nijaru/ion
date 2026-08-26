@@ -359,7 +359,10 @@ fn clean_exit_restores_the_terminal() {
         String::from_utf8_lossy(&session.output.lock().unwrap())
     );
     std::thread::sleep(std::time::Duration::from_millis(300));
-    session.master_write.write_all(&[0x1b]).expect("esc quits");
+    session
+        .master_write
+        .write_all(&[0x04])
+        .expect("ctrl+d quits");
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     let status = loop {
         match session.child.try_wait().expect("try_wait") {
@@ -437,7 +440,8 @@ fn slash_commands_render_notices_without_runtime_calls() {
         session.wait_for_output("nothing to compact", std::time::Duration::from_secs(10)),
         "idle /compact explains itself"
     );
-    session.master_write.write_all(&[0x03]).ok();
+    // ctrl+d exits from an empty, idle composer.
+    session.master_write.write_all(&[0x04]).ok();
     session.master_write.flush().ok();
     let _ = session.child.wait();
     session.assert_cooked();
@@ -487,7 +491,10 @@ fn sigstp_suspends_cleanly_and_resume_rearms() {
         termios.local_flags
     );
 
-    session.master_write.write_all(&[0x1b]).expect("esc quits");
+    session
+        .master_write
+        .write_all(&[0x04])
+        .expect("ctrl+d quits");
     let status = session
         .wait_exit(std::time::Duration::from_secs(10))
         .expect("child did not exit after resume + esc");
@@ -537,7 +544,10 @@ fn resize_storm_survives_and_stays_interactive() {
             .collect::<String>()
     );
 
-    session.master_write.write_all(&[0x1b]).expect("esc quits");
+    session
+        .master_write
+        .write_all(&[0x04])
+        .expect("ctrl+d quits");
     let status = session
         .wait_exit(std::time::Duration::from_secs(10))
         .expect("child did not exit after storm");

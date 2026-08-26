@@ -548,10 +548,13 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
 
 fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffect>) {
     match action {
+        // Escape interrupts a running operation. At idle it does
+        // nothing: quitting is ctrl+c twice or ctrl+d (empty), so a
+        // reflexive escape can never exit the app or discard state.
         Action::Cancel => {
             if matches!(state.status, UiStatus::Idle) {
-                state.quit_requested = true;
-                (state, Some(UiEffect::Quit))
+                state.hint = None;
+                (state, None)
             } else {
                 (state, Some(UiEffect::Cancel))
             }
@@ -927,19 +930,13 @@ impl UiState {
             }
         }
         if !self.draft.is_empty() {
-            let mut first = true;
             for line in self.draft.lines() {
-                // Assistant content: leading dot on the first line,
-                // blank lines dropped (single-newline spacing).
+                // Assistant content renders plain (pi parity); blank
+                // lines dropped (single-newline spacing).
                 if line.trim().is_empty() {
                     continue;
                 }
-                let mut styled = markdown_line(line.trim_end());
-                if first {
-                    styled.spans.insert(0, Span::from("\u{25cf} "));
-                    first = false;
-                }
-                self.pending_scrollback.push(styled);
+                self.pending_scrollback.push(markdown_line(line.trim_end()));
             }
             if self.draft_degraded {
                 self.pending_scrollback.push(
@@ -1079,7 +1076,7 @@ pub async fn run(
     // the diffed window.
     let banner = if resume_session.is_some() {
         format!(
-            "ion v{} — resumed; enter sends; esc cancels; ctrl-d quits",
+            "ion v{} — resumed; enter sends; escape interrupts",
             env!("CARGO_PKG_VERSION")
         )
     } else {
@@ -1094,8 +1091,8 @@ pub async fn run(
         // Key cheats (pi parity): dim lines under the header.
         for cheat in [
             "escape to interrupt",
-            "ctrl+c to clear · twice to exit",
-            "ctrl+d to exit (empty)",
+            "ctrl+c clear · twice to exit",
+            "ctrl+d exit (empty)",
             "shift+enter to steer",
             "ctrl+o tool output",
             "ctrl+t thinking",
@@ -1793,7 +1790,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn esc_cancels_when_working_and_quits_when_idle() {
+    fn esc_cancels_when_working_and_is_inert_when_idle() {
         let mut state = UiState::new();
         state.status = UiStatus::Working {
             operation: "running bash".to_owned(),
@@ -1801,10 +1798,12 @@ pub(crate) mod tests {
         let (_, effect) = update(state, key(KeyCode::Esc));
         assert_eq!(effect, Some(UiEffect::Cancel));
 
+        // Idle: escape never exits — reflexive escapes must not quit
+        // the app or touch durable state.
         let state = UiState::new();
         let (state, effect) = update(state, key(KeyCode::Esc));
-        assert_eq!(effect, Some(UiEffect::Quit));
-        assert!(state.quit_requested);
+        assert_eq!(effect, None);
+        assert!(!state.quit_requested);
     }
 
     #[test]
