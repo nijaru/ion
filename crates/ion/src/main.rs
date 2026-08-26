@@ -93,6 +93,18 @@ fn policy_for(allow: &[String]) -> Arc<dyn ion_core::PolicyEngine> {
     }
 }
 
+/// Best-effort git branch for the footer; None outside a repo.
+fn git_branch() -> std::io::Result<Option<String>> {
+    let output = std::process::Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+    Ok((!name.is_empty()).then_some(name))
+}
+
 async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
     let make_provider = match provider_factory(cli, settings) {
         Ok(factory) => factory,
@@ -339,6 +351,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 path.file_name()
                     .map(|name| name.to_string_lossy().into_owned())
             }),
+            branch: git_branch().ok().flatten(),
         },
         guard,
     )

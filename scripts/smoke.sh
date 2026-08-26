@@ -80,7 +80,7 @@ cargo build -q -p ion || { echo "build failed"; exit 1; }
 
 echo "== 1. fresh start =="
 launch
-wait_for "idle •" 15 || fail "fresh start: no idle banner"
+wait_for "escape to interrupt" 15 || fail "fresh start: no idle banner"
 pass "idle banner renders"
 
 echo "== 2. submit a turn =="
@@ -139,7 +139,7 @@ conn.close()
 PYEOF
 launch
 wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "idle •" 15 || fail "schema bump: session did not start"
+wait_for "escape to interrupt" 15 || fail "schema bump: session did not start"
 ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
 pass "old store archived, notice shown, session starts"
 

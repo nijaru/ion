@@ -46,6 +46,8 @@ pub struct HostConfig {
     pub startup_notice: Option<String>,
     /// Basename of the launch working directory (status line).
     pub cwd_label: Option<String>,
+    /// Git branch of the working directory, captured at launch.
+    pub branch: Option<String>,
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -319,7 +321,9 @@ fn parse_key(spec: &str) -> Result<(KeyCode, Modifiers), String> {
 /// preview from settlement (rendered only while expanded).
 #[derive(Debug, Clone)]
 struct ToolRow {
-    label: String,
+    tool: String,
+    target: Option<String>,
+    is_error: bool,
     preview: Option<String>,
 }
 
@@ -360,6 +364,8 @@ pub struct UiState {
     tool_rows: Vec<ToolRow>,
     /// Basename of the working directory for the status line.
     cwd_label: Option<String>,
+    /// Git branch of the working directory, captured at launch.
+    branch: Option<String>,
     status: UiStatus,
     /// Model id for /model display (host-provided, not runtime state).
     model_name: Option<String>,
@@ -734,25 +740,22 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         }
         RuntimeEvent::ToolStarted { tool, target, .. } => {
             flush_thinking(&mut state);
-            state.tool_rows.push(ToolRow {
-                label: match target {
-                    Some(target) => format!("· {tool} {target}…"),
-                    None => format!("· {tool}…"),
-                },
-                preview: None,
-            });
             state.status = UiStatus::Working {
                 operation: format!("running {tool}"),
             };
+            state.tool_rows.push(ToolRow {
+                tool,
+                target,
+                is_error: false,
+                preview: None,
+            });
         }
         RuntimeEvent::ToolSettled {
             is_error, preview, ..
         } => {
             if let Some(row) = state.tool_rows.last_mut() {
                 // The running row is the one this settlement answers.
-                if is_error && !row.label.ends_with("✗") {
-                    row.label.push_str(" ✗");
-                }
+                row.is_error = is_error || row.is_error;
                 row.preview = preview;
             }
         }
@@ -864,7 +867,12 @@ impl UiState {
         // Tool rows precede the text they enabled. Expanded rendering
         // includes each settled output preview (pi-parity ctrl+o).
         for row in self.tool_rows.drain(..) {
-            self.pending_scrollback.push(Line::from(row.label).dim());
+            self.pending_scrollback.push(render::tool_row_line(
+                &row.tool,
+                row.target.as_deref(),
+                row.is_error,
+                None,
+            ));
             if self.tool_output_expanded {
                 for line in row.preview.iter().flat_map(|p| p.lines()) {
                     self.pending_scrollback
@@ -909,13 +917,11 @@ impl UiState {
             Some(live) => {
                 self.draft = live.draft_text.clone();
                 self.draft_thinking = live.draft_thinking.clone();
-                for tool in &live.pending_tools {
-                    let label = match &tool.target {
-                        Some(target) => format!("· {} {target}…", tool.tool),
-                        None => format!("· {}…", tool.tool),
-                    };
+                for pending in &live.pending_tools {
                     self.tool_rows.push(ToolRow {
-                        label,
+                        tool: pending.tool.clone(),
+                        target: pending.target.clone(),
+                        is_error: false,
                         preview: None,
                     });
                 }
@@ -1020,15 +1026,32 @@ pub async fn run(
     // region (inline-first semantics): completed content never lives in
     // the diffed window.
     let banner = if resume_session.is_some() {
-        "— ion — resumed; enter sends; esc cancels; ctrl-d quits —"
+        format!(
+            "ion v{} — resumed; enter sends; esc cancels; ctrl-d quits",
+            env!("CARGO_PKG_VERSION")
+        )
     } else {
-        "— ion — type a prompt; enter sends; esc cancels; ctrl-d quits —"
+        format!("ion v{}", env!("CARGO_PKG_VERSION"))
     };
     {
         let out = terminal.output();
-        writeln!(out, "{banner}").map_err(|err| {
+        // Raw mode has no ONLCR: every line needs an explicit \r.
+        writeln!(out, "{banner}\r").map_err(|err| {
             RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
         })?;
+        // Key cheats (pi parity): dim lines under the header.
+        for cheat in [
+            "escape to interrupt",
+            "ctrl+o to expand tools",
+            "ctrl+t to expand thinking",
+            "ctrl+z to suspend",
+            "/ for commands",
+            "ctrl+d to quit",
+        ] {
+            writeln!(out, "{cheat}\r").map_err(|err| {
+                RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
+            })?;
+        }
         out.flush().map_err(|err| {
             RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
         })?;
@@ -1077,6 +1100,7 @@ pub async fn run(
     state.set_model_name(host.model_name.clone());
     state.thinking_visible = !host.hide_thinking_block;
     state.cwd_label = host.cwd_label.clone();
+    state.branch = host.branch.clone();
     state.model_switching_available = switching_available;
     if let Some(notice) = host.startup_notice {
         state
@@ -1566,7 +1590,8 @@ pub(crate) mod tests {
         assert_eq!(state.draft_thinking, "reasoning so far");
         assert!(!state.draft_degraded);
         assert_eq!(state.tool_rows.len(), 1);
-        assert_eq!(state.tool_rows[0].label, "· read Cargo.toml…");
+        assert_eq!(state.tool_rows[0].tool, "read");
+        assert_eq!(state.tool_rows[0].target.as_deref(), Some("Cargo.toml"));
     }
 
     #[test]
@@ -1645,8 +1670,8 @@ pub(crate) mod tests {
             },
         );
         assert_eq!(
-            state.tool_rows.last().map(|row| row.label.as_str()),
-            Some("· read Cargo.toml…")
+            state.tool_rows.last().map(|row| row.target.as_deref()),
+            Some(Some("Cargo.toml"))
         );
     }
 

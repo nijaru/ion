@@ -172,19 +172,17 @@ pub(super) fn build_live(
 
     let mut head: Vec<Line<'static>> = Vec::new();
     if let Some(latest) = state.tool_rows.last() {
-        head.extend(wrap_line(
-            &Line::from(latest.label.clone()).style(palette.tool_row),
-            width,
-        ));
-        if state.tool_output_expanded {
-            for line in latest.preview.iter().flat_map(|p| p.lines()) {
-                head.extend(wrap_line(
-                    &Line::from(format!("  {line}"))
-                        .style(palette.tool_row)
-                        .italic(),
-                    width,
-                ));
-            }
+        let preview: Option<Vec<&str>> = state
+            .tool_output_expanded
+            .then(|| latest.preview.iter().flat_map(|p| p.lines()).collect());
+        let rendered = tool_row_line(
+            &latest.tool,
+            latest.target.as_deref(),
+            latest.is_error,
+            preview.as_deref(),
+        );
+        for line in wrap_line(&rendered, width) {
+            head.push(line);
         }
     }
     if !state.draft.is_empty() {
@@ -211,35 +209,26 @@ pub(super) fn build_live(
         head = head.split_off(head.len() - budget);
     }
 
-    // Fit the head above the composer inside the band cap, keeping
-    // the newest content when truncating.
-    let budget = LIVE_REGION_MAX_ROWS.saturating_sub(composer_len);
-    if head.len() > budget {
-        head = head.split_off(head.len() - budget);
+    // Footer (pi parity): line 1 is `dir (branch)` plus the live
+    // progress; line 2 is the provider/model label, right-aligned.
+    let mut footer_left = match (&state.cwd_label, &state.branch) {
+        (Some(dir), Some(branch)) => format!("{dir} ({branch})"),
+        (Some(dir), None) => dir.clone(),
+        (None, Some(branch)) => format!("({branch})"),
+        (None, None) => String::new(),
+    };
+    if let UiStatus::Working { operation } = &state.status {
+        if !footer_left.is_empty() {
+            footer_left.push_str("  ");
+        }
+        footer_left.push_str(&format!("\u{25cf} {operation}"));
     }
-
-    // Status segments (Go parity): dim, inset, dot-joined.
-    let status_segments: Vec<String> = match &state.status {
-        UiStatus::Idle => {
-            let mut segments = vec!["idle".to_owned()];
-            if let Some(model) = &state.model_name {
-                segments.push(model.clone());
-            }
-            if let Some(dir) = &state.cwd_label {
-                segments.push(dir.clone());
-            }
-            segments
-        }
-        UiStatus::Working { operation } => {
-            let mut segments = vec![format!("\u{25cf} {operation}")];
-            if let Some(model) = &state.model_name {
-                segments.push(model.clone());
-            }
-            if let Some(dir) = &state.cwd_label {
-                segments.push(dir.clone());
-            }
-            segments
-        }
+    let provider_model = match &state.model_name {
+        Some(model) => match model.split_once('/') {
+            Some((provider, id)) => format!("({provider}) {id}"),
+            None => model.clone(),
+        },
+        None => "(scripted)".to_owned(),
     };
 
     let mut lines: Vec<Line<'static>> = std::mem::take(&mut head);
@@ -265,12 +254,40 @@ pub(super) fn build_live(
     lines.extend(composer_rows);
 
     lines.push(separator_line(width, palette));
+    lines.push(Line::from(format!(" {footer_left}")).style(palette.status_segment));
+
+    let left_width = footer_left.width() + 1;
+    let pad = width.saturating_sub(left_width + provider_model.width());
     lines.push(
-        Line::from(format!(" {}", status_segments.join(" \u{2022} ")))
-            .style(palette.status_segment),
+        Line::from(format!(" {}{}", " ".repeat(pad), provider_model)).style(palette.status_segment),
     );
 
     (lines, cursor)
+}
+
+/// One tool line (pi style): bold tool name, dim target, red failure
+/// marker; `preview_lines` renders the expanded output block dim.
+pub(super) fn tool_row_line(
+    row_tool: &str,
+    row_target: Option<&str>,
+    row_error: bool,
+    preview_lines: Option<&[&str]>,
+) -> Line<'static> {
+    let marker = if row_error { "\u{2717} " } else { "" };
+    let mut spans: Vec<Span> = vec![Span::styled(
+        format!("{marker}{}", row_tool),
+        Style::new().bold(),
+    )];
+    if let Some(target) = row_target {
+        spans.push(Span::styled(format!(" {target}"), Style::new().dim()));
+    }
+    if let Some(lines) = preview_lines {
+        for line in lines {
+            spans.push(Span::raw("\n"));
+            spans.push(Span::styled(format!("  {line}"), Style::new().dim()));
+        }
+    }
+    Line::from(spans)
 }
 
 /// Dim full-width rule used as shell chrome above/below the live band.
