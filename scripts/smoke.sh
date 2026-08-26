@@ -80,7 +80,7 @@ cargo build -q -p ion || { echo "build failed"; exit 1; }
 
 echo "== 1. fresh start =="
 launch
-wait_for "idle — type a prompt" 15 || fail "fresh start: no idle banner"
+wait_for "idle •" 15 || fail "fresh start: no idle banner"
 pass "idle banner renders"
 
 echo "== 2. submit a turn =="
@@ -99,7 +99,7 @@ pass "esc quits with code 0"
 echo "== 4. resume shows persisted history =="
 launch "--resume"
 wait_for "resumed" 15 || fail "resume: no resumed banner"
-capture | grep -q "hello" || fail "resume: previous turn missing"
+capture | grep -qE "(› hello|hello)" || fail "resume: previous turn missing"
 pass "resume restores history"
 
 echo "== 5. kill -9 mid-operation recovers =="
@@ -111,7 +111,7 @@ tmux new-session -d -s "$SESSION" -x 100 -y 30 \
 SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
 wait_for "resumed" 15 || fail "kill -9: no resumed banner"
 type_line "interruptible"
-wait_for "you » interruptible" 10 || fail "kill -9: submission not accepted"
+wait_for "› interruptible" 10 || fail "kill -9: submission not accepted"
 CHILD="$(ion_child_pid)"
 [[ -n "$CHILD" ]] && kill -9 "$CHILD" || fail "kill -9: no ion child found"
 launch "--resume"
@@ -139,7 +139,7 @@ conn.close()
 PYEOF
 launch
 wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "idle — type a prompt" 15 || fail "schema bump: session did not start"
+wait_for "idle •" 15 || fail "schema bump: session did not start"
 ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
 pass "old store archived, notice shown, session starts"
 

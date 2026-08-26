@@ -335,6 +335,10 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             model_name,
             hide_thinking_block: settings.hide_thinking_block,
             startup_notice: store.startup_notice().map(str::to_owned),
+            cwd_label: std::env::current_dir().ok().as_ref().and_then(|path| {
+                path.file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+            }),
         },
         guard,
     )

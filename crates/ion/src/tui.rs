@@ -44,6 +44,8 @@ pub struct HostConfig {
     /// One-time store/startup notice (e.g. archived old-schema
     /// database) rendered once into the transcript.
     pub startup_notice: Option<String>,
+    /// Basename of the launch working directory (status line).
+    pub cwd_label: Option<String>,
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -356,6 +358,8 @@ pub struct UiState {
     draft_degraded: bool,
     /// Completed tool rows for the live operation, newest last.
     tool_rows: Vec<ToolRow>,
+    /// Basename of the working directory for the status line.
+    cwd_label: Option<String>,
     status: UiStatus,
     /// Model id for /model display (host-provided, not runtime state).
     model_name: Option<String>,
@@ -709,11 +713,12 @@ fn browse_history(state: &mut UiState, direction: i32) {
 }
 
 fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
+    let palette = palette(Theme::Dark);
     match event {
         RuntimeEvent::OperationStarted { prompt, .. } => {
             state
                 .pending_scrollback
-                .push(Line::from(format!("you » {prompt}")).bold());
+                .push(Line::from(format!("\u{203a} {prompt}")).style(palette.user_entry));
             state.draft.clear();
             state.tool_rows.clear();
             state.status = UiStatus::Working {
@@ -869,9 +874,12 @@ impl UiState {
         }
         if !self.draft.is_empty() {
             for line in self.draft.lines() {
-                let mut styled = markdown_line(line);
-                styled.spans.insert(0, Span::from("ion « ").dim());
-                self.pending_scrollback.push(styled);
+                // Assistant content renders plain, matching durable
+                // history projection; no per-line role prefix.
+                let styled = markdown_line(line.trim_end());
+                if !styled.to_string().is_empty() || !line.is_empty() {
+                    self.pending_scrollback.push(styled);
+                }
             }
             if self.draft_degraded {
                 self.pending_scrollback.push(
@@ -1068,6 +1076,7 @@ pub async fn run(
     state.set_keymap(keymap);
     state.set_model_name(host.model_name.clone());
     state.thinking_visible = !host.hide_thinking_block;
+    state.cwd_label = host.cwd_label.clone();
     state.model_switching_available = switching_available;
     if let Some(notice) = host.startup_notice {
         state
@@ -1100,6 +1109,7 @@ pub async fn run(
         &snapshot.entries,
         resume_entry_count,
         resume_session,
+        &palette,
     );
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
@@ -1244,6 +1254,7 @@ pub async fn run(
                                     &snapshot.entries,
                                     resume_entry_count,
                                     resume_session,
+                                    &palette,
                                 );
                             }
                             Err(err) => {
@@ -1751,7 +1762,7 @@ pub(crate) mod tests {
         assert!(matches!(state.status, UiStatus::Working { .. }));
         assert_eq!(
             state.pending_scrollback[0].to_string(),
-            "you » read the design"
+            "\u{203a} read the design"
         );
 
         let (state, _) = update(
@@ -1776,7 +1787,7 @@ pub(crate) mod tests {
             state
                 .pending_scrollback
                 .iter()
-                .any(|line| line.to_string().contains("ion « hello"))
+                .any(|line| line.to_string().contains("hello"))
         );
         assert!(state.draft.is_empty());
     }
@@ -1796,7 +1807,8 @@ pub(crate) mod tests {
             },
         ];
         let mut transcript = Transcript::new(40);
-        append_snapshot_entries(&mut transcript, &entries, 2, Some(session_id));
+        let palette = render::palette(Theme::Dark);
+        append_snapshot_entries(&mut transcript, &entries, 2, Some(session_id), &palette);
 
         let marker = format!("— resumed session {session_id} —");
         let marker_index = transcript
@@ -1804,11 +1816,11 @@ pub(crate) mod tests {
             .iter()
             .position(|line| line.to_string() == marker)
             .expect("resume marker");
-        let history_lines = entry_lines(&entries[..2]);
+        let history_lines = entry_lines(&entries[..2], &palette);
         assert_eq!(marker_index, history_lines.len());
         assert_eq!(
             transcript.raw[marker_index + 1..],
-            entry_lines(&entries[2..])
+            entry_lines(&entries[2..], &palette)
         );
     }
 
@@ -1817,7 +1829,7 @@ pub(crate) mod tests {
         let entries = [ion_core::SessionEntry::AssistantMessage {
             text: "a".repeat(100),
         }];
-        let lines = entry_lines(&entries);
+        let lines = entry_lines(&entries, &render::palette(Theme::Dark));
         assert_eq!(
             lines.len(),
             1,
