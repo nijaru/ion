@@ -5,8 +5,9 @@
 //! once the PTY buffer fills, so stopping the reads would deadlock it.
 
 use std::io::{Read, Write};
-use std::os::fd::AsFd;
+use std::os::fd::{AsFd, AsRawFd};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nix::fcntl::{FcntlArg, OFlag, fcntl};
@@ -50,6 +51,7 @@ struct PtySession {
     master_write: std::fs::File,
     slave: std::fs::File,
     child: std::process::Child,
+    close_master: Arc<AtomicBool>,
 }
 
 /// A temp settings file with no default model, so the scripted
@@ -102,6 +104,16 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
             // SAFETY: the forked child is single-threaded; these calls
             // only touch process/tty state.
             libc::setsid();
+            // Job-control signals must be default-disposition in the
+            // child regardless of what the invoking shell ignored.
+            libc::signal(libc::SIGTSTP, libc::SIG_DFL);
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGHUP, libc::SIG_DFL);
+            // Make the pty the controlling terminal so kernel hangup
+            // (master close) reaches the child, and become its
+            // foreground group like a real login shell would.
+            libc::ioctl(0, libc::TIOCSCTTY.into(), 0 as libc::c_ulong);
+            libc::tcsetpgrp(0, libc::getpgrp());
             Ok(())
         });
     }
@@ -118,7 +130,9 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
     // reply).
     let collected: Arc<Mutex<Vec<u8>>> = Arc::new(Mutex::new(Vec::new()));
     let reader_buffer = Arc::clone(&collected);
+    let close_master = Arc::new(AtomicBool::new(false));
     let mut responder = std::fs::File::from(master.try_clone().expect("dup master"));
+    let drain_close = Arc::clone(&close_master);
     std::thread::spawn(move || {
         let mut file = std::fs::File::from(master);
         let mut chunk = [0u8; 4096];
@@ -127,6 +141,11 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
         // Non-blocking reads: EAGAIN just means no data yet; EOF (or
         // the master closing) ends the drain.
         loop {
+            if drain_close.load(Ordering::SeqCst) {
+                // Dropping both dups closes the master; the kernel then
+                // hangs up the child's foreground process group.
+                break;
+            }
             match file.read(&mut chunk) {
                 Ok(0) => break,
                 Ok(n) => {
@@ -162,7 +181,13 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
                 Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
                     std::thread::sleep(std::time::Duration::from_millis(10));
                 }
-                Err(_) => break,
+                Err(err) => {
+                    reader_buffer
+                        .lock()
+                        .expect("drain lock")
+                        .extend_from_slice(format!("\n<<DRAIN-ERR {err}>>").as_bytes());
+                    break;
+                }
             }
         }
     });
@@ -174,6 +199,7 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
         master_write: master_write.into(),
         slave: held_slave.into(),
         child,
+        close_master,
     }
 }
 
@@ -203,6 +229,54 @@ impl PtySession {
             .unwrap_or(false)
     }
 
+    /// Count occurrences in the raw byte stream (for re-emitted
+    /// capability sequences after suspend/resume).
+    fn count_raw(&self, needle: &str) -> usize {
+        let buffer = self.output.lock().expect("output lock");
+        std::str::from_utf8(&buffer)
+            .map(|text| text.matches(needle).count())
+            .unwrap_or(0)
+    }
+
+    /// Close every master fd so the kernel hangs up the child.
+    fn hang_up(&mut self) {
+        self.close_master.store(true, Ordering::SeqCst);
+        self.master_write = std::fs::File::open("/dev/null").expect("placeholder fd");
+    }
+
+    #[allow(unsafe_code)] // raw signal syscall
+    fn continue_child(&self) {
+        let pid = self.child.id() as i32;
+        // SAFETY: plain signal syscall on a live, stopped child.
+        unsafe { libc::kill(pid, libc::SIGCONT) };
+    }
+
+    /// Set the pty window size; the kernel delivers SIGWINCH to the
+    /// foreground process group.
+    #[allow(unsafe_code)] // raw ioctl for winsize changes
+    fn set_winsize(&self, rows: u16, cols: u16) {
+        let winsize = libc::winsize {
+            ws_row: rows,
+            ws_col: cols,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        let fd = self.slave.as_fd().as_raw_fd();
+        // SAFETY: TIOCSWINSZ with a valid winsize pointer.
+        unsafe { libc::ioctl(fd, libc::TIOCSWINSZ, &winsize) };
+    }
+
+    fn wait_exit(&mut self, timeout: std::time::Duration) -> Option<std::process::ExitStatus> {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.child.try_wait().expect("try_wait") {
+                Some(status) => return Some(status),
+                None if std::time::Instant::now() > deadline => return None,
+                None => std::thread::sleep(std::time::Duration::from_millis(100)),
+            }
+        }
+    }
+
     fn wait_for_raw(&self, needle: &str, timeout: std::time::Duration) -> bool {
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
@@ -215,9 +289,12 @@ impl PtySession {
     }
 
     /// The TUI puts the tty in raw mode; after any exit path ECHO and
-    /// ICANON must be back on (the guard restored cooked mode).
+    /// ICANON must be back on (the guard restored cooked mode). Read
+    /// through the master: when the child owns the pty as its
+    /// controlling terminal, a session-leader exit disassociates the
+    /// slave and leaves ENOTTY on held slave fds.
     fn assert_cooked(&self) {
-        let termios = tcgetattr(&self.slave).expect("tcgetattr on pty slave");
+        let termios = tcgetattr(&self.master_write).expect("tcgetattr on pty master");
         assert!(
             termios
                 .local_flags
@@ -364,4 +441,136 @@ fn slash_commands_render_notices_without_runtime_calls() {
     session.master_write.flush().ok();
     let _ = session.child.wait();
     session.assert_cooked();
+}
+
+/// H0b matrix: suspend must leave the shell a cooked, capability-clean
+/// terminal while ion is stopped; resume/continue must re-arm the
+/// negotiated modes and repaint. In raw mode ISIG is off, so a real
+/// Ctrl+Z arrives as the 0x1a byte — that is the deterministic driver.
+#[test]
+fn sigstp_suspends_cleanly_and_resume_rearms() {
+    let mut session = spawn_ion(&[]);
+    assert!(
+        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        "TUI idle banner never appeared"
+    );
+
+    let disables_before = session.count_raw("\x1b[?2004l");
+    let enables_before = session.count_raw("\x1b[>1u");
+    session.master_write.write_all(&[0x1a]).expect("ctrl+z");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let disables_now = session.count_raw("\x1b[?2004l");
+        let enables_now = session.count_raw("\x1b[>1u");
+        if disables_now > disables_before && enables_now > enables_before {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "suspend/resume cycle not observed after ctrl+z"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+
+    // After the cycle the terminal must be back in raw mode with the
+    // negotiated keyboard enhancement re-armed, and still interactive.
+
+    session.continue_child();
+    // Give the loop a moment to notice SIGCONT and settle.
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    let termios = tcgetattr(&session.master_write).expect("tcgetter after resume");
+    assert!(
+        !termios
+            .local_flags
+            .contains(LocalFlags::ECHO | LocalFlags::ICANON),
+        "raw mode not re-applied after resume: {:?}",
+        termios.local_flags
+    );
+
+    session.master_write.write_all(&[0x1b]).expect("esc quits");
+    let status = session
+        .wait_exit(std::time::Duration::from_secs(10))
+        .expect("child did not exit after resume + esc");
+    assert!(status.success(), "exit after resume must be clean");
+    session.assert_cooked();
+}
+
+/// H0b matrix: a resize storm must not kill or wedge the renderer;
+/// after the storm the TUI still accepts input and exits cleanly.
+#[test]
+fn resize_storm_survives_and_stays_interactive() {
+    let mut session = spawn_ion(&[]);
+    assert!(
+        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        "TUI idle banner never appeared"
+    );
+    session.master_write.write_all(b"hello\r").expect("submit");
+    assert!(
+        session.wait_for_output("scripted provider", std::time::Duration::from_secs(15)),
+        "expected the scripted response before the storm"
+    );
+
+    for i in 0..12 {
+        if i % 2 == 0 {
+            session.set_winsize(15, 40);
+        } else {
+            session.set_winsize(30, 100);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(40));
+    }
+    session.set_winsize(30, 100);
+
+    // Still interactive after the storm.
+    let alive = session.child.try_wait().expect("try_wait").is_none();
+    session.master_write.write_all(b"second\r").expect("second");
+    let seen = session.wait_for_output("scripted provider", std::time::Duration::from_secs(15));
+    assert!(
+        seen,
+        "TUI unresponsive after resize storm (alive={alive}); tail: {:?}",
+        String::from_utf8_lossy(&session.output.lock().unwrap())
+            .chars()
+            .rev()
+            .take(600)
+            .collect::<String>()
+            .chars()
+            .rev()
+            .collect::<String>()
+    );
+
+    session.master_write.write_all(&[0x1b]).expect("esc quits");
+    let status = session
+        .wait_exit(std::time::Duration::from_secs(10))
+        .expect("child did not exit after storm");
+    assert!(status.success(), "clean exit required after storm");
+    session.assert_cooked();
+}
+
+/// H0b matrix: a lost terminal must end the process instead of
+/// leaving it writing into the void forever. Linux kernels raise
+/// SIGHUP themselves when the master closes; macOS stays silent, so
+/// there the terminal manager's hangup signal is delivered explicitly.
+#[test]
+fn dead_tty_ends_the_process() {
+    let mut session = spawn_ion(&[]);
+    assert!(
+        session.wait_for_output("idle", std::time::Duration::from_secs(15)),
+        "TUI idle banner never appeared"
+    );
+    session.hang_up();
+    #[cfg(target_os = "linux")]
+    if session
+        .wait_exit(std::time::Duration::from_secs(3))
+        .is_some()
+    {
+        return;
+    }
+    #[cfg(not(target_os = "linux"))]
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    // SAFETY: plain signal syscall; the child pid is valid.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::kill(session.child.id() as i32, libc::SIGHUP);
+    }
+    let status = session.wait_exit(std::time::Duration::from_secs(10));
+    assert!(status.is_some(), "child outlived its terminal loss");
 }

@@ -18,11 +18,12 @@ etcetera = "0.11.0"
 futures-util = "0.3.34"
 ion-core.workspace = true
 ion-terminal.workspace = true
+libc = "0.2.189"
 ratatui = "0.30.2"
 reqwest = { version = "0.13.4", features = ["json", "stream", "rustls"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-tokio = { workspace = true, features = ["io-util", "io-std"] }
+tokio = { workspace = true, features = ["io-util", "io-std", "signal"] }
 tokio-util.workspace = true
 toml = "1.1.4"
 tracing.workspace = true
@@ -31,7 +32,6 @@ unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 
 [dev-dependencies]
-libc = "0.2.189"
 nix = { version = "0.31.3", features = ["fs", "term"] }
 tempfile = "3.27.0"
 

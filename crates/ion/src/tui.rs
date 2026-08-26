@@ -9,6 +9,8 @@
 
 use std::io::Write;
 
+use libc::SIGTSTP;
+
 use ratatui::style::{Style, Stylize};
 use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation as _;
@@ -940,6 +942,51 @@ pub fn setup_terminal() -> Result<TerminalSession, RuntimeError> {
     Ok(session)
 }
 
+/// Suspend the terminal claim, stop via the default TSTP
+/// disposition, then re-arm on wake. In orphaned process groups the
+/// kernel discards the re-raised TSTP and execution continues
+/// immediately; every step is idempotent so both worlds are correct.
+fn suspend_and_rearm(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    sigtstp: &mut tokio::signal::unix::Signal,
+) -> Result<(), RuntimeError> {
+    use tokio::signal::unix::{SignalKind, signal};
+
+    // Give the shell back a usable terminal before stopping.
+    terminal
+        .suspend()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal suspend failed: {err}")))?;
+    screen.invalidate();
+    // Default disposition for the real stop: unregister by dropping
+    // the stream inside our own slot.
+    {
+        use tokio::signal::unix::{SignalKind, signal as register};
+        // Take the old stream so it drops now, before the re-raise.
+        let _old = std::mem::replace(
+            sigtstp,
+            // Placeholder replaced again right after the raise.
+            register(SignalKind::from_raw(SIGTSTP)).map_err(|err| {
+                RuntimeError::OperationFailed(format!("signal setup failed: {err}"))
+            })?,
+        );
+    }
+    // SAFETY: plain signal syscalls on this process.
+    #[allow(unsafe_code)]
+    unsafe {
+        libc::kill(libc::getpid(), libc::SIGTSTP);
+    }
+    // Resumed (SIGCONT) or TSTP was swallowed by an orphaned group:
+    // re-arm everything.
+    *sigtstp = signal(SignalKind::from_raw(SIGTSTP))
+        .map_err(|err| RuntimeError::OperationFailed(format!("signal setup failed: {err}")))?;
+    terminal
+        .resume()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal resume failed: {err}")))?;
+    screen.invalidate();
+    Ok(())
+}
+
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (§22.2).
@@ -1056,6 +1103,18 @@ pub async fn run(
     let mut stream_recreations = 0u32;
     const MAX_STREAM_RECREATIONS: u32 = 64;
 
+    // Job control (§22.4): SIGTSTP must leave the shell a cooked,
+    // capability-clean terminal while ion is stopped; SIGCONT re-arms
+    // the negotiated modes and repaints. In orphaned process groups a
+    // re-raised SIGTSTP is discarded by the kernel, so the raise may
+    // return immediately; the resume path is idempotent either way.
+    let mut sigtstp =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(SIGTSTP))
+            .map_err(|err| RuntimeError::OperationFailed(format!("signal setup failed: {err}")))?;
+    let mut sigcont =
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(libc::SIGCONT))
+            .map_err(|err| RuntimeError::OperationFailed(format!("signal setup failed: {err}")))?;
+
     loop {
         // Size changes are polled directly: resize events ride the same
         // fragile stream as keys.
@@ -1092,6 +1151,16 @@ pub async fn run(
                 match maybe_key {
                     Some(Ok(InputEvent::Key(key))) => {
                         stream_recreations = 0;
+                        if key.code == KeyCode::Char('z') && key.modifiers | Modifiers::CONTROL == key.modifiers
+                        {
+                            if let Err(err) =
+                                suspend_and_rearm(&mut terminal, &mut screen, &mut sigtstp)
+                            {
+                                result = Err(err);
+                                break;
+                            }
+                            continue;
+                        }
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
@@ -1180,6 +1249,23 @@ pub async fn run(
                         break;
                     }
                 }
+            }
+            _ = sigtstp.recv() => {
+                if let Err(err) = suspend_and_rearm(&mut terminal, &mut screen, &mut sigtstp) {
+                    result = Err(err);
+                    break;
+                }
+            }
+            _ = sigcont.recv() => {
+                // External continue after a stop we did not observe:
+                // make sure modes and surface are live again.
+                if let Err(err) = terminal.resume() {
+                    result = Err(RuntimeError::OperationFailed(format!(
+                        "terminal resume failed: {err}"
+                    )));
+                    break;
+                }
+                screen.invalidate();
             }
         }
     }

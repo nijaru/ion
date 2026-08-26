@@ -136,6 +136,15 @@ impl Screen {
         self.cursor_at = None;
     }
 
+    /// Force a full repaint on the next draw without changing size.
+    /// Used after suspend/resume: the host terminal's visible surface
+    /// is no longer what this Screen believes it is.
+    pub fn invalidate(&mut self) {
+        self.current = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+    }
+
     /// Render one frame. Lines must already be wrapped to `width`;
     /// each occupies exactly one row (overlong spans truncate).
     pub fn draw(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {
