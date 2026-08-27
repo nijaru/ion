@@ -221,6 +221,57 @@ impl PtySession {
         text.contains(needle)
     }
 
+    fn output_len(&self) -> usize {
+        self.output.lock().expect("output lock").len()
+    }
+
+    fn saw_since(&self, offset: usize, needle: &str) -> bool {
+        let buffer = self.output.lock().expect("output lock");
+        let text = strip_ansi(&String::from_utf8_lossy(
+            &buffer[offset.min(buffer.len())..],
+        ));
+        text.contains(needle)
+    }
+
+    /// Wait for a fresh active footer after the caller submitted a turn.
+    /// Checking from an output offset avoids matching an earlier turn's
+    /// `thinking` frame in the append-only PTY capture.
+    fn wait_for_active_since(&self, offset: usize, timeout: std::time::Duration) -> bool {
+        self.wait_for_since(offset, "● thinking", timeout)
+    }
+
+    fn wait_for_since(&self, offset: usize, needle: &str, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if self.saw_since(offset, needle) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        self.saw_since(offset, needle)
+    }
+
+    /// Wait until the newest footer has no active-operation marker.
+    /// This is the PTY-visible completion boundary; streamed model text
+    /// alone is not evidence that `OperationFinished` was handled.
+    fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        while std::time::Instant::now() < deadline {
+            if self.latest_footer_is_idle() {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
+        self.latest_footer_is_idle()
+    }
+
+    fn latest_footer_is_idle(&self) -> bool {
+        let buffer = self.output.lock().expect("output lock");
+        let text = strip_ansi(&String::from_utf8_lossy(&buffer));
+        text.rfind("ion ")
+            .is_some_and(|start| !text[start..].contains("● "))
+    }
+
     /// Match against the raw byte stream (for escape sequences).
     fn saw_raw(&self, needle: &str) -> bool {
         let buffer = self.output.lock().expect("output lock");
@@ -511,10 +562,19 @@ fn resize_storm_survives_and_stays_interactive() {
         session.wait_for_output("escape to interrupt", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
+    let before_first = session.output_len();
     session.master_write.write_all(b"hello\r").expect("submit");
+    assert!(
+        session.wait_for_active_since(before_first, std::time::Duration::from_secs(15)),
+        "first operation did not start"
+    );
     assert!(
         session.wait_for_output("scripted provider", std::time::Duration::from_secs(15)),
         "expected the scripted response before the storm"
+    );
+    assert!(
+        session.wait_for_idle(std::time::Duration::from_secs(15)),
+        "first operation did not reach an idle footer before the storm"
     );
 
     for i in 0..12 {
@@ -527,21 +587,19 @@ fn resize_storm_survives_and_stays_interactive() {
     }
     session.set_winsize(30, 100);
 
-    // Still interactive after the storm.
+    // Still interactive after the storm. Wait for a fresh active footer
+    // and then its idle transition; a historical response string is not
+    // evidence that the second operation completed.
     let alive = session.child.try_wait().expect("try_wait").is_none();
+    let before_second = session.output_len();
     session.master_write.write_all(b"second\r").expect("second");
-    let seen = session.wait_for_output("scripted provider", std::time::Duration::from_secs(15));
     assert!(
-        seen,
-        "TUI unresponsive after resize storm (alive={alive}); tail: {:?}",
-        String::from_utf8_lossy(&session.output.lock().unwrap())
-            .chars()
-            .rev()
-            .take(600)
-            .collect::<String>()
-            .chars()
-            .rev()
-            .collect::<String>()
+        session.wait_for_active_since(before_second, std::time::Duration::from_secs(15)),
+        "TUI did not start the second operation after resize storm (alive={alive})"
+    );
+    assert!(
+        session.wait_for_idle(std::time::Duration::from_secs(15)),
+        "TUI did not settle the second operation after resize storm (alive={alive})"
     );
 
     session

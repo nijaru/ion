@@ -42,6 +42,24 @@ wait_for() { # $1 needle, $2 timeout seconds
     done
 }
 
+wait_for_idle() { # $1 timeout seconds
+    local deadline=$((SECONDS + ${1:-15}))
+    local screen
+    while (( SECONDS <= deadline )); do
+        screen="$(capture)"
+        # The footer is the PTY-visible completion boundary. It is
+        # current-screen state, unlike streamed response text, which
+        # may already be present while OperationFinished is pending.
+        if grep -Eq '^[[:space:]]+ion \([^)]*\)[[:space:]]*$' <<<"$screen" \
+            && ! grep -Eq '^[[:space:]]+ion \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
+        then
+            return 0
+        fi
+        sleep 0.2
+    done
+    return 1
+}
+
 launch() { # $@ = ion args
     tmux kill-session -t "$SESSION" 2>/dev/null
     # Explicit bash: tmux default-shell may be fish, where "$?" aborts.
@@ -63,10 +81,11 @@ ion_child_pid() {
 }
 
 quit_and_check_exit_code() { # $1 = description
+    wait_for_idle 10 || fail "$1: ion did not reach an idle footer"
     tmux send-keys -t "$SESSION" C-d
     local deadline=$((SECONDS + 10))
     until capture | grep -q "SMOKE_EXIT="; do
-        (( SECONDS > deadline )) && fail "$1: ion did not exit after esc"
+        (( SECONDS > deadline )) && fail "$1: ion did not exit after ctrl+d"
         sleep 0.2
     done
     capture | grep -q "SMOKE_EXIT=0" || fail "$1: exit code was not 0: $(capture | grep SMOKE_EXIT)"
