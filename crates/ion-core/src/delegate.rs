@@ -14,7 +14,7 @@
 //! structurally: child catalogs are read-only and never contain a
 //! delegate tool.
 
-use std::sync::Arc;
+use std::{path::PathBuf, sync::Arc};
 
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -74,6 +74,9 @@ pub struct DelegateConfig<P> {
     /// Explicitly inherited project resources; empty when the host did not
     /// grant project trust.
     pub trusted_resources: Vec<TrustedResource>,
+    /// Host-owned workspace root used for the child catalog and durable
+    /// session identity.
+    pub cwd: PathBuf,
 }
 
 /// The model-facing delegation tool. Registered under a dedicated
@@ -244,10 +247,7 @@ async fn run_child<P>(
 where
     P: Provider,
 {
-    // Absolute root: relative cwd would make every child path
-    // resolution depend on the host process's working directory.
-    let cwd = std::env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("."));
-    let catalog = crate::tool::ToolCatalog::read_only(cwd);
+    let catalog = crate::tool::ToolCatalog::read_only(&config.cwd);
     let provider = match spec.model_override.as_deref() {
         Some(model_ref) => {
             let Some(make_provider) = config.make_provider_for_model.as_ref() else {

@@ -126,9 +126,87 @@ fn delegate_tool(
             max_active_children: 4,
             child_budget: budget,
             trusted_resources: Vec::new(),
+            cwd: std::env::current_dir().expect("cwd"),
         },
         parent,
     ))
+}
+
+#[tokio::test]
+async fn child_uses_parent_workspace_for_relative_tools() {
+    let workspace = tempfile::tempdir().expect("workspace");
+    std::fs::write(
+        workspace.path().join("relative.txt"),
+        "from parent workspace",
+    )
+    .expect("write workspace file");
+    let child_script = vec![
+        ScriptedMessage::ToolCall {
+            name: "read".to_owned(),
+            arguments: json!({ "path": "relative.txt" }),
+        },
+        ScriptedMessage::text("child completed"),
+    ];
+    let parent_provider = ScriptedProvider::new(vec![
+        ScriptedMessage::ToolCall {
+            name: "delegate".to_owned(),
+            arguments: json!({ "children": [{ "objective": "read the workspace file" }] }),
+        },
+        ScriptedMessage::text("parent completed"),
+    ]);
+    let store = SessionStore::open_in_memory().expect("store");
+    let catalog = crate::ToolCatalog::with_cwd(workspace.path());
+    let workspace_text = workspace.path().to_string_lossy().into_owned();
+    let runtime = Runtime::start_with_policy_and_resources_in_cwd(
+        parent_provider,
+        catalog.clone(),
+        store.clone(),
+        permissive_policy(),
+        Vec::new(),
+        workspace_text.clone(),
+    );
+    let parent_id = runtime.session_id();
+    catalog.register_scope(
+        "delegate",
+        vec![Arc::new(crate::DelegateTool::new(
+            crate::DelegateConfig {
+                store: store.clone(),
+                make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
+                make_provider_for_model: None,
+                max_active_children: 1,
+                child_budget: crate::RuntimeBudget::unbounded(),
+                trusted_resources: Vec::new(),
+                cwd: workspace.path().to_path_buf(),
+            },
+            parent_id,
+        ))],
+    );
+
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("delegate").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let parent = store.load(parent_id).await.expect("parent session");
+    let child_id = parent
+        .entries
+        .iter()
+        .find_map(|(_, entry)| {
+            serde_json::to_string(entry)
+                .ok()
+                .filter(|text| text.contains("child completed"))
+                .and_then(|text| child_ids(&text).into_iter().next())
+        })
+        .expect("child reference");
+    let child = store.load(child_id).await.expect("child session");
+    assert_eq!(child.session.cwd, workspace_text);
+    assert!(child.entries.iter().any(|(_, entry)| {
+        serde_json::to_string(entry)
+            .map(|text| text.contains("from parent workspace"))
+            .unwrap_or(false)
+    }));
 }
 
 /// Extract `session-<uuid>` references from a delegate result.
@@ -252,6 +330,7 @@ async fn fork_context_and_model_override_are_explicit() {
                 max_active_children: 4,
                 child_budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),
+                cwd: std::env::current_dir().expect("cwd"),
             },
             parent_id,
         ))],
@@ -398,6 +477,7 @@ async fn budget_stops_a_runaway_child() {
                     max_tool_calls: None,
                 },
                 trusted_resources: Vec::new(),
+                cwd: std::env::current_dir().expect("cwd"),
             },
             parent_id,
         ))],
@@ -482,6 +562,7 @@ async fn parent_cancel_cancels_running_children() {
                 max_active_children: 4,
                 child_budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),
+                cwd: std::env::current_dir().expect("cwd"),
             },
             parent_id,
         ))],

@@ -813,7 +813,9 @@ impl Runtime {
     }
 
     /// Compose a bounded child with an explicitly inherited trusted-resource
-    /// snapshot. The child receives no broader capability set than its host.
+    /// snapshot and workspace identity. The child receives no broader
+    /// capability set than its host, and its durable session records the same
+    /// workspace used by its tool catalog.
     #[must_use]
     pub fn start_child_with_resources(
         provider: impl Provider,
@@ -824,11 +826,14 @@ impl Runtime {
         parent: SessionId,
         trusted_resources: Vec<TrustedResource>,
     ) -> Self {
+        let tools = tools.into();
+        let cwd = tools.cwd().to_string_lossy().into_owned();
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.budget = budget;
         composition.parent = Some(parent);
         composition.trusted_resources = trusted_resources;
+        composition.cwd = Some(cwd);
         composition.spawn(SessionId::generate(), None)
     }
 

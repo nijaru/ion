@@ -100,6 +100,7 @@ pub fn enable_children<P>(
                 max_active_children: 4,
                 child_budget: ion_core::child_budget_default(),
                 trusted_resources,
+                cwd: tools.cwd().to_path_buf(),
             },
             parent_id,
         ))],
