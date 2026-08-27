@@ -95,24 +95,48 @@ pub fn enable_children<P>(
     make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     parent_id: ion_core::SessionId,
     trusted_resources: Vec<ion_core::TrustedResource>,
-) where
-    P: ion_core::Provider,
+) -> Arc<ion_core::ChildManager<P>>
+where
+    P: ion_core::Provider + 'static,
 {
-    tools.register_scope(
-        "delegate",
-        vec![Arc::new(ion_core::DelegateTool::new(
-            ion_core::DelegateConfig {
-                store: store.clone(),
-                make_provider,
-                make_provider_for_model: None,
-                max_active_children: 4,
-                child_budget: ion_core::child_budget_default(),
-                trusted_resources,
-                cwd: tools.cwd().to_path_buf(),
-            },
-            parent_id,
-        ))],
+    enable_children_with_model_resolver(
+        tools,
+        store,
+        make_provider,
+        None,
+        parent_id,
+        trusted_resources,
+    )
+}
+
+/// Register durable child control tools with an optional host model resolver.
+/// The returned manager owns live child runtime incarnations and must be
+/// closed before the host drops the tool catalog.
+pub fn enable_children_with_model_resolver<P>(
+    tools: &ion_core::ToolCatalog,
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
+    parent_id: ion_core::SessionId,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+) -> Arc<ion_core::ChildManager<P>>
+where
+    P: ion_core::Provider + 'static,
+{
+    let (manager, child_tools) = ion_core::child_tools(
+        ion_core::DelegateConfig {
+            store: store.clone(),
+            make_provider,
+            make_provider_for_model,
+            max_active_children: 4,
+            child_budget: ion_core::child_budget_default(),
+            trusted_resources,
+            cwd: tools.cwd().to_path_buf(),
+        },
+        parent_id,
     );
+    tools.register_scope("children", child_tools);
+    manager
 }
 
 /// Build the scripted-provider factory used when no real model is

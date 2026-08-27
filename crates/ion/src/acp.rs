@@ -39,11 +39,11 @@ pub struct AcpConfig<P> {
 
 use ion_core::PolicyEngine;
 
-struct AcpSession {
+struct AcpSession<P> {
     handle: ion_core::SessionHandle,
-    #[allow(dead_code)] // owns the runtime task until process exit
     runtime: Runtime,
     catalog: ToolCatalog,
+    child_manager: Arc<ion_core::ChildManager<P>>,
     /// The in-flight prompt turn, if any: (JSON-RPC id, operation id).
     active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 }
@@ -57,7 +57,7 @@ where
 {
     let output = Arc::new(Mutex::new(output));
     let mut input = input;
-    let mut sessions: HashMap<String, AcpSession> = HashMap::new();
+    let mut sessions: HashMap<String, AcpSession<P>> = HashMap::new();
     let mut prompt_tasks = JoinSet::new();
     let mut buf = Vec::new();
     let mut chunk = [0u8; 4096];
@@ -231,9 +231,17 @@ where
 
     let mut shutdown_error = None;
     for (_, session) in sessions.drain() {
+        if let Err(err) = session.child_manager.close().await {
+            tracing::error!(error = %err, "failed to close ACP child runtimes");
+            shutdown_error.get_or_insert_with(|| format!("ACP child close failed: {err}"));
+        }
         if let Err(err) = session.handle.close().await {
             tracing::error!(error = %err, "failed to close an ACP session at shutdown");
             shutdown_error.get_or_insert_with(|| format!("ACP session close failed: {err}"));
+        }
+        if let Err(err) = session.runtime.join().await {
+            tracing::error!(error = %err, "failed to join an ACP session at shutdown");
+            shutdown_error.get_or_insert_with(|| format!("ACP runtime join failed: {err}"));
         }
         if let Err(err) = session.catalog.close().await {
             tracing::error!(error = %err, "failed to close an ACP tool catalog at shutdown");
@@ -406,9 +414,9 @@ async fn finish_prompt<W>(
 async fn session_new<P>(
     config: &AcpConfig<P>,
     params: &Value,
-) -> Result<(String, AcpSession), String>
+) -> Result<(String, AcpSession<P>), String>
 where
-    P: Provider,
+    P: Provider + 'static,
 {
     let (cwd, catalog, trusted_resources) = session_tools(config, params).await?;
     let runtime = Runtime::start_with_policy_and_resources_in_cwd(
@@ -462,11 +470,11 @@ fn attach_session<P>(
     runtime: Runtime,
     session_id: ion_core::SessionId,
     trusted_resources: Vec<ion_core::TrustedResource>,
-) -> AcpSession
+) -> AcpSession<P>
 where
-    P: Provider,
+    P: Provider + 'static,
 {
-    crate::enable_children(
+    let child_manager = crate::enable_children(
         catalog,
         &config.store,
         Arc::clone(&config.make_provider),
@@ -477,6 +485,7 @@ where
         handle: runtime.session(),
         runtime,
         catalog: catalog.clone(),
+        child_manager,
         active_prompt: Arc::new(Mutex::new(None)),
     }
 }
@@ -486,9 +495,9 @@ where
 async fn session_load<P>(
     config: &AcpConfig<P>,
     params: &Value,
-) -> Result<(String, AcpSession, Vec<Value>), String>
+) -> Result<(String, AcpSession<P>, Vec<Value>), String>
 where
-    P: Provider,
+    P: Provider + 'static,
 {
     let session_id_text = params
         .get("sessionId")

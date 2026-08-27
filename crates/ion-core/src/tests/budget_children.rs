@@ -112,6 +112,54 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
 
 // ---- Bounded child delegation (§20, Step 7) ----
 
+#[tokio::test]
+async fn durable_child_handles_support_spawn_status_wait_and_cancel() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let parent = crate::SessionId::generate();
+    let (manager, tools) = crate::child_tools(
+        crate::DelegateConfig {
+            store: store.clone(),
+            make_provider: Arc::new(|| {
+                ScriptedProvider::new(vec![ScriptedMessage::text("child answer")])
+            }),
+            make_provider_for_model: None,
+            max_active_children: 4,
+            child_budget: crate::RuntimeBudget::unbounded(),
+            trusted_resources: Vec::new(),
+            cwd: std::env::current_dir().expect("cwd"),
+        },
+        parent,
+    );
+
+    let spawn = tools[0]
+        .call(
+            json!({"children": [{"objective": "research the task"}]}),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!spawn.is_error, "spawn failed: {spawn:?}");
+    let handle = spawn
+        .output
+        .strip_prefix("child handle: ")
+        .expect("durable handle")
+        .to_owned();
+
+    let status = tools[1]
+        .call(json!({"handle": handle}), CancellationToken::new())
+        .await;
+    assert!(!status.is_error, "status failed: {status:?}");
+    assert!(status.output.contains("child session-"), "{status:?}");
+
+    let waited = tools[2]
+        .call(json!({"handle": handle}), CancellationToken::new())
+        .await;
+    assert!(!waited.is_error, "wait failed: {waited:?}");
+    assert!(waited.output.contains("finished"), "{waited:?}");
+    assert!(waited.output.contains("child answer"), "{waited:?}");
+
+    manager.close().await.expect("close children");
+}
+
 fn delegate_tool(
     store: SessionStore,
     child_script: Vec<ScriptedMessage>,

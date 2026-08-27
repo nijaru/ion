@@ -913,6 +913,33 @@ impl Runtime {
         Ok(composition.spawn(session_id, Some(loaded)))
     }
 
+    /// Reopen a bounded child session with its durable lineage and budget.
+    /// The loaded session remains the source of its workspace/model state;
+    /// the host supplies only the provider and policy dependencies.
+    pub async fn open_child(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        session_id: SessionId,
+        config: ChildRuntimeConfig,
+    ) -> Result<Self, RuntimeError> {
+        let loaded = store
+            .load(session_id)
+            .await
+            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+        if loaded.session.parent_session_id != Some(config.parent) {
+            return Err(RuntimeError::OperationFailed(
+                "child session does not belong to the requested parent".to_owned(),
+            ));
+        }
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = config.policy;
+        composition.budget = config.budget;
+        composition.parent = Some(config.parent);
+        composition.trusted_resources = config.trusted_resources;
+        Ok(composition.spawn(session_id, Some(loaded)))
+    }
+
     /// Reopen an interactive session (DESIGN.md §17.4): a parked
     /// approval re-surfaces for a durable decision instead of
     /// terminating the operation.
@@ -1006,6 +1033,15 @@ pub struct RuntimeBudget {
     pub max_model_steps: Option<u32>,
     /// Maximum admitted tool effects per operation.
     pub max_tool_calls: Option<u32>,
+}
+
+/// Host dependencies needed to reopen a durable child runtime.
+#[derive(Clone)]
+pub struct ChildRuntimeConfig {
+    pub policy: Arc<dyn PolicyEngine>,
+    pub budget: RuntimeBudget,
+    pub parent: SessionId,
+    pub trusted_resources: Vec<TrustedResource>,
 }
 
 impl RuntimeBudget {
@@ -2171,7 +2207,19 @@ impl<P: Provider> SessionRuntime<P> {
             // Delegation is a structural capability (§20.4): every
             // effect a child can produce is individually gated inside the
             // child, so spawning one needs no grant.
-            Ok(_) if call.name == "delegate" => PolicyDecision::Allow,
+            Ok(_)
+                if matches!(
+                    call.name.as_str(),
+                    "delegate"
+                        | "spawn_child"
+                        | "child_status"
+                        | "child_wait"
+                        | "child_cancel"
+                        | "child_resume"
+                ) =>
+            {
+                PolicyDecision::Allow
+            }
             Ok(target) => self.policy.decide(&call.name, target),
             // Canonicalization failure is a model-visible denial, not a
             // harness failure: the model produced an unusable input.

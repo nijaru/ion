@@ -27,8 +27,11 @@ pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest,
 };
+#[cfg(test)]
+pub use delegate::DelegateTool;
 pub use delegate::{
-    ChildContextMode, ChildSpec, DelegateConfig, DelegateTool, child_budget_default,
+    ChildContextMode, ChildHandle, ChildManager, ChildObservation, ChildSpec, ChildStatus,
+    DelegateConfig, child_budget_default, child_tools,
 };
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};
@@ -41,8 +44,9 @@ pub use provider::{
     ScriptedProvider, SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
-    EventSubscription, IndeterminateWarning, LiveOperationState, OperationStatus, PendingTool,
-    Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle, SessionHandle, SessionSnapshot,
+    ChildRuntimeConfig, EventSubscription, IndeterminateWarning, LiveOperationState,
+    OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
+    SessionHandle, SessionSnapshot,
 };
 pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,

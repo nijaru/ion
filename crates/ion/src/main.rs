@@ -6,7 +6,6 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use clap::Parser;
-use ion::enable_children;
 use ion::openai_codex::{CodexCredential, OpenAICodexProvider};
 use ion::openrouter::OpenRouterProvider;
 use ion::print::PrintFrontend;
@@ -205,6 +204,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     // and seeds the launch default.
     let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>>;
     let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync>;
+    let make_provider_for_model: Option<Arc<dyn Fn(String) -> CliProvider + Send + Sync>>;
     let model_name: Option<String>;
     let model_provider: Option<String>;
     let mut model_catalog = match settings.model_catalog() {
@@ -238,7 +238,9 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 make(initial.clone()),
                 Arc::clone(&make),
             ));
-            make_provider = Arc::new(move || make(initial.clone()));
+            let make_for_initial = Arc::clone(&make);
+            make_provider = Arc::new(move || make_for_initial(initial.clone()));
+            make_provider_for_model = Some(make);
             model_name = Some(selection.model);
             model_provider = Some(selection.provider);
         }
@@ -260,6 +262,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             let make: Arc<dyn Fn() -> CliProvider + Send + Sync> =
                 Arc::new(move || CliProvider::Scripted(ScriptedProvider::new(script.clone())));
             make_provider = make;
+            make_provider_for_model = None;
             model_name = None;
             model_provider = None;
         }
@@ -358,10 +361,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             trusted_resources.clone(),
         )
     };
-    enable_children(
+    let child_manager = ion::enable_children_with_model_resolver(
         &tools,
         &store,
         Arc::clone(&make_provider),
+        make_provider_for_model,
         runtime.session_id(),
         trusted_resources.clone(),
     );
@@ -369,6 +373,9 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Ok(keymap) => keymap,
         Err(err) => {
             let _ = writeln!(io::stderr(), "settings: {err}");
+            if let Err(child_err) = child_manager.close().await {
+                tracing::error!(error = %child_err, "failed to close child runtimes");
+            }
             if let Err(close_err) = tools.close().await {
                 tracing::error!(error = %close_err, "failed to close the tool catalog");
             }
@@ -405,9 +412,14 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     // A successful UI run is successful only when all three cleanup steps
     // complete; an already-failed UI still reports each cleanup failure.
     let join = runtime.join().await;
+    let child_close = child_manager.close().await;
     let catalog_close = tools.close().await;
     let store_close = store.close().await;
     let mut cleanup_failed = false;
+    if let Err(err) = child_close {
+        cleanup_failed = true;
+        tracing::error!(error = %err, "failed to close child runtimes");
+    }
     if let Err(err) = catalog_close {
         cleanup_failed = true;
         tracing::error!(error = %err, "failed to close the tool catalog");
@@ -610,7 +622,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         policy,
         trusted_resources.clone(),
     );
-    enable_children(
+    let child_manager = ion::enable_children(
         &tools,
         &store,
         Arc::clone(&make_provider),
@@ -621,11 +633,13 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;
     let join = runtime.join().await;
+    let child_close = child_manager.close().await;
     let catalog_close = tools.close().await;
     let store_close = store.close().await;
     result?;
     shutdown?;
     join?;
+    child_close.map_err(RuntimeError::OperationFailed)?;
     catalog_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     store_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     Ok(())
