@@ -486,6 +486,14 @@ async fn pump_child(
                     "approval required for `{tool}` (read-only child)"
                 ));
             }
+            // Children are non-interactive and read-only: a parked
+            // approval cannot occur, so surface it as a failure if it
+            // ever does (defense, not a normal path).
+            crate::RuntimeEvent::ApprovalPending { tool, .. } => {
+                return ChildTerminal::Failed(format!(
+                    "approval pending for `{tool}` (read-only child)"
+                ));
+            }
             crate::RuntimeEvent::ToolStarted { .. }
             | crate::RuntimeEvent::ToolSettled { .. }
             | crate::RuntimeEvent::OperationStarted { .. }

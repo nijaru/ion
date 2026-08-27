@@ -803,3 +803,99 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_interactive_with_effect_gate(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::tool("bash", json!({ "command": "echo hi" })),
+            ScriptedMessage::text("done"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+        EffectGate::new(EffectBoundary::ToolExecution),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    wait_for_park(&mut events).await;
+
+    // The park is durable: the staged call is in the checkpoint and
+    // nothing has executed.
+    let loaded = store.load(session_id).await.expect("load");
+    assert!(matches!(
+        loaded.operations[0].latest.1.state,
+        OperationState::ApprovalPending { .. }
+    ));
+    assert!(
+        !loaded
+            .entries
+            .iter()
+            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. })),
+        "nothing may have executed before the decision"
+    );
+
+    // Process loss: drop the live runtime; reopen interactively.
+    drop(session);
+    runtime.crash();
+    drop(runtime);
+
+    let runtime = Runtime::open_interactive(
+        ScriptedProvider::new(vec![ScriptedMessage::text("done")]),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+        Arc::new(crate::policy::DefaultPolicy),
+        Vec::new(),
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    // The snapshot is authoritative: the parked decision is still live,
+    // so the frontend can re-surface it and the user can decide.
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::ApprovalPending { .. })
+    })
+    .await;
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let operation_id = match snapshot.operation {
+        OperationStatus::Active { operation_id, .. } => operation_id,
+        other => panic!("the parked operation must still be active: {other:?}"),
+    };
+    session
+        .decide_approval(operation_id, true)
+        .await
+        .expect("approve");
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded.iter().any(|e| matches!(
+            e,
+            RuntimeEvent::ToolSettled {
+                is_error: false,
+                ..
+            }
+        )),
+        "the approved call executes after the crash: {recorded:?}"
+    );
+    assert!(
+        recorded
+            .iter()
+            .any(|e| matches!(e, RuntimeEvent::OperationFinished { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // Durable: exactly one tool result for the approved call.
+    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(
+        loaded
+            .entries
+            .iter()
+            .filter(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+            .count(),
+        1
+    );
+}

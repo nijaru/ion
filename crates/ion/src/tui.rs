@@ -19,7 +19,8 @@ use unicode_width::UnicodeWidthStr as _;
 
 use crate::settings::Theme;
 use ion_core::{
-    CommandError, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot,
+    CommandError, OperationState, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle,
+    SessionSnapshot,
 };
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
@@ -54,13 +55,36 @@ pub struct HostConfig {
 /// path back into the runtime (TERMINAL.md, runtime interaction).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UiEffect {
-    Submit { text: String },
-    Enqueue { text: String },
-    Steer { text: String },
-    Compact { instructions: Option<String> },
-    SwitchModel { model: String },
+    Submit {
+        text: String,
+    },
+    Enqueue {
+        text: String,
+    },
+    Steer {
+        text: String,
+    },
+    Compact {
+        instructions: Option<String>,
+    },
+    SwitchModel {
+        model: String,
+    },
     Cancel,
+    /// Approve the parked tool approval (§17.4).
+    Approve,
+    /// Deny the parked tool approval (§17.4).
+    Deny,
     Quit,
+}
+
+/// A parked tool invocation awaiting the user's approval decision
+/// (DESIGN.md §17.4). While set, the composer is inert and only the
+/// decision keys are live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApprovalPrompt {
+    pub tool: String,
+    pub target: Option<String>,
 }
 
 /// Inputs to the reducer: runtime events, keys, resizes.
@@ -387,6 +411,9 @@ pub struct UiState {
     last_clear: Option<std::time::Instant>,
     /// Transient footer hint (e.g. "ctrl+c again to exit").
     hint: Option<String>,
+    /// The parked tool approval awaiting the user's decision (§17.4);
+    /// set by the runtime, cleared by the decision or the next tool.
+    approval: Option<ApprovalPrompt>,
 }
 
 impl UiState {
@@ -453,7 +480,35 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
     }
 }
 
-fn handle_key(state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    // A parked approval owns the keyboard (§17.4): only the decision
+    // keys act; every other key is swallowed so a stray keystroke can
+    // never submit, quit, or edit the composer mid-decision.
+    if state.approval.is_some() {
+        let allow = match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => Some(true),
+            KeyCode::Char('y') if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+                Some(true)
+            }
+            KeyCode::Esc if key.modifiers.is_empty() => Some(false),
+            KeyCode::Char('n') if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+                Some(false)
+            }
+            _ => None,
+        };
+        let Some(allow) = allow else {
+            return (state, None);
+        };
+        state.approval = None;
+        return (
+            state,
+            Some(if allow {
+                UiEffect::Approve
+            } else {
+                UiEffect::Deny
+            }),
+        );
+    }
     if let Some(action) = state.keymap.action_for(&key) {
         return handle_action(state, action);
     }
@@ -783,8 +838,17 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         RuntimeEvent::ThinkingDelta { text, .. } => {
             state.draft_thinking.push_str(&text);
         }
+        RuntimeEvent::ApprovalPending { tool, target, .. } => {
+            // The operation is live but parked; the draft stays put and
+            // the prompt owns the band until the decision arrives.
+            state.approval = Some(ApprovalPrompt { tool, target });
+            state.status = UiStatus::Working {
+                operation: "awaiting approval".to_owned(),
+            };
+        }
         RuntimeEvent::ToolStarted { tool, target, .. } => {
             flush_thinking(&mut state);
+            state.approval = None;
             state.status = UiStatus::Working {
                 operation: format!("running {tool}"),
             };
@@ -810,6 +874,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
+            state.approval = None;
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationFailed { message, .. } => {
@@ -817,6 +882,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state
                 .pending_scrollback
                 .push(Line::from(format!("! failed: {message}")).red());
+            state.approval = None;
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationIndeterminate { message, .. } => {
@@ -826,6 +892,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                     .yellow()
                     .bold(),
             );
+            state.approval = None;
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationCancelled { .. } => {
@@ -833,6 +900,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state
                 .pending_scrollback
                 .push(Line::from("! cancelled".to_owned()).yellow());
+            state.approval = None;
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationApprovalRequired { tool, .. } => {
@@ -843,6 +911,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 ))
                 .yellow(),
             );
+            state.approval = None;
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::SessionClosed { .. } => {
@@ -958,6 +1027,18 @@ impl UiState {
             OperationStatus::Active { prompt, .. } => UiStatus::Working {
                 operation: format!("working: {prompt}"),
             },
+        };
+        // A parked approval is durable state, not a live event (§17.4):
+        // it must be reconstructable from the snapshot alone.
+        self.approval = match &snapshot.operation {
+            OperationStatus::Active {
+                state: OperationState::ApprovalPending { call, .. },
+                ..
+            } => Some(ApprovalPrompt {
+                tool: call.name.clone(),
+                target: None,
+            }),
+            _ => None,
         };
         self.tool_rows.clear();
         match &snapshot.live {
@@ -1190,6 +1271,18 @@ pub async fn run(
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
         OperationStatus::Idle => None,
+    };
+    // A parked approval is durable state: re-surface it at launch so a
+    // resume never strands a waiting decision (§17.4).
+    state.approval = match &snapshot.operation {
+        OperationStatus::Active {
+            state: OperationState::ApprovalPending { call, .. },
+            ..
+        } => Some(ApprovalPrompt {
+            tool: call.name.clone(),
+            target: None,
+        }),
+        _ => None,
     };
     let mut result: Result<(), RuntimeError> = Ok(());
     // Crossterm's EventStream can terminate on transient reads (notably
@@ -1470,6 +1563,16 @@ async fn dispatch(
                 *state = next;
             }
         },
+        UiEffect::Approve | UiEffect::Deny => {
+            let allow = matches!(effect, UiEffect::Approve);
+            let Some(operation_id) = active_operation else {
+                notice(state, "approval: no active operation");
+                return;
+            };
+            if let Err(err) = session.decide_approval(operation_id, allow).await {
+                notice(state, &format!("approval decision failed: {err}"));
+            }
+        }
         UiEffect::Cancel => {
             if let Some(operation_id) = active_operation
                 && let Err(err) = session.cancel(operation_id).await
@@ -1706,6 +1809,156 @@ pub(crate) mod tests {
                 operation: "working: do things".to_owned()
             }
         );
+    }
+
+    #[test]
+    fn resync_after_lag_resurfaces_parked_approval_from_snapshot() {
+        let call = ion_core::ToolCall {
+            operation_id: OperationId::generate(),
+            call_id: 1,
+            name: "bash".to_owned(),
+            arguments: serde_json::json!({ "command": "echo hi" }),
+        };
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
+            reopen_entry_count: None,
+            operation: OperationStatus::Active {
+                operation_id: call.operation_id,
+                prompt: "do things".to_owned(),
+                state: ion_core::OperationState::ApprovalPending {
+                    call,
+                    pending: Vec::new(),
+                },
+            },
+            entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
+            live: None,
+        };
+        let mut state = UiState::new();
+        state.resync_after_lag(&snapshot);
+        assert_eq!(
+            state.approval,
+            Some(ApprovalPrompt {
+                tool: "bash".to_owned(),
+                target: None,
+            })
+        );
+
+        // A non-parked snapshot clears a stale prompt.
+        let mut snapshot = snapshot;
+        snapshot.operation = OperationStatus::Active {
+            operation_id: OperationId::generate(),
+            prompt: "do things".to_owned(),
+            state: ion_core::OperationState::NeedAssistant,
+        };
+        state.resync_after_lag(&snapshot);
+        assert!(state.approval.is_none());
+    }
+
+    #[test]
+    fn parked_approval_owns_the_keyboard_until_decided() {
+        let with_prompt = || {
+            let mut state = UiState::new();
+            state.composer = "draft".to_owned();
+            state.cursor = 5;
+            state.approval = Some(ApprovalPrompt {
+                tool: "bash".to_owned(),
+                target: Some("echo hi".to_owned()),
+            });
+            state
+        };
+
+        // Typing while parked never reaches the composer.
+        let (state, effect) = update(with_prompt(), key(KeyCode::Char('h')));
+        assert_eq!(state.composer.as_str(), "draft");
+        assert!(effect.is_none());
+
+        // Enter approves; y approves.
+        let (state, effect) = update(with_prompt(), key(KeyCode::Enter));
+        assert_eq!(effect, Some(UiEffect::Approve));
+        assert!(state.approval.is_none());
+        let (state, effect) = update(with_prompt(), key(KeyCode::Char('y')));
+        assert_eq!(effect, Some(UiEffect::Approve));
+        assert!(state.approval.is_none());
+
+        // Esc denies; n denies.
+        let (state, effect) = update(with_prompt(), key(KeyCode::Esc));
+        assert_eq!(effect, Some(UiEffect::Deny));
+        assert!(state.approval.is_none());
+        let (state, effect) = update(with_prompt(), key(KeyCode::Char('n')));
+        assert_eq!(effect, Some(UiEffect::Deny));
+        assert!(state.approval.is_none());
+
+        // Ctrl+c and ctrl+d are swallowed too: a stray key can never
+        // exit the app mid-decision.
+        let (state, effect) = update(with_prompt(), ctrl('c'));
+        assert!(effect.is_none());
+        assert!(state.approval.is_some());
+        let (state, effect) = update(with_prompt(), ctrl('d'));
+        assert!(effect.is_none());
+        assert!(!state.quit_requested);
+    }
+
+    #[test]
+    fn without_prompt_esc_stays_idle_safe() {
+        // The interception is prompt-scoped: idle Esc does nothing and
+        // idle keys behave as before.
+        let (state, effect) = update(UiState::new(), key(KeyCode::Esc));
+        assert!(effect.is_none());
+        let (state, _) = update(state, key(KeyCode::Char('h')));
+        assert_eq!(state.composer.as_str(), "h");
+    }
+
+    #[test]
+    fn approval_event_sets_prompt_and_the_next_tool_clears_it() {
+        let operation_id = OperationId::generate();
+        let mut state = UiState::new();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ApprovalPending {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+                tool: "bash".to_owned(),
+                target: Some("echo hi".to_owned()),
+            },
+        );
+        assert_eq!(
+            state.approval,
+            Some(ApprovalPrompt {
+                tool: "bash".to_owned(),
+                target: Some("echo hi".to_owned()),
+            })
+        );
+
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ToolStarted {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+                call_id: 1,
+                tool: "bash".to_owned(),
+                target: Some("echo hi".to_owned()),
+            },
+        );
+        assert!(state.approval.is_none());
+
+        // Terminal events clear a prompt that never got a decision.
+        let mut state = UiState::new();
+        state.approval = Some(ApprovalPrompt {
+            tool: "bash".to_owned(),
+            target: None,
+        });
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationCancelled {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+            },
+        );
+        assert!(state.approval.is_none());
+        assert_eq!(state.status, UiStatus::Idle);
     }
 
     #[test]

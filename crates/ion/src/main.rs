@@ -292,12 +292,15 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let policy = policy_for(&cli.allow);
+    // The TUI can grant approvals interactively (DESIGN.md §17.4);
+    // print/ACP hosts stay fail-closed.
     let runtime = if let Some(session_id) = resume_session {
-        match Runtime::open_session_with_resources(
+        match Runtime::open_interactive(
             root_provider,
             tools.clone(),
             (*store).clone(),
             session_id,
+            Arc::clone(&policy),
             trusted_resources.clone(),
         )
         .await
@@ -312,11 +315,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             }
         }
     } else {
-        Runtime::start_with_policy_and_resources(
+        Runtime::start_interactive(
             root_provider,
             tools.clone(),
             (*store).clone(),
-            policy,
+            Arc::clone(&policy),
             trusted_resources.clone(),
         )
     };

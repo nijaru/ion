@@ -339,6 +339,11 @@ where
             RuntimeEvent::OperationApprovalRequired { tool, .. } => {
                 return TurnStop::ApprovalRequired(tool);
             }
+            // This host is non-interactive, so a parked approval cannot
+            // occur; surface it the same way if it ever does.
+            RuntimeEvent::ApprovalPending { tool, .. } => {
+                return TurnStop::ApprovalRequired(tool);
+            }
             RuntimeEvent::OperationStarted { .. } | RuntimeEvent::SessionClosed { .. } => {}
         }
     }
@@ -507,6 +512,7 @@ where
         catalog.clone(),
         (*config.store).clone(),
         session_id,
+        Arc::clone(&config.policy),
         trusted_resources.clone(),
     )
     .await

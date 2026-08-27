@@ -236,6 +236,17 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
         tool: String,
     },
+    /// The operation parked for an interactive approval before any
+    /// effect intent was committed (DESIGN.md §17.4). The staged
+    /// invocation is durable in the operation state; the decision
+    /// arrives through `SessionHandle::decide_approval`.
+    ApprovalPending {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        tool: String,
+        /// Short canonical-target summary for display (path or command).
+        target: Option<String>,
+    },
     SessionClosed {
         cursor: RuntimeCursor,
     },
@@ -255,7 +266,8 @@ impl RuntimeEvent {
             | Self::OperationFailed { operation_id, .. }
             | Self::OperationIndeterminate { operation_id, .. }
             | Self::OperationCancelled { operation_id, .. }
-            | Self::OperationApprovalRequired { operation_id, .. } => Some(*operation_id),
+            | Self::OperationApprovalRequired { operation_id, .. }
+            | Self::ApprovalPending { operation_id, .. } => Some(*operation_id),
             Self::SessionClosed { .. } => None,
         }
     }
@@ -273,6 +285,7 @@ impl RuntimeEvent {
             | Self::OperationIndeterminate { cursor, .. }
             | Self::OperationCancelled { cursor, .. }
             | Self::OperationApprovalRequired { cursor, .. }
+            | Self::ApprovalPending { cursor, .. }
             | Self::SessionClosed { cursor } => *cursor,
         }
     }
@@ -378,6 +391,13 @@ enum SessionCommand {
     },
     Cancel {
         operation_id: OperationId,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    },
+    /// A durable approval decision for a parked operation (DESIGN.md
+    /// §17.4). Acceptance is durable before the command returns.
+    DecideApproval {
+        operation_id: OperationId,
+        allow: bool,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
     /// User-requested compaction: honored at the next continuation
@@ -526,6 +546,26 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
 
+    /// Decide one parked approval (DESIGN.md §17.4). `allow` commits the
+    /// staged tool effect intent and executes it; denial records a
+    /// model-visible denial result and continues the operation. The
+    /// decision is durable before this returns.
+    pub async fn decide_approval(
+        &self,
+        operation_id: OperationId,
+        allow: bool,
+    ) -> Result<(), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::DecideApproval {
+                operation_id,
+                allow,
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
     pub async fn snapshot(&self) -> Result<SessionSnapshot, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
@@ -572,6 +612,7 @@ struct Composition<P> {
     tools: ToolCatalog,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
+    interactive_approvals: bool,
     budget: RuntimeBudget,
     parent: Option<SessionId>,
     trusted_resources: Vec<TrustedResource>,
@@ -588,6 +629,7 @@ impl<P: Provider> Composition<P> {
             tools: tools.into(),
             store,
             policy: Arc::new(DefaultPolicy),
+            interactive_approvals: false,
             budget: RuntimeBudget::unbounded(),
             parent: None,
             trusted_resources: Vec::new(),
@@ -630,6 +672,7 @@ impl<P: Provider> Composition<P> {
                     effect_gate,
                     store: self.store,
                     policy: self.policy,
+                    interactive_approvals: self.interactive_approvals,
                     budget: self.budget,
                     parent: self.parent,
                 },
@@ -678,6 +721,19 @@ impl Runtime {
         composition.spawn(SessionId::generate(), None)
     }
 
+    #[cfg(test)]
+    pub(crate) fn start_interactive_with_effect_gate(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        gate: EffectGate,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.interactive_approvals = true;
+        composition.effect_gate = Some(Arc::new(gate));
+        composition.spawn(SessionId::generate(), None)
+    }
+
     /// Compose the runtime with an explicit approval policy (DESIGN.md
     /// §17): the documented mechanism for callers that can grant
     /// actions non-interactively.
@@ -703,6 +759,26 @@ impl Runtime {
     ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
+        composition.trusted_resources = trusted_resources;
+        composition.spawn(SessionId::generate(), None)
+    }
+
+    /// Compose an interactive runtime (DESIGN.md §17.4): approval-required
+    /// calls park the operation for a durable decision via
+    /// [`SessionHandle::decide_approval`] instead of terminating it.
+    /// Non-interactive hosts use [`Self::start_with_policy_and_resources`],
+    /// which keeps fail-closed termination.
+    #[must_use]
+    pub fn start_interactive(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.interactive_approvals = true;
         composition.trusted_resources = trusted_resources;
         composition.spawn(SessionId::generate(), None)
     }
@@ -774,15 +850,27 @@ impl Runtime {
         store: SessionStore,
         session_id: SessionId,
     ) -> Result<Self, RuntimeError> {
-        Self::open_session_with_resources(provider, tools, store, session_id, Vec::new()).await
+        Self::open_session_with_resources(
+            provider,
+            tools,
+            store,
+            session_id,
+            Arc::new(DefaultPolicy),
+            Vec::new(),
+        )
+        .await
     }
 
-    /// Reopen a session with the host's explicit trusted-resource snapshot.
+    /// Reopen a session with the host's explicit approval policy and
+    /// trusted-resource snapshot. The policy must match the one the
+    /// session ran under; a resumed session never silently widens or
+    /// narrows its grants (DESIGN.md §17).
     pub async fn open_session_with_resources(
         provider: impl Provider,
         tools: impl Into<ToolCatalog>,
         store: SessionStore,
         session_id: SessionId,
+        policy: Arc<dyn PolicyEngine>,
         trusted_resources: Vec<TrustedResource>,
     ) -> Result<Self, RuntimeError> {
         let loaded = store
@@ -790,6 +878,29 @@ impl Runtime {
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
         let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.trusted_resources = trusted_resources;
+        Ok(composition.spawn(session_id, Some(loaded)))
+    }
+
+    /// Reopen an interactive session (DESIGN.md §17.4): a parked
+    /// approval re-surfaces for a durable decision instead of
+    /// terminating the operation.
+    pub async fn open_interactive(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        session_id: SessionId,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+    ) -> Result<Self, RuntimeError> {
+        let loaded = store
+            .load(session_id)
+            .await
+            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.interactive_approvals = true;
         composition.trusted_resources = trusted_resources;
         Ok(composition.spawn(session_id, Some(loaded)))
     }
@@ -886,6 +997,10 @@ struct SessionDeps<P> {
     effect_gate: Option<Arc<EffectGate>>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
+    /// This host can grant approvals interactively: approval-required
+    /// calls park the operation for a durable decision instead of
+    /// terminating it (DESIGN.md §17.4).
+    interactive_approvals: bool,
     budget: RuntimeBudget,
     /// Durable lineage for bounded child sessions (§20.3).
     parent: Option<SessionId>,
@@ -905,6 +1020,8 @@ struct SessionRuntime<P> {
     effect_gate: Option<Arc<EffectGate>>,
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
+    /// This host can grant approvals interactively (§17.4).
+    interactive_approvals: bool,
     budget: RuntimeBudget,
     parent_session_id: Option<SessionId>,
     /// Tool effects admitted by the active operation (budget counter).
@@ -1003,6 +1120,7 @@ impl<P: Provider> SessionRuntime<P> {
             effect_gate,
             store,
             policy,
+            interactive_approvals,
             budget,
             parent,
         } = deps;
@@ -1022,6 +1140,7 @@ impl<P: Provider> SessionRuntime<P> {
             effect_gate,
             store,
             policy,
+            interactive_approvals,
             budget,
             parent_session_id: parent,
             operation_tool_calls: 0,
@@ -1246,6 +1365,14 @@ impl<P: Provider> SessionRuntime<P> {
                 reply,
             } => {
                 let _ = reply.send(self.cancel(operation_id).await);
+                false
+            }
+            SessionCommand::DecideApproval {
+                operation_id,
+                allow,
+                reply,
+            } => {
+                let _ = reply.send(self.decide_approval(operation_id, allow).await);
                 false
             }
             SessionCommand::Compact {
@@ -1537,6 +1664,15 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("cancelled operation installed")
             .cancel
             .cancel();
+        // A parked approval has no live effect to settle the cancellation;
+        // the operation is terminal now, so surface it and idle the slot.
+        if let Some(active) = self.operation.as_ref()
+            && matches!(active.machine.state(), OperationState::Finished(_))
+        {
+            let state = active.machine.state().clone();
+            self.emit_terminal_state(&state);
+            self.advance().await;
+        }
         Ok(())
     }
 
@@ -2006,9 +2142,48 @@ impl<P: Provider> SessionRuntime<P> {
             decision
         };
         if decision == PolicyDecision::ApprovalRequired {
-            // §17.4: nothing may execute, so nothing is committed as an
-            // effect intent; the operation terminates with the durable
-            // ApprovalRequired outcome.
+            if self.interactive_approvals {
+                // §17.4: park. The staged call is durable in the state
+                // before acknowledgment; nothing executes and no effect
+                // intent is committed until the decision arrives.
+                let mut staged = self.operation.clone().expect("admit needs an operation");
+                staged
+                    .machine
+                    .apply(Transition::RequestApproval)
+                    .expect("request approval from ToolsPlanned");
+                let (request, new_entry_seq) = build_commit_request(
+                    self.session_id,
+                    &staged,
+                    staged.state_seq + 1,
+                    self.next_entry_seq,
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                    Vec::new(),
+                );
+                if let Err(err) = self.store.commit(request).await {
+                    self.fail_operation_on_persistence(err).await;
+                    return false;
+                }
+                self.next_entry_seq = new_entry_seq;
+                staged.state_seq += 1;
+                self.operation = Some(staged);
+                let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
+                self.emit(RuntimeEvent::ApprovalPending {
+                    cursor: RuntimeCursor::default(),
+                    operation_id: call.operation_id,
+                    tool: call.name.clone(),
+                    target,
+                });
+                info!(tool = %call.name, "approval requested; parking the operation");
+                return true;
+            }
+            // Non-interactive: nothing may execute, so nothing is
+            // committed as an effect intent; the operation terminates
+            // with the durable ApprovalRequired outcome.
             let mut staged = self.operation.clone().expect("admit needs an operation");
             let applied = staged
                 .machine
@@ -2071,13 +2246,40 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             None
         };
+        self.commit_tool_admission(
+            Transition::AdmitNextTool,
+            "admit next tool from ToolsPlanned",
+            canonical,
+            evidence,
+            denial,
+        )
+        .await
+    }
+
+    /// Apply a tool-admission transition, durably commit the effect
+    /// intent with the exact canonical input and reconciliation
+    /// evidence, then either spawn the tool effect or settle a
+    /// model-visible denial through the normal tool-result path.
+    /// Shared by the ordinary admit path and the approval path, so an
+    /// approved call commits and executes exactly what the policy saw
+    /// (§17.3). Returns false when persistence failed.
+    async fn commit_tool_admission(
+        &mut self,
+        transition: Transition,
+        expect: &'static str,
+        canonical: Result<crate::tool::CanonicalTarget, String>,
+        evidence: Option<serde_json::Value>,
+        denial: Option<String>,
+    ) -> bool {
+        let step_tools = self
+            .operation
+            .as_ref()
+            .map(|active| active.tool_registry.clone())
+            .expect("tool admission needs the current step tool registry");
         let mut staged = self.operation.clone().expect("admit needs an operation");
-        let applied = staged
-            .machine
-            .apply(Transition::AdmitNextTool)
-            .expect("admit next tool from ToolsPlanned");
+        let applied = staged.machine.apply(transition).expect(expect);
         let EffectIntent::Tool { call } = applied.intents[0].clone() else {
-            panic!("AdmitNextTool must yield a tool intent");
+            panic!("tool admission must yield a tool intent");
         };
         // The exact invocation the executor will use is part of the
         // durable intent (§17.3: never approve one string and execute
@@ -2149,6 +2351,126 @@ impl<P: Provider> SessionRuntime<P> {
             self.spawn_tool_effect(effect_id, call, reconciliation, step_tools);
         }
         true
+    }
+
+    /// Durable approval decision for a parked operation (DESIGN.md
+    /// §17.4). Approval re-runs the admission invariants — capability
+    /// identity, canonical input, reconciliation evidence, budget — so
+    /// the executor runs exactly what the policy saw; denial records a
+    /// model-visible denial result and continues the operation.
+    async fn decide_approval(
+        &mut self,
+        operation_id: OperationId,
+        allow: bool,
+    ) -> Result<(), CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let Some(active) = self.operation.as_ref() else {
+            return Err(CommandError::NoActiveOperation);
+        };
+        if active.machine.operation_id() != operation_id {
+            return Err(CommandError::NotActive { operation_id });
+        }
+        let Some(call) = active.machine.state().staged_call().cloned() else {
+            return Err(CommandError::NoPendingApproval { operation_id });
+        };
+        let mut staged = active.clone();
+        if !allow {
+            let applied = staged
+                .machine
+                .apply(Transition::DenyCall)
+                .expect("deny a parked approval");
+            let (request, new_entry_seq) = build_commit_request(
+                self.session_id,
+                &staged,
+                staged.state_seq + 1,
+                self.next_entry_seq,
+                applied.entries.clone(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+            );
+            if let Err(err) = self.store.commit(request).await {
+                let message = err.to_string();
+                self.fail_operation_on_persistence(err).await;
+                return Err(CommandError::Persistence(message));
+            }
+            self.next_entry_seq = new_entry_seq;
+            staged.state_seq += 1;
+            self.entries.extend(applied.entries);
+            let state = staged.machine.state().clone();
+            self.operation = Some(staged);
+            self.emit_terminal_state(&state);
+            info!(operation = %operation_id, "approval denied; the operation continues");
+            self.advance().await;
+            return Ok(());
+        }
+        // Approval: the staged operation stays parked; the admission
+        // commit below applies ApproveCall exactly once and commits the
+        // effect intent. Re-run the admission invariants against the
+        // staged call first.
+        let step_tools = staged.tool_registry.clone();
+        let active_capability = staged
+            .capability_snapshot
+            .identity(&call.name)
+            .map(str::to_owned);
+        let current_capability = self
+            .tools
+            .snapshot()
+            .capability_snapshot()
+            .identity(&call.name)
+            .map(str::to_owned);
+        let canonical = if active_capability == current_capability {
+            step_tools.canonicalize(&call.name, &call.arguments)
+        } else {
+            Err(format!("capability `{}` is no longer available", call.name))
+        };
+        let mut denial = canonical.as_ref().err().cloned();
+        if self
+            .budget
+            .max_tool_calls
+            .is_some_and(|max| self.operation_tool_calls >= max)
+        {
+            denial = Some("operation tool-call budget exhausted".to_owned());
+        }
+        let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
+            match crate::tool::reconciliation_evidence(
+                step_tools.cwd(),
+                &call.name,
+                &call.arguments,
+            )
+            .await
+            {
+                Ok(evidence) => Some(evidence),
+                Err(message) => {
+                    denial = Some(message);
+                    None
+                }
+            }
+        } else {
+            None
+        };
+        self.operation = Some(staged);
+        let committed = self
+            .commit_tool_admission(
+                Transition::ApproveCall,
+                "approve a parked call",
+                canonical,
+                evidence,
+                denial,
+            )
+            .await;
+        if committed {
+            Ok(())
+        } else {
+            Err(CommandError::Persistence(
+                "approval commit failed; the operation failed from its last checkpoint".to_owned(),
+            ))
+        }
     }
 
     fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
@@ -2417,6 +2739,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::OperationIndeterminate { cursor: slot, .. }
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
         | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
+        | RuntimeEvent::ApprovalPending { cursor: slot, .. }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
     }
 }
@@ -2433,6 +2756,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
         RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
+        RuntimeEvent::ApprovalPending { .. } => "approval_pending",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
     }
 }

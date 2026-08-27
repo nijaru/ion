@@ -42,6 +42,11 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::OperationApprovalRequired { tool, .. } => {
                     return Err(RuntimeError::ApprovalRequired { tool });
                 }
+                // Print mode is non-interactive, so a parked approval
+                // cannot occur; fail closed the same way if it ever does.
+                RuntimeEvent::ApprovalPending { tool, .. } => {
+                    return Err(RuntimeError::ApprovalRequired { tool });
+                }
                 RuntimeEvent::OperationFailed { message, .. } => {
                     return Err(RuntimeError::OperationFailed(message));
                 }

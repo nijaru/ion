@@ -205,6 +205,23 @@ pub(super) fn build_live(
         ));
     }
 
+    // The parked approval prompt sits at the band bottom, right above
+    // the composer, and owns the keyboard while visible (§17.4).
+    if let Some(prompt) = &state.approval {
+        let mut spans = vec![Span::styled(
+            format!("\u{26a0} approve `{}`", prompt.tool),
+            Style::new().yellow().bold(),
+        )];
+        if let Some(target) = &prompt.target {
+            spans.push(Span::styled(format!(" {target}"), Style::new().yellow()));
+        }
+        spans.push(Span::styled(
+            "  y approve \u{00b7} n deny",
+            Style::new().yellow(),
+        ));
+        head.extend(wrap_line(&Line::from(spans), width));
+    }
+
     // Fit the head above the composer inside the band cap, keeping
     // the newest content when truncating.
     let budget = LIVE_REGION_MAX_ROWS.saturating_sub(composer_len);

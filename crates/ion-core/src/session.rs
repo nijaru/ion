@@ -60,9 +60,7 @@ pub enum SessionEntry {
     },
 }
 
-/// Total durable operation state (DESIGN.md §10.1). Only states with
-/// distinct recovery semantics exist; approval, retry-wait, and
-/// compaction states arrive with their owning phases.
+/// Total durable operation state (DESIGN.md §10.1).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OperationState {
     /// Prompt accepted durably; model step not yet started.
@@ -73,6 +71,13 @@ pub enum OperationState {
     AssistantEffectPending,
     /// Assistant completed with tool calls not yet admitted.
     ToolsPlanned {
+        pending: Vec<ToolCall>,
+    },
+    /// The policy gate requested an approval for the staged call; the
+    /// operation parks before any effect intent is committed. The
+    /// decision arrives as a durable command (§17.4).
+    ApprovalPending {
+        call: ToolCall,
         pending: Vec<ToolCall>,
     },
     /// Tool effect intent committed; awaiting settlement.
@@ -195,10 +200,22 @@ pub enum Transition {
     SettleIndeterminate,
     /// The policy gate requires an approval that cannot be granted in
     /// this mode; the operation terminates before any effect intent is
-    /// committed (DESIGN.md §17.4).
+    /// committed (DESIGN.md §17.4). Also used when a parked
+    /// [`OperationState::ApprovalPending`] is reopened in a mode that
+    /// cannot grant it.
     ApprovalRequired {
         tool: String,
     },
+    /// The policy gate requested an approval for the next planned call;
+    /// the operation parks before any effect intent is committed
+    /// (DESIGN.md §17.4). The staged call is durable in the state.
+    RequestApproval,
+    /// The user approved the staged call; its tool effect intent commits
+    /// and execution proceeds (DESIGN.md §17.4).
+    ApproveCall,
+    /// The user rejected the staged call; a model-visible denial result
+    /// records the decision and the operation continues (DESIGN.md §17.4).
+    DenyCall,
     /// Begin a compaction step at a continuation boundary (§14.7).
     StartCompaction {
         plan: ContextPlan,
@@ -388,6 +405,9 @@ impl OperationMachine {
             Transition::RecoverTool { call } => self.recover_tool(call),
             Transition::SettleIndeterminate => self.settle_indeterminate(),
             Transition::ApprovalRequired { tool } => self.approval_required(tool),
+            Transition::RequestApproval => self.request_approval(),
+            Transition::ApproveCall => self.approve_call(),
+            Transition::DenyCall => self.deny_call(),
             Transition::StartCompaction { plan } => self.start_compaction(plan),
             Transition::RecoverCompaction { plan } => self.recover_compaction(plan),
             Transition::CompactionCompleted {
@@ -431,6 +451,7 @@ impl OperationMachine {
                 | OperationState::NeedContinuation
                 | OperationState::AssistantEffectPending
                 | OperationState::ToolsPlanned { .. }
+                | OperationState::ApprovalPending { .. }
                 | OperationState::ToolEffectPending { .. }
         ) {
             match item.kind {
@@ -603,6 +624,11 @@ impl OperationMachine {
             });
         }
         self.cancel_requested = true;
+        // ApprovalPending has no live effect to settle the flag, so the
+        // cancellation terminates the operation directly (§9.4).
+        if matches!(self.state, OperationState::ApprovalPending { .. }) {
+            self.state = OperationState::Finished(OperationOutcome::Cancelled);
+        }
         Ok(Applied {
             state: self.state.clone(),
             entries: Vec::new(),
@@ -692,7 +718,10 @@ impl OperationMachine {
     }
 
     fn approval_required(&mut self, tool: String) -> Result<Applied, TransitionError> {
-        if !matches!(self.state, OperationState::ToolsPlanned { .. }) {
+        if !matches!(
+            self.state,
+            OperationState::ToolsPlanned { .. } | OperationState::ApprovalPending { .. }
+        ) {
             return Err(TransitionError {
                 state: self.state.kind(),
                 transition: "approval_required",
@@ -702,6 +731,85 @@ impl OperationMachine {
         Ok(Applied {
             state: self.state.clone(),
             entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: false,
+        })
+    }
+
+    fn request_approval(&mut self) -> Result<Applied, TransitionError> {
+        let pending = match &self.state {
+            OperationState::ToolsPlanned { pending } => pending.clone(),
+            state => {
+                return Err(TransitionError {
+                    state: state.kind(),
+                    transition: "request_approval",
+                });
+            }
+        };
+        let Some(call) = pending.first().cloned() else {
+            return Err(TransitionError {
+                state: self.state.kind(),
+                transition: "request_approval",
+            });
+        };
+        let rest = pending[1..].to_vec();
+        self.state = OperationState::ApprovalPending {
+            call,
+            pending: rest,
+        };
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: Vec::new(),
+            cancel_effects: false,
+        })
+    }
+
+    fn approve_call(&mut self) -> Result<Applied, TransitionError> {
+        let (call, pending) = match &self.state {
+            OperationState::ApprovalPending { call, pending } => (call.clone(), pending.clone()),
+            state => {
+                return Err(TransitionError {
+                    state: state.kind(),
+                    transition: "approve_call",
+                });
+            }
+        };
+        self.state = OperationState::ToolEffectPending { pending };
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: Vec::new(),
+            intents: vec![EffectIntent::Tool { call }],
+            cancel_effects: false,
+        })
+    }
+
+    fn deny_call(&mut self) -> Result<Applied, TransitionError> {
+        let (call, pending) = match &self.state {
+            OperationState::ApprovalPending { call, pending } => (call.clone(), pending.clone()),
+            state => {
+                return Err(TransitionError {
+                    state: state.kind(),
+                    transition: "deny_call",
+                });
+            }
+        };
+        self.state = if self.cancel_requested {
+            OperationState::Finished(OperationOutcome::Cancelled)
+        } else if pending.is_empty() {
+            OperationState::NeedAssistant
+        } else {
+            OperationState::ToolsPlanned { pending }
+        };
+        Ok(Applied {
+            state: self.state.clone(),
+            entries: vec![SessionEntry::ToolResult {
+                result: ToolResult::Err {
+                    call_id: call.call_id,
+                    error: "user denied approval for this call".to_owned(),
+                    artifact: None,
+                },
+            }],
             intents: Vec::new(),
             cancel_effects: false,
         })
@@ -837,6 +945,16 @@ impl OperationMachine {
 }
 
 impl OperationState {
+    /// The staged call of a parked approval, when the machine is in
+    /// [`OperationState::ApprovalPending`].
+    #[must_use]
+    pub(crate) fn staged_call(&self) -> Option<&ToolCall> {
+        match self {
+            Self::ApprovalPending { call, .. } => Some(call),
+            _ => None,
+        }
+    }
+
     /// Stable lowercase name used in diagnostics and durable rows.
     #[must_use]
     pub(crate) const fn kind(&self) -> &'static str {
@@ -845,6 +963,7 @@ impl OperationState {
             OperationState::NeedAssistant => "need_assistant",
             OperationState::AssistantEffectPending => "assistant_effect_pending",
             OperationState::ToolsPlanned { .. } => "tools_planned",
+            OperationState::ApprovalPending { .. } => "approval_pending",
             OperationState::ToolEffectPending { .. } => "tool_effect_pending",
             OperationState::NeedContinuation => "need_continuation",
             OperationState::CompactionPending => "compaction_pending",

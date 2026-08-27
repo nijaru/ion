@@ -67,6 +67,21 @@ pub(super) async fn collect_until_terminal(
     }
 }
 
+/// Wait for the next ApprovalPending event, skipping non-park events.
+pub(super) async fn wait_for_park(events: &mut crate::EventSubscription) -> RuntimeEvent {
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event recv timed out")
+            .expect("event stream closed");
+        match &event {
+            RuntimeEvent::ApprovalPending { .. } => return event,
+            RuntimeEvent::SessionClosed { .. } => panic!("stream closed before parking"),
+            _ => {}
+        }
+    }
+}
+
 pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
     events
         .iter()
@@ -81,6 +96,7 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",
             RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
             RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
+            RuntimeEvent::ApprovalPending { .. } => "approval_pending",
             RuntimeEvent::SessionClosed { .. } => "session_closed",
         })
         .collect()

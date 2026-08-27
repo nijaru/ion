@@ -496,6 +496,59 @@ impl<P: Provider> SessionRuntime<P> {
                     }
                 }
             }
+            OperationState::ApprovalPending { .. } => {
+                // The staged call is durable in the state and nothing may
+                // execute before the decision. An interactive host
+                // re-surfaces the parked decision; a host that cannot
+                // grant approvals terminates it (DESIGN.md §17.2, §17.4).
+                let call = self
+                    .operation
+                    .as_ref()
+                    .and_then(|active| active.machine.state().staged_call())
+                    .cloned()
+                    .expect("parked approval carries its staged call");
+                if self.interactive_approvals {
+                    let tools = self.tools.snapshot();
+                    let target = target_summary_registry(&tools, &call.name, &call.arguments);
+                    self.emit(RuntimeEvent::ApprovalPending {
+                        cursor: RuntimeCursor::default(),
+                        operation_id: call.operation_id,
+                        tool: call.name.clone(),
+                        target,
+                    });
+                    info!(operation = %call.operation_id, tool = %call.name, "re-surfaced a parked approval after process loss");
+                } else {
+                    let mut staged = self.operation.clone().expect("parked approval present");
+                    let applied = staged
+                        .machine
+                        .apply(Transition::ApprovalRequired {
+                            tool: call.name.clone(),
+                        })
+                        .expect("terminate a parked approval in non-interactive mode");
+                    let (request, new_entry_seq) = build_commit_request(
+                        self.session_id,
+                        &staged,
+                        staged.state_seq + 1,
+                        self.next_entry_seq,
+                        applied.entries.clone(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                    );
+                    if let Err(err) = self.store.commit(request).await {
+                        self.fail_operation_on_persistence(err).await;
+                        return;
+                    }
+                    self.next_entry_seq = new_entry_seq;
+                    staged.state_seq += 1;
+                    self.operation = Some(staged);
+                    self.emit_terminal_state(&applied.state);
+                    self.operation.take();
+                }
+            }
             OperationState::Accepted
             | OperationState::NeedAssistant
             | OperationState::NeedContinuation
