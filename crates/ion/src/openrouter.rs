@@ -42,6 +42,7 @@ pub struct OpenRouterProvider {
     api_key: String,
     base_url: String,
     client: reqwest::Client,
+    context_window_hint: Option<u64>,
     context_window: tokio::sync::OnceCell<Option<u64>>,
 }
 
@@ -50,20 +51,48 @@ impl OpenRouterProvider {
     /// standard OpenRouter endpoint.
     #[must_use]
     pub fn new(model: impl Into<String>, api_key: impl Into<String>) -> Self {
+        Self::with_endpoint(model, api_key, "https://openrouter.ai/api/v1")
+    }
+
+    /// Build the same bounded chat-completions adapter for an explicitly
+    /// configured OpenAI-compatible endpoint.
+    #[must_use]
+    pub fn new_with_base_url(
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
+        Self::with_endpoint(model, api_key, base_url)
+    }
+
+    fn with_endpoint(
+        model: impl Into<String>,
+        api_key: impl Into<String>,
+        base_url: impl Into<String>,
+    ) -> Self {
         Self {
             model: model.into(),
             api_key: api_key.into(),
-            base_url: "https://openrouter.ai/api/v1".to_owned(),
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
             client: reqwest::Client::new(),
+            context_window_hint: None,
             context_window: tokio::sync::OnceCell::new(),
         }
+    }
+
+    /// Set a host-supplied context window when the endpoint does not expose
+    /// model metadata through the OpenAI models API.
+    #[must_use]
+    pub fn with_context_window_hint(mut self, context_window: u64) -> Self {
+        self.context_window_hint = Some(context_window);
+        self
     }
 
     /// Override the API root (tests point this at a local server).
     #[cfg(test)]
     #[must_use]
     pub fn with_base_url(mut self, base_url: impl Into<String>) -> Self {
-        self.base_url = base_url.into();
+        self.base_url = base_url.into().trim_end_matches('/').to_owned();
         self
     }
 
@@ -99,6 +128,9 @@ impl Provider for OpenRouterProvider {
     /// Fetch the model's `context_length` from the models endpoint
     /// once, lazily; any failure degrades to unknown (§14.8).
     async fn context_window(&self) -> Option<u64> {
+        if self.context_window_hint.is_some() {
+            return self.context_window_hint;
+        }
         *self
             .context_window
             .get_or_init(|| async {
@@ -627,7 +659,7 @@ mod tests {
              data: [DONE]\n\n",
             None,
         );
-        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let provider = OpenRouterProvider::new_with_base_url("test/model", "key", base_url);
         let signals = collect(provider).await;
         let texts: Vec<&str> = signals
             .iter()

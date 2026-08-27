@@ -334,8 +334,8 @@ pub(super) fn build_live(
         footer_left.push_str(&format!("\u{25cf} {operation}"));
     }
     let provider_model = match &state.model_name {
-        Some(model) => match model.split_once('/') {
-            Some((provider, id)) => format!("({provider}) {id}"),
+        Some(model) => match &state.model_provider {
+            Some(provider) => format!("({provider}) {model}"),
             None => model.clone(),
         },
         None => "(scripted)".to_owned(),

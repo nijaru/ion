@@ -24,6 +24,8 @@ pub enum CliProvider {
     Scripted(ScriptedProvider),
     OpenAICodex(OpenAICodexProvider),
     OpenRouter(OpenRouterProvider),
+    /// OpenAI-compatible local endpoint (currently the desktop route).
+    Desktop(OpenRouterProvider),
     Unavailable(String),
 }
 
@@ -40,7 +42,9 @@ impl Provider for CliProvider {
                 CliProvider::OpenAICodex(provider) => {
                     provider.run(request, cancel, out).await;
                 }
-                CliProvider::OpenRouter(provider) => provider.run(request, cancel, out).await,
+                CliProvider::OpenRouter(provider) | CliProvider::Desktop(provider) => {
+                    provider.run(request, cancel, out).await;
+                }
                 CliProvider::Unavailable(message) => {
                     let _ = out
                         .send(EngineSignal::Failed {
@@ -58,7 +62,9 @@ impl Provider for CliProvider {
         match self {
             CliProvider::Scripted(_) => None,
             CliProvider::OpenAICodex(provider) => provider.context_window().await,
-            CliProvider::OpenRouter(provider) => provider.context_window().await,
+            CliProvider::OpenRouter(provider) | CliProvider::Desktop(provider) => {
+                provider.context_window().await
+            }
             CliProvider::Unavailable(_) => None,
         }
     }
@@ -67,7 +73,9 @@ impl Provider for CliProvider {
         match self {
             CliProvider::Scripted(provider) => provider.capabilities().await,
             CliProvider::OpenAICodex(provider) => provider.capabilities().await,
-            CliProvider::OpenRouter(provider) => provider.capabilities().await,
+            CliProvider::OpenRouter(provider) | CliProvider::Desktop(provider) => {
+                provider.capabilities().await
+            }
             CliProvider::Unavailable(_) => ModelCapabilities {
                 reasoning: false,
                 tool_calls: false,

@@ -1,6 +1,7 @@
 //! Ion CLI host. This binary owns process lifetime and frontend selection.
 
 use std::io::{self, Write};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
 
@@ -27,8 +28,9 @@ struct Cli {
     /// Run one prompt through print mode and exit.
     #[arg(short = 'p', long = "print", value_name = "PROMPT")]
     print: Option<String>,
-    /// Run against a real provider/model (e.g. openai-codex/gpt-5.6-luna
-    /// or openrouter/stealth/ox-alpha) instead of the scripted provider.
+    /// Run against a real provider/model (e.g. desktop/qwen3.8:27b,
+    /// openai-codex/gpt-5.6-luna, or openrouter/stealth/ox-alpha) instead
+    /// of the scripted provider.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
     /// Reopen the most recent persisted session in the interactive
@@ -103,6 +105,26 @@ fn git_branch() -> std::io::Result<Option<String>> {
     }
     let name = String::from_utf8_lossy(&output.stdout).trim().to_owned();
     Ok((!name.is_empty()).then_some(name))
+}
+
+/// Format the working directory compactly without collapsing distinct
+/// paths that merely share a textual prefix with `$HOME`.
+fn display_cwd(path: &Path) -> String {
+    let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
+    display_cwd_with_home(path, home.as_deref())
+}
+
+fn display_cwd_with_home(path: &Path, home: Option<&Path>) -> String {
+    if let Some(home) = home
+        && let Ok(relative) = path.strip_prefix(home)
+    {
+        return if relative.as_os_str().is_empty() {
+            "~".to_owned()
+        } else {
+            format!("~/{}", relative.display())
+        };
+    }
+    path.display().to_string()
 }
 
 async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
@@ -184,6 +206,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>>;
     let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync>;
     let model_name: Option<String>;
+    let model_provider: Option<String>;
     let mut model_catalog = match settings.model_catalog() {
         Ok(catalog) => catalog,
         Err(err) => {
@@ -217,6 +240,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             ));
             make_provider = Arc::new(move || make(initial.clone()));
             model_name = Some(selection.model);
+            model_provider = Some(selection.provider);
         }
         Ok(None) => {
             // Test hook (smoke checklist): hold each scripted step open
@@ -237,6 +261,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 Arc::new(move || CliProvider::Scripted(ScriptedProvider::new(script.clone())));
             make_provider = make;
             model_name = None;
+            model_provider = None;
         }
         Err(err) => {
             let _ = writeln!(io::stderr(), "{err}");
@@ -358,13 +383,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         keymap,
         tui::HostConfig {
             model_name,
+            model_provider,
             model_catalog,
             hide_thinking_block: settings.hide_thinking_block,
             startup_notice: store.startup_notice().map(str::to_owned),
-            cwd_label: std::env::current_dir().ok().as_ref().and_then(|path| {
-                path.file_name()
-                    .map(|name| name.to_string_lossy().into_owned())
-            }),
+            cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),
         },
         guard,
@@ -449,6 +472,8 @@ fn provider_factory(
 #[derive(Clone, Default)]
 struct ProviderMaterial {
     openrouter_key: Option<String>,
+    desktop_api_key: String,
+    desktop_base_url: String,
     codex_credential: Option<CodexCredential>,
     reasoning_effort: Option<String>,
 }
@@ -473,6 +498,14 @@ fn provider_material(
             ),
             ..ProviderMaterial::default()
         }),
+        "desktop" => Ok(ProviderMaterial {
+            // Local OpenAI-compatible servers commonly ignore bearer
+            // authentication. A key remains configurable without making
+            // the default local route depend on a secret in the environment.
+            desktop_api_key: settings.desktop_api_key(),
+            desktop_base_url: settings.desktop_base_url(),
+            ..ProviderMaterial::default()
+        }),
         provider => Err(format!("unsupported provider {provider:?}")),
     }
 }
@@ -482,7 +515,7 @@ fn parse_model_reference(raw: &str, default_provider: &str) -> Result<ModelSelec
     if raw.is_empty() {
         return Err("model reference cannot be empty".to_owned());
     }
-    for provider in ["openai-codex", "openrouter"] {
+    for provider in ["openai-codex", "openrouter", "desktop"] {
         let prefix = format!("{provider}/");
         if let Some(model) = raw.strip_prefix(&prefix) {
             if model.is_empty() {
@@ -525,6 +558,14 @@ fn make_cli_provider(
                 "OPENROUTER_API_KEY is unavailable for this model".to_owned(),
             ),
         },
+        "desktop" => CliProvider::Desktop(
+            OpenRouterProvider::new_with_base_url(
+                selection.model,
+                &material.desktop_api_key,
+                &material.desktop_base_url,
+            )
+            .with_context_window_hint(262_144),
+        ),
         provider => CliProvider::Unavailable(format!("unsupported provider {provider:?}")),
     }
 }
@@ -588,4 +629,61 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     catalog_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     store_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ion_core::Provider;
+
+    #[test]
+    fn parses_desktop_model_reference() {
+        assert_eq!(
+            parse_model_reference("desktop/qwen3.8:27b", "openrouter").unwrap(),
+            ModelSelection {
+                provider: "desktop".to_owned(),
+                model: "qwen3.8:27b".to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn desktop_material_builds_a_local_provider_without_a_key() {
+        let settings: Settings = toml::from_str(
+            r#"
+            defaultProvider = "desktop"
+            defaultModel = "qwen3.8:27b"
+            desktopBaseUrl = "http://127.0.0.1:9000/v1"
+            "#,
+        )
+        .unwrap();
+        let selection = settings.model_selection().unwrap().unwrap();
+        let material = provider_material(&selection, &settings).unwrap();
+        match make_cli_provider(&selection.model, &selection.provider, &material) {
+            CliProvider::Desktop(provider) => {
+                assert_eq!(provider.context_window().await, Some(262_144));
+            }
+            CliProvider::Scripted(_)
+            | CliProvider::OpenAICodex(_)
+            | CliProvider::OpenRouter(_)
+            | CliProvider::Unavailable(_) => panic!("expected desktop provider"),
+        }
+    }
+
+    #[test]
+    fn cwd_display_is_home_relative_without_prefix_collisions() {
+        let home = Path::new("/Users/test");
+        assert_eq!(
+            display_cwd_with_home(Path::new("/Users/test/project"), Some(home)),
+            "~/project"
+        );
+        assert_eq!(
+            display_cwd_with_home(Path::new("/Users/tester/project"), Some(home)),
+            "/Users/tester/project"
+        );
+        assert_eq!(
+            display_cwd_with_home(Path::new("/Users/test"), Some(home)),
+            "~"
+        );
+    }
 }

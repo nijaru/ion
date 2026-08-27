@@ -50,8 +50,8 @@ wait_for_idle() { # $1 timeout seconds
         # The footer is the PTY-visible completion boundary. It is
         # current-screen state, unlike streamed response text, which
         # may already be present while OperationFinished is pending.
-        if grep -Eq '^[[:space:]]+ion \([^)]*\)[[:space:]]*$' <<<"$screen" \
-            && ! grep -Eq '^[[:space:]]+ion \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
+        if grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]*$' <<<"$screen" \
+            && ! grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
         then
             return 0
         fi
@@ -99,7 +99,7 @@ cargo build -q -p ion || { echo "build failed"; exit 1; }
 
 echo "== 1. fresh start =="
 launch
-wait_for "escape to interrupt" 15 || fail "fresh start: no idle banner"
+wait_for "ion v" 15 || fail "fresh start: no quiet startup banner"
 pass "idle banner renders"
 
 echo "== 2. submit a turn =="
@@ -158,7 +158,7 @@ conn.close()
 PYEOF
 launch
 wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "escape to interrupt" 15 || fail "schema bump: session did not start"
+wait_for "ion v" 15 || fail "schema bump: session did not start"
 ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
 pass "old store archived, notice shown, session starts"
 

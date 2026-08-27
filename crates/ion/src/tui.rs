@@ -40,6 +40,8 @@ pub struct HostConfig {
     /// possible (a real model is configured; scripted launches have
     /// nothing to switch to).
     pub model_name: Option<String>,
+    /// Provider label shown beside the model in the footer.
+    pub model_provider: Option<String>,
     /// Host-provided finite model list shown by `/model` and selectable by
     /// number. Provider APIs do not need to enumerate models.
     pub model_catalog: Vec<String>,
@@ -48,7 +50,7 @@ pub struct HostConfig {
     /// One-time store/startup notice (e.g. archived old-schema
     /// database) rendered once into the transcript.
     pub startup_notice: Option<String>,
-    /// Basename of the launch working directory (status line).
+    /// Home-relative launch working directory (status line).
     pub cwd_label: Option<String>,
     /// Git branch of the working directory, captured at launch.
     pub branch: Option<String>,
@@ -463,6 +465,8 @@ pub struct UiState {
     status: UiStatus,
     /// Model id for /model display (host-provided, not runtime state).
     model_name: Option<String>,
+    /// Provider label for the footer (host-provided composition state).
+    model_provider: Option<String>,
     /// Lines queued for scrollback: flushed above the inline viewport
     /// when the composer redraws.
     pending_scrollback: Vec<Line<'static>>,
@@ -1496,24 +1500,8 @@ pub async fn run(
         writeln!(out, "{banner}\r").map_err(|err| {
             RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
         })?;
-        // Key cheats (pi parity): dim lines under the header.
-        for cheat in [
-            "escape to interrupt",
-            "ctrl+c clear · twice to exit",
-            "ctrl+d exit (empty)",
-            "shift+enter to steer",
-            "ctrl+j newline",
-            "tab complete",
-            "ctrl+o tool output",
-            "ctrl+t thinking",
-            "up/down history",
-            "ctrl+z to suspend",
-            "/ for commands",
-        ] {
-            writeln!(out, "{cheat}\r").map_err(|err| {
-                RuntimeError::OperationFailed(format!("terminal output failed: {err}"))
-            })?;
-        }
+        // Keep startup quiet. `/help` is the explicit discovery path;
+        // contextual notices appear only when an action needs them.
         out.flush().map_err(|err| {
             RuntimeError::OperationFailed(format!("terminal flush failed: {err}"))
         })?;
@@ -1560,6 +1548,7 @@ pub async fn run(
     let mut state = UiState::new();
     state.set_keymap(keymap);
     state.set_model_name(host.model_name.clone());
+    state.model_provider = host.model_provider.clone();
     state.model_catalog = host.model_catalog.clone();
     state.thinking_visible = !host.hide_thinking_block;
     state.cwd_label = host.cwd_label.clone();

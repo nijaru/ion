@@ -1,6 +1,6 @@
 //! User settings (`~/.config/ion/settings.toml`), pi-style camelCase
-//! keys. The compiled-in defaults mirror the maintainer's pi settings
-//! (`gpt-5.6-luna` via openai-codex); a settings file overrides them.
+//! keys. The compiled-in defaults mirror the maintainer's local workflow
+//! (`qwen3.8:27b` via desktop); a settings file overrides them.
 
 use std::path::PathBuf;
 
@@ -77,6 +77,12 @@ pub struct Keybindings {
 pub struct Settings {
     default_model: Option<String>,
     default_provider: Option<String>,
+    /// Base URL for the local OpenAI-compatible desktop provider.
+    desktop_base_url: Option<String>,
+    /// Optional bearer key for the local desktop provider. Environment
+    /// configuration takes precedence so credentials need not be stored in
+    /// this file.
+    desktop_api_key: Option<String>,
     /// Optional finite model list supplied by the host. Providers do not
     /// need to implement model enumeration for the TUI selector to work.
     #[serde(default)]
@@ -145,8 +151,10 @@ impl Settings {
     /// means the key is unset.
     fn maintainer_defaults() -> Settings {
         Settings {
-            default_model: Some("gpt-5.6-luna".to_owned()),
-            default_provider: Some("openai-codex".to_owned()),
+            default_model: Some("qwen3.8:27b".to_owned()),
+            default_provider: Some("desktop".to_owned()),
+            desktop_base_url: Some("http://desktop:8080/v1".to_owned()),
+            desktop_api_key: None,
             model_catalog: Vec::new(),
             default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
@@ -175,6 +183,8 @@ impl Settings {
         Self {
             default_model: None,
             default_provider: None,
+            desktop_base_url: None,
+            desktop_api_key: None,
             model_catalog: Vec::new(),
             default_thinking_level: None,
             sandbox: None,
@@ -207,9 +217,9 @@ impl Settings {
     /// model is accepted when it agrees with `defaultProvider`.
     pub fn model_selection(&self) -> Result<Option<ModelSelection>, String> {
         let provider = self.default_provider.as_deref().unwrap_or("openai-codex");
-        if !matches!(provider, "openai-codex" | "openrouter") {
+        if !matches!(provider, "openai-codex" | "openrouter" | "desktop") {
             return Err(format!(
-                "unsupported defaultProvider {:?}; supported providers are \"openai-codex\" and \"openrouter\"",
+                "unsupported defaultProvider {:?}; supported providers are \"openai-codex\", \"openrouter\", and \"desktop\"",
                 self.default_provider
             ));
         }
@@ -223,7 +233,10 @@ impl Settings {
                 model: model.to_owned(),
             }));
         }
-        if model.starts_with("openai-codex/") || model.starts_with("openrouter/") {
+        if model.starts_with("openai-codex/")
+            || model.starts_with("openrouter/")
+            || model.starts_with("desktop/")
+        {
             return Err(format!(
                 "defaultModel provider prefix does not match defaultProvider: {model:?} vs {provider:?}"
             ));
@@ -257,6 +270,25 @@ impl Settings {
         Ok(catalog)
     }
 
+    /// Resolve the local OpenAI-compatible endpoint. Environment
+    /// configuration is useful for machines where the desktop hostname or
+    /// port differs from the maintainer default.
+    pub fn desktop_base_url(&self) -> String {
+        std::env::var("ION_DESKTOP_BASE_URL")
+            .ok()
+            .or_else(|| self.desktop_base_url.clone())
+            .unwrap_or_else(|| "http://desktop:8080/v1".to_owned())
+    }
+
+    /// Resolve the optional local bearer key without requiring one for local
+    /// servers that do not authenticate requests.
+    pub fn desktop_api_key(&self) -> String {
+        std::env::var("ION_DESKTOP_API_KEY")
+            .ok()
+            .or_else(|| self.desktop_api_key.clone())
+            .unwrap_or_default()
+    }
+
     pub fn theme(&self) -> Theme {
         self.theme.unwrap_or(Theme::Auto)
     }
@@ -284,10 +316,11 @@ mod tests {
         assert_eq!(
             settings.model_selection().unwrap(),
             Some(ModelSelection {
-                provider: "openai-codex".to_owned(),
-                model: "gpt-5.6-luna".to_owned(),
+                provider: "desktop".to_owned(),
+                model: "qwen3.8:27b".to_owned(),
             })
         );
+        assert_eq!(settings.desktop_base_url(), "http://desktop:8080/v1");
         assert_eq!(settings.theme(), Theme::Auto);
         assert_eq!(settings.thinking_level(), ThinkingLevel::Xhigh);
     }
@@ -333,6 +366,28 @@ mod tests {
     fn unsupported_provider_is_refused() {
         let settings: Settings = toml::from_str("defaultProvider = \"anthropic\"").unwrap();
         assert!(settings.model_selection().is_err());
+    }
+
+    #[test]
+    fn desktop_provider_and_endpoint_are_supported() {
+        let settings: Settings = toml::from_str(
+            r#"
+            defaultModel = "desktop/qwen3.8:27b"
+            defaultProvider = "desktop"
+            desktopBaseUrl = "http://127.0.0.1:9000/v1"
+            desktopApiKey = "local-only"
+            "#,
+        )
+        .unwrap();
+        assert_eq!(
+            settings.model_selection().unwrap(),
+            Some(ModelSelection {
+                provider: "desktop".to_owned(),
+                model: "qwen3.8:27b".to_owned(),
+            })
+        );
+        assert_eq!(settings.desktop_base_url(), "http://127.0.0.1:9000/v1");
+        assert_eq!(settings.desktop_api_key.as_deref(), Some("local-only"));
     }
 
     #[test]

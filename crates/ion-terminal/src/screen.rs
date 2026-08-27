@@ -74,6 +74,10 @@ impl Surface {
 struct Window {
     surface: Surface,
     offset: usize,
+    /// One-based cursor row to use for the shell prompt after this
+    /// frame. It is the first row after the rendered content, capped at
+    /// the terminal bottom when the window is full-height.
+    finish_row: u16,
 }
 
 pub struct Screen {
@@ -246,19 +250,29 @@ impl Screen {
         }
         out.flush()?;
 
+        let visible_rows = total.saturating_sub(offset).min(h);
+        let finish_row = self
+            .origin
+            .saturating_add(visible_rows.min(u16::MAX as usize) as u16)
+            .saturating_add(1)
+            .min(self.screen_height);
         self.current = Some(Window {
             surface: next,
             offset,
+            finish_row,
         });
         self.cursor_shown = cursor_shown;
         self.cursor_at = cursor_at_out;
         Ok(())
     }
 
-    /// Park below the rendered window on shutdown so the shell prompt
-    /// lands on a fresh line.
+    /// Park below the active rendered content on shutdown so the shell
+    /// prompt follows the footer instead of the unused physical region.
     pub fn finish(&mut self, out: &mut impl Write) -> io::Result<()> {
-        let row = self.screen_height;
+        let row = self
+            .current
+            .as_ref()
+            .map_or(self.origin.saturating_add(1), |window| window.finish_row);
         write!(out, "\x1b[{row};1H\x1b[?25h\x1b[0m\r\n")
     }
 }
@@ -636,6 +650,25 @@ mod tests {
         let out = render(vec![(&committed, &[line("s")], Some((1, 0)))]);
         let s = String::from_utf8(out).expect("utf8");
         assert!(!s.contains("\x1b[?25h"), "cursor above window stays hidden");
+    }
+
+    #[test]
+    fn finish_follows_short_rendered_region() {
+        let mut out = Vec::new();
+        let mut screen = Screen::new(40, 2, 10);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[],
+                    live: &[line("footer"), line("model")],
+                    cursor: None,
+                },
+            )
+            .expect("draw");
+        screen.finish(&mut out).expect("finish");
+        let s = String::from_utf8(out).expect("utf8");
+        assert!(s.ends_with("\x1b[5;1H\x1b[?25h\x1b[0m\r\n"), "{s:?}");
     }
 
     #[test]
