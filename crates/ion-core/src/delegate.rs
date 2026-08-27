@@ -24,7 +24,9 @@ use crate::ids::SessionId;
 use crate::provider::Provider;
 use crate::runtime::{Runtime, RuntimeBudget};
 use crate::store::SessionStore;
-use crate::tool::{Tool, ToolOutcome, ToolProgress, ToolProgressSender, ToolSpec};
+use crate::tool::{
+    Tool, ToolOutcome, ToolProgress, ToolProgressSender, ToolSpec, bounded_progress_output,
+};
 
 /// Conservative default bounds for children (§20.5): exact numbers are
 /// host configuration; these exist so hosts that do not tune budgets
@@ -455,7 +457,11 @@ enum ChildTerminal {
 
 async fn report_progress(progress: Option<&ToolProgressSender>, output: String) {
     if let Some(progress) = progress {
-        let _ = progress.send(ToolProgress { output }).await;
+        let _ = progress
+            .send(ToolProgress {
+                output: bounded_progress_output(output),
+            })
+            .await;
     }
 }
 

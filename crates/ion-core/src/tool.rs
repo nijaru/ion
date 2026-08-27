@@ -60,6 +60,16 @@ const MODEL_SAMPLE_TAIL_BYTES: usize = MODEL_SAMPLE_MAX_BYTES - MODEL_SAMPLE_HEA
 const ARTIFACT_MAX_BYTES: u64 = 16 * 1024 * 1024;
 const OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
 
+/// Bound auxiliary progress at the runtime boundary before persistence and
+/// frontend emission. Progress is disposable presentation, so keep its tail
+/// when a tool reports more than the semantic result limit.
+pub(crate) fn bounded_progress_output(output: String) -> String {
+    if output.len() <= MODEL_RESULT_MAX_BYTES {
+        return output;
+    }
+    truncate_tail(&output, MODEL_RESULT_MAX_LINES, MODEL_RESULT_MAX_BYTES).unwrap_or_default()
+}
+
 /// A durable locator for raw output externalized from the model-visible
 /// result. The URI is semantic; the backing path remains store-owned.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2180,6 +2190,12 @@ mod preview_bound_tests {
         assert!(text.len() <= MODEL_RESULT_MAX_BYTES);
         assert!(text.contains("full result was not externalized"));
         assert!(result.model_text().len() <= MODEL_RESULT_MAX_BYTES);
+    }
+
+    #[test]
+    fn live_progress_is_bounded_at_the_runtime_boundary() {
+        let progress = bounded_progress_output("x".repeat(100_000));
+        assert!(progress.len() <= MODEL_RESULT_MAX_BYTES);
     }
 
     #[tokio::test]

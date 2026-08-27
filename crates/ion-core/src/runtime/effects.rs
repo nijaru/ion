@@ -464,6 +464,7 @@ impl<P: Provider> SessionRuntime<P> {
                     return;
                 }
                 let operation_id = active.machine.operation_id();
+                let output = crate::tool::bounded_progress_output(output);
                 let event_output = output.clone();
                 let progress = ToolProgressCheckpoint {
                     effect_id,
