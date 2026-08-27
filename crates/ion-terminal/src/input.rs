@@ -46,6 +46,11 @@ impl Modifiers {
     pub const fn is_empty(self) -> bool {
         self.0 == 0
     }
+
+    #[must_use]
+    pub const fn contains(self, other: Self) -> bool {
+        self.0 & other.0 == other.0
+    }
 }
 
 impl std::ops::BitOr for Modifiers {

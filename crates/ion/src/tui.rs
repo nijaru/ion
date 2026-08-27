@@ -26,6 +26,7 @@ use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
 };
 
+mod help;
 mod render;
 pub use render::{Palette, palette};
 use render::{Transcript, append_snapshot_entries, build_live};
@@ -339,6 +340,48 @@ impl KeyMap {
             .find(|(_, code, modifiers)| *code == key.code && *modifiers == key.modifiers)
             .map(|(action, _, _)| *action)
     }
+
+    fn label(&self, action: Action) -> String {
+        self.bindings
+            .iter()
+            .find(|(bound, _, _)| *bound == action)
+            .map_or_else(
+                || "unbound".to_owned(),
+                |(_, code, modifiers)| format_key(*code, *modifiers),
+            )
+    }
+}
+
+fn format_key(code: KeyCode, modifiers: Modifiers) -> String {
+    let mut label = String::new();
+    if modifiers.contains(Modifiers::CONTROL) {
+        label.push_str("ctrl+");
+    }
+    if modifiers.contains(Modifiers::ALT) {
+        label.push_str("alt+");
+    }
+    if modifiers.contains(Modifiers::SHIFT) {
+        label.push_str("shift+");
+    }
+    label.push_str(match code {
+        KeyCode::Char(ch) => return format!("{label}{ch}"),
+        KeyCode::Enter => "enter",
+        KeyCode::Esc => "esc",
+        KeyCode::Tab => "tab",
+        KeyCode::Backspace => "backspace",
+        KeyCode::Delete => "delete",
+        KeyCode::Up => "up",
+        KeyCode::Down => "down",
+        KeyCode::Left => "left",
+        KeyCode::Right => "right",
+        KeyCode::Home => "home",
+        KeyCode::End => "end",
+        KeyCode::BackTab => "backtab",
+        KeyCode::Insert => "insert",
+        KeyCode::F(number) => return format!("{label}f{number}"),
+        KeyCode::Other => "key",
+    });
+    label
 }
 
 /// Parse a keybinding string like `ctrl+k`, `alt+left`, or `enter`.
@@ -453,6 +496,9 @@ pub struct UiState {
     /// Whether settled tool rows render their output preview
     /// (ctrl+o, pi-parity app.tools.expand).
     tool_output_expanded: bool,
+    /// Local discoverability overlay, opened by `?` from an empty idle
+    /// composer. It is presentation-only and never reaches the runtime.
+    hotkeys_visible: bool,
     /// True after an event lag dropped deltas: the draft is partial
     /// and must never present as a completed turn.
     draft_degraded: bool,
@@ -573,6 +619,7 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
         }
         UiMessage::Runtime(event) => (apply_runtime_event(state, event), None),
         UiMessage::SubmitAccepted => {
+            state.hotkeys_visible = false;
             state.reset_composer();
             (state, None)
         }
@@ -633,6 +680,22 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 UiEffect::Deny
             }),
         );
+    }
+    if state.hotkeys_visible {
+        if (key.code == KeyCode::Char('?') && key.modifiers.is_empty())
+            || (key.code == KeyCode::Esc && key.modifiers.is_empty())
+        {
+            state.hotkeys_visible = false;
+        }
+        return (state, None);
+    }
+    if state.composer.is_empty()
+        && matches!(state.status, UiStatus::Idle)
+        && key.code == KeyCode::Char('?')
+        && key.modifiers.is_empty()
+    {
+        state.hotkeys_visible = true;
+        return (state, None);
     }
     if let Some(action) = state.keymap.action_for(&key) {
         return handle_action(state, action);
@@ -1138,6 +1201,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
     let palette = palette(Theme::Dark);
     match event {
         RuntimeEvent::OperationStarted { prompt, .. } => {
+            state.hotkeys_visible = false;
             state
                 .pending_scrollback
                 .push(Line::from(format!("> {prompt}")).style(palette.user_marker));
@@ -1242,6 +1306,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::SessionClosed { .. } => {
+            state.hotkeys_visible = false;
             state.quit_requested = true;
         }
     }
@@ -1349,6 +1414,7 @@ impl UiState {
     /// (§21.4): the snapshot is authoritative for operation status;
     /// partial deltas and missed tool rows are display-only losses.
     fn resync_after_lag(&mut self, snapshot: &SessionSnapshot) {
+        self.hotkeys_visible = false;
         self.status = match &snapshot.operation {
             OperationStatus::Idle => UiStatus::Idle,
             OperationStatus::Active { prompt, .. } => UiStatus::Working {
@@ -1988,6 +2054,45 @@ pub(crate) mod tests {
         assert_eq!(state.cursor, 8);
         state = update(state, key(KeyCode::Down)).0;
         assert_eq!(state.cursor, 17);
+    }
+
+    #[test]
+    fn empty_question_opens_a_local_hotkey_view() {
+        let state = UiState::new();
+        let (state, effect) = update(state, key(KeyCode::Char('?')));
+        assert!(effect.is_none());
+        assert!(state.hotkeys_visible);
+        assert!(state.composer.is_empty());
+
+        let (state, effect) = update(state, key(KeyCode::Char('?')));
+        assert!(effect.is_none());
+        assert!(!state.hotkeys_visible);
+    }
+
+    #[test]
+    fn question_remains_text_when_composer_is_nonempty_or_working() {
+        let state = type_text(UiState::new(), "ask");
+        let state = update(state, key(KeyCode::Char('?'))).0;
+        assert_eq!(state.composer, "ask?");
+        assert!(!state.hotkeys_visible);
+
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "thinking".to_owned(),
+        };
+        let state = update(state, key(KeyCode::Char('?'))).0;
+        assert_eq!(state.composer, "?");
+        assert!(!state.hotkeys_visible);
+    }
+
+    #[test]
+    fn hotkey_view_captures_edits_until_closed() {
+        let state = update(UiState::new(), key(KeyCode::Char('?'))).0;
+        let state = update(state, key(KeyCode::Char('x'))).0;
+        assert!(state.composer.is_empty());
+        assert!(state.hotkeys_visible);
+        let state = update(state, key(KeyCode::Esc)).0;
+        assert!(!state.hotkeys_visible);
     }
 
     #[test]

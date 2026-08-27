@@ -255,6 +255,9 @@ pub(super) fn build_live(
     let composer_len = composer_rows.len();
 
     let mut head: Vec<Line<'static>> = Vec::new();
+    if state.hotkeys_visible {
+        head.extend(help::hotkey_lines(&state.keymap, palette));
+    }
     if let Some(latest) = state.tool_rows.last() {
         let preview: Option<Vec<&str>> = state.tool_output_expanded.then(|| {
             latest
