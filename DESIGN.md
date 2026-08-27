@@ -149,6 +149,9 @@ The following are not part of Ion's core architecture:
 - Live self-editing of trusted harness semantics or policy.
 - Hidden permissive repair of malformed provider/tool data.
 - Verified long-horizon task state in the ordinary operation loop.
+- A Cloudflare-OS-style platform capability model: multi-user collaboration
+  and sharing semantics, a per-resource grant registry, or staged/simulated
+  execution of pending side effects (§33.14).
 
 ---
 
@@ -1572,6 +1575,47 @@ Interactive rejection generally becomes a model-visible tool denial so the model
 
 In non-interactive mode, an approval-required action SHOULD terminate/park the operation with a clear `ApprovalRequired` error rather than invite an endless model retry loop.
 
+## 17.5 Brokered remote tools: the tool surface is the grant unit
+
+For brokered remote integrations (MCP servers, extension tools), the grant
+unit is the broker's tool surface, not an Ion-side resource table:
+
+- The broker owns resource scope, per-resource operations, constraints, and
+  credentials. An MCP server or extension enforces its own service policy
+  inside its own process, where the credential lives. Ion does not re-derive
+  resource scope from tool metadata.
+- Ion owns admission: capability identity/generation (§18.2), recovery class
+  (all dynamic tools default to `NeverReplay`), and the per-invocation
+  policy decision. The default policy treats every remote call as
+  `ApprovalRequired`.
+- Server-provided tool metadata — names, descriptions, annotations (including
+  read-only hints) — is untrusted data. It is never a policy input, never
+  auto-approval evidence, and never a substitute for Ion's recovery-class or
+  approval decisions.
+- If a future policy relaxes approval for trusted read-only remote
+  operations, the classification MUST come from Ion-owned definition (native
+  tools) or explicit user policy (named tool entries), never from broker
+  metadata.
+
+Authority boundary:
+
+```text
+instructions != authority
+tool availability != authority
+credential possession != authority
+explicit grant/capability = authority
+```
+
+Local resources (files, shell, network) need no grant table: their scope is
+enforced structurally — project-root path confinement plus the OS sandbox
+(workspace-write, network denied) — so the model never holds a scope it can
+exceed.
+
+Observation-provenance seam: the durable `ToolCall`/`ToolResult` entries are
+already the complete record of what a session observed. A future egress
+policy that considers observed sensitive content MUST derive provenance from
+those semantic entries, not from a parallel observation store.
+
 ---
 
 # 18. Capability lifecycle: Rust-native scoped composition
@@ -2505,6 +2549,27 @@ migrations become a requirement and this decision is revisited.
 ## 33.13 Live harness evolution and mandatory programmability
 
 Rejected as core architecture. A live self-rewriter or mandatory programmable model surface would mix untrusted model-generated behavior with trusted lifecycle, persistence, policy, and recovery authority. Ion may evaluate these ideas offline or expose them as explicitly selected, host-mediated capabilities after the ordinary path is proven.
+
+## 33.14 Cloudflare-OS-style platform capability model
+
+Rejected as core architecture. Cloudflare OS is a multi-user cloud
+platform: Gatekeepers are isolated per-service brokers that hold
+credentials, typed bindings grant resource scope, and durable observation
+records drive sharing and collaboration policy. The useful part —
+credentials stay in the broker, the agent sees only the tool surface,
+and effect classification is broker-owned rather than metadata-driven —
+is already Ion's brokered-boundary decomposition (§17.5, §19), with local
+resource scope enforced structurally by path confinement and the OS
+sandbox instead of grant tables.
+
+Not adopted: multi-user sharing/collaboration semantics and
+observation-lockdown enforcement; a generic resource-capability registry
+with per-resource grant tables; application/gadget runtimes; and
+staged/simulated execution of pending side effects (P5: durable action
+semantics require truthful external-operation state and fail-closed
+indeterminate handling; simulating a side effect that has not happened is
+forbidden). A future staged action queue for independent remote mutations,
+if ever justified, remains distinct from simulated execution.
 
 ---
 
