@@ -147,6 +147,46 @@ fn str_width(line: &Line<'_>) -> usize {
     line.spans.iter().map(|s| s.content.width()).sum()
 }
 
+/// Wrap the multiline composer and locate its cursor by logical line. The
+/// prompt is shown once and continuation lines align beneath the draft.
+fn composer_rows(state: &UiState, width: usize) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let width = width.max(1);
+    let mut rows = Vec::new();
+    let mut cursor = None;
+    let mut text_offset = 0;
+    for (line_index, logical_line) in state.composer.split('\n').enumerate() {
+        let prefix = if line_index == 0 { "> " } else { "  " };
+        let wrapped = wrap_line(&Line::from(format!("{prefix}{logical_line}")), width);
+        let line_length = logical_line.chars().count();
+        if state.cursor >= text_offset && state.cursor <= text_offset + line_length {
+            let local_cursor = state.cursor - text_offset;
+            let cursor_byte = char_offset_to_byte(logical_line, local_cursor);
+            let target_col = prefix.width() + logical_line[..cursor_byte].width();
+            let mut walked = 0;
+            for (row_index, row) in wrapped.iter().enumerate() {
+                let row_width = str_width(row);
+                if target_col <= walked + row_width {
+                    cursor = Some((
+                        rows.len() + row_index,
+                        (target_col - walked).min(width.saturating_sub(1)) as u16,
+                    ));
+                    break;
+                }
+                walked += row_width;
+            }
+            if cursor.is_none() {
+                cursor = Some((
+                    rows.len() + wrapped.len().saturating_sub(1),
+                    walked.min(width.saturating_sub(1)) as u16,
+                ));
+            }
+        }
+        rows.extend(wrapped);
+        text_offset += line_length + 1;
+    }
+    (rows, cursor)
+}
+
 /// Maximum live-band height: tool row(s), draft tail, status,
 /// composer. The band is variable-height within this cap; growth
 /// beyond the window scrolls physically (monotonic offset), shrink
@@ -164,13 +204,7 @@ pub(super) fn build_live(
 ) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
     // Composer first: it is anchored to the band's bottom and owns the
     // hardware cursor.
-    let cursor_byte = char_offset_to_byte(&state.composer, state.cursor);
-    let before = &state.composer[..cursor_byte];
-    let after = &state.composer[cursor_byte..];
-    let prompt = "> ";
-    let target_col = prompt.width() + before.width();
-    let composer = Line::from(format!("{prompt}{before}{after}"));
-    let composer_rows = wrap_line(&composer, width);
+    let (composer_rows, composer_cursor) = composer_rows(state, width);
     let composer_len = composer_rows.len();
 
     let mut head: Vec<Line<'static>> = Vec::new();
@@ -272,19 +306,7 @@ pub(super) fn build_live(
     lines.push(separator_line(width, palette));
 
     // Cursor position within the wrapped composer rows.
-    let mut cursor = None;
-    let mut walked = 0usize;
-    for (i, row) in composer_rows.iter().enumerate() {
-        let row_width = str_width(row);
-        if target_col <= walked + row_width {
-            cursor = Some((
-                lines.len() + i,
-                (target_col - walked).min(width.saturating_sub(1)) as u16,
-            ));
-            break;
-        }
-        walked += row_width;
-    }
+    let cursor = composer_cursor.map(|(row, column)| (lines.len() + row, column));
     lines.extend(composer_rows);
 
     lines.push(separator_line(width, palette));

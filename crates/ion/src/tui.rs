@@ -123,6 +123,7 @@ pub enum Action {
     Cancel,
     ClearComposer,
     Submit,
+    InsertNewline,
     SteerCurrent,
     ToggleToolOutput,
     ToggleThinking,
@@ -173,6 +174,12 @@ impl Default for KeyMap {
             Action::Submit,
             KeyCode::Enter,
             Modifiers::NONE,
+        );
+        bind(
+            &mut bindings,
+            Action::InsertNewline,
+            KeyCode::Char('j'),
+            Modifiers::CONTROL,
         );
         bind(
             &mut bindings,
@@ -291,6 +298,7 @@ impl KeyMap {
         rebind(&mut map, Action::Quit, &overrides.quit)?;
         rebind(&mut map, Action::Cancel, &overrides.cancel)?;
         rebind(&mut map, Action::Submit, &overrides.submit)?;
+        rebind(&mut map, Action::InsertNewline, &overrides.insert_newline)?;
         rebind(
             &mut map,
             Action::HistoryPrevious,
@@ -394,6 +402,9 @@ pub struct UiState {
     composer: String,
     /// Cursor position as a char offset into `composer`.
     cursor: usize,
+    /// Preferred logical column while moving vertically through multiline
+    /// drafts; cleared by horizontal movement or edits.
+    preferred_column: Option<usize>,
     /// Submitted prompts, oldest first; up/down navigates.
     history: Vec<String>,
     /// Position in `history` while browsing; None edits the live
@@ -472,6 +483,7 @@ impl UiState {
     fn reset_composer(&mut self) {
         self.composer.clear();
         self.cursor = 0;
+        self.preferred_column = None;
         self.undo_stack.clear();
         self.last_edit = None;
         self.history_index = None;
@@ -509,6 +521,7 @@ impl UiState {
         if let Some(snapshot) = self.undo_stack.pop() {
             self.composer = snapshot.composer;
             self.cursor = snapshot.cursor.min(self.composer.chars().count());
+            self.preferred_column = None;
             self.exit_history_browse();
         }
         self.break_edit_group();
@@ -648,6 +661,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/model [id|number]      - list or switch the model",
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
+                "ctrl+j                  - insert a newline",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
                 "ctrl+_                  - undo composer edit",
@@ -758,6 +772,10 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             state.thinking_visible = !state.thinking_visible;
             (state, None)
         }
+        Action::InsertNewline => {
+            insert_text(&mut state, "\n", EditKind::Insert);
+            (state, None)
+        }
         Action::Submit => {
             let text = state.composer.trim().to_owned();
             if text.is_empty() {
@@ -793,12 +811,14 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         }
         Action::CursorLeft if state.cursor > 0 => {
             state.cursor -= 1;
+            state.preferred_column = None;
             state.break_edit_group();
             state.exit_history_browse();
             (state, None)
         }
         Action::CursorRight if state.cursor < state.composer.chars().count() => {
             state.cursor += 1;
+            state.preferred_column = None;
             state.break_edit_group();
             state.exit_history_browse();
             (state, None)
@@ -809,25 +829,36 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         }
         Action::CursorHome => {
             state.cursor = 0;
+            state.preferred_column = None;
             state.break_edit_group();
             (state, None)
         }
         Action::CursorEnd => {
             state.cursor = state.composer.chars().count();
+            state.preferred_column = None;
             state.break_edit_group();
             (state, None)
         }
         Action::HistoryPrevious => {
-            browse_history(&mut state, -1);
+            if state.composer.contains('\n') {
+                move_vertical(&mut state, -1);
+            } else {
+                browse_history(&mut state, -1);
+            }
             (state, None)
         }
         Action::HistoryNext => {
-            browse_history(&mut state, 1);
+            if state.composer.contains('\n') {
+                move_vertical(&mut state, 1);
+            } else {
+                browse_history(&mut state, 1);
+            }
             (state, None)
         }
         Action::KillToEnd => {
             let chars = state.composer.chars().count();
             if state.cursor < chars {
+                state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
                 state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
             }
@@ -835,6 +866,7 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         }
         Action::KillToStart => {
             if state.cursor > 0 {
+                state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
                 state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
                 state.cursor = 0;
@@ -844,6 +876,7 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         Action::KillWord => {
             let start = word_start(&state.composer, state.cursor);
             if start < state.cursor {
+                state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
                 state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
                 state.cursor = start;
@@ -866,6 +899,7 @@ fn insert_text(state: &mut UiState, text: &str, kind: EditKind) {
     if text.is_empty() {
         return;
     }
+    state.preferred_column = None;
     state.record_edit(kind);
     let byte = char_offset_to_byte(&state.composer, state.cursor);
     state.composer.insert_str(byte, text);
@@ -877,9 +911,54 @@ fn delete_at_cursor(state: &mut UiState) {
     let end = char_offset_to_byte(&state.composer, state.cursor + 1);
     let byte = char_offset_to_byte(&state.composer, state.cursor);
     if byte < end {
+        state.preferred_column = None;
         state.record_edit(EditKind::Delete);
         state.composer.replace_range(byte..end, "");
     }
+}
+
+/// Move the cursor between logical lines while retaining the preferred
+/// column when adjacent lines have different lengths.
+fn move_vertical(state: &mut UiState, direction: i32) {
+    let chars: Vec<char> = state.composer.chars().collect();
+    let cursor = state.cursor.min(chars.len());
+    let line_start = chars[..cursor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map_or(0, |index| index + 1);
+    let line_end = chars[cursor..]
+        .iter()
+        .position(|ch| *ch == '\n')
+        .map_or(chars.len(), |offset| cursor + offset);
+    let current_column = cursor - line_start;
+    let preferred = state.preferred_column.unwrap_or(current_column);
+
+    let target = if direction < 0 {
+        if line_start == 0 {
+            return;
+        }
+        let previous_end = line_start - 1;
+        let previous_start = chars[..previous_end]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map_or(0, |index| index + 1);
+        previous_start + preferred.min(previous_end - previous_start)
+    } else {
+        if line_end == chars.len() {
+            return;
+        }
+        let next_start = line_end + 1;
+        let next_end = chars[next_start..]
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map_or(chars.len(), |offset| next_start + offset);
+        next_start + preferred.min(next_end - next_start)
+    };
+
+    state.cursor = target;
+    state.preferred_column = Some(preferred);
+    state.break_edit_group();
+    state.exit_history_browse();
 }
 
 /// Remove chars `[from, to)` and return them.
@@ -925,6 +1004,7 @@ fn browse_history(state: &mut UiState, direction: i32) {
         return;
     }
     state.break_edit_group();
+    state.preferred_column = None;
     let index = match state.history_index {
         None => {
             if direction >= 0 {
@@ -1316,6 +1396,7 @@ pub async fn run(
             "ctrl+c clear · twice to exit",
             "ctrl+d exit (empty)",
             "shift+enter to steer",
+            "ctrl+j newline",
             "ctrl+o tool output",
             "ctrl+t thinking",
             "up/down history",
@@ -1745,6 +1826,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn multiline_composer_moves_vertically_with_a_sticky_column() {
+        let mut state = type_text(UiState::new(), "one");
+        state = update(state, ctrl('j')).0;
+        state = type_text(state, "longer");
+        state = update(state, ctrl('j')).0;
+        state = type_text(state, "x");
+        assert_eq!(state.composer, "one\nlonger\nx");
+
+        state = update(state, key(KeyCode::Up)).0;
+        for _ in 0..5 {
+            state = update(state, key(KeyCode::Right)).0;
+        }
+        state = update(state, key(KeyCode::Down)).0;
+        assert_eq!(state.cursor, state.composer.chars().count());
+        state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.cursor, 10);
+        state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
     fn cursor_moves_and_edits_mid_string() {
         let state = type_text(UiState::new(), "hello");
         let state = update(state, key(KeyCode::Left)).0;
@@ -1872,6 +1974,8 @@ pub(crate) mod tests {
         assert_eq!(map.action_for(&ctrl_y), Some(Action::Yank));
         let ctrl_underscore = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_underscore), Some(Action::Undo));
+        let ctrl_j = KeyEvent::new(KeyCode::Char('j'), Modifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_j), Some(Action::InsertNewline));
     }
 
     #[test]
@@ -2495,6 +2599,19 @@ pub(crate) mod tests {
                 .to_string()
                 .contains("indeterminate: inspect before retrying")
         );
+    }
+
+    #[test]
+    fn multiline_composer_renders_each_logical_line_and_cursor() {
+        let mut state = UiState::new();
+        state.composer = "one\nlonger".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (lines, cursor) = build_live(&state, &palette(Theme::Dark), 40);
+        let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        assert!(text.iter().any(|line| line == "> one"), "{text:?}");
+        let (row, col) = cursor.expect("cursor");
+        assert_eq!(text[row], "  longer");
+        assert_eq!(col as usize, 2 + "longer".width());
     }
 
     #[test]
