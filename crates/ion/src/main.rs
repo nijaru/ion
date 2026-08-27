@@ -184,6 +184,13 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let root_provider: Arc<ion_core::SwitchingProvider<CliProvider>>;
     let make_provider: Arc<dyn Fn() -> CliProvider + Send + Sync>;
     let model_name: Option<String>;
+    let mut model_catalog = match settings.model_catalog() {
+        Ok(catalog) => catalog,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "{err}");
+            return ExitCode::from(2);
+        }
+    };
     match resolve_model(cli.model.clone(), settings) {
         Ok(Some(selection)) => {
             let material = match provider_material(&selection, settings) {
@@ -199,6 +206,9 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 Arc::new(move |model_ref: String| {
                     make_cli_provider(&model_ref, &default_provider, &make_material)
                 });
+            if !model_catalog.iter().any(|model| model == &selection.model) {
+                model_catalog.push(selection.model.clone());
+            }
             let initial = selection.model.clone();
             root_provider = Arc::new(ion_core::SwitchingProvider::switchable(
                 initial.clone(),
@@ -348,6 +358,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         keymap,
         tui::HostConfig {
             model_name,
+            model_catalog,
             hide_thinking_block: settings.hide_thinking_block,
             startup_notice: store.startup_notice().map(str::to_owned),
             cwd_label: std::env::current_dir().ok().as_ref().and_then(|path| {

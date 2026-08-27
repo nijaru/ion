@@ -40,6 +40,9 @@ pub struct HostConfig {
     /// possible (a real model is configured; scripted launches have
     /// nothing to switch to).
     pub model_name: Option<String>,
+    /// Host-provided finite model list shown by `/model` and selectable by
+    /// number. Provider APIs do not need to enumerate models.
+    pub model_catalog: Vec<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
     /// One-time store/startup notice (e.g. archived old-schema
@@ -418,6 +421,8 @@ pub struct UiState {
     thinking_visible: bool,
     /// Whether /model <id> can switch (host provided a switch handle).
     model_switching_available: bool,
+    /// Host-provided finite model list for the slash-command selector.
+    model_catalog: Vec<String>,
     /// Whether settled tool rows render their output preview
     /// (ctrl+o, pi-parity app.tools.expand).
     tool_output_expanded: bool,
@@ -640,7 +645,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
         "help" => {
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
-                "/model [id]             - show or switch the model",
+                "/model [id|number]      - list or switch the model",
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
                 "ctrl+o                  - toggle tool output previews",
@@ -661,20 +666,37 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
         }
         "model" => {
             if rest.is_empty() {
-                let shown = state.model_name.as_deref().unwrap_or("(scripted provider)");
+                let shown = state
+                    .model_name
+                    .clone()
+                    .unwrap_or_else(|| "(scripted provider)".to_owned());
                 notice(state, &format!("model: {shown}"));
+                let catalog = state.model_catalog.clone();
+                for (index, model) in catalog.iter().enumerate() {
+                    let marker = if model == &shown { '*' } else { ' ' };
+                    notice(state, &format!("{marker} {}. {model}", index + 1));
+                }
                 return (std::mem::take(state), None);
             }
             if !state.model_switching_available {
                 notice(state, "model switching unavailable (scripted provider)");
                 return (std::mem::take(state), None);
             }
-            (
-                std::mem::take(state),
-                Some(UiEffect::SwitchModel {
-                    model: rest.to_owned(),
-                }),
-            )
+            let model = match rest.parse::<usize>() {
+                Ok(index) if index > 0 => match state.model_catalog.get(index - 1) {
+                    Some(model) => model.clone(),
+                    None => {
+                        notice(state, &format!("model selection out of range: {rest}"));
+                        return (std::mem::take(state), None);
+                    }
+                },
+                Ok(_) => {
+                    notice(state, "model selection must start at 1");
+                    return (std::mem::take(state), None);
+                }
+                Err(_) => rest.to_owned(),
+            };
+            (std::mem::take(state), Some(UiEffect::SwitchModel { model }))
         }
         other => {
             notice(state, &format!("unknown command: /{other} (try /help)"));
@@ -1350,6 +1372,7 @@ pub async fn run(
     let mut state = UiState::new();
     state.set_keymap(keymap);
     state.set_model_name(host.model_name.clone());
+    state.model_catalog = host.model_catalog.clone();
     state.thinking_visible = !host.hide_thinking_block;
     state.cwd_label = host.cwd_label.clone();
     state.branch = host.branch.clone();
@@ -1764,6 +1787,27 @@ pub(crate) mod tests {
         assert_eq!(state.composer.as_str(), "");
         let state = update(state, key(KeyCode::Up)).0;
         assert_eq!(state.composer.as_str(), "one");
+    }
+
+    #[test]
+    fn model_command_lists_catalog_and_selects_by_number() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_name = Some("alpha".to_owned());
+        state.model_catalog = vec!["alpha".to_owned(), "beta".to_owned()];
+        let (state, effect) = handle_command(&mut state, "model");
+        assert!(effect.is_none());
+        assert_eq!(state.pending_scrollback.len(), 3);
+
+        let mut state = state;
+        let (state, effect) = handle_command(&mut state, "model 2");
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchModel {
+                model: "beta".to_owned()
+            })
+        );
+        assert_eq!(state.pending_scrollback.len(), 3);
     }
 
     #[test]

@@ -75,6 +75,10 @@ pub struct Keybindings {
 pub struct Settings {
     default_model: Option<String>,
     default_provider: Option<String>,
+    /// Optional finite model list supplied by the host. Providers do not
+    /// need to implement model enumeration for the TUI selector to work.
+    #[serde(default)]
+    model_catalog: Vec<String>,
     default_thinking_level: Option<ThinkingLevel>,
     /// Native shell enforcement. `auto` selects the strongest backend
     /// available on the host; it never upgrades project trust or approval.
@@ -141,6 +145,7 @@ impl Settings {
         Settings {
             default_model: Some("gpt-5.6-luna".to_owned()),
             default_provider: Some("openai-codex".to_owned()),
+            model_catalog: Vec::new(),
             default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
             theme: None,
@@ -168,6 +173,7 @@ impl Settings {
         Self {
             default_model: None,
             default_provider: None,
+            model_catalog: Vec::new(),
             default_thinking_level: None,
             sandbox: None,
             theme: None,
@@ -226,6 +232,29 @@ impl Settings {
         }))
     }
 
+    /// Return the host-supplied finite model list, including the launch
+    /// default exactly once. Entries are displayable model references; the
+    /// runtime/provider resolver remains authoritative for whether a switch
+    /// can execute.
+    pub fn model_catalog(&self) -> Result<Vec<String>, String> {
+        let default = self.model_selection()?.map(|selection| selection.model);
+        let mut catalog =
+            Vec::with_capacity(self.model_catalog.len() + usize::from(default.is_some()));
+        if let Some(model) = default {
+            catalog.push(model);
+        }
+        for model in &self.model_catalog {
+            let model = model.trim();
+            if model.is_empty() {
+                return Err("modelCatalog entries cannot be empty".to_owned());
+            }
+            if !catalog.iter().any(|candidate| candidate == model) {
+                catalog.push(model.to_owned());
+            }
+        }
+        Ok(catalog)
+    }
+
     pub fn theme(&self) -> Theme {
         self.theme.unwrap_or(Theme::Auto)
     }
@@ -267,6 +296,7 @@ mod tests {
             r#"
             defaultModel = "openrouter/stealth/ox-alpha"
             defaultProvider = "openrouter"
+            modelCatalog = ["stealth/ox-alpha", "stealth/ox-beta"]
             theme = "light"
             "#,
         )
@@ -275,6 +305,10 @@ mod tests {
             settings.model_selection().unwrap().unwrap().model,
             "stealth/ox-alpha"
         );
+        assert_eq!(
+            settings.model_catalog().unwrap(),
+            ["stealth/ox-alpha", "stealth/ox-beta"]
+        );
         assert_eq!(settings.theme(), Theme::Light);
     }
 
@@ -282,7 +316,15 @@ mod tests {
     fn no_default_model_falls_back_to_scripted() {
         let settings: Settings = toml::from_str("theme = \"dark\"").unwrap();
         assert_eq!(settings.model_selection().unwrap(), None);
+        assert_eq!(settings.model_catalog().unwrap(), Vec::<String>::new());
         assert_eq!(settings.theme(), Theme::Dark);
+    }
+
+    #[test]
+    fn empty_model_catalog_entry_is_refused() {
+        let settings: Settings =
+            toml::from_str("defaultModel = \"one\"\nmodelCatalog = [\"\", \"two\"]").unwrap();
+        assert!(settings.model_catalog().is_err());
     }
 
     #[test]

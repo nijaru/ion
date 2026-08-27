@@ -40,8 +40,9 @@ For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
 
 In print mode everything else terminates the operation with an
 approval requirement instead of executing. In the TUI, `/help` lists
-the slash commands (`/compact`, `/model`); `/model <id>` switches
-models durably at the next step boundary and survives restart.
+the slash commands (`/compact`, `/model`); `/model` lists the host-provided
+catalog and `/model <id|number>` switches models durably at the next step
+boundary and survives restart.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
@@ -60,6 +61,8 @@ Settings live at `~/.config/ion/settings.toml`. Minimal example:
 theme = "dark"
 defaultProvider = "openai-codex"
 defaultModel = "gpt-5.6-luna"
+# Optional finite list for the TUI's `/model` selector.
+modelCatalog = ["gpt-5.6-luna", "gpt-5.6-sol"]
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
 

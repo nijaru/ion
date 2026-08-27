@@ -646,6 +646,13 @@ selection. `switch_model` appends a semantic configuration entry before
 acknowledgment. It never mutates an in-flight `ModelStep`; the new
 selection applies to the next step started after the commit.
 
+A host MAY provide a finite model catalog to a frontend selector. The catalog
+is presentation and input guidance, not model authority: provider APIs do not
+need to enumerate models, and a selected reference still goes through the
+normal runtime switch and provider-resolution path. Hosts MUST include the
+launch selection when they expose a catalog so the selector remains usable
+without provider discovery.
+
 ## 8.3 Bounded mailboxes
 
 All runtime channels are bounded.
