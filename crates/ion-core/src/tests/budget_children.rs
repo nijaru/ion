@@ -209,6 +209,39 @@ async fn child_uses_parent_workspace_for_relative_tools() {
     }));
 }
 
+#[tokio::test]
+async fn delegate_reports_child_lifecycle_progress() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let tool = delegate_tool(
+        store,
+        vec![ScriptedMessage::text("child answer")],
+        crate::SessionId::generate(),
+        crate::RuntimeBudget::unbounded(),
+    );
+    let (progress_tx, mut progress_rx) = mpsc::channel(8);
+    let outcome = tool
+        .call_with_progress(
+            json!({ "children": [{ "objective": "research" }] }),
+            CancellationToken::new(),
+            Some(progress_tx),
+        )
+        .await;
+    let mut updates = Vec::new();
+    while let Some(update) = progress_rx.recv().await {
+        updates.push(update.output);
+    }
+
+    assert!(!outcome.is_error, "child should complete: {outcome:?}");
+    assert!(
+        updates.iter().any(|update| update.contains("started")),
+        "missing child-start progress: {updates:?}"
+    );
+    assert!(
+        updates.iter().any(|update| update.contains("finished")),
+        "missing child-finish progress: {updates:?}"
+    );
+}
+
 /// Extract `session-<uuid>` references from a delegate result.
 fn child_ids(output: &str) -> Vec<crate::SessionId> {
     output

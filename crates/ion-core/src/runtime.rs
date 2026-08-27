@@ -197,6 +197,15 @@ pub enum RuntimeEvent {
         /// Short canonical-target summary for display (path or command).
         target: Option<String>,
     },
+    /// Bounded live output from a running tool. The latest checkpoint is
+    /// persisted before this presentation event is emitted; it is never a
+    /// semantic result or completion signal.
+    ToolProgress {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        call_id: u64,
+        output: String,
+    },
     /// A started tool effect settled durably. Emitted after the
     /// settlement checkpoint commits, so subscribers see completion
     /// exactly when it is durable.
@@ -269,6 +278,7 @@ impl RuntimeEvent {
             | Self::AssistantTextDelta { operation_id, .. }
             | Self::ThinkingDelta { operation_id, .. }
             | Self::ToolStarted { operation_id, .. }
+            | Self::ToolProgress { operation_id, .. }
             | Self::ToolSettled { operation_id, .. }
             | Self::UsageUpdate { operation_id, .. }
             | Self::OperationFinished { operation_id, .. }
@@ -288,6 +298,7 @@ impl RuntimeEvent {
             | Self::AssistantTextDelta { cursor, .. }
             | Self::ThinkingDelta { cursor, .. }
             | Self::ToolStarted { cursor, .. }
+            | Self::ToolProgress { cursor, .. }
             | Self::ToolSettled { cursor, .. }
             | Self::UsageUpdate { cursor, .. }
             | Self::OperationFinished { cursor, .. }
@@ -2770,6 +2781,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::AssistantTextDelta { cursor: slot, .. }
         | RuntimeEvent::ThinkingDelta { cursor: slot, .. }
         | RuntimeEvent::ToolStarted { cursor: slot, .. }
+        | RuntimeEvent::ToolProgress { cursor: slot, .. }
         | RuntimeEvent::ToolSettled { cursor: slot, .. }
         | RuntimeEvent::UsageUpdate { cursor: slot, .. }
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
@@ -2788,6 +2800,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
         RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
         RuntimeEvent::ToolStarted { .. } => "tool_started",
+        RuntimeEvent::ToolProgress { .. } => "tool_progress",
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::UsageUpdate { .. } => "usage_update",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",

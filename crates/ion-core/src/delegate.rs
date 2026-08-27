@@ -24,7 +24,7 @@ use crate::ids::SessionId;
 use crate::provider::Provider;
 use crate::runtime::{Runtime, RuntimeBudget};
 use crate::store::SessionStore;
-use crate::tool::{Tool, ToolOutcome, ToolSpec};
+use crate::tool::{Tool, ToolOutcome, ToolProgress, ToolProgressSender, ToolSpec};
 
 /// Conservative default bounds for children (§20.5): exact numbers are
 /// host configuration; these exist so hosts that do not tune budgets
@@ -143,6 +143,15 @@ their results return as text. Use for parallel investigation."
         arguments: Value,
         cancel: CancellationToken,
     ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
+        self.call_with_progress(arguments, cancel, None)
+    }
+
+    fn call_with_progress<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+        progress: Option<ToolProgressSender>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
         Box::pin(async move {
             let children = match parse_children(&arguments) {
                 Ok(children) => children,
@@ -155,9 +164,10 @@ their results return as text. Use for parallel investigation."
                 let config = Arc::clone(&self.config);
                 let parent_id = self.parent_id;
                 let cancel = cancel.child_token();
+                let progress = progress.clone();
                 handles.push(tokio::spawn(async move {
                     let _permit = semaphore.acquire().await;
-                    run_child(config, parent_id, spec, cancel).await
+                    run_child(config, parent_id, spec, cancel, progress).await
                 }));
             }
             // Parent cancellation cancels descendants (§20.6): the
@@ -243,6 +253,7 @@ async fn run_child<P>(
     parent_id: SessionId,
     spec: ChildSpec,
     cancel: CancellationToken,
+    progress: Option<ToolProgressSender>,
 ) -> String
 where
     P: Provider,
@@ -279,6 +290,11 @@ where
     );
     let child_id = runtime.session_id();
     let session = runtime.session();
+    report_progress(
+        progress.as_ref(),
+        format!("child {child_id} started: {}", spec.objective),
+    )
+    .await;
 
     // Subscribe before submit: live events predate subscribers.
     let (_snapshot, mut events) = match session.subscribe().await {
@@ -311,12 +327,12 @@ where
     };
 
     let terminal = tokio::select! {
-        outcome = pump_child(&mut events, operation_id) => outcome,
+        outcome = pump_child(&mut events, operation_id, child_id, progress.as_ref()) => outcome,
         () = cancel.cancelled() => {
             // §20.6: cancelling the parent cancels descendants; the
             // child settles durably as cancelled on its own.
             let _ = session.cancel(operation_id).await;
-            pump_child(&mut events, operation_id).await
+            pump_child(&mut events, operation_id, child_id, progress.as_ref()).await
         }
     };
 
@@ -437,11 +453,19 @@ enum ChildTerminal {
     Cancelled,
 }
 
+async fn report_progress(progress: Option<&ToolProgressSender>, output: String) {
+    if let Some(progress) = progress {
+        let _ = progress.send(ToolProgress { output }).await;
+    }
+}
+
 /// Drain child events until the operation terminates, keeping the last
 /// assistant draft as the compact result.
 async fn pump_child(
     events: &mut crate::runtime::EventSubscription,
     operation_id: crate::ids::OperationId,
+    child_id: SessionId,
+    progress: Option<&ToolProgressSender>,
 ) -> ChildTerminal {
     let mut draft = String::new();
     loop {
@@ -450,9 +474,13 @@ async fn pump_child(
             Err(crate::RuntimeError::SubscriptionLagged) => {
                 // The compact result must not present silently
                 // incomplete deltas as the child's answer (§21.4).
+                report_progress(progress, format!("child {child_id} event stream lagged")).await;
                 return ChildTerminal::Failed("child event stream lagged".to_owned());
             }
-            Err(_) => return ChildTerminal::Failed("event stream closed".to_owned()),
+            Err(_) => {
+                report_progress(progress, format!("child {child_id} event stream closed")).await;
+                return ChildTerminal::Failed("event stream closed".to_owned());
+            }
         };
         if event.operation_id() != Some(operation_id) {
             continue;
@@ -463,8 +491,10 @@ async fn pump_child(
             }
             // Thinking and tool previews are parent-display-only; a
             // child's terminal draft is its final assistant text.
-            crate::RuntimeEvent::ThinkingDelta { .. } => {}
+            crate::RuntimeEvent::ThinkingDelta { .. }
+            | crate::RuntimeEvent::ToolProgress { .. } => {}
             crate::RuntimeEvent::OperationFinished { .. } => {
+                report_progress(progress, format!("child {child_id} finished")).await;
                 let result = if draft.is_empty() {
                     "(no output)".to_owned()
                 } else {
@@ -473,15 +503,27 @@ async fn pump_child(
                 return ChildTerminal::Completed(result);
             }
             crate::RuntimeEvent::OperationCancelled { .. } => {
+                report_progress(progress, format!("child {child_id} cancelled")).await;
                 return ChildTerminal::Cancelled;
             }
             crate::RuntimeEvent::OperationFailed { message, .. } => {
+                report_progress(progress, format!("child {child_id} failed: {message}")).await;
                 return ChildTerminal::Failed(message);
             }
             crate::RuntimeEvent::OperationIndeterminate { message, .. } => {
+                report_progress(
+                    progress,
+                    format!("child {child_id} indeterminate: {message}"),
+                )
+                .await;
                 return ChildTerminal::Failed(format!("indeterminate operation: {message}"));
             }
             crate::RuntimeEvent::OperationApprovalRequired { tool, .. } => {
+                report_progress(
+                    progress,
+                    format!("child {child_id} needs approval for `{tool}`"),
+                )
+                .await;
                 return ChildTerminal::Failed(format!(
                     "approval required for `{tool}` (read-only child)"
                 ));
@@ -490,12 +532,20 @@ async fn pump_child(
             // approval cannot occur, so surface it as a failure if it
             // ever does (defense, not a normal path).
             crate::RuntimeEvent::ApprovalPending { tool, .. } => {
+                report_progress(
+                    progress,
+                    format!("child {child_id} needs approval for `{tool}`"),
+                )
+                .await;
                 return ChildTerminal::Failed(format!(
                     "approval pending for `{tool}` (read-only child)"
                 ));
             }
-            crate::RuntimeEvent::ToolStarted { .. }
-            | crate::RuntimeEvent::ToolSettled { .. }
+            crate::RuntimeEvent::ToolStarted { tool, target, .. } => {
+                let target = target.map_or_else(String::new, |target| format!(" → {target}"));
+                report_progress(progress, format!("child {child_id} running {tool}{target}")).await;
+            }
+            crate::RuntimeEvent::ToolSettled { .. }
             | crate::RuntimeEvent::UsageUpdate { .. }
             | crate::RuntimeEvent::OperationStarted { .. }
             | crate::RuntimeEvent::SessionClosed { .. } => {}

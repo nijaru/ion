@@ -90,6 +90,7 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
             RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
             RuntimeEvent::ToolStarted { .. } => "tool_started",
+            RuntimeEvent::ToolProgress { .. } => "tool_progress",
             RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::UsageUpdate { .. } => "usage_update",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",

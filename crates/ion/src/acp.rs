@@ -328,7 +328,7 @@ where
                 )
                 .await;
             }
-            RuntimeEvent::UsageUpdate { .. } => {}
+            RuntimeEvent::ToolProgress { .. } | RuntimeEvent::UsageUpdate { .. } => {}
             RuntimeEvent::OperationFinished { .. } => return TurnStop::EndTurn,
             RuntimeEvent::OperationCancelled { .. } => return TurnStop::Cancelled,
             RuntimeEvent::OperationFailed { message, .. } => {

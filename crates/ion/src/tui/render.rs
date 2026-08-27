@@ -256,9 +256,15 @@ pub(super) fn build_live(
 
     let mut head: Vec<Line<'static>> = Vec::new();
     if let Some(latest) = state.tool_rows.last() {
-        let preview: Option<Vec<&str>> = state
-            .tool_output_expanded
-            .then(|| latest.preview.iter().flat_map(|p| p.lines()).collect());
+        let preview: Option<Vec<&str>> = state.tool_output_expanded.then(|| {
+            latest
+                .progress
+                .as_deref()
+                .or(latest.preview.as_deref())
+                .into_iter()
+                .flat_map(str::lines)
+                .collect()
+        });
         let rendered = tool_row_line(
             &latest.tool,
             latest.target.as_deref(),

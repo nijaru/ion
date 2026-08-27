@@ -464,6 +464,7 @@ impl<P: Provider> SessionRuntime<P> {
                     return;
                 }
                 let operation_id = active.machine.operation_id();
+                let event_output = output.clone();
                 let progress = ToolProgressCheckpoint {
                     effect_id,
                     session_id: self.session_id,
@@ -473,6 +474,13 @@ impl<P: Provider> SessionRuntime<P> {
                 };
                 if let Err(err) = self.store.upsert_tool_progress(progress).await {
                     self.fail_operation_on_persistence(err).await;
+                } else {
+                    self.emit(RuntimeEvent::ToolProgress {
+                        cursor: RuntimeCursor::default(),
+                        operation_id,
+                        call_id,
+                        output: event_output,
+                    });
                 }
                 return;
             }

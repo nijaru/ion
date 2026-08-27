@@ -199,7 +199,17 @@ async fn bash_progress_checkpoint_is_bounded_and_cleared() {
             break;
         }
     }
-    sleep(Duration::from_millis(100)).await;
+    let progress_event = timeout(Duration::from_secs(2), async {
+        loop {
+            let event = events.recv().await.expect("event");
+            if let RuntimeEvent::ToolProgress { output, .. } = event {
+                break output;
+            }
+        }
+    })
+    .await
+    .expect("tool progress event");
+    assert!(progress_event.len() <= 16 * 1024);
     let loaded = store.load(runtime.session_id()).await.expect("load");
     assert_eq!(loaded.tool_progress.len(), 1);
     assert!(loaded.tool_progress[0].output.len() <= 16 * 1024);

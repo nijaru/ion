@@ -34,6 +34,7 @@ impl<W: Write> PrintFrontend<W> {
                 // Tool settlement and usage are durable-state news, not
                 // print-mode output.
                 RuntimeEvent::ToolStarted { .. }
+                | RuntimeEvent::ToolProgress { .. }
                 | RuntimeEvent::ToolSettled { .. }
                 | RuntimeEvent::UsageUpdate { .. } => {}
                 // Print mode is quiet output only.

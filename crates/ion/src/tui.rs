@@ -400,6 +400,8 @@ struct ToolRow {
     tool: String,
     target: Option<String>,
     state: ToolState,
+    /// Latest bounded live output while the call is running.
+    progress: Option<String>,
     preview: Option<String>,
 }
 
@@ -1167,8 +1169,14 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 tool,
                 target,
                 state: ToolState::Running,
+                progress: None,
                 preview: None,
             });
+        }
+        RuntimeEvent::ToolProgress { output, .. } => {
+            if let Some(row) = state.tool_rows.last_mut() {
+                row.progress = Some(output);
+            }
         }
         RuntimeEvent::ToolSettled {
             is_error, preview, ..
@@ -1180,6 +1188,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 } else {
                     ToolState::Ok
                 };
+                row.progress = None;
                 row.preview = preview;
             }
         }
@@ -1369,6 +1378,7 @@ impl UiState {
                         tool: pending.tool.clone(),
                         target: pending.target.clone(),
                         state: ToolState::Running,
+                        progress: None,
                         preview: None,
                     });
                 }
@@ -2884,6 +2894,29 @@ mod display_surface_tests {
         let state = update(state, settled(Some("hello\nworld".to_owned()))).0;
         let row = state.tool_rows.last().expect("row");
         assert_eq!(row.preview.as_deref(), Some("hello\nworld"));
+    }
+
+    #[test]
+    fn running_tool_progress_is_visible_when_expanded() {
+        let state = started(UiState::new());
+        let state = update(
+            state,
+            UiMessage::Runtime(RuntimeEvent::ToolProgress {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                call_id: 1,
+                output: "child session started".to_owned(),
+            }),
+        )
+        .0;
+        let state = update(state, ctrl('o')).0;
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 80);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.to_string().contains("child session started")),
+            "expanded running progress should render"
+        );
     }
 
     #[test]
