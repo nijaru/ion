@@ -208,6 +208,14 @@ pub enum RuntimeEvent {
         /// Bounded tail of the settled output for frontend rendering.
         preview: Option<String>,
     },
+    /// Provider-reported usage for the current model step. This is a
+    /// display event; the durable usage row is still committed only with
+    /// model-step settlement.
+    UsageUpdate {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        usage: TokenUsage,
+    },
     OperationFinished {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -262,6 +270,7 @@ impl RuntimeEvent {
             | Self::ThinkingDelta { operation_id, .. }
             | Self::ToolStarted { operation_id, .. }
             | Self::ToolSettled { operation_id, .. }
+            | Self::UsageUpdate { operation_id, .. }
             | Self::OperationFinished { operation_id, .. }
             | Self::OperationFailed { operation_id, .. }
             | Self::OperationIndeterminate { operation_id, .. }
@@ -280,6 +289,7 @@ impl RuntimeEvent {
             | Self::ThinkingDelta { cursor, .. }
             | Self::ToolStarted { cursor, .. }
             | Self::ToolSettled { cursor, .. }
+            | Self::UsageUpdate { cursor, .. }
             | Self::OperationFinished { cursor, .. }
             | Self::OperationFailed { cursor, .. }
             | Self::OperationIndeterminate { cursor, .. }
@@ -2734,6 +2744,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::ThinkingDelta { cursor: slot, .. }
         | RuntimeEvent::ToolStarted { cursor: slot, .. }
         | RuntimeEvent::ToolSettled { cursor: slot, .. }
+        | RuntimeEvent::UsageUpdate { cursor: slot, .. }
         | RuntimeEvent::OperationFinished { cursor: slot, .. }
         | RuntimeEvent::OperationFailed { cursor: slot, .. }
         | RuntimeEvent::OperationIndeterminate { cursor: slot, .. }
@@ -2751,6 +2762,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
         RuntimeEvent::ToolStarted { .. } => "tool_started",
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
+        RuntimeEvent::UsageUpdate { .. } => "usage_update",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",

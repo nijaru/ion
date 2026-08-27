@@ -20,7 +20,7 @@ use unicode_width::UnicodeWidthStr as _;
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationState, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle,
-    SessionSnapshot,
+    SessionSnapshot, TokenUsage,
 };
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
@@ -414,6 +414,8 @@ pub struct UiState {
     /// The parked tool approval awaiting the user's decision (§17.4);
     /// set by the runtime, cleared by the decision or the next tool.
     approval: Option<ApprovalPrompt>,
+    /// Most recent provider usage, retained for the footer after settlement.
+    usage: Option<TokenUsage>,
 }
 
 impl UiState {
@@ -827,6 +829,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 .push(Line::from(format!("> {prompt}")).style(palette.user_marker));
             state.draft.clear();
             state.tool_rows.clear();
+            state.usage = None;
             state.status = UiStatus::Working {
                 operation: "thinking".to_owned(),
             };
@@ -871,6 +874,9 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 };
                 row.preview = preview;
             }
+        }
+        RuntimeEvent::UsageUpdate { usage, .. } => {
+            state.usage = Some(usage);
         }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
@@ -1041,6 +1047,9 @@ impl UiState {
             _ => None,
         };
         self.tool_rows.clear();
+        // Usage is a live provider event, not part of this snapshot yet;
+        // discard it during lag recovery rather than display stale values.
+        self.usage = None;
         match &snapshot.live {
             // The snapshot's draft is the runtime's authoritative
             // accumulation, so reconstruction is exact (§21.4).
@@ -2103,6 +2112,35 @@ pub(crate) mod tests {
         state.status = UiStatus::Idle;
         let (_, effect) = update(state, ctrl('d'));
         assert_eq!(effect, Some(UiEffect::Quit));
+    }
+
+    #[test]
+    fn usage_event_reaches_the_footer_without_inventing_cost() {
+        let operation_id = OperationId::generate();
+        let state = apply_runtime_event(
+            UiState::new(),
+            RuntimeEvent::UsageUpdate {
+                cursor: Default::default(),
+                operation_id,
+                usage: TokenUsage {
+                    input: 100,
+                    output: 20,
+                    cache_read: 60,
+                    cache_write: 4,
+                },
+            },
+        );
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 120);
+        let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|line| line.contains("ctx 184 · in 100 · out 20 · cache 60/4")),
+            "{text:?}"
+        );
+        assert!(
+            text.iter().all(|line| !line.contains("cost")),
+            "cost must stay absent until a provider pricing contract exists: {text:?}"
+        );
     }
 
     #[test]

@@ -31,8 +31,11 @@ impl<W: Write> PrintFrontend<W> {
                         .flush()
                         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
                 }
-                // Tool settlement is durable-state news, not output.
-                RuntimeEvent::ToolStarted { .. } | RuntimeEvent::ToolSettled { .. } => {}
+                // Tool settlement and usage are durable-state news, not
+                // print-mode output.
+                RuntimeEvent::ToolStarted { .. }
+                | RuntimeEvent::ToolSettled { .. }
+                | RuntimeEvent::UsageUpdate { .. } => {}
                 // Print mode is quiet output only.
                 RuntimeEvent::ThinkingDelta { .. } => {}
                 RuntimeEvent::OperationFinished { .. } => return Ok(()),

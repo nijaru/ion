@@ -496,6 +496,7 @@ async fn pump_child(
             }
             crate::RuntimeEvent::ToolStarted { .. }
             | crate::RuntimeEvent::ToolSettled { .. }
+            | crate::RuntimeEvent::UsageUpdate { .. }
             | crate::RuntimeEvent::OperationStarted { .. }
             | crate::RuntimeEvent::SessionClosed { .. } => {}
         }

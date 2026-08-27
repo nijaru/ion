@@ -253,6 +253,17 @@ pub(super) fn build_live(
         },
         None => "(scripted)".to_owned(),
     };
+    let usage_label = state.usage.map(|usage| {
+        let context = usage
+            .input
+            .saturating_add(usage.output)
+            .saturating_add(usage.cache_read)
+            .saturating_add(usage.cache_write);
+        format!(
+            "ctx {context} · in {} · out {} · cache {}/{}",
+            usage.input, usage.output, usage.cache_read, usage.cache_write
+        )
+    });
 
     let mut lines: Vec<Line<'static>> = std::mem::take(&mut head);
 
@@ -284,17 +295,23 @@ pub(super) fn build_live(
     };
     lines.push(Line::from(format!(" {footer_left}")).style(footer_style));
 
-    // Right-aligned provider/model: the assembled line is exactly one
-    // inset space + padding + label, ending at the same column as the
-    // rule (width - 1).
+    // Right-align provider/model while keeping usage on the left. The
+    // assembled line ends at the same column as the rule (width - 1).
     let content_width = width.saturating_sub(1);
-    let left_width = footer_left.width() + 1; // leading inset space
+    let usage_prefix = usage_label.as_deref().unwrap_or("");
+    let left_width = usage_prefix.width() + usize::from(!usage_prefix.is_empty()) + 1;
     let pad = content_width
         .saturating_sub(left_width)
         .saturating_sub(provider_model.width())
         .saturating_sub(1);
+    let usage_text = if usage_prefix.is_empty() {
+        " ".to_owned()
+    } else {
+        format!(" {usage_prefix} ")
+    };
     lines.push(
-        Line::from(format!(" {}{}", " ".repeat(pad), provider_model)).style(palette.status_segment),
+        Line::from(format!("{usage_text}{}{}", " ".repeat(pad), provider_model))
+            .style(palette.status_segment),
     );
 
     (lines, cursor)

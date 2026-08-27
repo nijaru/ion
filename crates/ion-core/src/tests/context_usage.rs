@@ -100,7 +100,19 @@ async fn usage_persists_with_the_settlement() {
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     session.submit_if_idle("go").await.expect("submit");
-    collect_until_terminal(&mut events).await.expect("collect");
+    let events = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            RuntimeEvent::UsageUpdate { usage, .. }
+                if *usage == crate::provider::TokenUsage {
+                    input: 100,
+                    output: 20,
+                    cache_read: 60,
+                    cache_write: 0,
+                }
+        )
+    }));
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 

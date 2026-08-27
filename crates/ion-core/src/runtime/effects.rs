@@ -165,6 +165,11 @@ impl<P: Provider> SessionRuntime<P> {
                 self.last_context_tokens =
                     Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
                 self.draft_usage = Some(usage);
+                self.emit(RuntimeEvent::UsageUpdate {
+                    cursor: RuntimeCursor::default(),
+                    operation_id: active.machine.operation_id(),
+                    usage,
+                });
             }
             EngineSignal::ToolCallCompleted { call, .. } => {
                 if call.operation_id != active.machine.operation_id() {
