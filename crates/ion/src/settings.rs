@@ -65,6 +65,7 @@ pub struct Keybindings {
     pub kill_to_start: Option<String>,
     pub kill_word: Option<String>,
     pub yank: Option<String>,
+    pub undo: Option<String>,
     pub toggle_tool_output: Option<String>,
     pub toggle_thinking: Option<String>,
 }

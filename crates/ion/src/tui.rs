@@ -133,6 +133,7 @@ pub enum Action {
     KillToStart,
     KillWord,
     Yank,
+    Undo,
 }
 
 /// Resolved action → key bindings. Plain data owned by the UI state;
@@ -250,6 +251,12 @@ impl Default for KeyMap {
         );
         bind(
             &mut bindings,
+            Action::Undo,
+            KeyCode::Char('_'),
+            Modifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
             Action::ToggleToolOutput,
             KeyCode::Char('o'),
             Modifiers::CONTROL,
@@ -295,6 +302,7 @@ impl KeyMap {
         rebind(&mut map, Action::KillToStart, &overrides.kill_to_start)?;
         rebind(&mut map, Action::KillWord, &overrides.kill_word)?;
         rebind(&mut map, Action::Yank, &overrides.yank)?;
+        rebind(&mut map, Action::Undo, &overrides.undo)?;
         rebind(
             &mut map,
             Action::ToggleToolOutput,
@@ -351,6 +359,21 @@ enum ToolState {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EditKind {
+    Insert,
+    Delete,
+    Paste,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct EditSnapshot {
+    composer: String,
+    cursor: usize,
+}
+
+const MAX_UNDO_ENTRIES: usize = 128;
+
 /// One started tool effect: its display label plus the bounded output
 /// preview from settlement (rendered only while expanded).
 #[derive(Debug, Clone)]
@@ -375,8 +398,15 @@ pub struct UiState {
     history_index: Option<usize>,
     /// The live draft set aside when history browsing starts.
     history_stash: Option<String>,
+    /// History entry awaiting runtime admission. Rejected commands remove it
+    /// so retrying a preserved draft does not duplicate history.
+    pending_history: Option<String>,
     /// Last kill (ctrl-k/u/w); ctrl-y yanks it back.
     kill_buffer: String,
+    /// Bounded local composer history. Adjacent typing/deletion is one edit;
+    /// each bracketed paste is one edit.
+    undo_stack: Vec<EditSnapshot>,
+    last_edit: Option<EditKind>,
     /// Resolved key bindings (settings overrides applied).
     keymap: KeyMap,
     /// Streaming assistant draft for the live step.
@@ -433,6 +463,51 @@ impl UiState {
     pub fn set_keymap(&mut self, keymap: KeyMap) {
         self.keymap = keymap;
     }
+
+    fn reset_composer(&mut self) {
+        self.composer.clear();
+        self.cursor = 0;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.history_index = None;
+        self.history_stash = None;
+        self.pending_history = None;
+    }
+
+    fn reject_pending_history(&mut self) {
+        if let Some(text) = self.pending_history.take()
+            && self.history.last() == Some(&text)
+        {
+            self.history.pop();
+        }
+    }
+
+    fn break_edit_group(&mut self) {
+        self.last_edit = None;
+    }
+
+    fn record_edit(&mut self, kind: EditKind) {
+        let coalesces = self.last_edit == Some(kind) && kind != EditKind::Paste;
+        if !coalesces {
+            if self.undo_stack.len() == MAX_UNDO_ENTRIES {
+                self.undo_stack.remove(0);
+            }
+            self.undo_stack.push(EditSnapshot {
+                composer: self.composer.clone(),
+                cursor: self.cursor,
+            });
+        }
+        self.last_edit = Some(kind);
+    }
+
+    fn undo_edit(&mut self) {
+        if let Some(snapshot) = self.undo_stack.pop() {
+            self.composer = snapshot.composer;
+            self.cursor = snapshot.cursor.min(self.composer.chars().count());
+            self.exit_history_browse();
+        }
+        self.break_edit_group();
+    }
 }
 
 /// Pure reducer: `update(UiState, UiMessage) -> UiState` plus
@@ -446,12 +521,14 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             handle_key(state, key)
         }
         UiMessage::Paste(text) => {
-            insert_at_cursor(&mut state, &text);
+            if state.approval.is_none() {
+                insert_text(&mut state, &text, EditKind::Paste);
+            }
             (state, None)
         }
         UiMessage::Runtime(event) => (apply_runtime_event(state, event), None),
         UiMessage::SubmitAccepted => {
-            state.composer.clear();
+            state.reset_composer();
             (state, None)
         }
         UiMessage::CompactAccepted => {
@@ -461,19 +538,20 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             (state, None)
         }
         UiMessage::SteerAccepted => {
-            state.composer.clear();
+            state.reset_composer();
             (state, None)
         }
         UiMessage::EnqueueAccepted => {
             state
                 .pending_scrollback
                 .push(Line::from("queued for the next operation").dim());
-            state.composer.clear();
+            state.reset_composer();
             (state, None)
         }
         UiMessage::SubmitRejected(message)
         | UiMessage::EnqueueRejected(message)
         | UiMessage::SteerRejected(message) => {
+            state.reject_pending_history();
             state
                 .pending_scrollback
                 .push(Line::from(format!("! {message}")).red());
@@ -537,6 +615,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
 
 fn handle_backspace(mut state: UiState) -> (UiState, Option<UiEffect>) {
     if state.cursor > 0 {
+        state.record_edit(EditKind::Delete);
         state.cursor -= 1;
         delete_at_cursor(&mut state);
     }
@@ -566,6 +645,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "shift+enter             - steer the active operation",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
+                "ctrl+_                  - undo composer edit",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -629,8 +709,7 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         // press within 2s exits.
         Action::ClearComposer => {
             if !state.composer.is_empty() {
-                state.composer.clear();
-                state.cursor = 0;
+                state.reset_composer();
                 state.hint = None;
                 state.last_clear = None;
             } else if state
@@ -643,6 +722,10 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
                 state.hint = Some("ctrl+c again to exit".to_owned());
                 state.last_clear = Some(std::time::Instant::now());
             }
+            (state, None)
+        }
+        Action::Undo => {
+            state.undo_edit();
             (state, None)
         }
         Action::ToggleToolOutput => {
@@ -658,16 +741,17 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if text.is_empty() {
                 return (state, None);
             }
-            state.composer.clear();
-            state.cursor = 0;
+            state.break_edit_group();
             state.history_index = None;
             state.history_stash = None;
             // Slash commands are frontend presentation over SessionHandle
             // commands - never TUI-only session logic.
             if let Some(command) = text.strip_prefix('/') {
+                state.reset_composer();
                 return handle_command(&mut state, command);
             }
             state.history.push(text.clone());
+            state.pending_history = Some(text.clone());
             match &state.status {
                 UiStatus::Idle => (state, Some(UiEffect::Submit { text })),
                 UiStatus::Working { .. } => (state, Some(UiEffect::Enqueue { text })),
@@ -678,30 +762,37 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if text.is_empty() || matches!(state.status, UiStatus::Idle) {
                 return (state, None);
             }
-            state.composer.clear();
-            state.cursor = 0;
+            state.break_edit_group();
             state.history_index = None;
             state.history_stash = None;
             state.history.push(text.clone());
+            state.pending_history = Some(text.clone());
             (state, Some(UiEffect::Steer { text }))
         }
         Action::CursorLeft if state.cursor > 0 => {
             state.cursor -= 1;
+            state.break_edit_group();
             state.exit_history_browse();
             (state, None)
         }
         Action::CursorRight if state.cursor < state.composer.chars().count() => {
             state.cursor += 1;
+            state.break_edit_group();
             state.exit_history_browse();
             (state, None)
         }
-        Action::CursorLeft | Action::CursorRight => (state, None),
+        Action::CursorLeft | Action::CursorRight => {
+            state.break_edit_group();
+            (state, None)
+        }
         Action::CursorHome => {
             state.cursor = 0;
+            state.break_edit_group();
             (state, None)
         }
         Action::CursorEnd => {
             state.cursor = state.composer.chars().count();
+            state.break_edit_group();
             (state, None)
         }
         Action::HistoryPrevious => {
@@ -714,18 +805,27 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         }
         Action::KillToEnd => {
             let chars = state.composer.chars().count();
-            state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
+            if state.cursor < chars {
+                state.record_edit(EditKind::Delete);
+                state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
+            }
             (state, None)
         }
         Action::KillToStart => {
-            state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
-            state.cursor = 0;
+            if state.cursor > 0 {
+                state.record_edit(EditKind::Delete);
+                state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
+                state.cursor = 0;
+            }
             (state, None)
         }
         Action::KillWord => {
             let start = word_start(&state.composer, state.cursor);
-            state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
-            state.cursor = start;
+            if start < state.cursor {
+                state.record_edit(EditKind::Delete);
+                state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
+                state.cursor = start;
+            }
             (state, None)
         }
         Action::Yank => {
@@ -737,6 +837,14 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
 }
 
 fn insert_at_cursor(state: &mut UiState, text: &str) {
+    insert_text(state, text, EditKind::Insert);
+}
+
+fn insert_text(state: &mut UiState, text: &str, kind: EditKind) {
+    if text.is_empty() {
+        return;
+    }
+    state.record_edit(kind);
     let byte = char_offset_to_byte(&state.composer, state.cursor);
     state.composer.insert_str(byte, text);
     state.cursor += text.chars().count();
@@ -747,6 +855,7 @@ fn delete_at_cursor(state: &mut UiState) {
     let end = char_offset_to_byte(&state.composer, state.cursor + 1);
     let byte = char_offset_to_byte(&state.composer, state.cursor);
     if byte < end {
+        state.record_edit(EditKind::Delete);
         state.composer.replace_range(byte..end, "");
     }
 }
@@ -793,6 +902,7 @@ fn browse_history(state: &mut UiState, direction: i32) {
     if state.history.is_empty() {
         return;
     }
+    state.break_edit_group();
     let index = match state.history_index {
         None => {
             if direction >= 0 {
@@ -1638,6 +1748,7 @@ pub(crate) mod tests {
         let state = type_text(UiState::new(), "first");
         let (state, effect) = update(state, key(KeyCode::Enter));
         assert!(matches!(effect, Some(UiEffect::Submit { .. })));
+        let state = update(state, UiMessage::SubmitAccepted).0;
         let state = type_text(state, "draft");
         let state = update(state, key(KeyCode::Up)).0;
         assert_eq!(state.composer.as_str(), "first");
@@ -1649,6 +1760,7 @@ pub(crate) mod tests {
     fn submit_pushes_history_and_clears_composer() {
         let state = type_text(UiState::new(), "one");
         let (state, _) = update(state, key(KeyCode::Enter));
+        let state = update(state, UiMessage::SubmitAccepted).0;
         assert_eq!(state.composer.as_str(), "");
         let state = update(state, key(KeyCode::Up)).0;
         assert_eq!(state.composer.as_str(), "one");
@@ -1714,6 +1826,8 @@ pub(crate) mod tests {
         assert_eq!(map.action_for(&up), Some(Action::HistoryPrevious));
         let ctrl_y = KeyEvent::new(KeyCode::Char('y'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_y), Some(Action::Yank));
+        let ctrl_underscore = KeyEvent::new(KeyCode::Char('_'), Modifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_underscore), Some(Action::Undo));
     }
 
     #[test]
@@ -2014,6 +2128,84 @@ pub(crate) mod tests {
         let (state, _) = update(state, UiMessage::SubmitAccepted);
         assert_eq!(state.composer.as_str(), "");
         assert!(matches!(state.status, UiStatus::Idle));
+    }
+
+    #[test]
+    fn rejected_commands_preserve_the_draft_until_retry_or_clear() {
+        let state = type_text(UiState::new(), "draft");
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::Submit {
+                text: "draft".to_owned()
+            })
+        );
+        assert_eq!(state.composer, "draft");
+
+        let (state, _) = update(state, UiMessage::SubmitRejected("busy".to_owned()));
+        assert_eq!(state.composer, "draft");
+        assert!(state.history.is_empty());
+        let (state, _) = update(state, UiMessage::SubmitAccepted);
+        assert!(state.composer.is_empty());
+
+        let mut state = type_text(UiState::new(), "queued");
+        state.status = UiStatus::Working {
+            operation: "thinking".to_owned(),
+        };
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        assert!(matches!(effect, Some(UiEffect::Enqueue { .. })));
+        let (state, _) = update(state, UiMessage::EnqueueRejected("closed".to_owned()));
+        assert_eq!(state.composer, "queued");
+
+        let mut state = type_text(UiState::new(), "steer");
+        state.status = UiStatus::Working {
+            operation: "thinking".to_owned(),
+        };
+        let (state, effect) = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Enter, Modifiers::SHIFT)),
+        );
+        assert!(matches!(effect, Some(UiEffect::Steer { .. })));
+        let (state, _) = update(state, UiMessage::SteerRejected("closed".to_owned()));
+        assert_eq!(state.composer, "steer");
+    }
+
+    #[test]
+    fn undo_coalesces_typing_and_deletion() {
+        let state = type_text(UiState::new(), "hello");
+        let state = update(state, ctrl('_')).0;
+        assert!(state.composer.is_empty());
+
+        let state = type_text(UiState::new(), "hello");
+        let state = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE)),
+        )
+        .0;
+        let state = update(
+            state,
+            UiMessage::Key(KeyEvent::new(KeyCode::Backspace, Modifiers::NONE)),
+        )
+        .0;
+        let state = update(state, ctrl('_')).0;
+        assert_eq!(state.composer, "hello");
+        assert_eq!(state.cursor, 5);
+    }
+
+    #[test]
+    fn paste_is_one_undo_unit_and_is_swallowed_for_approval() {
+        let (state, _) = update(UiState::new(), UiMessage::Paste("one\ntwo".to_owned()));
+        assert_eq!(state.composer, "one\ntwo");
+        let state = update(state, ctrl('_')).0;
+        assert!(state.composer.is_empty());
+
+        let mut state = UiState::new();
+        state.approval = Some(ApprovalPrompt {
+            tool: "bash".to_owned(),
+            target: None,
+        });
+        let (state, _) = update(state, UiMessage::Paste("must not enter".to_owned()));
+        assert!(state.composer.is_empty());
     }
 
     #[test]
