@@ -56,6 +56,7 @@ pub struct Keybindings {
     pub cancel: Option<String>,
     pub submit: Option<String>,
     pub insert_newline: Option<String>,
+    pub complete: Option<String>,
     pub history_previous: Option<String>,
     pub history_next: Option<String>,
     pub cursor_left: Option<String>,

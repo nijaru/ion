@@ -42,7 +42,8 @@ In print mode everything else terminates the operation with an
 approval requirement instead of executing. In the TUI, `/help` lists
 the slash commands (`/compact`, `/model`); `/model` lists the host-provided
 catalog and `/model <id|number>` switches models durably at the next step
-boundary and survives restart.
+boundary and survives restart. `ctrl+j` inserts a newline; Tab completes only
+known slash commands and catalog models.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,

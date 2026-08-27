@@ -124,6 +124,7 @@ pub enum Action {
     ClearComposer,
     Submit,
     InsertNewline,
+    Complete,
     SteerCurrent,
     ToggleToolOutput,
     ToggleThinking,
@@ -180,6 +181,12 @@ impl Default for KeyMap {
             Action::InsertNewline,
             KeyCode::Char('j'),
             Modifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::Complete,
+            KeyCode::Tab,
+            Modifiers::NONE,
         );
         bind(
             &mut bindings,
@@ -299,6 +306,7 @@ impl KeyMap {
         rebind(&mut map, Action::Cancel, &overrides.cancel)?;
         rebind(&mut map, Action::Submit, &overrides.submit)?;
         rebind(&mut map, Action::InsertNewline, &overrides.insert_newline)?;
+        rebind(&mut map, Action::Complete, &overrides.complete)?;
         rebind(
             &mut map,
             Action::HistoryPrevious,
@@ -662,6 +670,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
                 "ctrl+j                  - insert a newline",
+                "tab                     - complete safe commands/models",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
                 "ctrl+_                  - undo composer edit",
@@ -719,6 +728,78 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
     }
 }
 
+const MAX_COMPLETION_SUGGESTIONS: usize = 16;
+
+fn complete_composer(state: &mut UiState) {
+    if state.cursor != state.composer.chars().count() {
+        return;
+    }
+    let Some(command) = state.composer.strip_prefix('/') else {
+        return;
+    };
+    let (prefix, mut partial, mut candidates) = match command.split_once(' ') {
+        Some((name, rest)) if name == "model" && !rest.chars().any(char::is_whitespace) => (
+            "/model ".to_owned(),
+            rest.to_owned(),
+            state.model_catalog.clone(),
+        ),
+        Some(_) => return,
+        None => (
+            "/".to_owned(),
+            command.to_owned(),
+            ["compact", "help", "model"]
+                .into_iter()
+                .map(str::to_owned)
+                .collect(),
+        ),
+    };
+    candidates.retain(|candidate| candidate.starts_with(&partial));
+    if candidates.is_empty() {
+        return;
+    }
+    candidates.truncate(MAX_COMPLETION_SUGGESTIONS);
+    let common = common_prefix(&candidates);
+    if candidates.len() == 1 {
+        partial = candidates[0].clone();
+    } else if common.len() > partial.len() {
+        partial = common;
+    } else {
+        for candidate in candidates {
+            notice(state, &format!("  {prefix}{candidate}"));
+        }
+        return;
+    }
+    let mut completed = format!("{prefix}{partial}");
+    if prefix == "/" {
+        completed.push(' ');
+    }
+    if completed != state.composer {
+        state.record_edit(EditKind::Insert);
+        state.composer = completed;
+        state.cursor = state.composer.chars().count();
+        state.preferred_column = None;
+        state.exit_history_browse();
+    }
+}
+
+fn common_prefix(candidates: &[String]) -> String {
+    let Some(first) = candidates.first() else {
+        return String::new();
+    };
+    let length = candidates[1..]
+        .iter()
+        .map(|candidate| {
+            first
+                .chars()
+                .zip(candidate.chars())
+                .take_while(|(left, right)| left == right)
+                .count()
+        })
+        .min()
+        .unwrap_or_else(|| first.chars().count());
+    first.chars().take(length).collect()
+}
+
 fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffect>) {
     match action {
         // Escape interrupts a running operation. At idle it does
@@ -774,6 +855,10 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         }
         Action::InsertNewline => {
             insert_text(&mut state, "\n", EditKind::Insert);
+            (state, None)
+        }
+        Action::Complete => {
+            complete_composer(&mut state);
             (state, None)
         }
         Action::Submit => {
@@ -1397,6 +1482,7 @@ pub async fn run(
             "ctrl+d exit (empty)",
             "shift+enter to steer",
             "ctrl+j newline",
+            "tab complete",
             "ctrl+o tool output",
             "ctrl+t thinking",
             "up/down history",
@@ -1892,6 +1978,27 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn tab_completes_only_safe_commands_and_catalog_models() {
+        let state = type_text(UiState::new(), "/he");
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "/help ");
+
+        let mut state = type_text(UiState::new(), "/model b");
+        state.model_catalog = vec!["alpha".to_owned(), "beta".to_owned()];
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "/model beta");
+
+        let state = type_text(UiState::new(), "ordinary prose");
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "ordinary prose");
+
+        let state = type_text(UiState::new(), "/");
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "/");
+        assert_eq!(state.pending_scrollback.len(), 3);
+    }
+
+    #[test]
     fn model_command_lists_catalog_and_selects_by_number() {
         let mut state = UiState::new();
         state.model_switching_available = true;
@@ -1976,6 +2083,10 @@ pub(crate) mod tests {
         assert_eq!(map.action_for(&ctrl_underscore), Some(Action::Undo));
         let ctrl_j = KeyEvent::new(KeyCode::Char('j'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_j), Some(Action::InsertNewline));
+        assert_eq!(
+            map.action_for(&KeyEvent::new(KeyCode::Tab, Modifiers::NONE)),
+            Some(Action::Complete)
+        );
     }
 
     #[test]
