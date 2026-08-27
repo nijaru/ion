@@ -264,9 +264,8 @@ impl<P: Provider> SessionRuntime<P> {
             .collect();
         // Usage persists with the settlement, independent of operation
         // success (DESIGN.md §27.2).
-        let usage = self
-            .draft_usage
-            .take()
+        let settled_usage = self.draft_usage.take();
+        let usage = settled_usage
             .map(|u| {
                 vec![UsageRecord {
                     step: self.model_step,
@@ -298,6 +297,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.entries.extend(applied.entries);
+        if let Some(usage) = settled_usage {
+            self.latest_usage = Some(usage);
+        }
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
         self.advance().await;

@@ -1824,6 +1824,8 @@ SessionSnapshot {
     durable semantic view
     active operation summary
     current ephemeral assistant draft/tool statuses
+    bounded projections of durable facts needed after lag (for example,
+    latest settled usage)
     event_cursor
     runtime_instance_id
 }

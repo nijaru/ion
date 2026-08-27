@@ -335,6 +335,10 @@ pub struct SessionSnapshot {
     /// The session's durable model selection; authoritative across
     /// resume (§14.8).
     pub model_ref: String,
+    /// Most recently settled model-step usage. This is a bounded projection
+    /// of the durable usage ledger for frontend resynchronization; it is not
+    /// a cost estimate or a replacement for the ledger.
+    pub latest_usage: Option<TokenUsage>,
     /// Live draft of the active operation (§21.4): present iff an
     /// operation is running. A lagged subscriber reconstructs its view
     /// from this instead of guessing from partial deltas.
@@ -1069,6 +1073,9 @@ struct SessionRuntime<P> {
     /// Token usage buffered from the live model step; persisted at the
     /// settlement boundary (DESIGN.md §27.2).
     draft_usage: Option<TokenUsage>,
+    /// Most recently settled model-step usage, restored from the durable
+    /// ledger and exposed through snapshots for frontend resynchronization.
+    latest_usage: Option<TokenUsage>,
     /// Full token cost (input + output + cache) of the most recent
     /// settled step; anchors the safety net (14.7.3).
     last_context_tokens: Option<u64>,
@@ -1176,6 +1183,7 @@ impl<P: Provider> SessionRuntime<P> {
             assistant_frame_seq: 0,
             draft_calls: Vec::new(),
             draft_usage: None,
+            latest_usage: None,
             last_context_tokens: None,
             last_prefix_fingerprint: None,
             context_window: None,
@@ -1203,6 +1211,19 @@ impl<P: Provider> SessionRuntime<P> {
     /// sequence, and — for a non-terminal operation — the complete
     /// machine, its pending inbox, and its pending effect intent.
     fn restore_from(&mut self, loaded: LoadedSession) {
+        self.latest_usage = loaded.latest_usage.map(|usage| TokenUsage {
+            input: usage.input_tokens,
+            output: usage.output_tokens,
+            cache_read: usage.cache_read_tokens,
+            cache_write: usage.cache_write_tokens,
+        });
+        self.last_context_tokens = self.latest_usage.map(|usage| {
+            usage
+                .input
+                .saturating_add(usage.output)
+                .saturating_add(usage.cache_read)
+                .saturating_add(usage.cache_write)
+        });
         let assistant_frames = loaded.assistant_frames;
         self.selected_model_ref = loaded.session.initial_model_ref.clone();
         let mut max_seq = 0;
@@ -2572,6 +2593,7 @@ impl<P: Provider> SessionRuntime<P> {
             },
             entries: self.entries.clone(),
             model_ref: self.selected_model_ref.clone(),
+            latest_usage: self.latest_usage,
             live: self.operation.as_ref().map(|_| LiveOperationState {
                 draft_text: self.draft_text.clone(),
                 draft_thinking: self.draft_thinking.clone(),

@@ -1344,9 +1344,9 @@ impl UiState {
             _ => None,
         };
         self.tool_rows.clear();
-        // Usage is a live provider event, not part of this snapshot yet;
-        // discard it during lag recovery rather than display stale values.
-        self.usage = None;
+        // Restore the runtime-owned projection of the latest durable usage;
+        // frontend resynchronization never reads the store directly.
+        self.usage = snapshot.latest_usage;
         match &snapshot.live {
             // The snapshot's draft is the runtime's authoritative
             // accumulation, so reconstruction is exact (§21.4).
@@ -1554,6 +1554,7 @@ pub async fn run(
     // The session's durable selection is authoritative once subscribed;
     // a resumed session may have switched models in an earlier run.
     // Scripted launches keep the host's display fallback.
+    state.usage = snapshot.latest_usage;
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
@@ -2112,6 +2113,12 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            latest_usage: Some(TokenUsage {
+                input: 100,
+                output: 20,
+                cache_read: 60,
+                cache_write: 4,
+            }),
             live: Some(ion_core::LiveOperationState {
                 draft_text: "authoritative draft".to_owned(),
                 draft_thinking: "reasoning so far".to_owned(),
@@ -2124,6 +2131,15 @@ pub(crate) mod tests {
         };
         state.resync_after_lag(&snapshot);
         assert_eq!(state.draft, "authoritative draft");
+        assert_eq!(
+            state.usage,
+            Some(TokenUsage {
+                input: 100,
+                output: 20,
+                cache_read: 60,
+                cache_write: 4,
+            })
+        );
         assert_eq!(state.draft_thinking, "reasoning so far");
         assert!(!state.draft_degraded);
         assert_eq!(state.tool_rows.len(), 1);
@@ -2143,6 +2159,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            latest_usage: None,
             live: None,
         };
         state.resync_after_lag(&snapshot);
@@ -2182,6 +2199,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            latest_usage: None,
             live: None,
         };
         state.resync_after_lag(&snapshot);
@@ -2216,6 +2234,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            latest_usage: None,
             live: None,
         };
         let mut state = UiState::new();

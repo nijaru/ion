@@ -130,6 +130,73 @@ async fn usage_persists_with_the_settlement() {
 }
 
 #[tokio::test]
+async fn latest_usage_is_restored_in_snapshot_after_reopen() {
+    let db = temp_db("usage-reopen");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = Runtime::start_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 100,
+                output: 20,
+                cache_read: 60,
+                cache_write: 4,
+            }),
+            ScriptedMessage::text("done"),
+        ]),
+        ToolRegistry::default(),
+        store,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    assert_eq!(
+        session.snapshot().await.expect("snapshot").latest_usage,
+        Some(crate::provider::TokenUsage {
+            input: 100,
+            output: 20,
+            cache_read: 60,
+            cache_write: 4,
+        })
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    drop(session);
+
+    let store = SessionStore::open(&db).expect("reopen store");
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store,
+        session_id,
+    )
+    .await
+    .expect("reopen runtime");
+    assert_eq!(
+        runtime
+            .session()
+            .snapshot()
+            .await
+            .expect("reopened snapshot")
+            .latest_usage,
+        Some(crate::provider::TokenUsage {
+            input: 100,
+            output: 20,
+            cache_read: 60,
+            cache_write: 4,
+        })
+    );
+    runtime
+        .session()
+        .close()
+        .await
+        .expect("close reopened runtime");
+    runtime.join().await.expect("join reopened runtime");
+    let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
+}
+
+#[tokio::test]
 async fn usage_survives_a_failed_operation() {
     // §27.2: usage is independent of operation success — a failed
     // step's tokens still land in the ledger via the settlement commit.

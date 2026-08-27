@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 
-use rusqlite::Connection;
 use rusqlite::types::Type;
+use rusqlite::{Connection, OptionalExtension};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -188,6 +188,9 @@ pub struct LoadedSession {
     pub pending_inbox: Vec<InboxRecord>,
     pub assistant_frames: Vec<AssistantFrame>,
     pub tool_progress: Vec<ToolProgressCheckpoint>,
+    /// Most recently committed model-step usage, loaded for runtime-owned
+    /// frontend resynchronization without exposing the store to a frontend.
+    pub latest_usage: Option<UsageRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

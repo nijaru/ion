@@ -143,6 +143,19 @@ fn latest_session(connection: &mut Connection) -> Result<Option<SessionId>, Stor
     .transpose()
 }
 
+fn usage_row(row: &rusqlite::Row<'_>) -> Result<UsageRow, rusqlite::Error> {
+    Ok(UsageRow {
+        operation_id: OperationId::from_uuid(Uuid::parse_str(&row.get::<_, String>(0)?).map_err(
+            |_| rusqlite::Error::InvalidColumnType(0, "operation_id".into(), Type::Text),
+        )?),
+        step: row.get::<_, i64>(1)? as u64,
+        input_tokens: row.get::<_, i64>(2)? as u64,
+        output_tokens: row.get::<_, i64>(3)? as u64,
+        cache_read_tokens: row.get::<_, i64>(4)? as u64,
+        cache_write_tokens: row.get::<_, i64>(5)? as u64,
+    })
+}
+
 fn usage_rows(
     connection: &mut Connection,
     session_id: SessionId,
@@ -153,20 +166,7 @@ fn usage_rows(
          FROM usage WHERE session_id = ?1 ORDER BY id",
     )?;
     let rows = statement
-        .query_map([session_id.as_uuid().to_string()], |row| {
-            Ok(UsageRow {
-                operation_id: OperationId::from_uuid(
-                    Uuid::parse_str(&row.get::<_, String>(0)?).map_err(|_| {
-                        rusqlite::Error::InvalidColumnType(0, "operation_id".into(), Type::Text)
-                    })?,
-                ),
-                step: row.get::<_, i64>(1)? as u64,
-                input_tokens: row.get::<_, i64>(2)? as u64,
-                output_tokens: row.get::<_, i64>(3)? as u64,
-                cache_read_tokens: row.get::<_, i64>(4)? as u64,
-                cache_write_tokens: row.get::<_, i64>(5)? as u64,
-            })
-        })?
+        .query_map([session_id.as_uuid().to_string()], usage_row)?
         .collect::<Result<Vec<_>, rusqlite::Error>>()?;
     Ok(rows)
 }
@@ -753,6 +753,16 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         });
     }
 
+    let latest_usage = connection
+        .query_row(
+            "SELECT operation_id, step, input_tokens, output_tokens,
+                    cache_read_tokens, cache_write_tokens
+             FROM usage WHERE session_id = ?1 ORDER BY id DESC LIMIT 1",
+            [id],
+            usage_row,
+        )
+        .optional()?;
+
     Ok(LoadedSession {
         session,
         entries,
@@ -760,6 +770,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         pending_inbox,
         assistant_frames,
         tool_progress,
+        latest_usage,
     })
 }
 
