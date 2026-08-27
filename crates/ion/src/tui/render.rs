@@ -147,6 +147,67 @@ fn str_width(line: &Line<'_>) -> usize {
     line.spans.iter().map(|s| s.content.width()).sum()
 }
 
+fn wrapped_cursor_position(
+    logical_line: &str,
+    prefix: &str,
+    wrapped: &[Line<'_>],
+    local_cursor: usize,
+) -> (usize, usize) {
+    let cursor_byte = char_offset_to_byte(logical_line, local_cursor);
+    let target_col = prefix.width() + logical_line[..cursor_byte].width();
+    let mut walked = 0;
+    for (row_index, row) in wrapped.iter().enumerate() {
+        let row_width = str_width(row);
+        if target_col <= walked + row_width {
+            return (row_index, target_col - walked);
+        }
+        walked += row_width;
+    }
+    (wrapped.len().saturating_sub(1), walked)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ComposerCursorPosition {
+    pub(super) cursor: usize,
+    pub(super) row: usize,
+    /// Display column within the logical content, excluding the prompt.
+    pub(super) column: usize,
+}
+
+/// Map every composer cursor boundary to the wrapped row and display column
+/// used by vertical movement. This deliberately uses the same wrapping and
+/// cursor mapping as `composer_rows` so navigation cannot drift from paint.
+pub(super) fn composer_cursor_positions(
+    composer: &str,
+    width: usize,
+) -> Vec<ComposerCursorPosition> {
+    let width = width.max(1);
+    let mut positions = Vec::new();
+    let mut text_offset = 0;
+    let mut visual_offset = 0;
+    for (line_index, logical_line) in composer.split('\n').enumerate() {
+        let prefix = if line_index == 0 { "> " } else { "  " };
+        let wrapped = wrap_line(&Line::from(format!("{prefix}{logical_line}")), width);
+        let line_length = logical_line.chars().count();
+        for local_cursor in 0..=line_length {
+            let (row, screen_column) =
+                wrapped_cursor_position(logical_line, prefix, &wrapped, local_cursor);
+            positions.push(ComposerCursorPosition {
+                cursor: text_offset + local_cursor,
+                row: visual_offset + row,
+                column: if row == 0 {
+                    screen_column.saturating_sub(prefix.width())
+                } else {
+                    screen_column
+                },
+            });
+        }
+        text_offset += line_length + 1;
+        visual_offset += wrapped.len();
+    }
+    positions
+}
+
 /// Wrap the multiline composer and locate its cursor by logical line. The
 /// prompt is shown once and continuation lines align beneath the draft.
 fn composer_rows(state: &UiState, width: usize) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
@@ -160,26 +221,12 @@ fn composer_rows(state: &UiState, width: usize) -> (Vec<Line<'static>>, Option<(
         let line_length = logical_line.chars().count();
         if state.cursor >= text_offset && state.cursor <= text_offset + line_length {
             let local_cursor = state.cursor - text_offset;
-            let cursor_byte = char_offset_to_byte(logical_line, local_cursor);
-            let target_col = prefix.width() + logical_line[..cursor_byte].width();
-            let mut walked = 0;
-            for (row_index, row) in wrapped.iter().enumerate() {
-                let row_width = str_width(row);
-                if target_col <= walked + row_width {
-                    cursor = Some((
-                        rows.len() + row_index,
-                        (target_col - walked).min(width.saturating_sub(1)) as u16,
-                    ));
-                    break;
-                }
-                walked += row_width;
-            }
-            if cursor.is_none() {
-                cursor = Some((
-                    rows.len() + wrapped.len().saturating_sub(1),
-                    walked.min(width.saturating_sub(1)) as u16,
-                ));
-            }
+            let (row_index, screen_column) =
+                wrapped_cursor_position(logical_line, prefix, &wrapped, local_cursor);
+            cursor = Some((
+                rows.len() + row_index,
+                screen_column.min(width.saturating_sub(1)) as u16,
+            ));
         }
         rows.extend(wrapped);
         text_offset += line_length + 1;

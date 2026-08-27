@@ -410,9 +410,13 @@ pub struct UiState {
     composer: String,
     /// Cursor position as a char offset into `composer`.
     cursor: usize,
-    /// Preferred logical column while moving vertically through multiline
-    /// drafts; cleared by horizontal movement or edits.
+    /// Preferred display column within the composer while moving vertically
+    /// through multiline or wrapped drafts; cleared by horizontal movement
+    /// or edits.
     preferred_column: Option<usize>,
+    /// Terminal width used to map wrapped composer rows for vertical motion.
+    /// The render loop refreshes this before drawing and handling input.
+    terminal_width: Option<usize>,
     /// Submitted prompts, oldest first; up/down navigates.
     history: Vec<String>,
     /// Position in `history` while browsing; None edits the live
@@ -481,6 +485,15 @@ impl UiState {
     /// Host-provided model id for the /model display.
     pub fn set_model_name(&mut self, model_name: Option<String>) {
         self.model_name = model_name;
+    }
+
+    /// Keep cursor movement aligned with the current render width.
+    pub(crate) fn set_terminal_width(&mut self, width: usize) {
+        self.terminal_width = Some(width.max(1));
+    }
+
+    fn composer_width(&self) -> usize {
+        self.terminal_width.unwrap_or(80).max(1)
     }
 
     /// Replace the key bindings with settings-resolved ones.
@@ -1002,45 +1015,43 @@ fn delete_at_cursor(state: &mut UiState) {
     }
 }
 
-/// Move the cursor between logical lines while retaining the preferred
-/// column when adjacent lines have different lengths.
+/// Move the cursor between visual composer rows while retaining the
+/// preferred display column when adjacent rows have different widths.
 fn move_vertical(state: &mut UiState, direction: i32) {
-    let chars: Vec<char> = state.composer.chars().collect();
-    let cursor = state.cursor.min(chars.len());
-    let line_start = chars[..cursor]
+    if !matches!(direction, -1 | 1) {
+        return;
+    }
+    let positions = render::composer_cursor_positions(&state.composer, state.composer_width());
+    let Some(current) = positions
         .iter()
-        .rposition(|ch| *ch == '\n')
-        .map_or(0, |index| index + 1);
-    let line_end = chars[cursor..]
-        .iter()
-        .position(|ch| *ch == '\n')
-        .map_or(chars.len(), |offset| cursor + offset);
-    let current_column = cursor - line_start;
-    let preferred = state.preferred_column.unwrap_or(current_column);
-
-    let target = if direction < 0 {
-        if line_start == 0 {
-            return;
-        }
-        let previous_end = line_start - 1;
-        let previous_start = chars[..previous_end]
-            .iter()
-            .rposition(|ch| *ch == '\n')
-            .map_or(0, |index| index + 1);
-        previous_start + preferred.min(previous_end - previous_start)
+        .find(|position| position.cursor == state.cursor.min(state.composer.chars().count()))
+    else {
+        return;
+    };
+    let preferred = state.preferred_column.unwrap_or(current.column);
+    let target_row = if direction < 0 {
+        current.row.checked_sub(1)
     } else {
-        if line_end == chars.len() {
-            return;
-        }
-        let next_start = line_end + 1;
-        let next_end = chars[next_start..]
-            .iter()
-            .position(|ch| *ch == '\n')
-            .map_or(chars.len(), |offset| next_start + offset);
-        next_start + preferred.min(next_end - next_start)
+        Some(current.row + 1)
+    };
+    let Some(target_row) = target_row else {
+        return;
+    };
+    let Some(target) = positions
+        .iter()
+        .filter(|position| position.row == target_row)
+        .min_by_key(|position| {
+            (
+                position.column.abs_diff(preferred),
+                position.column,
+                position.cursor,
+            )
+        })
+    else {
+        return;
     };
 
-    state.cursor = target;
+    state.cursor = target.cursor;
     state.preferred_column = Some(preferred);
     state.break_edit_group();
     state.exit_history_browse();
@@ -1618,6 +1629,7 @@ pub async fn run(
         // fragile stream as keys.
         if let Ok((w, h)) = terminal.size() {
             screen.resize(w, h);
+            state.set_terminal_width(w as usize);
         }
         transcript.rewrap_if_needed(screen.size().0);
         // Flush completed turns into the committed transcript, then
@@ -1931,6 +1943,52 @@ pub(crate) mod tests {
         assert_eq!(state.cursor, 10);
         state = update(state, key(KeyCode::Up)).0;
         assert_eq!(state.cursor, 3);
+    }
+
+    #[test]
+    fn wrapped_vertical_motion_uses_visual_rows() {
+        let mut state = type_text(UiState::new(), "abcdefghijklmn");
+        state.set_terminal_width(8);
+        state = update(state, ctrl('j')).0;
+        state = type_text(state, "z");
+
+        // The first logical line occupies two visual rows at width 8;
+        // Up moves to its continuation row rather than skipping the wrap.
+        state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.cursor, 7);
+        state = update(state, key(KeyCode::Down)).0;
+        assert_eq!(state.cursor, 16);
+    }
+
+    #[test]
+    fn wrapped_vertical_motion_uses_display_width_for_wide_graphemes() {
+        let mut state = type_text(UiState::new(), "界x");
+        state.set_terminal_width(20);
+        state = update(state, ctrl('j')).0;
+        state = type_text(state, "1234");
+
+        // Move to the first line, place the cursor after the wide grapheme,
+        // then move down. Display column 2 lands after two ASCII characters;
+        // a character-count column would land after only one.
+        state = update(state, key(KeyCode::Up)).0;
+        state = update(state, key(KeyCode::Left)).0;
+        state = update(state, key(KeyCode::Down)).0;
+        assert_eq!(state.cursor, 5);
+    }
+
+    #[test]
+    fn wrapped_vertical_motion_retains_display_column_across_short_rows() {
+        let mut state = type_text(UiState::new(), "abcdefghijklmn");
+        state.set_terminal_width(8);
+        state = update(state, ctrl('j')).0;
+        state = type_text(state, "xy");
+
+        // The continuation row has more text than the short next line. The
+        // preferred column survives the round trip and returns to the end.
+        state = update(state, key(KeyCode::Up)).0;
+        assert_eq!(state.cursor, 8);
+        state = update(state, key(KeyCode::Down)).0;
+        assert_eq!(state.cursor, 17);
     }
 
     #[test]
