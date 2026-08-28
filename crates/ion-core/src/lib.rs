@@ -1,12 +1,9 @@
-//! Runtime contract for Ion: one agent loop inside a durable,
-//! single-writer session runtime (DESIGN.md).
+//! Durable core for Ion's provider-neutral coding harness.
 //!
-//! The process-level [`Runtime`] composes one or more sessions; each
-//! loaded session has exactly one mutation authority: its private
-//! `SessionRuntime` task driving the pure [`OperationMachine`] transition
-//! core. Frontends hold a
-//! [`SessionHandle`] and subscribe to [`RuntimeEvent`]s. Persistence,
-//! tools, and TUI state are out of scope until their owning slices.
+//! Authoritative session state has one mutation owner; provider, tool, and
+//! agent effects execute concurrently outside that mutation line and become
+//! authoritative only through durable transitions. The current implementation
+//! is migrating from one linear session operation to a tree/lane substrate.
 
 mod context;
 mod delegate;
@@ -16,6 +13,7 @@ mod extensions;
 mod harness;
 mod ids;
 mod mcp;
+mod operation;
 mod policy;
 mod process;
 mod provider;
@@ -43,6 +41,10 @@ pub use extensions::{ExtensionDef, ExtensionService};
 pub use harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 pub use ids::{EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
+pub use operation::{
+    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
+    OperationState, SessionEntry, Transition, TransitionError,
+};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
@@ -53,10 +55,6 @@ pub use runtime::{
     ChildRuntimeConfig, EventSubscription, IndeterminateWarning, LiveOperationState,
     OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
     SessionHandle, SessionSnapshot,
-};
-pub use session::{
-    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
-    OperationState, SessionEntry, Transition, TransitionError,
 };
 pub use store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
