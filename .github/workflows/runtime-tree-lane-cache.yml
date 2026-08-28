@@ -24,6 +24,7 @@ jobs:
         run: |
           python .github/runtime_tree_lane_cache_fix.py
           python .github/runtime_tree_lane_cache_patch.py
+          python .github/runtime_tree_lane_cache_postfix.py
           python .github/consolidate_design.py
       - name: Validate Rust
         run: |
@@ -39,6 +40,7 @@ jobs:
             .github/consolidate_design.py \
             .github/runtime_tree_lane_cache_fix.py \
             .github/runtime_tree_lane_cache_patch.py \
+            .github/runtime_tree_lane_cache_postfix.py \
             .github/workflows/runtime-tree-lane-cache.yml
           git commit -m 'refactor(core): retain runtime tree and lane state'
           git push origin HEAD:refactor/reopen-entry-ids
