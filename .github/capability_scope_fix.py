@@ -13,21 +13,40 @@ def replace(path: str, old: str, new: str, count: int = 1) -> None:
 # production owner through mutation of an inherited config, not a second ctor.
 replace(
     "crates/ion-core/src/session/lane.rs",
-    '''\n    pub(crate) fn with_tools(model_ref: impl Into<String>, tools: ToolSelection) -> Self {\n        Self {\n            model_ref: model_ref.into(),\n            tools,\n        }\n    }\n''',
+    '''
+    pub(crate) fn with_tools(model_ref: impl Into<String>, tools: ToolSelection) -> Self {
+        Self {
+            model_ref: model_ref.into(),
+            tools,
+        }
+    }
+''',
     "",
 )
 
-# Store tests use the same total config the crate-private admission primitive now requires.
+# These are the only bare model literals in the agent-store test; the session
+# record uses `.to_owned()`. Convert the two crate-private admission arguments.
 replace(
     "crates/ion-core/src/tests/agent_store.rs",
-    '''            Some(root_entry),\n            "model-a",\n''',
-    '''            Some(root_entry),\n            crate::session::lane::Config::new("model-a"),\n''',
+    '"model-a",',
+    'crate::session::lane::Config::new("model-a"),',
     count=2,
 )
 
 # Hold the recorded requests while borrowing tool names from the first request.
 replace(
     "crates/ion-core/src/tests/agent_family.rs",
-    '''    let names = provider.requests()[0]\n        .tools\n        .iter()\n        .map(|tool| tool.name.as_str())\n        .collect::<Vec<_>>();\n''',
-    '''    let requests = provider.requests();\n    let names = requests[0]\n        .tools\n        .iter()\n        .map(|tool| tool.name.as_str())\n        .collect::<Vec<_>>();\n''',
+    '''    let names = provider.requests()[0]
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+''',
+    '''    let requests = provider.requests();
+    let names = requests[0]
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+''',
 )
