@@ -193,7 +193,9 @@ impl<P: Provider> SessionRuntime<P> {
                 }
             }
             EngineSignal::UsageUpdate { usage, .. } => {
-                self.last_context_tokens =
+                self.operation_lane_live_mut(operation_id)
+                    .expect("resident operation has an owning lane")
+                    .last_context_tokens =
                     Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
                 self.live_mut(operation_id)
                     .expect("resident operation has live execution state")
@@ -353,7 +355,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         if let Some(usage) = settled_usage {
-            self.latest_usage = Some(usage);
+            self.operation_lane_live_mut(operation_id)
+                .expect("resident operation has an owning lane")
+                .latest_usage = Some(usage);
         }
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
@@ -456,7 +460,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.live_mut(operation_id)
             .expect("main operation residency exists")
             .last_step_was_compaction = true;
-        self.last_prefix_fingerprint = None;
+        self.operation_lane_live_mut(operation_id)
+            .expect("resident operation has an owning lane")
+            .last_prefix_fingerprint = None;
         warn!(%operation_id, "context overflow; compacting once and retrying");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
     }

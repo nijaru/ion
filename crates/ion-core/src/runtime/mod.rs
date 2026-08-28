@@ -1063,6 +1063,29 @@ impl ResidentOperation {
     }
 }
 
+#[derive(Debug, Default)]
+struct LaneResidency {
+    last_context_tokens: Option<u64>,
+    last_prefix_fingerprint: Option<String>,
+    latest_usage: Option<TokenUsage>,
+    context_window: Option<u64>,
+    model_capabilities: Option<(String, ModelCapabilities)>,
+}
+
+struct ResidentLane {
+    durable: crate::session::lane::Lane,
+    live: LaneResidency,
+}
+
+impl ResidentLane {
+    fn new(durable: crate::session::lane::Lane) -> Self {
+        Self {
+            durable,
+            live: LaneResidency::default(),
+        }
+    }
+}
+
 /// The single-writer owner of one loaded session's mutable live state
 /// (DESIGN.md §4.3).
 /// The composed collaborators one session runtime runs with (DESIGN.md
@@ -1144,27 +1167,14 @@ struct SessionRuntime<P> {
     /// turning context projection into an O(n²) scan. `tree_entries` remains
     /// the authority; this index is rebuilt on reopen and extended on commit.
     entry_index: HashMap<EntryId, usize>,
-    /// Durable total lane projections. Public commands still address `main`
-    /// until the next multi-lane residency checkpoint.
-    lanes: BTreeMap<String, crate::session::lane::Lane>,
+    /// Durable lane projections paired with lane-relative live cache and
+    /// telemetry observations. Public commands still address `main` until the
+    /// lane command surface lands.
+    lanes: BTreeMap<String, ResidentLane>,
     /// Next session-global durable entry sequence.
     next_entry_seq: u64,
-    /// Live operation residency keyed by durable operation identity. Public
-    /// commands still project `main`, but effects no longer depend on one
-    /// session-global operation slot.
+    /// Live operation residency keyed by durable operation identity.
     operations: HashMap<OperationId, ResidentOperation>,
-    /// Main-lane context/cache observations intentionally survive operation
-    /// boundaries; these become lane-addressed with the lane command surface.
-    last_context_tokens: Option<u64>,
-    last_prefix_fingerprint: Option<String>,
-    /// Most recently settled model-step usage, restored from the durable
-    /// ledger and exposed through snapshots for frontend resynchronization.
-    latest_usage: Option<TokenUsage>,
-    /// Cached model context window (14.8); fetched from the adapter
-    /// once, on first use.
-    context_window: Option<u64>,
-    /// Cached model capability metadata, keyed by the selected model.
-    model_capabilities: Option<(String, ModelCapabilities)>,
     /// Reopened Suspended operations awaiting durable settlement
     /// (§9.5); empty unless --resume found one.
     suspended_operations: Vec<(
@@ -1213,7 +1223,7 @@ impl<P: Provider> SessionRuntime<P> {
         let mut lanes = BTreeMap::new();
         lanes.insert(
             crate::session::lane::MAIN.to_owned(),
-            crate::session::lane::Lane {
+            ResidentLane::new(crate::session::lane::Lane {
                 name: crate::session::lane::MAIN.to_owned(),
                 state: crate::session::lane::State {
                     leaf: None,
@@ -1221,7 +1231,7 @@ impl<P: Provider> SessionRuntime<P> {
                     pending_next_run: None,
                 },
                 config: crate::session::lane::Config::new(initial_model_ref),
-            },
+            }),
         );
         let mut runtime = Self {
             session_id,
@@ -1250,11 +1260,6 @@ impl<P: Provider> SessionRuntime<P> {
             lanes,
             next_entry_seq: 1,
             operations: HashMap::new(),
-            last_context_tokens: None,
-            last_prefix_fingerprint: None,
-            latest_usage: None,
-            context_window: None,
-            model_capabilities: None,
             suspended_operations: Vec::new(),
             events,
             indeterminate_warning: None,
@@ -1273,13 +1278,13 @@ impl<P: Provider> SessionRuntime<P> {
     /// sequence, and — for a non-terminal operation — the complete
     /// machine, its pending inbox, and its pending effect intent.
     fn restore_from(&mut self, loaded: LoadedSession) {
-        self.latest_usage = loaded.latest_usage.map(|usage| TokenUsage {
+        let latest_usage = loaded.latest_usage.map(|usage| TokenUsage {
             input: usage.input_tokens,
             output: usage.output_tokens,
             cache_read: usage.cache_read_tokens,
             cache_write: usage.cache_write_tokens,
         });
-        self.last_context_tokens = self.latest_usage.map(|usage| {
+        let last_context_tokens = latest_usage.map(|usage| {
             usage
                 .input
                 .saturating_add(usage.output)
@@ -1303,12 +1308,21 @@ impl<P: Provider> SessionRuntime<P> {
         self.lanes = loaded
             .lanes
             .into_iter()
-            .map(|lane| (lane.name.clone(), lane))
+            .map(|lane| (lane.name.clone(), ResidentLane::new(lane)))
             .collect();
         if !self.lanes.contains_key(crate::session::lane::MAIN) {
             error!(session = %self.session_id, "reopened session has no main lane; fencing");
             self.closed = true;
             return;
+        }
+        {
+            let live = &mut self
+                .lanes
+                .get_mut(crate::session::lane::MAIN)
+                .expect("checked main lane")
+                .live;
+            live.latest_usage = latest_usage;
+            live.last_context_tokens = last_context_tokens;
         }
         let Some(main_branch) = self.lane_branch_records(crate::session::lane::MAIN) else {
             error!(session = %self.session_id, "main lane branch is incomplete; fencing");
@@ -1420,14 +1434,41 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn main_lane(&self) -> &crate::session::lane::Lane {
-        self.lanes
+        &self
+            .lanes
             .get(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
+            .durable
     }
 
     fn main_lane_mut(&mut self) -> &mut crate::session::lane::Lane {
-        self.lanes
+        &mut self
+            .lanes
             .get_mut(crate::session::lane::MAIN)
+            .expect("main lane exists while session runtime is live")
+            .durable
+    }
+
+    fn lane_live(&self, lane_name: &str) -> Option<&LaneResidency> {
+        self.lanes.get(lane_name).map(|lane| &lane.live)
+    }
+
+    fn lane_live_mut(&mut self, lane_name: &str) -> Option<&mut LaneResidency> {
+        self.lanes.get_mut(lane_name).map(|lane| &mut lane.live)
+    }
+
+    fn operation_lane_live_mut(&mut self, operation_id: OperationId) -> Option<&mut LaneResidency> {
+        let lane_name = self.operation_lane_name(operation_id)?.to_owned();
+        self.lane_live_mut(&lane_name)
+    }
+
+    fn main_lane_live(&self) -> &LaneResidency {
+        self.lane_live(crate::session::lane::MAIN)
+            .expect("main lane exists while session runtime is live")
+    }
+
+    fn main_lane_live_mut(&mut self) -> &mut LaneResidency {
+        self.lane_live_mut(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
     }
 
@@ -1457,14 +1498,15 @@ impl<P: Provider> SessionRuntime<P> {
             .map(|resident| resident.lane_name.as_str())
             .or_else(|| {
                 self.lanes.iter().find_map(|(name, lane)| {
-                    (lane.state.current_operation == Some(operation_id)).then_some(name.as_str())
+                    (lane.durable.state.current_operation == Some(operation_id))
+                        .then_some(name.as_str())
                 })
             })
     }
 
     fn lane_resident_id(&self, lane_name: &str) -> Option<OperationId> {
         let lane = self.lanes.get(lane_name)?;
-        lane.state.current_operation.or_else(|| {
+        lane.durable.state.current_operation.or_else(|| {
             self.operations.iter().find_map(|(operation_id, resident)| {
                 (resident.lane_name == lane_name).then_some(*operation_id)
             })
@@ -1515,7 +1557,7 @@ impl<P: Provider> SessionRuntime<P> {
     fn lane_branch_records(&self, lane_name: &str) -> Option<Vec<&EntryRecord>> {
         let lane = self.lanes.get(lane_name)?;
         let mut branch = Vec::new();
-        let mut cursor = lane.state.leaf;
+        let mut cursor = lane.durable.state.leaf;
         while let Some(entry_id) = cursor {
             let index = *self.entry_index.get(&entry_id)?;
             let record = self.tree_entries.get(index)?;
@@ -1869,9 +1911,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.main_lane_mut().config.model_ref = model_ref;
         // Model-relative metadata and hint throttling cannot cross a
         // selection boundary.
-        self.context_window = None;
-        self.model_capabilities = None;
-        self.last_prefix_fingerprint = None;
+        self.main_lane_live_mut().context_window = None;
+        self.main_lane_live_mut().model_capabilities = None;
+        self.main_lane_live_mut().last_prefix_fingerprint = None;
         Ok(previous)
     }
 
@@ -2118,25 +2160,27 @@ impl<P: Provider> SessionRuntime<P> {
     /// is injected into this projection.
     async fn current_model_config(&mut self) -> ModelConfig {
         let selected_model_ref = self.main_model_ref().to_owned();
-        if self
-            .model_capabilities
-            .as_ref()
-            .is_none_or(|(model_ref, _)| model_ref != &selected_model_ref)
-        {
-            let capabilities = self.provider.capabilities_for(&selected_model_ref).await;
-            self.model_capabilities = Some((selected_model_ref.clone(), capabilities));
-        }
-        if self.context_window.is_none() {
-            self.context_window = self.provider.context_window_for(&selected_model_ref).await;
-        }
+        let capabilities = match self.main_lane_live().model_capabilities.as_ref() {
+            Some((model_ref, capabilities)) if model_ref == &selected_model_ref => *capabilities,
+            _ => {
+                let capabilities = self.provider.capabilities_for(&selected_model_ref).await;
+                self.main_lane_live_mut().model_capabilities =
+                    Some((selected_model_ref.clone(), capabilities));
+                capabilities
+            }
+        };
+        let context_window = match self.main_lane_live().context_window {
+            Some(window) => Some(window),
+            None => {
+                let window = self.provider.context_window_for(&selected_model_ref).await;
+                self.main_lane_live_mut().context_window = window;
+                window
+            }
+        };
         ModelConfig {
             model_ref: selected_model_ref,
-            context_window: self.context_window,
-            capabilities: self
-                .model_capabilities
-                .as_ref()
-                .expect("model capabilities cached")
-                .1,
+            context_window,
+            capabilities,
         }
     }
 
@@ -2150,7 +2194,7 @@ impl<P: Provider> SessionRuntime<P> {
         if !model.capabilities.prompt_cache {
             return "unsupported";
         }
-        match self.last_prefix_fingerprint.as_deref() {
+        match self.main_lane_live().last_prefix_fingerprint.as_deref() {
             None => "cold_start",
             Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
             Some(_) => "prefix_changed",
@@ -2193,9 +2237,10 @@ impl<P: Provider> SessionRuntime<P> {
         {
             return false;
         }
-        match self.context_window {
+        match self.main_lane_live().context_window {
             Some(window) => {
-                self.last_context_tokens.unwrap_or(0) > window.saturating_sub(RESERVE_TOKENS)
+                self.main_lane_live().last_context_tokens.unwrap_or(0)
+                    > window.saturating_sub(RESERVE_TOKENS)
             }
             None => false,
         }
@@ -2268,7 +2313,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.main_live_mut()
             .expect("main operation residency exists")
             .last_step_was_compaction = true;
-        self.last_prefix_fingerprint = None;
+        self.main_lane_live_mut().last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.wait_effect_boundary(EffectBoundary::CompactionExecution)
             .await;
@@ -2409,7 +2454,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.install_active(staged);
-        self.last_prefix_fingerprint = Some(prefix_fingerprint);
+        self.main_lane_live_mut().last_prefix_fingerprint = Some(prefix_fingerprint);
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -2841,6 +2886,7 @@ impl<P: Provider> SessionRuntime<P> {
             .lanes
             .get(&lane_name)
             .expect("operation lane exists while session runtime is live")
+            .durable
             .state
             .leaf;
         for entry in &mut request.entries {
@@ -2851,10 +2897,11 @@ impl<P: Provider> SessionRuntime<P> {
         let new_leaf = entries.last().map(|entry| entry.id);
         self.store.commit(request).await?;
         self.install_tree_entries(entries);
-        let lane = self
+        let lane = &mut self
             .lanes
             .get_mut(&lane_name)
-            .expect("operation lane exists after durable commit");
+            .expect("operation lane exists after durable commit")
+            .durable;
         if let Some(new_leaf) = new_leaf {
             lane.state.leaf = Some(new_leaf);
         }
@@ -2948,7 +2995,7 @@ impl<P: Provider> SessionRuntime<P> {
                 .map(|record| record.entry.clone())
                 .collect(),
             model_ref: self.main_model_ref().to_owned(),
-            latest_usage: self.latest_usage,
+            latest_usage: self.main_lane_live().latest_usage,
             live: self.main_active().map(|_| LiveOperationState {
                 draft_text: self
                     .main_live()

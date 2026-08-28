@@ -130,7 +130,9 @@ impl<P: Provider> SessionRuntime<P> {
                 self.main_live_mut()
                     .expect("main operation residency exists")
                     .model_step = step.saturating_sub(1);
-                self.last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
+                self.operation_lane_live_mut(operation_id)
+                    .expect("recovered operation has an owning lane")
+                    .last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
                 self.main_live_mut()
                     .expect("main operation residency exists")
                     .draft_text
