@@ -246,8 +246,8 @@ pub enum RuntimeEvent {
         operation_id: OperationId,
     },
     /// Non-interactive policy gate (DESIGN.md §17.4): a concrete action
-    /// needed an approval no caller could grant; the operation
-    /// terminated durably with `ApprovalRequired`.
+    /// needed an approval no one can grant in this mode, so the operation
+    /// terminates visibly instead of inviting a model retry loop.
     OperationApprovalRequired {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -1077,8 +1077,9 @@ struct SessionRuntime<P> {
     runtime_instance_id: RuntimeInstanceId,
     cwd: String,
     provider: Arc<P>,
-    /// Authoritative model selection for future steps. The initial id
-    /// is in the session row; changes are semantic entries.
+    /// Live projection of the hidden `main` lane's total model config.
+    /// Durable lane config is authoritative; an in-flight model step keeps
+    /// its frozen [`ModelConfig`].
     selected_model_ref: String,
     tools: Arc<ToolCatalog>,
     artifact_root: Option<PathBuf>,
@@ -1276,9 +1277,6 @@ impl<P: Provider> SessionRuntime<P> {
         let mut max_seq = 0;
         for (seq, entry) in loaded.entries {
             max_seq = max_seq.max(seq);
-            if let SessionEntry::ModelChanged { model_ref } = &entry {
-                self.selected_model_ref.clone_from(model_ref);
-            }
             self.entries.push(entry);
         }
         self.next_entry_seq = max_seq + 1;
@@ -1617,16 +1615,13 @@ impl<P: Provider> SessionRuntime<P> {
         if model_ref == previous {
             return Ok(previous);
         }
-        let entry = SessionEntry::ModelChanged {
-            model_ref: model_ref.clone(),
-        };
-        let record = self.stage_entry(&entry);
         self.store
-            .append_entry(self.session_id, record)
+            .set_main_lane_config(
+                self.session_id,
+                crate::session::lane::Config::new(model_ref.clone()),
+            )
             .await
             .map_err(persistence_command_error)?;
-        self.next_entry_seq += 1;
-        self.entries.push(entry);
         self.selected_model_ref = model_ref;
         // Model-relative metadata and hint throttling cannot cross a
         // selection boundary.

@@ -35,9 +35,9 @@ pub struct SessionRecord {
     pub id: SessionId,
     pub cwd: String,
     pub title: String,
-    /// Host-selected launch default, persisted into the initial main-lane
-    /// configuration before the first effect. Runtime model switching still
-    /// uses a compatibility conversation entry until that owner migrates.
+    /// Host-selected launch default used to create the initial `main` lane
+    /// configuration. Later model changes update that lane configuration
+    /// directly rather than becoming conversation entries.
     pub initial_model_ref: String,
     /// Present for bounded child sessions (§20.3): lineage is durable
     /// before the child runs.
@@ -246,6 +246,11 @@ enum StoreCommand {
         entry: EntryRecord,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    SetMainLaneConfig {
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
     Load {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
@@ -416,8 +421,7 @@ impl SessionStore {
             .await
     }
 
-    /// Append semantic session configuration while idle or while an
-    /// immutable effect is in flight. The session runtime assigns seq.
+    /// Append one semantic conversation entry. The session runtime assigns seq.
     pub async fn append_entry(
         &self,
         session_id: SessionId,
@@ -426,6 +430,22 @@ impl SessionStore {
         self.request(|reply| StoreCommand::AppendEntry {
             session_id,
             entry,
+            reply,
+        })
+        .await
+    }
+
+    /// Replace the total configuration for future work on the hidden `main`
+    /// lane. This stays crate-private until callers can address arbitrary
+    /// lanes directly.
+    pub(crate) async fn set_main_lane_config(
+        &self,
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
             reply,
         })
         .await

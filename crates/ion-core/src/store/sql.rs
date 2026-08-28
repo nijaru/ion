@@ -47,6 +47,15 @@ pub(super) fn handle_command(
                 append_entry(connection, session_id, &entry).map_err(StoreError::from)
             }));
         }
+        StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
+            }));
+        }
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
@@ -208,6 +217,37 @@ fn create_session(
             config,
             now,
         ],
+    )?;
+    tx.commit()
+}
+
+fn set_main_lane_config(
+    connection: &mut Connection,
+    session_id: SessionId,
+    config: &crate::session::lane::Config,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let config = serde_json::to_string(config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let now = now_ms();
+    let changed = tx.execute(
+        "UPDATE lanes SET config = ?3, updated_at = ?4
+         WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            config,
+            now,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane is missing".to_owned(),
+        ));
+    }
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now],
     )?;
     tx.commit()
 }
@@ -953,7 +993,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn appends_extend_main_lane_and_model_config_is_lane_owned() {
+    fn appends_extend_main_lane_and_config_write_does_not_move_history() {
         let mut connection = Connection::open_in_memory().expect("database");
         crate::store::schema::create_fresh(&mut connection).expect("schema");
         connection
@@ -1017,30 +1057,34 @@ mod tests {
                 row.get(0)
             })
             .expect("second parent");
-        let leaf: Option<String> = connection
+        let leaf_before: Option<String> = connection
             .query_row(
                 "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
                 [session_id.as_uuid().to_string()],
                 |row| row.get(0),
             )
-            .expect("leaf");
+            .expect("leaf before");
         assert!(first_parent.is_none());
         assert_eq!(second_parent.as_deref(), Some(first.as_str()));
-        assert_eq!(leaf.as_deref(), Some(second.as_str()));
+        assert_eq!(leaf_before.as_deref(), Some(second.as_str()));
 
-        append_entry(
+        set_main_lane_config(
             &mut connection,
             session_id,
-            &EntryRecord {
-                seq: 3,
-                entry: SessionEntry::ModelChanged {
-                    model_ref: "model-b".to_owned(),
-                },
-            },
+            &crate::session::lane::Config::new("model-b"),
         )
-        .expect("model change");
+        .expect("model config");
+
         let loaded = load(&connection, session_id).expect("load");
+        let leaf_after: Option<String> = connection
+            .query_row(
+                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
+                [session_id.as_uuid().to_string()],
+                |row| row.get(0),
+            )
+            .expect("leaf after");
         assert_eq!(loaded.session.initial_model_ref, "model-b");
-        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.entries.len(), 2);
+        assert_eq!(leaf_after, leaf_before);
     }
 }
