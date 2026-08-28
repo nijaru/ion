@@ -1,13 +1,14 @@
 //! Durable identity newtypes (DESIGN.md §11.2).
 //!
 //! Sessions, operations, and effects use UUIDv7. Conversation entry identity
-//! is a deterministic UUIDv5 derived from the owning session and its immutable
-//! per-session sequence: the sequence remains the durable ordering key while
-//! callers use an opaque typed id. Live runtime events keep a separate
-//! in-memory cursor.
+//! is a deterministic UUIDv8 derived from SHA-256 over the owning session and
+//! its immutable per-session sequence. The sequence remains the durable
+//! ordering key while callers use an opaque typed id. Live runtime events keep
+//! a separate in-memory cursor.
 
 use std::fmt;
 
+use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -74,12 +75,21 @@ impl fmt::Display for OperationId {
 pub struct EntryId(Uuid);
 
 impl EntryId {
-    /// Stable identity for a semantic entry whose per-session sequence has
-    /// already been provisioned by the single session writer.
+    /// Stable opaque identity for a semantic entry whose per-session sequence
+    /// has already been provisioned by the single session writer.
     #[must_use]
     pub fn for_seq(session_id: SessionId, seq: u64) -> Self {
-        let namespace = session_id.as_uuid();
-        Self(Uuid::new_v5(&namespace, &seq.to_be_bytes()))
+        let mut hash = Sha256::new();
+        hash.update(b"ion-entry-id-v1\0");
+        hash.update(session_id.as_uuid().as_bytes());
+        hash.update(seq.to_be_bytes());
+        let digest = hash.finalize();
+        let mut bytes = [0_u8; 16];
+        bytes.copy_from_slice(&digest[..16]);
+        // RFC 9562 UUIDv8: application-defined payload with standard variant.
+        bytes[6] = (bytes[6] & 0x0f) | 0x80;
+        bytes[8] = (bytes[8] & 0x3f) | 0x80;
+        Self(Uuid::from_bytes(bytes))
     }
 
     #[must_use]
@@ -212,5 +222,6 @@ mod tests {
         assert_eq!(one, EntryId::for_seq(session, 1));
         assert_ne!(one, EntryId::for_seq(session, 2));
         assert_eq!(EntryId::parse(&one.as_uuid().to_string()), Some(one));
+        assert_eq!(one.as_uuid().get_version_num(), 8);
     }
 }
