@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply source patch
-        run: python .github/agent_message_patch.py
+        run: |
+          python .github/agent_message_patch_fix.py
+          python .github/agent_message_patch.py
       - name: Validate Rust
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/ion-core/src
-          git rm -f .github/agent_message_patch.py .github/workflows/agent-message.yml
+          git rm -f .github/agent_message_patch.py .github/agent_message_patch_fix.py .github/workflows/agent-message.yml
           git commit -m 'feat(core): add durable agent messaging'
           git push origin HEAD:refactor/reopen-entry-ids
