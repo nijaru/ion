@@ -1028,6 +1028,27 @@ struct ActiveOperation {
     pending_steers: Vec<InboxId>,
 }
 
+/// Ephemeral execution state owned by the currently resident operation.
+/// Keeping these fields together is a prerequisite for operation-addressed
+/// residency: no draft, step counter, budget counter, or live tool state may
+/// remain session-global once more than one lane can execute concurrently.
+#[derive(Debug, Default)]
+struct OperationResidency {
+    operation_tool_calls: u32,
+    draft_text: String,
+    draft_thinking: String,
+    assistant_frame_seq: u64,
+    draft_calls: Vec<ToolCall>,
+    draft_usage: Option<TokenUsage>,
+    last_context_tokens: Option<u64>,
+    last_prefix_fingerprint: Option<String>,
+    pending_compact: Option<Option<String>>,
+    overflow_retry_used: bool,
+    last_step_was_compaction: bool,
+    model_step: u64,
+    live_tools: Vec<PendingTool>,
+}
+
 /// The single-writer owner of one loaded session's mutable live state
 /// (DESIGN.md §4.3).
 /// The composed collaborators one session runtime runs with (DESIGN.md
@@ -1095,8 +1116,6 @@ struct SessionRuntime<P> {
     interactive_approvals: bool,
     budget: RuntimeBudget,
     parent_session_id: Option<SessionId>,
-    /// Tool effects admitted by the active operation (budget counter).
-    operation_tool_calls: u32,
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -1117,34 +1136,15 @@ struct SessionRuntime<P> {
     /// Next session-global durable entry sequence.
     next_entry_seq: u64,
     operation: Option<ActiveOperation>,
-    /// Ephemeral draft of the in-flight model step; never durable.
-    draft_text: String,
-    /// Live reasoning text for the current step; cleared at settlement.
-    /// Display-only: thinking is never durable assistant content.
-    draft_thinking: String,
-    /// Monotonic frame sequence for the current assistant effect.
-    assistant_frame_seq: u64,
-    draft_calls: Vec<ToolCall>,
-    /// Token usage buffered from the live model step; persisted at the
-    /// settlement boundary (DESIGN.md §27.2).
-    draft_usage: Option<TokenUsage>,
+    operation_live: OperationResidency,
     /// Most recently settled model-step usage, restored from the durable
     /// ledger and exposed through snapshots for frontend resynchronization.
     latest_usage: Option<TokenUsage>,
-    /// Full token cost (input + output + cache) of the most recent
-    /// settled step; anchors the safety net (14.7.3).
-    last_context_tokens: Option<u64>,
-    /// Stable-prefix fingerprint used to explain prompt-cache expectations
-    /// at the next model-step boundary.
-    last_prefix_fingerprint: Option<String>,
     /// Cached model context window (14.8); fetched from the adapter
     /// once, on first use.
     context_window: Option<u64>,
     /// Cached model capability metadata, keyed by the selected model.
     model_capabilities: Option<(String, ModelCapabilities)>,
-    /// A user-requested compaction waiting for the run to settle; consumed
-    /// at the next continuation boundary.
-    pending_compact: Option<Option<String>>,
     /// Reopened Suspended operations awaiting durable settlement
     /// (§9.5); empty unless --resume found one.
     suspended_operations: Vec<(
@@ -1153,21 +1153,7 @@ struct SessionRuntime<P> {
         crate::store::CheckpointPayload,
         CapabilitySnapshot,
     )>,
-    /// An overflow already triggered the one compaction+retry
-    /// (14.7.4); a second overflow fails the operation visibly.
-    overflow_retry_used: bool,
-    /// The previous step was compaction itself; prevents the
-    /// compaction step's own usage from re-triggering compaction.
-    last_step_was_compaction: bool,
-    /// Monotonic model-step counter for the active operation; provider
-    /// signals carry the step that produced them, and stale generations
-    /// are dropped.
-    model_step: u64,
     events: broadcast::Sender<RuntimeEvent>,
-    /// Started-but-unsettled tool calls of the active operation;
-    /// mirrors emitted ToolStarted/ToolSettled for snapshot
-    /// reconstruction (§21.4).
-    live_tools: Vec<PendingTool>,
     /// Persisted indeterminate outcomes that must remain visible to a
     /// frontend attaching after startup recovery.
     indeterminate_warning: Option<IndeterminateWarning>,
@@ -1231,7 +1217,6 @@ impl<P: Provider> SessionRuntime<P> {
             interactive_approvals,
             budget,
             parent_session_id: parent,
-            operation_tool_calls: 0,
             commands,
             engine_tx,
             engine_rx,
@@ -1245,23 +1230,12 @@ impl<P: Provider> SessionRuntime<P> {
             lanes,
             next_entry_seq: 1,
             operation: None,
-            draft_text: String::new(),
-            draft_thinking: String::new(),
-            assistant_frame_seq: 0,
-            draft_calls: Vec::new(),
-            draft_usage: None,
+            operation_live: OperationResidency::default(),
             latest_usage: None,
-            last_context_tokens: None,
-            last_prefix_fingerprint: None,
             context_window: None,
             model_capabilities: None,
-            pending_compact: None,
             suspended_operations: Vec::new(),
-            overflow_retry_used: false,
-            last_step_was_compaction: false,
-            model_step: 0,
             events,
-            live_tools: Vec::new(),
             indeterminate_warning: None,
             closed: false,
             resumed: false,
@@ -1284,7 +1258,7 @@ impl<P: Provider> SessionRuntime<P> {
             cache_read: usage.cache_read_tokens,
             cache_write: usage.cache_write_tokens,
         });
-        self.last_context_tokens = self.latest_usage.map(|usage| {
+        self.operation_live.last_context_tokens = self.latest_usage.map(|usage| {
             usage
                 .input
                 .saturating_add(usage.output)
@@ -1407,9 +1381,9 @@ impl<P: Provider> SessionRuntime<P> {
                     frame.operation_id == operation.id && frame.effect_id == effect_id
                 })
             {
-                self.draft_text = frame.text.clone();
-                self.draft_thinking = frame.thinking.clone();
-                self.assistant_frame_seq = frame.frame_seq;
+                self.operation_live.draft_text = frame.text.clone();
+                self.operation_live.draft_thinking = frame.thinking.clone();
+                self.operation_live.assistant_frame_seq = frame.frame_seq;
             }
             if self.operation.replace(active).is_some() {
                 error!(
@@ -1569,7 +1543,7 @@ impl<P: Provider> SessionRuntime<P> {
                 if requested {
                     // Consumed at the next continuation boundary by the
                     // harness-owned maintenance path.
-                    self.pending_compact = Some(instructions);
+                    self.operation_live.pending_compact = Some(instructions);
                 }
                 let _ = reply.send(Ok(requested));
                 false
@@ -1728,17 +1702,17 @@ impl<P: Provider> SessionRuntime<P> {
         let operation_id = active.machine.operation_id();
         let prompt = active.machine.prompt().to_owned();
         self.operation = Some(active);
-        self.draft_text.clear();
-        self.draft_thinking.clear();
-        self.assistant_frame_seq = 0;
-        self.draft_calls.clear();
-        self.draft_usage = None;
-        self.live_tools.clear();
-        self.pending_compact = None;
-        self.overflow_retry_used = false;
-        self.last_step_was_compaction = false;
-        self.model_step = 0;
-        self.operation_tool_calls = 0;
+        self.operation_live.draft_text.clear();
+        self.operation_live.draft_thinking.clear();
+        self.operation_live.assistant_frame_seq = 0;
+        self.operation_live.draft_calls.clear();
+        self.operation_live.draft_usage = None;
+        self.operation_live.live_tools.clear();
+        self.operation_live.pending_compact = None;
+        self.operation_live.overflow_retry_used = false;
+        self.operation_live.last_step_was_compaction = false;
+        self.operation_live.model_step = 0;
+        self.operation_live.operation_tool_calls = 0;
         self.emit(RuntimeEvent::OperationStarted {
             cursor: RuntimeCursor::default(),
             operation_id,
@@ -1799,7 +1773,7 @@ impl<P: Provider> SessionRuntime<P> {
         // selection boundary.
         self.context_window = None;
         self.model_capabilities = None;
-        self.last_prefix_fingerprint = None;
+        self.operation_live.last_prefix_fingerprint = None;
         Ok(previous)
     }
 
@@ -1953,7 +1927,7 @@ impl<P: Provider> SessionRuntime<P> {
                         }
                         continue;
                     }
-                    if let Some(request) = self.pending_compact.take() {
+                    if let Some(request) = self.operation_live.pending_compact.take() {
                         // The run has settled; compact now with the
                         // caller's preservation instructions.
                         if !self.start_compaction(request).await {
@@ -2075,7 +2049,7 @@ impl<P: Provider> SessionRuntime<P> {
         if !model.capabilities.prompt_cache {
             return "unsupported";
         }
-        match self.last_prefix_fingerprint.as_deref() {
+        match self.operation_live.last_prefix_fingerprint.as_deref() {
             None => "cold_start",
             Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
             Some(_) => "prefix_changed",
@@ -2111,12 +2085,13 @@ impl<P: Provider> SessionRuntime<P> {
     /// recovery (14.7.4) is the backstop.
     fn safety_net_compaction_due(&self) -> bool {
         const RESERVE_TOKENS: u64 = 16_000;
-        if self.last_step_was_compaction {
+        if self.operation_live.last_step_was_compaction {
             return false;
         }
         match self.context_window {
             Some(window) => {
-                self.last_context_tokens.unwrap_or(0) > window.saturating_sub(RESERVE_TOKENS)
+                self.operation_live.last_context_tokens.unwrap_or(0)
+                    > window.saturating_sub(RESERVE_TOKENS)
             }
             None => false,
         }
@@ -2159,7 +2134,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.model_step + 1,
+                "step": self.operation_live.model_step + 1,
                 "model": model,
                 "plan": plan
             }),
@@ -2186,8 +2161,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
-        self.last_step_was_compaction = true;
-        self.last_prefix_fingerprint = None;
+        self.operation_live.last_step_was_compaction = true;
+        self.operation_live.last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.wait_effect_boundary(EffectBoundary::CompactionExecution)
             .await;
@@ -2245,7 +2220,7 @@ impl<P: Provider> SessionRuntime<P> {
         if self
             .budget
             .max_model_steps
-            .is_some_and(|max| self.model_step >= u64::from(max))
+            .is_some_and(|max| self.operation_live.model_step >= u64::from(max))
         {
             // Budget bounds are runtime-enforced (§20.5): the
             // operation fails model-visibly instead of looping.
@@ -2288,7 +2263,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.model_step + 1,
+                "step": self.operation_live.model_step + 1,
                 "model": model,
                 "plan": plan,
                 "capability_snapshot_id": capability_snapshot.id,
@@ -2324,7 +2299,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.operation = Some(staged);
-        self.last_prefix_fingerprint = Some(prefix_fingerprint);
+        self.operation_live.last_prefix_fingerprint = Some(prefix_fingerprint);
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -2392,7 +2367,7 @@ impl<P: Provider> SessionRuntime<P> {
         let over_tool_budget = self
             .budget
             .max_tool_calls
-            .is_some_and(|max| self.operation_tool_calls >= max);
+            .is_some_and(|max| self.operation_live.operation_tool_calls >= max);
         let decision = if over_tool_budget {
             PolicyDecision::Deny("operation tool-call budget exhausted".to_owned())
         } else {
@@ -2593,7 +2568,7 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             self.wait_effect_boundary(EffectBoundary::ToolExecution)
                 .await;
-            self.operation_tool_calls += 1;
+            self.operation_live.operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
             let reconciliation = self
@@ -2690,7 +2665,7 @@ impl<P: Provider> SessionRuntime<P> {
         if self
             .budget
             .max_tool_calls
-            .is_some_and(|max| self.operation_tool_calls >= max)
+            .is_some_and(|max| self.operation_live.operation_tool_calls >= max)
         {
             denial = Some("operation tool-call budget exhausted".to_owned());
         }
@@ -2761,7 +2736,7 @@ impl<P: Provider> SessionRuntime<P> {
         // A terminal operation has no unsettled tools; any survivor is
         // a cancelled or failed call whose spinner must not resurrect
         // in a post-lag reconstruction.
-        self.live_tools.clear();
+        self.operation_live.live_tools.clear();
         if let OperationState::Finished(outcome) = state {
             let Some(active) = &self.operation else {
                 return;
@@ -2840,9 +2815,9 @@ impl<P: Provider> SessionRuntime<P> {
             model_ref: self.main_model_ref().to_owned(),
             latest_usage: self.latest_usage,
             live: self.operation.as_ref().map(|_| LiveOperationState {
-                draft_text: self.draft_text.clone(),
-                draft_thinking: self.draft_thinking.clone(),
-                pending_tools: self.live_tools.clone(),
+                draft_text: self.operation_live.draft_text.clone(),
+                draft_thinking: self.operation_live.draft_thinking.clone(),
+                pending_tools: self.operation_live.live_tools.clone(),
             }),
         }
     }
@@ -2863,8 +2838,10 @@ impl<P: Provider> SessionRuntime<P> {
             target: target.clone(),
             tool: tool.to_owned(),
         });
-        self.live_tools.retain(|pending| pending.call_id != call_id);
-        self.live_tools.push(PendingTool {
+        self.operation_live
+            .live_tools
+            .retain(|pending| pending.call_id != call_id);
+        self.operation_live.live_tools.push(PendingTool {
             call_id,
             tool: tool.to_owned(),
             target,

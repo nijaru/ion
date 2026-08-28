@@ -15,8 +15,8 @@ impl<P: Provider> SessionRuntime<P> {
             .map(|active| active.cancel.child_token())
             .unwrap_or_else(|| self.cancel_root.child_token());
         let out = self.engine_tx.clone();
-        self.model_step += 1;
-        let step = self.model_step;
+        self.operation_live.model_step += 1;
+        let step = self.operation_live.model_step;
         let request = ProviderRequest {
             operation_id,
             step,
@@ -45,12 +45,12 @@ impl<P: Provider> SessionRuntime<P> {
             effect_id: effect.id,
             session_id: self.session_id,
             operation_id: active.machine.operation_id(),
-            step: self.model_step,
-            frame_seq: self.assistant_frame_seq.saturating_add(1),
-            text: bounded_frame_text(&self.draft_text),
-            thinking: bounded_frame_text(&self.draft_thinking),
+            step: self.operation_live.model_step,
+            frame_seq: self.operation_live.assistant_frame_seq.saturating_add(1),
+            text: bounded_frame_text(&self.operation_live.draft_text),
+            thinking: bounded_frame_text(&self.operation_live.draft_thinking),
         };
-        self.assistant_frame_seq = frame.frame_seq;
+        self.operation_live.assistant_frame_seq = frame.frame_seq;
         self.store.upsert_assistant_frame(frame).await
     }
 
@@ -125,7 +125,7 @@ impl<P: Provider> SessionRuntime<P> {
             debug!(?signal, "ignored stale engine signal");
             return;
         }
-        if signal_step(&signal) != self.model_step {
+        if signal_step(&signal) != self.operation_live.model_step {
             debug!(?signal, "ignored engine signal from a stale model step");
             return;
         }
@@ -145,7 +145,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         match signal {
             EngineSignal::TextDelta { text, .. } => {
-                self.draft_text.push_str(&text);
+                self.operation_live.draft_text.push_str(&text);
                 self.emit(RuntimeEvent::AssistantTextDelta {
                     cursor: RuntimeCursor::default(),
                     operation_id: active.machine.operation_id(),
@@ -156,7 +156,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }
             }
             EngineSignal::ThinkingDelta { text, .. } => {
-                self.draft_thinking.push_str(&text);
+                self.operation_live.draft_thinking.push_str(&text);
                 self.emit(RuntimeEvent::ThinkingDelta {
                     cursor: RuntimeCursor::default(),
                     operation_id: active.machine.operation_id(),
@@ -167,9 +167,9 @@ impl<P: Provider> SessionRuntime<P> {
                 }
             }
             EngineSignal::UsageUpdate { usage, .. } => {
-                self.last_context_tokens =
+                self.operation_live.last_context_tokens =
                     Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
-                self.draft_usage = Some(usage);
+                self.operation_live.draft_usage = Some(usage);
                 self.emit(RuntimeEvent::UsageUpdate {
                     cursor: RuntimeCursor::default(),
                     operation_id: active.machine.operation_id(),
@@ -183,15 +183,15 @@ impl<P: Provider> SessionRuntime<P> {
                 }
                 // Buffered until the step completes; tool calls are never
                 // executed from partial streamed JSON (DESIGN.md §15.2).
-                self.draft_calls.push(call);
+                self.operation_live.draft_calls.push(call);
             }
             EngineSignal::Completed { .. } => {
                 let cancel_requested = self
                     .operation
                     .as_ref()
                     .is_some_and(|active| active.machine.cancel_requested());
-                let text = std::mem::take(&mut self.draft_text);
-                let tool_calls = std::mem::take(&mut self.draft_calls);
+                let text = std::mem::take(&mut self.operation_live.draft_text);
+                let tool_calls = std::mem::take(&mut self.operation_live.draft_calls);
                 let transition = if cancel_requested {
                     Transition::ProviderCancelled
                 } else {
@@ -206,8 +206,8 @@ impl<P: Provider> SessionRuntime<P> {
                     .is_some_and(|active| active.machine.cancel_requested());
                 if !cancel_requested
                     && is_context_overflow(&message)
-                    && !self.overflow_retry_used
-                    && !self.last_step_was_compaction
+                    && !self.operation_live.overflow_retry_used
+                    && !self.operation_live.last_step_was_compaction
                 {
                     // 14.7.4: one compaction, one retry. The failed
                     // attempt produced no durable effect beyond its
@@ -251,8 +251,8 @@ impl<P: Provider> SessionRuntime<P> {
             debug!("ignored settlement for an already-settled model step");
             return;
         }
-        self.draft_thinking.clear();
-        self.last_step_was_compaction = false;
+        self.operation_live.draft_thinking.clear();
+        self.operation_live.last_step_was_compaction = false;
         let applied = staged
             .machine
             .apply(transition)
@@ -269,11 +269,11 @@ impl<P: Provider> SessionRuntime<P> {
             .collect();
         // Usage persists with the settlement, independent of operation
         // success (DESIGN.md §27.2).
-        let settled_usage = self.draft_usage.take();
+        let settled_usage = self.operation_live.draft_usage.take();
         let usage = settled_usage
             .map(|u| {
                 vec![UsageRecord {
-                    step: self.model_step,
+                    step: self.operation_live.model_step,
                     input_tokens: u.input,
                     output_tokens: u.output,
                     cache_read_tokens: u.cache_read,
@@ -314,7 +314,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// Compaction intent commits in the same transaction, and the
     /// retry is the natural continuation after the summary lands.
     pub(crate) async fn settle_overflow_to_compaction(&mut self) {
-        self.overflow_retry_used = true;
+        self.operation_live.overflow_retry_used = true;
         let mut staged = self.operation.clone().expect("settle needs an operation");
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let model = self.current_model_config().await;
@@ -351,7 +351,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.model_step + 1,
+                "step": self.operation_live.model_step + 1,
                 "model": model,
                 "plan": plan
             }),
@@ -381,12 +381,12 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation = Some(staged);
         // The failed attempt's partial buffers are discarded; usage
         // from a rejected request is not trustworthy.
-        self.draft_text.clear();
-        self.draft_thinking.clear();
-        self.draft_calls.clear();
-        self.draft_usage = None;
-        self.last_step_was_compaction = true;
-        self.last_prefix_fingerprint = None;
+        self.operation_live.draft_text.clear();
+        self.operation_live.draft_thinking.clear();
+        self.operation_live.draft_calls.clear();
+        self.operation_live.draft_usage = None;
+        self.operation_live.last_step_was_compaction = true;
+        self.operation_live.last_prefix_fingerprint = None;
         warn!(%operation_id, "context overflow; compacting once and retrying");
         self.spawn_model_step(operation_id, model, plan, Vec::new());
     }
@@ -402,11 +402,11 @@ impl<P: Provider> SessionRuntime<P> {
         }
         let transition = match signal {
             EngineSignal::TextDelta { text, .. } => {
-                self.draft_text.push_str(&text);
+                self.operation_live.draft_text.push_str(&text);
                 return;
             }
             EngineSignal::Completed { .. } => {
-                let summary = std::mem::take(&mut self.draft_text);
+                let summary = std::mem::take(&mut self.operation_live.draft_text);
                 Transition::CompactionCompleted {
                     summary,
                     covers_through_seq: self.next_entry_seq - 1,
@@ -551,7 +551,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         staged.open_effect = None;
-        self.live_tools.retain(|pending| pending.call_id != call_id);
+        self.operation_live
+            .live_tools
+            .retain(|pending| pending.call_id != call_id);
         self.emit(RuntimeEvent::ToolSettled {
             cursor: RuntimeCursor::default(),
             operation_id: staged.machine.operation_id(),
