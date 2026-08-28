@@ -179,3 +179,123 @@ async fn family_reattaches_open_lane_agent_and_execution_permit_after_crash() {
     runtime.session().close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn agent_waits_are_event_driven_and_completion_is_non_consuming() {
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(220),
+        ..SharedLogProvider::default()
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let family = runtime.agent_family(2).await.expect("family");
+    let root = family.root();
+    let first = family.admit_lane(root).await.expect("first admission");
+    let second = family.admit_lane(root).await.expect("second admission");
+    let first_operation = family
+        .start(first, "first wait")
+        .await
+        .expect("first start");
+    let second_operation = family
+        .start(second, "second wait")
+        .await
+        .expect("second start");
+
+    let cancelled = CancellationToken::new();
+    let cancelled_for_wait = cancelled.clone();
+    let cancelled_wait = family.wait_one(first, cancelled_for_wait, None);
+    tokio::pin!(cancelled_wait);
+    tokio::select! {
+        result = &mut cancelled_wait => panic!("wait completed before explicit cancellation: {result:?}"),
+        () = sleep(Duration::from_millis(30)) => cancelled.cancel(),
+    }
+    assert!(matches!(
+        cancelled_wait.await,
+        Err(crate::AgentError::WaitCancelled)
+    ));
+
+    let deadline = std::time::Instant::now() + Duration::from_millis(30);
+    assert!(matches!(
+        family
+            .wait_one(second, CancellationToken::new(), Some(deadline))
+            .await,
+        Err(crate::AgentError::WaitDeadlineElapsed)
+    ));
+
+    let completed = family
+        .wait_all(&[first, second], CancellationToken::new(), None)
+        .await
+        .expect("wait all");
+    assert_eq!(completed.len(), 2);
+    assert!(matches!(
+        &completed[0].1,
+        crate::AgentStatus::Finished { operation_id, .. } if *operation_id == first_operation
+    ));
+    assert!(matches!(
+        &completed[1].1,
+        crate::AgentStatus::Finished { operation_id, .. } if *operation_id == second_operation
+    ));
+
+    // Earlier cancelled/timed-out waiters did not consume completion.
+    assert!(matches!(
+        family
+            .wait_one(first, CancellationToken::new(), None)
+            .await
+            .expect("repeat wait"),
+        crate::AgentStatus::Finished { operation_id, .. } if operation_id == first_operation
+    ));
+
+    let third = family.admit_lane(root).await.expect("third admission");
+    let third_operation = family
+        .start(third, "third wait")
+        .await
+        .expect("third start");
+    let (winner, winner_status) = family
+        .wait_any(&[third, first], CancellationToken::new(), None)
+        .await
+        .expect("wait any");
+    assert_eq!(winner, first);
+    assert!(matches!(
+        winner_status,
+        crate::AgentStatus::Finished { operation_id, .. } if operation_id == first_operation
+    ));
+    assert!(matches!(
+        family.status(third).await.expect("third remains active"),
+        crate::AgentStatus::Active { operation_id, .. } if operation_id == third_operation
+    ));
+
+    family
+        .wait_one(third, CancellationToken::new(), None)
+        .await
+        .expect("third finishes");
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn agent_wait_set_rejects_missing_execution_and_duplicates() {
+    let runtime = tool_runtime();
+    let family = runtime.agent_family(1).await.expect("family");
+    let root = family.root();
+    let idle = family.admit_lane(root).await.expect("idle admission");
+
+    assert!(matches!(
+        family
+            .wait_one(idle, CancellationToken::new(), None)
+            .await,
+        Err(crate::AgentError::NotRunning(agent)) if agent == idle
+    ));
+    assert!(matches!(
+        family.wait_all(&[], CancellationToken::new(), None).await,
+        Err(crate::AgentError::EmptyWaitSet)
+    ));
+    assert!(matches!(
+        family
+            .wait_any(&[idle, idle], CancellationToken::new(), None)
+            .await,
+        Err(crate::AgentError::DuplicateWaitTarget(agent)) if agent == idle
+    ));
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
