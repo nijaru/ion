@@ -127,3 +127,17 @@ replace_once(
     "",
     "remove ModelChanged entry kind",
 )
+replace_once(
+    "crates/ion-core/src/tests/compaction.rs",
+    '''        SessionEntry::ModelChanged { .. } => "model_changed",
+''',
+    "",
+    "remove compaction test ModelChanged helper",
+)
+replace_once(
+    "crates/ion-core/src/tests/support.rs",
+    '''            crate::SessionEntry::ModelChanged { .. } => "model_changed",
+''',
+    "",
+    "remove support ModelChanged helper",
+)
