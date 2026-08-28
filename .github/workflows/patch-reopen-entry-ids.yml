@@ -1,0 +1,68 @@
+name: Patch reopen entry ids
+
+on:
+  push:
+    branches:
+      - refactor/reopen-entry-ids
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/reopen-entry-ids
+      - name: Preserve loaded entry records
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          store = Path('crates/ion-core/src/store/mod.rs')
+          text = store.read_text()
+          old = '    pub entries: Vec<(u64, SessionEntry)>,\n'
+          new = '    pub entries: Vec<EntryRecord>,\n'
+          if text.count(old) != 1:
+              raise SystemExit('LoadedSession entries shape did not match exactly once')
+          store.write_text(text.replace(old, new))
+
+          sql = Path('crates/ion-core/src/store/sql.rs')
+          text = sql.read_text()
+          old = '        entries.push((node.seq, node.value));\n'
+          new = (
+              '        entries.push(EntryRecord {\n'
+              '            id: node.id,\n'
+              '            seq: node.seq,\n'
+              '            entry: node.value,\n'
+              '        });\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit('SQL loaded-entry push did not match exactly once')
+          text = text.replace(old, new)
+          old = (
+              '    if let Some(model_ref) = entries.iter().rev().find_map(|(_, entry)| match entry {\n'
+              '        SessionEntry::ModelChanged { model_ref } => Some(model_ref),\n'
+              '        _ => None,\n'
+              '    }) && model_ref != &lane.config.model_ref\n'
+          )
+          new = (
+              '    if let Some(model_ref) = entries.iter().rev().find_map(|entry| match &entry.entry {\n'
+              '        SessionEntry::ModelChanged { model_ref } => Some(model_ref),\n'
+              '        _ => None,\n'
+              '    }) && model_ref != &lane.config.model_ref\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit('SQL model-config compatibility scan did not match exactly once')
+          sql.write_text(text.replace(old, new))
+          PY
+          cargo fmt
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/ion-core/src/store/mod.rs crates/ion-core/src/store/sql.rs
+          git commit -m 'refactor(store): retain entry ids on load'
+          git push origin HEAD:refactor/reopen-entry-ids
