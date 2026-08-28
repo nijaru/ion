@@ -15,7 +15,6 @@ if old not in text:
     raise SystemExit('could not install post-insert reload')
 text = text.replace(old, new, 1)
 
-# Avoid moving typed inbox kinds out of borrowed records/items.
 text = text.replace(
     'if matches!(root_inbox.kind, InboxKind::Prompt)',
     'if matches!(&root_inbox.kind, InboxKind::Prompt)',
@@ -29,16 +28,12 @@ text = text.replace(
     'if let InboxKind::AgentMessage { from } = &item.kind {',
 )
 
-# Match the generic root input by reference so the kind remains available for
-# the durable root inbox record.
 text = text.replace(
     '''        let (machine, applied) = match input.kind {\\n            InboxKind::Prompt => {\\n                OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())\\n            }\\n            InboxKind::AgentMessage { from } => OperationMachine::accept_agent_message(\\n                operation_id,\\n                from,\\n                input.text.clone(),\\n                tool_registry.specs(),\\n            ),\\n            InboxKind::Steer => unreachable!("steer cannot open a new operation"),\\n        };''',
     '''        let (machine, applied) = match &input.kind {\\n            InboxKind::Prompt => {\\n                OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())\\n            }\\n            InboxKind::AgentMessage { from } => OperationMachine::accept_agent_message(\\n                operation_id,\\n                *from,\\n                input.text.clone(),\\n                tool_registry.specs(),\\n            ),\\n            InboxKind::Steer => unreachable!("steer cannot open a new operation"),\\n        };''',
 )
 
-# Append exact exhaustive-match updates after the main transform. Keep these
-# explicit so the new durable semantic variant cannot disappear behind `_`.
-text += r'''
+text += r"""
 
 p = Path("crates/ion-core/src/store/sql.rs")
 source = p.read_text()
@@ -57,6 +52,6 @@ source = source.replace(
     1,
 )
 p.write_text(source)
-'''
+"""
 
 p.write_text(text)
