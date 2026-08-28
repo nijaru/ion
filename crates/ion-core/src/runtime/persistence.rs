@@ -10,11 +10,15 @@ use crate::tool::ToolCall;
 
 use super::ActiveOperation;
 
-/// Reconstruct a tool call from a persisted effect's exact effective
-/// input (DESIGN.md §12.1). Returns None for inputs from older schemas
-/// that lack the call identity.
-pub(super) fn tool_call_from_input(input: &serde_json::Value) -> Option<ToolCall> {
-    let operation_id = OperationId::from_uuid(uuid::Uuid::now_v7());
+/// Reconstruct a tool call from a persisted effect's exact effective input.
+///
+/// The operation id is owned by the durable operation record, not by the
+/// effect payload. Recovery must preserve that identity; it must never mint a
+/// new semantic id while reconstructing already-accepted work.
+pub(super) fn tool_call_from_input(
+    operation_id: OperationId,
+    input: &serde_json::Value,
+) -> Option<ToolCall> {
     Some(ToolCall {
         operation_id,
         call_id: input.get("call_id")?.as_u64()?,

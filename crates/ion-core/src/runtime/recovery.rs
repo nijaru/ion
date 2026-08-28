@@ -204,9 +204,16 @@ impl<P: Provider> SessionRuntime<P> {
                 };
                 match open.recovery_class {
                     RecoveryClass::ReplaySafe => {
-                        // Re-execute with the exact effective input.
-                        let call =
-                            tool_call_from_input(&open.effective_input).unwrap_or_else(|| {
+                        // Re-execute with the exact effective input and the
+                        // durable operation identity that originally owned it.
+                        let operation_id = self
+                            .operation
+                            .as_ref()
+                            .expect("operation present")
+                            .machine
+                            .operation_id();
+                        let call = tool_call_from_input(operation_id, &open.effective_input)
+                            .unwrap_or_else(|| {
                                 panic!("replay-safe tool effect without a usable input")
                             });
                         let mut staged = self.operation.clone().expect("operation present");
@@ -300,7 +307,6 @@ impl<P: Provider> SessionRuntime<P> {
                         warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
                         self.advance().await;
                     }
-
                     RecoveryClass::Reconcile => {
                         // §12.3: classify the pending file mutation
                         // against the recorded evidence and the file
@@ -338,8 +344,15 @@ impl<P: Provider> SessionRuntime<P> {
                             crate::tool::ReconcileVerdict::SafeToExecute => {
                                 // The evidence proves re-execution is
                                 // exactly-once: the file still matches
-                                // the recorded preimage.
-                                let call = tool_call_from_input(&open.effective_input)
+                                // the recorded preimage. Preserve the original
+                                // durable operation identity on reconstruction.
+                                let operation_id = self
+                                    .operation
+                                    .as_ref()
+                                    .expect("operation present")
+                                    .machine
+                                    .operation_id();
+                                let call = tool_call_from_input(operation_id, &open.effective_input)
                                     .unwrap_or_else(|| {
                                         panic!("reconcilable tool effect without a usable input")
                                     });
@@ -362,6 +375,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     attempt: open.attempt + 1,
                                 };
                                 let effect_id = effect.id;
+                                staged.open_effect = Some(effect.clone());
                                 let (mut request, new_entry_seq) = build_commit_request(
                                     self.session_id,
                                     &staged,
@@ -383,7 +397,6 @@ impl<P: Provider> SessionRuntime<P> {
                                 let operation_id = staged.machine.operation_id();
                                 self.next_entry_seq = new_entry_seq;
                                 staged.state_seq += 1;
-                                staged.open_effect = Some(effect.clone());
                                 self.operation = Some(staged);
                                 let tools = self.tools.snapshot();
                                 self.emit_tool_started(
