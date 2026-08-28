@@ -11,15 +11,7 @@ const MAIN_LANE: &str = "main";
 /// Lane names are intentionally not UUIDs: callers may bind them to useful
 /// external identities. Empty names are rejected at the boundary.
 #[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub(crate) struct LaneId(String);
 
@@ -93,7 +85,10 @@ mod tests {
     #[test]
     fn lane_names_reject_only_the_empty_identity() {
         assert!(LaneId::parse("").is_none());
-        assert_eq!(LaneId::parse("worker:review").unwrap().as_str(), "worker:review");
+        assert_eq!(
+            LaneId::parse("worker:review").unwrap().as_str(),
+            "worker:review"
+        );
     }
 
     #[test]
