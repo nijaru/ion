@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply source patch
-        run: python .github/tree_aware_load_patch.py
+        run: |
+          python .github/tree_aware_load_patch.py
+          python .github/fix_tree_aware_load_patch.py
       - name: Validate Rust
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/ion-core/src
-          git rm -f .github/tree_aware_load_patch.py .github/workflows/tree-aware-load.yml
+          git rm -f .github/tree_aware_load_patch.py .github/fix_tree_aware_load_patch.py .github/workflows/tree-aware-load.yml
           git commit -m 'refactor(core): load durable lanes over conversation tree'
           git push origin HEAD:refactor/reopen-entry-ids
