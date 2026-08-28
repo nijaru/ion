@@ -63,9 +63,9 @@ pub(super) fn tool_call_from_input(
     Some((call, invocation))
 }
 
-/// Build the durable record of one staged transition. Entry sequences are
-/// computed from the caller's next value and returned so the allocator only
-/// advances after the commit succeeds (DESIGN.md §26.2).
+/// Build the durable record of one staged transition. Semantic entry identity
+/// is provisioned here, before the request crosses into the store; sequences
+/// advance only after the commit succeeds (DESIGN.md §26.2).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_commit_request(
     session_id: SessionId,
@@ -87,10 +87,7 @@ pub(super) fn build_commit_request(
         .map(|entry| {
             let entry_seq = seq;
             seq += 1;
-            EntryRecord {
-                seq: entry_seq,
-                entry,
-            }
+            EntryRecord::provision(entry_seq, entry)
         })
         .collect();
     let request = CommitRequest {
