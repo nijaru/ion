@@ -242,7 +242,8 @@ mod tests {
             effective_input: value,
             attempt: 1,
         };
-        let DurableEffect::ModelStep(decoded) = record.decode().expect("legacy step decodes") else {
+        let DurableEffect::ModelStep(decoded) = record.decode().expect("legacy step decodes")
+        else {
             panic!("expected a model step");
         };
         assert_eq!(decoded.harness_profile, HarnessProfile::default_v1());
