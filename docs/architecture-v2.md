@@ -30,7 +30,7 @@ The earlier design made several assumptions that no longer survive the evidence:
 1. **Linear history is not the target.** Session history is an append-only parent-linked tree.
 2. **One operation per session is too restrictive.** The invariant is one open operation per lane under one session writer.
 3. **Queued prompts are not queued operations.** A busy lane has lane-owned `next_run` input; a new operation is created only when that run is actually accepted.
-4. **Execution configuration is not conversation history.** Model selection and future reasoning/tool selections belong to total lane configuration. `SessionEntry::ModelChanged` is transitional scaffolding.
+4. **Execution configuration is not conversation history.** Model selection and future reasoning/tool selections belong to total lane configuration. Runtime model switching now writes lane config directly; the old `SessionEntry::ModelChanged` variant remains only as dead compatibility scaffolding pending the later code-hygiene cleanup.
 5. **Operation recovery should be direct.** Immutable acceptance plus one latest total operation-state revision must determine continuation; do not reconstruct a hidden program counter from partial records.
 6. **Child topology is not one special manager.** Lane/fork/fresh/external agents share common durable primitives, with family-scoped control above them.
 7. **Control lineage and history lineage differ.** Persist them separately.
@@ -83,7 +83,9 @@ Use SQLite naturally rather than emulating Pi's log format:
 
 A directly readable current-state projection is compatible with append-only revision history. The current schema retains every total operation-state revision in an immutable ledger while keeping the existing latest-state row as a cheap recovery projection.
 
-Operation topology is now captured separately in immutable `operation_origins`. While the runtime still addresses only hidden `main`, accepting an operation atomically records the exact lane and pre-acceptance source leaf. The database rejects operation acceptance if that lane cannot be resolved. When lane-targeted runtime commands become real, the current main-lane capture path should become an explicit lane argument without changing the origin contract.
+Operation topology is captured separately in immutable `operation_origins`. While the runtime still addresses only hidden `main`, accepting an operation atomically records the exact lane and pre-acceptance source leaf. Loading a session now restores that immutable origin as typed operation data. When lane-targeted runtime commands become real, the current main-lane capture path should become an explicit lane argument without changing the origin contract.
+
+Lane configuration is also now independently durable. `switch_model` replaces the hidden `main` lane's total config, does not append a conversation node, and does not move the lane leaf. The runtime installs the live model selection only after that write succeeds; reopened sessions take the selected model from the durable lane-config projection rather than scanning history.
 
 Ion is still pre-1.0, so schema iterations may archive older development databases rather than carrying migration machinery whose compatibility value is not yet real.
 
@@ -114,26 +116,27 @@ Already landed on `main`:
 - parent-linked entry schema and a durable `main` lane;
 - entry identity decoupled from storage sequence and represented as UUIDv7;
 - append-only total operation-state revision retention plus a current-state recovery projection;
-- immutable operation-origin capture of accepting lane + exact source leaf;
+- immutable operation-origin capture of accepting lane + exact source leaf, including typed recovery/load round-trip;
+- lane config as the authoritative durable model-selection state with no new model-change transcript entries;
 - Rust 1.98.0 as the pinned workspace/toolchain/CI contract.
 
-Three migration boundaries remain especially important:
+Two architecture migrations remain especially important:
 
-- entry IDs are currently generated inside store insertion; the target ownership is the authoritative session transition provisioning the UUIDv7 before persistence so later lane/fork references can name intended entries before the write starts;
-- model changes still use `SessionEntry::ModelChanged` to bridge old runtime behavior into lane config; the target is direct lane-config mutation with no semantic model-change entry;
-- busy-lane prompts still become complete queued `Accepted` operations in live/durable state; the target is lane-owned `pending_next_run` input with an operation created only at actual run acceptance.
+- entry IDs are still generated inside store insertion; the target ownership is the authoritative session transition provisioning the UUIDv7 before persistence so later lane/fork/queued-input references can name intended entries before the write starts;
+- busy-lane prompts still become complete queued `Accepted` operations in live/durable state; the target is lane-owned `pending_next_run` input with an operation created only at actual run acceptance. Those queued inputs should carry their pre-provisioned semantic entry IDs.
+
+The old `SessionEntry::ModelChanged` enum case is no longer produced by model switching or consulted during runtime recovery. It can be removed exhaustively during the later API/code-hygiene pass; it is not an architectural dependency.
 
 ## Next implementation slices
 
-1. Move UUIDv7 entry provisioning from store insertion to the authoritative session transition.
-2. Make lane config authoritative and remove `ModelChanged`.
-3. Add total lane state and move busy-lane queueing to `pending_next_run`.
-4. Thread the existing immutable operation origin through load/runtime types and make operation acceptance explicitly lane-addressable.
-5. Remove `queued_operations` from the live runtime and map current `enqueue` compatibility behavior onto next-run input.
-6. Generalize the session owner from only `main` to multiple lanes and concurrent slow effects.
-7. Finish typed effect codecs/admission boundaries.
-8. Replace special-purpose child/delegate paths with family-scoped agent control.
-9. Reconcile the public API/module vocabulary after the durable ownership model is stable.
-10. Establish/expand `ion-eval` before adding higher-level orchestration policy.
+1. Move UUIDv7 entry provisioning from store insertion to the authoritative session transition and round-trip entry identity through load/recovery types.
+2. Add total lane state (`leaf`, `current_operation`, `pending_next_run`) and move busy-lane queueing to provisioned lane-owned inputs.
+3. Remove `queued_operations` from the live runtime and map current `enqueue` compatibility behavior onto next-run input; create an operation only when the queued run is actually accepted.
+4. Make operation acceptance explicitly lane-addressable over the already-durable lane/source-leaf origin contract.
+5. Generalize the session owner from only `main` to multiple lanes and concurrent slow effects.
+6. Finish typed effect codecs/admission boundaries.
+7. Replace special-purpose child/delegate paths with family-scoped agent control.
+8. Reconcile the public API/module vocabulary and delete dead compatibility scaffolding after the durable ownership model is stable.
+9. Establish/expand `ion-eval` before adding higher-level orchestration policy.
 
 Broad architecture surveying is complete enough to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.
