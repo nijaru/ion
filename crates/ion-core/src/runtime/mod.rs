@@ -1040,13 +1040,27 @@ struct OperationResidency {
     assistant_frame_seq: u64,
     draft_calls: Vec<ToolCall>,
     draft_usage: Option<TokenUsage>,
-    last_context_tokens: Option<u64>,
-    last_prefix_fingerprint: Option<String>,
     pending_compact: Option<Option<String>>,
     overflow_retry_used: bool,
     last_step_was_compaction: bool,
     model_step: u64,
     live_tools: Vec<PendingTool>,
+}
+
+struct ResidentOperation {
+    lane_name: String,
+    active: ActiveOperation,
+    live: OperationResidency,
+}
+
+impl ResidentOperation {
+    fn new(lane_name: impl Into<String>, active: ActiveOperation) -> Self {
+        Self {
+            lane_name: lane_name.into(),
+            active,
+            live: OperationResidency::default(),
+        }
+    }
 }
 
 /// The single-writer owner of one loaded session's mutable live state
@@ -1135,8 +1149,14 @@ struct SessionRuntime<P> {
     lanes: BTreeMap<String, crate::session::lane::Lane>,
     /// Next session-global durable entry sequence.
     next_entry_seq: u64,
-    operation: Option<ActiveOperation>,
-    operation_live: OperationResidency,
+    /// Live operation residency keyed by durable operation identity. Public
+    /// commands still project `main`, but effects no longer depend on one
+    /// session-global operation slot.
+    operations: HashMap<OperationId, ResidentOperation>,
+    /// Main-lane context/cache observations intentionally survive operation
+    /// boundaries; these become lane-addressed with the lane command surface.
+    last_context_tokens: Option<u64>,
+    last_prefix_fingerprint: Option<String>,
     /// Most recently settled model-step usage, restored from the durable
     /// ledger and exposed through snapshots for frontend resynchronization.
     latest_usage: Option<TokenUsage>,
@@ -1229,8 +1249,9 @@ impl<P: Provider> SessionRuntime<P> {
             entry_index: HashMap::new(),
             lanes,
             next_entry_seq: 1,
-            operation: None,
-            operation_live: OperationResidency::default(),
+            operations: HashMap::new(),
+            last_context_tokens: None,
+            last_prefix_fingerprint: None,
             latest_usage: None,
             context_window: None,
             model_capabilities: None,
@@ -1258,7 +1279,7 @@ impl<P: Provider> SessionRuntime<P> {
             cache_read: usage.cache_read_tokens,
             cache_write: usage.cache_write_tokens,
         });
-        self.operation_live.last_context_tokens = self.latest_usage.map(|usage| {
+        self.last_context_tokens = self.latest_usage.map(|usage| {
             usage
                 .input
                 .saturating_add(usage.output)
@@ -1375,17 +1396,18 @@ impl<P: Provider> SessionRuntime<P> {
                     .map(|item| item.id)
                     .collect(),
             };
+            let mut resident = ResidentOperation::new(operation.lane_name.clone(), active);
             if matches!(payload.state, OperationState::AssistantEffectPending)
                 && let Some(effect_id) = payload.open_effect.as_ref().map(|effect| effect.id)
                 && let Some(frame) = assistant_frames.iter().find(|frame| {
                     frame.operation_id == operation.id && frame.effect_id == effect_id
                 })
             {
-                self.operation_live.draft_text = frame.text.clone();
-                self.operation_live.draft_thinking = frame.thinking.clone();
-                self.operation_live.assistant_frame_seq = frame.frame_seq;
+                resident.live.draft_text = frame.text.clone();
+                resident.live.draft_thinking = frame.thinking.clone();
+                resident.live.assistant_frame_seq = frame.frame_seq;
             }
-            if self.operation.replace(active).is_some() {
+            if self.operations.insert(operation.id, resident).is_some() {
                 error!(
                     session = %self.session_id,
                     operation = %operation.id,
@@ -1407,6 +1429,55 @@ impl<P: Provider> SessionRuntime<P> {
         self.lanes
             .get_mut(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
+    }
+
+    fn lane_resident_id(&self, lane_name: &str) -> Option<OperationId> {
+        let lane = self.lanes.get(lane_name)?;
+        lane.state.current_operation.or_else(|| {
+            self.operations.iter().find_map(|(operation_id, resident)| {
+                (resident.lane_name == lane_name).then_some(*operation_id)
+            })
+        })
+    }
+
+    fn main_resident_id(&self) -> Option<OperationId> {
+        self.lane_resident_id(crate::session::lane::MAIN)
+    }
+
+    fn main_resident(&self) -> Option<&ResidentOperation> {
+        let operation_id = self.main_resident_id()?;
+        self.operations.get(&operation_id)
+    }
+
+    fn main_resident_mut(&mut self) -> Option<&mut ResidentOperation> {
+        let operation_id = self.main_resident_id()?;
+        self.operations.get_mut(&operation_id)
+    }
+
+    fn main_active(&self) -> Option<&ActiveOperation> {
+        self.main_resident().map(|resident| &resident.active)
+    }
+
+    fn main_live(&self) -> Option<&OperationResidency> {
+        self.main_resident().map(|resident| &resident.live)
+    }
+
+    fn main_live_mut(&mut self) -> Option<&mut OperationResidency> {
+        self.main_resident_mut().map(|resident| &mut resident.live)
+    }
+
+    fn install_active(&mut self, active: ActiveOperation) {
+        let operation_id = active.machine.operation_id();
+        let resident = self
+            .operations
+            .get_mut(&operation_id)
+            .expect("installed operation residency exists");
+        resident.active = active;
+    }
+
+    fn remove_main_operation(&mut self) -> Option<ResidentOperation> {
+        let operation_id = self.main_resident_id()?;
+        self.operations.remove(&operation_id)
     }
 
     fn lane_branch_records(&self, lane_name: &str) -> Option<Vec<&EntryRecord>> {
@@ -1469,11 +1540,11 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
         info!(session = %self.session_id, "session opened");
-        if self.operation.is_some() || !self.suspended_operations.is_empty() {
+        if self.main_active().is_some() || !self.suspended_operations.is_empty() {
             self.recover_open_operation().await;
         }
         if !self.closed
-            && self.operation.is_none()
+            && self.main_active().is_none()
             && self.main_pending_next_run().is_some()
             && self.promote_pending_next_run().await
         {
@@ -1539,11 +1610,13 @@ impl<P: Provider> SessionRuntime<P> {
                 instructions,
                 reply,
             } => {
-                let requested = self.operation.is_some();
+                let requested = self.main_active().is_some();
                 if requested {
                     // Consumed at the next continuation boundary by the
                     // harness-owned maintenance path.
-                    self.operation_live.pending_compact = Some(instructions);
+                    self.main_live_mut()
+                        .expect("main operation residency exists")
+                        .pending_compact = Some(instructions);
                 }
                 let _ = reply.send(Ok(requested));
                 false
@@ -1570,7 +1643,7 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        if let Some(active) = &self.operation {
+        if let Some(active) = self.main_active() {
             return Err(CommandError::Busy {
                 operation_id: active.machine.operation_id(),
             });
@@ -1599,7 +1672,7 @@ impl<P: Provider> SessionRuntime<P> {
                 entry_id: pending.entry_id,
             });
         }
-        if self.operation.is_none() {
+        if self.main_active().is_none() {
             let (active, entry_id) = self.accept_operation_record(prompt, None).await?;
             self.start_active(active);
             self.advance().await;
@@ -1701,18 +1774,11 @@ impl<P: Provider> SessionRuntime<P> {
     fn start_active(&mut self, active: ActiveOperation) {
         let operation_id = active.machine.operation_id();
         let prompt = active.machine.prompt().to_owned();
-        self.operation = Some(active);
-        self.operation_live.draft_text.clear();
-        self.operation_live.draft_thinking.clear();
-        self.operation_live.assistant_frame_seq = 0;
-        self.operation_live.draft_calls.clear();
-        self.operation_live.draft_usage = None;
-        self.operation_live.live_tools.clear();
-        self.operation_live.pending_compact = None;
-        self.operation_live.overflow_retry_used = false;
-        self.operation_live.last_step_was_compaction = false;
-        self.operation_live.model_step = 0;
-        self.operation_live.operation_tool_calls = 0;
+        let previous = self.operations.insert(
+            operation_id,
+            ResidentOperation::new(crate::session::lane::MAIN, active),
+        );
+        debug_assert!(previous.is_none(), "operation residency identity is unique");
         self.emit(RuntimeEvent::OperationStarted {
             cursor: RuntimeCursor::default(),
             operation_id,
@@ -1721,7 +1787,7 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     async fn promote_pending_next_run(&mut self) -> bool {
-        if self.operation.is_some() {
+        if self.main_active().is_some() {
             return false;
         }
         let Some(next_run) = self.main_pending_next_run().cloned() else {
@@ -1773,7 +1839,7 @@ impl<P: Provider> SessionRuntime<P> {
         // selection boundary.
         self.context_window = None;
         self.model_capabilities = None;
-        self.operation_live.last_prefix_fingerprint = None;
+        self.last_prefix_fingerprint = None;
         Ok(previous)
     }
 
@@ -1785,8 +1851,8 @@ impl<P: Provider> SessionRuntime<P> {
         // Stage on a full clone; a failed commit discards the clone and
         // never mutates live state (DESIGN.md §26.2).
         let mut staged = self
-            .operation
-            .clone()
+            .main_active()
+            .cloned()
             .ok_or(CommandError::NoActiveOperation)?;
         let applied = staged
             .machine
@@ -1830,7 +1896,7 @@ impl<P: Provider> SessionRuntime<P> {
         if !applied_now {
             staged.pending_steers.push(inbox_id);
         }
-        self.operation = Some(staged);
+        self.install_active(staged);
         self.advance().await;
         Ok(())
     }
@@ -1843,8 +1909,7 @@ impl<P: Provider> SessionRuntime<P> {
             return Err(CommandError::Closed);
         }
         let active_id = self
-            .operation
-            .as_ref()
+            .main_active()
             .map(|active| active.machine.operation_id());
         if active_id.is_none() {
             return Err(CommandError::NoActiveOperation);
@@ -1852,7 +1917,7 @@ impl<P: Provider> SessionRuntime<P> {
         if active_id != Some(operation_id) {
             return Err(CommandError::NotActive { operation_id });
         }
-        let mut staged = self.operation.clone().expect("checked above");
+        let mut staged = self.main_active().cloned().expect("checked above");
         staged
             .machine
             .apply(Transition::CancelRequested)
@@ -1875,17 +1940,16 @@ impl<P: Provider> SessionRuntime<P> {
             .map_err(persistence_command_error)?;
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.operation = Some(staged);
+        self.install_active(staged);
         self.wait_effect_boundary(EffectBoundary::CancellationSignal)
             .await;
-        self.operation
-            .as_ref()
+        self.main_active()
             .expect("cancelled operation installed")
             .cancel
             .cancel();
         // A parked approval has no live effect to settle the cancellation;
         // the operation is terminal now, so surface it and idle the slot.
-        if let Some(active) = self.operation.as_ref()
+        if let Some(active) = self.main_active()
             && matches!(active.machine.state(), OperationState::Finished(_))
         {
             let state = active.machine.state().clone();
@@ -1902,15 +1966,14 @@ impl<P: Provider> SessionRuntime<P> {
     async fn advance(&mut self) {
         loop {
             let Some(state) = self
-                .operation
-                .as_ref()
+                .main_active()
                 .map(|active| active.machine.state().clone())
             else {
                 return;
             };
             match state {
                 OperationState::Finished(_) => {
-                    self.operation.take();
+                    self.remove_main_operation();
                     if self.promote_pending_next_run().await {
                         continue;
                     }
@@ -1918,8 +1981,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }
                 OperationState::Accepted | OperationState::NeedAssistant => {
                     if self
-                        .operation
-                        .as_ref()
+                        .main_active()
                         .is_some_and(|active| active.machine.has_queued_steers())
                     {
                         if !self.drain_queued().await {
@@ -1927,7 +1989,12 @@ impl<P: Provider> SessionRuntime<P> {
                         }
                         continue;
                     }
-                    if let Some(request) = self.operation_live.pending_compact.take() {
+                    if let Some(request) = self
+                        .main_live_mut()
+                        .expect("main operation residency exists")
+                        .pending_compact
+                        .take()
+                    {
                         // The run has settled; compact now with the
                         // caller's preservation instructions.
                         if !self.start_compaction(request).await {
@@ -1950,8 +2017,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }
                 OperationState::NeedContinuation => {
                     if self
-                        .operation
-                        .as_ref()
+                        .main_active()
                         .is_some_and(|active| active.machine.has_queued_steers())
                     {
                         if !self.drain_queued().await {
@@ -1976,7 +2042,10 @@ impl<P: Provider> SessionRuntime<P> {
     /// boundary. Returns false when persistence failed.
     async fn drain_queued(&mut self) -> bool {
         let (mut staged, request, new_entry_seq) = {
-            let active = self.operation.clone().expect("drain needs an operation");
+            let active = self
+                .main_active()
+                .cloned()
+                .expect("drain needs an operation");
             let mut staged = active.clone();
             let drained = staged.machine.drain_steers().expect("steer drain");
             let applied_ids = staged
@@ -2008,7 +2077,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.operation = Some(staged);
+        self.install_active(staged);
         true
     }
 
@@ -2049,7 +2118,7 @@ impl<P: Provider> SessionRuntime<P> {
         if !model.capabilities.prompt_cache {
             return "unsupported";
         }
-        match self.operation_live.last_prefix_fingerprint.as_deref() {
+        match self.last_prefix_fingerprint.as_deref() {
             None => "cold_start",
             Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
             Some(_) => "prefix_changed",
@@ -2085,13 +2154,16 @@ impl<P: Provider> SessionRuntime<P> {
     /// recovery (14.7.4) is the backstop.
     fn safety_net_compaction_due(&self) -> bool {
         const RESERVE_TOKENS: u64 = 16_000;
-        if self.operation_live.last_step_was_compaction {
+        if self
+            .main_live()
+            .expect("main operation residency exists")
+            .last_step_was_compaction
+        {
             return false;
         }
         match self.context_window {
             Some(window) => {
-                self.operation_live.last_context_tokens.unwrap_or(0)
-                    > window.saturating_sub(RESERVE_TOKENS)
+                self.last_context_tokens.unwrap_or(0) > window.saturating_sub(RESERVE_TOKENS)
             }
             None => false,
         }
@@ -2119,8 +2191,8 @@ impl<P: Provider> SessionRuntime<P> {
         plan.messages
             .push(crate::context::ContextMessage::User { content });
         let mut staged = self
-            .operation
-            .clone()
+            .main_active()
+            .cloned()
             .expect("compaction needs an operation");
         let applied = staged
             .machine
@@ -2134,7 +2206,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.operation_live.model_step + 1,
+                "step": self.main_live_mut().expect("main operation residency exists").model_step + 1,
                 "model": model,
                 "plan": plan
             }),
@@ -2160,9 +2232,11 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.operation = Some(staged);
-        self.operation_live.last_step_was_compaction = true;
-        self.operation_live.last_prefix_fingerprint = None;
+        self.install_active(staged);
+        self.main_live_mut()
+            .expect("main operation residency exists")
+            .last_step_was_compaction = true;
+        self.last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.wait_effect_boundary(EffectBoundary::CompactionExecution)
             .await;
@@ -2175,14 +2249,14 @@ impl<P: Provider> SessionRuntime<P> {
     /// Fail the active operation durably for a spent budget
     /// dimension (§20.5): model-visible, terminal, no retry.
     async fn fail_budgeted(&mut self, dimension: &str) {
-        if self.operation.is_none() {
+        if self.main_active().is_none() {
             return;
         }
         let message = format!("operation budget exceeded: {dimension}");
         warn!(session = %self.session_id, %message, "budget exhausted");
         let mut staged = self
-            .operation
-            .clone()
+            .main_active()
+            .cloned()
             .expect("budget fail needs an operation");
         let applied = staged
             .machine
@@ -2213,15 +2287,16 @@ impl<P: Provider> SessionRuntime<P> {
         // contract); idling here mirrors the approval-required path so
         // no command observes a Finished-but-open operation.
         self.emit_terminal_state(&applied.state);
-        self.operation.take();
+        self.remove_main_operation();
     }
 
     async fn start_model_step(&mut self) -> bool {
-        if self
-            .budget
-            .max_model_steps
-            .is_some_and(|max| self.operation_live.model_step >= u64::from(max))
-        {
+        if self.budget.max_model_steps.is_some_and(|max| {
+            self.main_live_mut()
+                .expect("main operation residency exists")
+                .model_step
+                >= u64::from(max)
+        }) {
             // Budget bounds are runtime-enforced (§20.5): the
             // operation fails model-visibly instead of looping.
             self.fail_budgeted("model steps").await;
@@ -2230,7 +2305,10 @@ impl<P: Provider> SessionRuntime<P> {
         let (_, planning_manifest) = self.current_context_manifest();
         let plan = self.project_model_step_plan(&planning_manifest).await;
         let model = self.current_model_config().await;
-        let mut staged = self.operation.clone().expect("step needs an operation");
+        let mut staged = self
+            .main_active()
+            .cloned()
+            .expect("step needs an operation");
         let step_registry = self.tools.snapshot();
         let capability_snapshot = step_registry.capability_snapshot();
         staged
@@ -2263,7 +2341,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.operation_live.model_step + 1,
+                "step": self.main_live_mut().expect("main operation residency exists").model_step + 1,
                 "model": model,
                 "plan": plan,
                 "capability_snapshot_id": capability_snapshot.id,
@@ -2298,8 +2376,8 @@ impl<P: Provider> SessionRuntime<P> {
             .await;
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.operation = Some(staged);
-        self.operation_live.last_prefix_fingerprint = Some(prefix_fingerprint);
+        self.install_active(staged);
+        self.last_prefix_fingerprint = Some(prefix_fingerprint);
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -2311,8 +2389,7 @@ impl<P: Provider> SessionRuntime<P> {
         // The policy gate runs before any effect intent is committed
         // (§17.3): peek the next call, canonicalize it, and decide.
         let Some(call) = self
-            .operation
-            .as_ref()
+            .main_active()
             .and_then(|active| active.machine.next_planned_call().cloned())
         else {
             error!(session = %self.session_id, "admit with no planned call; fencing");
@@ -2320,8 +2397,7 @@ impl<P: Provider> SessionRuntime<P> {
             return false;
         };
         let active_capability = self
-            .operation
-            .as_ref()
+            .main_active()
             .and_then(|active| active.capability_snapshot.identity(&call.name))
             .map(str::to_owned);
         let current_capability = self
@@ -2331,8 +2407,7 @@ impl<P: Provider> SessionRuntime<P> {
             .identity(&call.name)
             .map(str::to_owned);
         let step_tools = self
-            .operation
-            .as_ref()
+            .main_active()
             .map(|active| active.tool_registry.clone())
             .expect("admit needs the current step tool registry");
         let canonical = if active_capability == current_capability {
@@ -2364,10 +2439,12 @@ impl<P: Provider> SessionRuntime<P> {
         };
         // Tool-call budget (§20.5): spent budget denies further calls
         // model-visibly; the model can still finish its turn.
-        let over_tool_budget = self
-            .budget
-            .max_tool_calls
-            .is_some_and(|max| self.operation_live.operation_tool_calls >= max);
+        let over_tool_budget = self.budget.max_tool_calls.is_some_and(|max| {
+            self.main_live_mut()
+                .expect("main operation residency exists")
+                .operation_tool_calls
+                >= max
+        });
         let decision = if over_tool_budget {
             PolicyDecision::Deny("operation tool-call budget exhausted".to_owned())
         } else {
@@ -2378,7 +2455,10 @@ impl<P: Provider> SessionRuntime<P> {
                 // §17.4: park. The staged call is durable in the state
                 // before acknowledgment; nothing executes and no effect
                 // intent is committed until the decision arrives.
-                let mut staged = self.operation.clone().expect("admit needs an operation");
+                let mut staged = self
+                    .main_active()
+                    .cloned()
+                    .expect("admit needs an operation");
                 staged
                     .machine
                     .apply(Transition::RequestApproval)
@@ -2402,7 +2482,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }
                 self.next_entry_seq = new_entry_seq;
                 staged.state_seq += 1;
-                self.operation = Some(staged);
+                self.install_active(staged);
                 let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
                 self.emit(RuntimeEvent::ApprovalPending {
                     cursor: RuntimeCursor::default(),
@@ -2416,7 +2496,10 @@ impl<P: Provider> SessionRuntime<P> {
             // Non-interactive: nothing may execute, so nothing is
             // committed as an effect intent; the operation terminates
             // with the durable ApprovalRequired outcome.
-            let mut staged = self.operation.clone().expect("admit needs an operation");
+            let mut staged = self
+                .main_active()
+                .cloned()
+                .expect("admit needs an operation");
             let applied = staged
                 .machine
                 .apply(Transition::ApprovalRequired {
@@ -2442,13 +2525,13 @@ impl<P: Provider> SessionRuntime<P> {
             }
             self.next_entry_seq = new_entry_seq;
             staged.state_seq += 1;
-            self.operation = Some(staged);
+            self.install_active(staged);
             warn!(tool = %call.name, "approval required; terminating the operation");
             self.emit_terminal_state(&applied.state);
             // Terminal: idle the operation here (the caller's arm
             // returns without re-reading state), synchronously so no
             // command can observe a Finished-but-open operation.
-            self.operation.take();
+            self.remove_main_operation();
             return true;
         }
 
@@ -2504,11 +2587,13 @@ impl<P: Provider> SessionRuntime<P> {
         denial: Option<String>,
     ) -> bool {
         let step_tools = self
-            .operation
-            .as_ref()
+            .main_active()
             .map(|active| active.tool_registry.clone())
             .expect("tool admission needs the current step tool registry");
-        let mut staged = self.operation.clone().expect("admit needs an operation");
+        let mut staged = self
+            .main_active()
+            .cloned()
+            .expect("admit needs an operation");
         let applied = staged.machine.apply(transition).expect(expect);
         let EffectIntent::Tool { call } = applied.intents[0].clone() else {
             panic!("tool admission must yield a tool intent");
@@ -2552,7 +2637,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.operation = Some(staged);
+        self.install_active(staged);
         if let Some(message) = denial {
             // The denial settles through the normal tool-result path; the
             // tool never started, so no ToolStarted event is emitted.
@@ -2568,18 +2653,18 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             self.wait_effect_boundary(EffectBoundary::ToolExecution)
                 .await;
-            self.operation_live.operation_tool_calls += 1;
+            self.main_live_mut()
+                .expect("main operation residency exists")
+                .operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
             let reconciliation = self
-                .operation
-                .as_ref()
+                .main_active()
                 .and_then(|active| active.open_effect.as_ref())
                 .and_then(|effect| effect.effective_input.get("reconciliation"))
                 .cloned();
             let effect_id = self
-                .operation
-                .as_ref()
+                .main_active()
                 .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
             self.spawn_tool_effect(effect_id, call, reconciliation, step_tools);
         }
@@ -2599,7 +2684,7 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let Some(active) = self.operation.as_ref() else {
+        let Some(active) = self.main_active() else {
             return Err(CommandError::NoActiveOperation);
         };
         if active.machine.operation_id() != operation_id {
@@ -2635,7 +2720,7 @@ impl<P: Provider> SessionRuntime<P> {
             self.next_entry_seq = new_entry_seq;
             staged.state_seq += 1;
             let state = staged.machine.state().clone();
-            self.operation = Some(staged);
+            self.install_active(staged);
             self.emit_terminal_state(&state);
             info!(operation = %operation_id, "approval denied; the operation continues");
             self.advance().await;
@@ -2662,11 +2747,12 @@ impl<P: Provider> SessionRuntime<P> {
             Err(format!("capability `{}` is no longer available", call.name))
         };
         let mut denial = canonical.as_ref().err().cloned();
-        if self
-            .budget
-            .max_tool_calls
-            .is_some_and(|max| self.operation_live.operation_tool_calls >= max)
-        {
+        if self.budget.max_tool_calls.is_some_and(|max| {
+            self.main_live_mut()
+                .expect("main operation residency exists")
+                .operation_tool_calls
+                >= max
+        }) {
             denial = Some("operation tool-call budget exhausted".to_owned());
         }
         let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
@@ -2686,7 +2772,7 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             None
         };
-        self.operation = Some(staged);
+        self.install_active(staged);
         let committed = self
             .commit_tool_admission(
                 Transition::ApproveCall,
@@ -2736,9 +2822,12 @@ impl<P: Provider> SessionRuntime<P> {
         // A terminal operation has no unsettled tools; any survivor is
         // a cancelled or failed call whose spinner must not resurrect
         // in a post-lag reconstruction.
-        self.operation_live.live_tools.clear();
+        self.main_live_mut()
+            .expect("main operation residency exists")
+            .live_tools
+            .clear();
         if let OperationState::Finished(outcome) = state {
-            let Some(active) = &self.operation else {
+            let Some(active) = self.main_active() else {
                 return;
             };
             let operation_id = active.machine.operation_id();
@@ -2799,7 +2888,7 @@ impl<P: Provider> SessionRuntime<P> {
             runtime_instance_id: self.runtime_instance_id,
             indeterminate: self.indeterminate_warning.clone(),
             reopen_entry_count: self.reopen_entry_count,
-            operation: match &self.operation {
+            operation: match self.main_active() {
                 None => OperationStatus::Idle,
                 Some(active) => OperationStatus::Active {
                     operation_id: active.machine.operation_id(),
@@ -2814,10 +2903,22 @@ impl<P: Provider> SessionRuntime<P> {
                 .collect(),
             model_ref: self.main_model_ref().to_owned(),
             latest_usage: self.latest_usage,
-            live: self.operation.as_ref().map(|_| LiveOperationState {
-                draft_text: self.operation_live.draft_text.clone(),
-                draft_thinking: self.operation_live.draft_thinking.clone(),
-                pending_tools: self.operation_live.live_tools.clone(),
+            live: self.main_active().map(|_| LiveOperationState {
+                draft_text: self
+                    .main_live()
+                    .expect("main operation residency exists")
+                    .draft_text
+                    .clone(),
+                draft_thinking: self
+                    .main_live()
+                    .expect("main operation residency exists")
+                    .draft_thinking
+                    .clone(),
+                pending_tools: self
+                    .main_live()
+                    .expect("main operation residency exists")
+                    .live_tools
+                    .clone(),
             }),
         }
     }
@@ -2838,14 +2939,18 @@ impl<P: Provider> SessionRuntime<P> {
             target: target.clone(),
             tool: tool.to_owned(),
         });
-        self.operation_live
+        self.main_live_mut()
+            .expect("main operation residency exists")
             .live_tools
             .retain(|pending| pending.call_id != call_id);
-        self.operation_live.live_tools.push(PendingTool {
-            call_id,
-            tool: tool.to_owned(),
-            target,
-        });
+        self.main_live_mut()
+            .expect("main operation residency exists")
+            .live_tools
+            .push(PendingTool {
+                call_id,
+                tool: tool.to_owned(),
+                target,
+            });
     }
 
     /// Session close (DESIGN.md §9.5, §25): stop accepting work, suspend
@@ -2858,8 +2963,8 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.closed = true;
         let close_gate = self.effect_gate.clone();
-        if let Some(active) = &mut self.operation {
-            let mut staged = active.clone();
+        if let Some(mut staged) = self.main_active().cloned() {
+            let cancel = staged.cancel.clone();
             staged
                 .machine
                 .apply(Transition::Suspend)
@@ -2884,8 +2989,7 @@ impl<P: Provider> SessionRuntime<P> {
             match self.store.commit(request).await {
                 Ok(()) => {
                     self.next_entry_seq = new_entry_seq;
-                    active.machine = staged.machine;
-                    active.state_seq = staged.state_seq;
+                    self.install_active(staged);
                 }
                 Err(err) => {
                     error!(
@@ -2895,7 +2999,7 @@ impl<P: Provider> SessionRuntime<P> {
                     );
                 }
             }
-            active.cancel.cancel();
+            cancel.cancel();
         }
         self.cancel_root.cancel();
         self.tracker.close();

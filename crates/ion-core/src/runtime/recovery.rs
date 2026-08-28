@@ -50,15 +50,14 @@ impl<P: Provider> SessionRuntime<P> {
             info!(session = %self.session_id, operation = %operation_id, "settled a reopened suspended operation as cancelled");
         }
         let Some(state) = self
-            .operation
-            .as_ref()
+            .main_active()
             .map(|active| active.machine.state().clone())
         else {
             return;
         };
         match state {
             OperationState::AssistantEffectPending => {
-                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                let Some(open) = self.main_active().and_then(|a| a.open_effect.clone()) else {
                     error!(session = %self.session_id, "pending model step without an effect intent; fencing");
                     self.closed = true;
                     return;
@@ -77,7 +76,7 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let mut staged = self.operation.clone().expect("operation present");
+                let mut staged = self.main_active().cloned().expect("operation present");
                 let snapshot_id = staged.capability_snapshot.id.clone();
                 if snapshot_id != persisted_snapshot_id
                     || persisted_manifest_id.is_empty()
@@ -127,17 +126,27 @@ impl<P: Provider> SessionRuntime<P> {
                 self.next_entry_seq = new_entry_seq;
                 staged.state_seq += 1;
                 staged.open_effect = Some(effect);
-                self.operation = Some(staged);
-                self.operation_live.model_step = step.saturating_sub(1);
-                self.operation_live.last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
-                self.operation_live.draft_text.clear();
-                self.operation_live.draft_thinking.clear();
-                self.operation_live.assistant_frame_seq = 0;
+                self.install_active(staged);
+                self.main_live_mut()
+                    .expect("main operation residency exists")
+                    .model_step = step.saturating_sub(1);
+                self.last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
+                self.main_live_mut()
+                    .expect("main operation residency exists")
+                    .draft_text
+                    .clear();
+                self.main_live_mut()
+                    .expect("main operation residency exists")
+                    .draft_thinking
+                    .clear();
+                self.main_live_mut()
+                    .expect("main operation residency exists")
+                    .assistant_frame_seq = 0;
                 warn!(%operation_id, model = %model.model_ref, "recovered a pending model step by replay");
                 self.spawn_model_step(operation_id, model, plan, tools);
             }
             OperationState::CompactionPending => {
-                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                let Some(open) = self.main_active().and_then(|a| a.open_effect.clone()) else {
                     error!(session = %self.session_id, "pending compaction without an effect intent; fencing");
                     self.closed = true;
                     return;
@@ -147,7 +156,7 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let mut staged = self.operation.clone().expect("operation present");
+                let mut staged = self.main_active().cloned().expect("operation present");
                 staged
                     .machine
                     .apply(Transition::RecoverCompaction { plan: plan.clone() })
@@ -179,13 +188,15 @@ impl<P: Provider> SessionRuntime<P> {
                 self.next_entry_seq = new_entry_seq;
                 staged.state_seq += 1;
                 staged.open_effect = Some(effect);
-                self.operation = Some(staged);
-                self.operation_live.model_step = step.saturating_sub(1);
+                self.install_active(staged);
+                self.main_live_mut()
+                    .expect("main operation residency exists")
+                    .model_step = step.saturating_sub(1);
                 warn!(%operation_id, model = %model.model_ref, "recovered a pending compaction step by replay");
                 self.spawn_model_step(operation_id, model, plan, Vec::new());
             }
             OperationState::ToolEffectPending { .. } => {
-                let Some(open) = self.operation.as_ref().and_then(|a| a.open_effect.clone()) else {
+                let Some(open) = self.main_active().and_then(|a| a.open_effect.clone()) else {
                     error!(session = %self.session_id, "pending tool effect without an effect intent; fencing");
                     self.closed = true;
                     return;
@@ -193,8 +204,7 @@ impl<P: Provider> SessionRuntime<P> {
                 match open.recovery_class {
                     RecoveryClass::ReplaySafe => {
                         let operation_id = self
-                            .operation
-                            .as_ref()
+                            .main_active()
                             .expect("operation present")
                             .machine
                             .operation_id();
@@ -205,7 +215,7 @@ impl<P: Provider> SessionRuntime<P> {
                             self.closed = true;
                             return;
                         };
-                        let mut staged = self.operation.clone().expect("operation present");
+                        let mut staged = self.main_active().cloned().expect("operation present");
                         staged
                             .machine
                             .apply(Transition::RecoverTool { call: call.clone() })
@@ -239,7 +249,7 @@ impl<P: Provider> SessionRuntime<P> {
                         staged.state_seq += 1;
                         let effect_id = effect.id;
                         staged.open_effect = Some(effect);
-                        self.operation = Some(staged);
+                        self.install_active(staged);
                         let tools = self.tools.snapshot();
                         self.emit_tool_started(
                             operation_id,
@@ -254,7 +264,7 @@ impl<P: Provider> SessionRuntime<P> {
                         // Side effects cannot be classified (§12.4); an
                         // unresolved effect of this class is
                         // indeterminate, never replayed.
-                        let mut staged = self.operation.clone().expect("operation present");
+                        let mut staged = self.main_active().cloned().expect("operation present");
                         let applied = staged
                             .machine
                             .apply(Transition::SettleIndeterminate)
@@ -285,14 +295,13 @@ impl<P: Provider> SessionRuntime<P> {
                         staged.state_seq += 1;
                         staged.open_effect = None;
                         self.emit_terminal_state(&applied.state);
-                        self.operation = Some(staged);
+                        self.install_active(staged);
                         warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
                         self.advance().await;
                     }
                     RecoveryClass::Reconcile => {
                         let operation_id = self
-                            .operation
-                            .as_ref()
+                            .main_active()
                             .expect("operation present")
                             .machine
                             .operation_id();
@@ -333,7 +342,8 @@ impl<P: Provider> SessionRuntime<P> {
                         };
                         match verdict {
                             crate::tool::ReconcileVerdict::SafeToExecute => {
-                                let mut staged = self.operation.clone().expect("operation present");
+                                let mut staged =
+                                    self.main_active().cloned().expect("operation present");
                                 staged
                                     .machine
                                     .apply(Transition::RecoverTool { call: call.clone() })
@@ -368,7 +378,7 @@ impl<P: Provider> SessionRuntime<P> {
                                 let operation_id = staged.machine.operation_id();
                                 self.next_entry_seq = new_entry_seq;
                                 staged.state_seq += 1;
-                                self.operation = Some(staged);
+                                self.install_active(staged);
                                 let tools = self.tools.snapshot();
                                 self.emit_tool_started(
                                     operation_id,
@@ -385,7 +395,8 @@ impl<P: Provider> SessionRuntime<P> {
                                 info!(%operation_id, "reconciled a pending file mutation by preimage match");
                             }
                             crate::tool::ReconcileVerdict::AlreadyApplied => {
-                                let mut staged = self.operation.clone().expect("operation present");
+                                let mut staged =
+                                    self.main_active().cloned().expect("operation present");
                                 let applied = staged
                                     .machine
                                     .apply(Transition::ToolSettled {
@@ -424,13 +435,14 @@ impl<P: Provider> SessionRuntime<P> {
                                 self.next_entry_seq = new_entry_seq;
                                 staged.state_seq += 1;
                                 staged.open_effect = None;
-                                self.operation = Some(staged);
+                                self.install_active(staged);
                                 info!(%operation_id, "reconciled a pending file mutation as already applied");
                                 self.advance().await;
                             }
                             crate::tool::ReconcileVerdict::Conflict
                             | crate::tool::ReconcileVerdict::Unknown => {
-                                let mut staged = self.operation.clone().expect("operation present");
+                                let mut staged =
+                                    self.main_active().cloned().expect("operation present");
                                 let applied = staged
                                     .machine
                                     .apply(Transition::SettleIndeterminate)
@@ -459,7 +471,7 @@ impl<P: Provider> SessionRuntime<P> {
                                 staged.state_seq += 1;
                                 staged.open_effect = None;
                                 self.emit_terminal_state(&applied.state);
-                                self.operation = Some(staged);
+                                self.install_active(staged);
                                 warn!(%operation_id, "a pending file mutation settled as indeterminate (conflict)");
                                 self.advance().await;
                             }
@@ -473,8 +485,7 @@ impl<P: Provider> SessionRuntime<P> {
                 // re-surfaces the parked decision; a host that cannot
                 // grant approvals terminates it (DESIGN.md §17.2, §17.4).
                 let call = self
-                    .operation
-                    .as_ref()
+                    .main_active()
                     .and_then(|active| active.machine.state().staged_call())
                     .cloned()
                     .expect("parked approval carries its staged call");
@@ -489,7 +500,10 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                     info!(operation = %call.operation_id, tool = %call.name, "re-surfaced a parked approval after process loss");
                 } else {
-                    let mut staged = self.operation.clone().expect("parked approval present");
+                    let mut staged = self
+                        .main_active()
+                        .cloned()
+                        .expect("parked approval present");
                     let applied = staged
                         .machine
                         .apply(Transition::ApprovalRequired {
@@ -515,9 +529,9 @@ impl<P: Provider> SessionRuntime<P> {
                     }
                     self.next_entry_seq = new_entry_seq;
                     staged.state_seq += 1;
-                    self.operation = Some(staged);
+                    self.install_active(staged);
                     self.emit_terminal_state(&applied.state);
-                    self.operation.take();
+                    self.remove_main_operation();
                 }
             }
             OperationState::Accepted
