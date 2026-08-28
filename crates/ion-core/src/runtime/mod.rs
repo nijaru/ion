@@ -126,11 +126,13 @@ impl EffectGate {
 }
 enum ToolSignal {
     Progress {
+        operation_id: OperationId,
         effect_id: EffectId,
         call_id: u64,
         output: String,
     },
     Settled {
+        operation_id: OperationId,
         effect_id: EffectId,
         result: ToolResult,
     },
@@ -2580,6 +2582,7 @@ impl<P: Provider> SessionRuntime<P> {
             // The denial settles through the normal tool-result path; the
             // tool never started, so no ToolStarted event is emitted.
             let _ = self.tool_tx.try_send(ToolSignal::Settled {
+                operation_id: call.operation_id,
                 effect_id,
                 result: ToolResult::Err {
                     call_id: call.call_id,

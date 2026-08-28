@@ -73,10 +73,10 @@ impl<P: Provider> SessionRuntime<P> {
         let tool_tx = self.tool_tx.clone();
         let (progress_tx, mut progress_rx) = mpsc::channel::<ToolProgress>(8);
         let ToolCall {
+            operation_id,
             call_id,
             name,
             arguments,
-            ..
         } = call;
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
@@ -92,6 +92,7 @@ impl<P: Provider> SessionRuntime<P> {
                 while let Some(progress) = progress_rx.recv().await {
                     if tool_tx
                         .send(ToolSignal::Progress {
+                            operation_id,
                             effect_id,
                             call_id,
                             output: progress.output,
@@ -106,7 +107,11 @@ impl<P: Provider> SessionRuntime<P> {
             let (outcome, ()) = tokio::join!(execute, forward);
             let result = ToolResult::from_outcome(call_id, outcome);
             let _ = tool_tx
-                .send(ToolSignal::Settled { effect_id, result })
+                .send(ToolSignal::Settled {
+                    operation_id,
+                    effect_id,
+                    result,
+                })
                 .await;
         });
     }
@@ -455,9 +460,14 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     pub(crate) async fn handle_tool_result(&mut self, settlement: ToolSettlement) {
-        let (effect_id, result) = match settlement {
-            ToolSignal::Settled { effect_id, result } => (effect_id, result),
+        let (operation_id, effect_id, result) = match settlement {
+            ToolSignal::Settled {
+                operation_id,
+                effect_id,
+                result,
+            } => (operation_id, effect_id, result),
             ToolSignal::Progress {
+                operation_id,
                 effect_id,
                 call_id,
                 output,
@@ -465,10 +475,12 @@ impl<P: Provider> SessionRuntime<P> {
                 let Some(active) = self.operation.as_ref() else {
                     return;
                 };
-                if active.open_effect.as_ref().map(|effect| effect.id) != Some(effect_id) {
+                if active.machine.operation_id() != operation_id
+                    || active.open_effect.as_ref().map(|effect| effect.id) != Some(effect_id)
+                {
+                    debug!(%operation_id, %effect_id, "dropped stale tool progress");
                     return;
                 }
-                let operation_id = active.machine.operation_id();
                 let output = crate::tool::bounded_progress_output(output);
                 let event_output = output.clone();
                 let progress = ToolProgressCheckpoint {
@@ -494,14 +506,15 @@ impl<P: Provider> SessionRuntime<P> {
         let call_id = result.call_id();
         let is_error = matches!(&result, ToolResult::Err { .. });
         let preview = result.display_preview();
-        let expected = self
-            .operation
-            .as_ref()
-            .and_then(|active| active.open_effect.as_ref().map(|e| e.id));
+        let expected = self.operation.as_ref().and_then(|active| {
+            (active.machine.operation_id() == operation_id)
+                .then(|| active.open_effect.as_ref().map(|effect| effect.id))
+                .flatten()
+        });
         if expected != Some(effect_id) {
-            // Stale or unknown tool result: a typed diagnostic, never a
-            // panic and never a state change.
-            debug!(?effect_id, ?expected, "dropped stale tool settlement");
+            // Stale or unknown tool result: operation and effect identity
+            // must both match before the session writer mutates state.
+            debug!(%operation_id, %effect_id, ?expected, "dropped stale tool settlement");
             return;
         }
         self.wait_effect_boundary(EffectBoundary::ToolSettlement)
