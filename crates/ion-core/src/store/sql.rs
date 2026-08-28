@@ -47,15 +47,6 @@ pub(super) fn handle_command(
                 append_entry(connection, session_id, &entry).map_err(StoreError::from)
             }));
         }
-        StoreCommand::SetMainLaneConfig {
-            session_id,
-            config,
-            reply,
-        } => {
-            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
-                set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
-            }));
-        }
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
@@ -217,37 +208,6 @@ fn create_session(
             config,
             now,
         ],
-    )?;
-    tx.commit()
-}
-
-fn set_main_lane_config(
-    connection: &mut Connection,
-    session_id: SessionId,
-    config: &crate::session::lane::Config,
-) -> Result<(), rusqlite::Error> {
-    let tx = connection.transaction()?;
-    let config = serde_json::to_string(config)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
-    let now = now_ms();
-    let changed = tx.execute(
-        "UPDATE lanes SET config = ?3, updated_at = ?4
-         WHERE session_id = ?1 AND name = ?2",
-        rusqlite::params![
-            session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
-            config,
-            now,
-        ],
-    )?;
-    if changed != 1 {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane is missing".to_owned(),
-        ));
-    }
-    tx.execute(
-        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
-        rusqlite::params![session_id.as_uuid().to_string(), now],
     )?;
     tx.commit()
 }
@@ -826,8 +786,12 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     }
 
     let mut statement = connection.prepare(
-        "SELECT o.id, o.accepted_seq, s.state_seq, s.payload FROM operations o
+        "SELECT o.id, o.accepted_seq, origin.lane_name, origin.source_leaf_id,
+                s.state_seq, s.payload
+         FROM operations o
          JOIN operation_state s ON s.operation_id = o.id
+         LEFT JOIN operation_origins origin
+           ON origin.operation_id = o.id AND origin.session_id = o.session_id
          WHERE o.session_id = ?1
          ORDER BY o.accepted_seq",
     )?;
@@ -836,11 +800,24 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     while let Some(row) = op_rows.next()? {
         let op_id: String = row.get(0)?;
         let accepted_seq: i64 = row.get(1)?;
-        let state_seq: i64 = row.get(2)?;
-        let payload: String = row.get(3)?;
+        let lane_name: Option<String> = row.get(2)?;
+        let source_leaf_raw: Option<String> = row.get(3)?;
+        let state_seq: i64 = row.get(4)?;
+        let payload: String = row.get(5)?;
         let accepted_seq = u64::try_from(accepted_seq).map_err(|_| {
             StoreError::Sqlite(format!("corrupt operation accepted seq {accepted_seq}"))
         })?;
+        let lane_name = lane_name.ok_or_else(|| {
+            StoreError::Sqlite(format!("operation {op_id} has no immutable origin"))
+        })?;
+        let source_leaf = source_leaf_raw
+            .as_deref()
+            .map(|raw| {
+                crate::ids::EntryId::parse(raw).ok_or_else(|| {
+                    StoreError::Sqlite(format!("operation {op_id} has corrupt source leaf"))
+                })
+            })
+            .transpose()?;
         let checkpoint: CheckpointPayload = decode("checkpoint", payload)?;
         let snapshot_payload: String = connection.query_row(
             "SELECT payload FROM capability_snapshots WHERE id = ?1",
@@ -859,6 +836,8 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         operations.push(LoadedOperation {
             id: OperationId::from_uuid(uuid),
             accepted_seq,
+            lane_name,
+            source_leaf,
             latest: (state_seq as u64, checkpoint),
             capability_snapshot,
         });
@@ -1063,63 +1042,5 @@ mod tests {
         let loaded = load(&connection, session_id).expect("load");
         assert_eq!(loaded.session.initial_model_ref, "model-b");
         assert_eq!(loaded.entries.len(), 3);
-    }
-
-    #[test]
-    fn direct_main_lane_config_write_does_not_move_history() {
-        let mut connection = Connection::open_in_memory().expect("database");
-        crate::store::schema::create_fresh(&mut connection).expect("schema");
-        connection
-            .pragma_update(None, "foreign_keys", "ON")
-            .expect("foreign keys");
-        let session_id = SessionId::from_uuid(Uuid::nil());
-        create_session(
-            &mut connection,
-            &SessionRecord {
-                id: session_id,
-                cwd: "/tmp".to_owned(),
-                title: String::new(),
-                initial_model_ref: "model-a".to_owned(),
-                parent_session_id: None,
-            },
-        )
-        .expect("session");
-        append_entry(
-            &mut connection,
-            session_id,
-            &EntryRecord {
-                seq: 1,
-                entry: SessionEntry::UserMessage {
-                    text: "hello".to_owned(),
-                },
-            },
-        )
-        .expect("entry");
-        let leaf_before: Option<String> = connection
-            .query_row(
-                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
-                [session_id.as_uuid().to_string()],
-                |row| row.get(0),
-            )
-            .expect("leaf before");
-
-        set_main_lane_config(
-            &mut connection,
-            session_id,
-            &crate::session::lane::Config::new("model-b"),
-        )
-        .expect("set config");
-
-        let loaded = load(&connection, session_id).expect("load");
-        let leaf_after: Option<String> = connection
-            .query_row(
-                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
-                [session_id.as_uuid().to_string()],
-                |row| row.get(0),
-            )
-            .expect("leaf after");
-        assert_eq!(loaded.session.initial_model_ref, "model-b");
-        assert_eq!(loaded.entries.len(), 1);
-        assert_eq!(leaf_after, leaf_before);
     }
 }
