@@ -521,9 +521,6 @@ fn push_entry_lines(
                 out.push(Line::from(format!("{prefix}{logical_line}")).style(palette.user_entry));
             }
         }
-        ion_core::SessionEntry::ModelChanged { model_ref } => {
-            out.push(Line::from(format!("• model → {model_ref}")).style(palette.system_note));
-        }
         ion_core::SessionEntry::AssistantMessage { text } => {
             let total = text.lines().count();
             for (i, logical_line) in text.split('\n').enumerate() {

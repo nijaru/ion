@@ -42,12 +42,6 @@ pub enum SessionEntry {
     UserMessage {
         text: String,
     },
-    /// A durably accepted model selection. It applies only to model
-    /// steps started after this entry; any in-flight step keeps its
-    /// frozen [`ModelConfig`].
-    ModelChanged {
-        model_ref: String,
-    },
     /// Only validated completed provider output becomes this entry.
     AssistantMessage {
         text: String,

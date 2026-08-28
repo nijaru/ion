@@ -612,8 +612,7 @@ fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
                     }));
                 }
             }
-            ion_core::SessionEntry::ToolResult { .. }
-            | ion_core::SessionEntry::ModelChanged { .. } => {}
+            ion_core::SessionEntry::ToolResult { .. } => {}
         }
     }
     updates

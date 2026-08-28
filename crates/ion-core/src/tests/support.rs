@@ -224,7 +224,6 @@ pub(super) fn entry_kinds<'a>(
         .into_iter()
         .map(|entry| match entry {
             crate::SessionEntry::UserMessage { .. } => "user_message",
-            crate::SessionEntry::ModelChanged { .. } => "model_changed",
             crate::SessionEntry::AssistantMessage { .. } => "assistant_message",
             crate::SessionEntry::ToolCall { .. } => "tool_call",
             crate::SessionEntry::ToolResult { .. } => "tool_result",

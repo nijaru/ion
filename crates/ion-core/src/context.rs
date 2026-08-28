@@ -296,10 +296,6 @@ fn project_with_system<'a>(
                     content: text.clone(),
                 });
             }
-            SessionEntry::ModelChanged { .. } => {
-                // Configuration lineage is canonical session state, not
-                // a conversational message.
-            }
             SessionEntry::AssistantMessage { text } => {
                 messages.push(ContextMessage::Assistant {
                     content: text.clone(),

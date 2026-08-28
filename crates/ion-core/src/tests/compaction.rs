@@ -196,7 +196,6 @@ async fn large_context_compacts_at_the_continuation_boundary() {
 fn entry_kind_name(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
-        SessionEntry::ModelChanged { .. } => "model_changed",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",

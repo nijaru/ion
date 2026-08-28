@@ -818,10 +818,10 @@ fn insert_entry(
         )));
     }
 
-    let (leaf_id, config): (Option<String>, String) = connection.query_row(
-        "SELECT leaf_id, config FROM lanes WHERE session_id = ?1 AND name = ?2",
+    let leaf_id: Option<String> = connection.query_row(
+        "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = ?2",
         rusqlite::params![session_id.as_uuid().to_string(), lane_name],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| row.get(0),
     )?;
     let expected_parent = leaf_id
         .as_deref()
@@ -860,21 +860,13 @@ fn insert_entry(
         ],
     )?;
 
-    let mut config: crate::session::lane::Config = serde_json::from_str(&config)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
-    if let SessionEntry::ModelChanged { model_ref } = &node.value {
-        config.model_ref.clone_from(model_ref);
-    }
-    let config = serde_json::to_string(&config)
-        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     let changed = connection.execute(
-        "UPDATE lanes SET leaf_id = ?3, config = ?4, updated_at = ?5
+        "UPDATE lanes SET leaf_id = ?3, updated_at = ?4
          WHERE session_id = ?1 AND name = ?2",
         rusqlite::params![
             session_id.as_uuid().to_string(),
             lane_name,
             node.id.as_uuid().to_string(),
-            config,
             now_ms(),
         ],
     )?;
@@ -1041,16 +1033,6 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             "main lane leaf does not match the persisted branch".to_owned(),
         ));
     }
-    if let Some(model_ref) = entries.iter().rev().find_map(|entry| match &entry.entry {
-        SessionEntry::ModelChanged { model_ref } => Some(model_ref),
-        _ => None,
-    }) && model_ref != &lane.config.model_ref
-    {
-        return Err(StoreError::Sqlite(
-            "main lane model config disagrees with the migration entry".to_owned(),
-        ));
-    }
-
     let mut statement = connection.prepare(
         "SELECT o.id, o.accepted_seq, origin.lane_name, origin.source_leaf_id,
                 s.state_seq, s.payload
@@ -1222,7 +1204,6 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
 fn entry_kind(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
-        SessionEntry::ModelChanged { .. } => "model_changed",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",
