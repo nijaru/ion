@@ -4,7 +4,7 @@ path = Path(".github/operation_residency_map_patch.py")
 text = path.read_text()
 start = text.index("# New acceptance publishes the residency once;")
 end = text.index("# A few direct singleton forms", start)
-replacement = '''# New acceptance publishes the residency once; its live state starts total and
+replacement = """# New acceptance publishes the residency once; its live state starts total and
 # empty instead of resetting a parallel session-global object. Earlier
 # mechanical rewrites intentionally change the exact body, so delimit this
 # function by stable semantic anchors rather than a formatting-sensitive blob.
@@ -18,5 +18,5 @@ new_prefix = '''    fn start_active(&mut self, active: ActiveOperation) {\n     
 text = text[:fn_start] + new_prefix + text[emit_start:]
 runtime.write_text(text)
 
-'''
+"""
 path.write_text(text[:start] + replacement + text[end:])
