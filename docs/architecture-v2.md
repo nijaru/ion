@@ -62,7 +62,7 @@ Its real failure modes are useful design tests for Ion: completed agents must re
 - reconnect is state-first: snapshot plus ordered actions/deltas;
 - the host can sit above more than one agent harness/protocol.
 
-ACP is the better signal for Ion's interoperable frontend boundary; AHP is the better corroborating signal for a durable host that outlives any one client. The shared conclusion is important: **TUI, ACP, and future remote clients are projections of authoritative runtime state, never the execution owner.**
+ACP is the better signal for Ion's interoperable frontend boundary; AHP is corroborating evidence for a durable host that outlives any one client. The shared conclusion is important: **TUI, ACP, and future remote clients are projections of authoritative runtime state, never the execution owner.**
 
 ### Tier C: strong mechanism references
 
