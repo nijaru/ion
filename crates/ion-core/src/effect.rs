@@ -267,7 +267,8 @@ mod tests {
             effective_input: value,
             attempt: 1,
         };
-        let DurableEffect::Compaction(decoded) = record.decode().expect("legacy compaction decodes")
+        let DurableEffect::Compaction(decoded) =
+            record.decode().expect("legacy compaction decodes")
         else {
             panic!("expected compaction");
         };
