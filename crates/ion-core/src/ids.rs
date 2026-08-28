@@ -1,14 +1,10 @@
-//! Durable identity newtypes (DESIGN.md §11.2).
+//! Durable identity newtypes.
 //!
-//! Sessions, operations, and effects use UUIDv7. Conversation entry identity
-//! is a deterministic UUIDv8 derived from SHA-256 over the owning session and
-//! its immutable per-session sequence. The sequence remains the durable
-//! ordering key while callers use an opaque typed id. Live runtime events keep
-//! a separate in-memory cursor.
+//! Durable semantic identities use UUIDv7 and stay independent from storage
+//! ordering. Live runtime events keep a separate in-memory cursor.
 
 use std::fmt;
 
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -75,21 +71,11 @@ impl fmt::Display for OperationId {
 pub struct EntryId(Uuid);
 
 impl EntryId {
-    /// Stable opaque identity for a semantic entry whose per-session sequence
-    /// has already been provisioned by the single session writer.
+    /// Provision a semantic conversation-entry identity before persistence.
+    /// Sequence numbers remain independent storage-order metadata.
     #[must_use]
-    pub fn for_seq(session_id: SessionId, seq: u64) -> Self {
-        let mut hash = Sha256::new();
-        hash.update(b"ion-entry-id-v1\0");
-        hash.update(session_id.as_uuid().as_bytes());
-        hash.update(seq.to_be_bytes());
-        let digest = hash.finalize();
-        let mut bytes = [0_u8; 16];
-        bytes.copy_from_slice(&digest[..16]);
-        // RFC 9562 UUIDv8: application-defined payload with standard variant.
-        bytes[6] = (bytes[6] & 0x0f) | 0x80;
-        bytes[8] = (bytes[8] & 0x3f) | 0x80;
-        Self(Uuid::from_bytes(bytes))
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
     }
 
     #[must_use]
@@ -216,12 +202,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entry_identity_is_stable_but_not_the_ordering_key() {
-        let session = SessionId::from_uuid(Uuid::nil());
-        let one = EntryId::for_seq(session, 1);
-        assert_eq!(one, EntryId::for_seq(session, 1));
-        assert_ne!(one, EntryId::for_seq(session, 2));
-        assert_eq!(EntryId::parse(&one.as_uuid().to_string()), Some(one));
-        assert_eq!(one.as_uuid().get_version_num(), 8);
+    fn entry_identity_is_uuid_v7_and_independent_from_ordering() {
+        let first = EntryId::generate();
+        let second = EntryId::generate();
+        assert_ne!(first, second);
+        assert_eq!(EntryId::parse(&first.as_uuid().to_string()), Some(first));
+        assert_eq!(first.as_uuid().get_version_num(), 7);
     }
 }
