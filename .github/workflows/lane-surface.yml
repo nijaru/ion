@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply source patch
-        run: python .github/lane_surface_patch.py
+        run: |
+          python .github/lane_surface_patch.py
+          python .github/lane_surface_compile_fix.py
       - name: Validate Rust
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/ion-core/src
-          git rm -f .github/lane_surface_patch.py .github/workflows/lane-surface.yml
+          git rm -f .github/lane_surface_patch.py .github/lane_surface_compile_fix.py .github/workflows/lane-surface.yml
           git commit -m 'feat(core): expose runtime lane admission'
           git push origin HEAD:refactor/reopen-entry-ids
