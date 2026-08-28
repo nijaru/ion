@@ -23,4 +23,23 @@ replacement = '''replace_once(
 ''' + '"""' + ''',
     "insert entry lane query",
 )'''
-path.write_text(text[:start] + replacement + text[end:])
+text = text[:start] + replacement + text[end:]
+text += '''
+
+replace_once(
+    "crates/ion-core/src/tests/reconcile.rs",
+    ''' + '"""' + '''        .begin_operation(session_id, operation_id, root_inbox, checkpoint, entry)
+''' + '"""' + ''',
+    ''' + '"""' + '''        .begin_operation(
+            session_id,
+            crate::session::lane::MAIN,
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+        )
+''' + '"""' + ''',
+    "reconciliation admission lane",
+)
+'''
+path.write_text(text)
