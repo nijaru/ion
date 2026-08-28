@@ -145,16 +145,18 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
     runtime.join().await.expect("join");
 
     // A settlement for an unknown or already-settled effect must be
-    // rejected, not silently succeed on zero rows.
+    // rejected, not silently succeed on zero rows. Keep the checkpoint itself
+    // valid so this test reaches the effect-settlement invariant it targets.
     let loaded = store.load(session_id).await.expect("load");
     let operation_id = loaded.operations[0].id;
+    let next_state_seq = loaded.operations[0].latest.0 + 1;
     let ghost = crate::ids::EffectId::generate();
     let err = store
         .commit(CommitRequest {
             session_id,
             operation_id,
             checkpoint: CheckpointRecord {
-                state_seq: 999,
+                state_seq: next_state_seq,
                 payload: CheckpointPayload {
                     state: OperationState::Finished(OperationOutcome::Completed),
                     cancel_requested: false,
