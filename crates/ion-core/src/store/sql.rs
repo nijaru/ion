@@ -878,10 +878,10 @@ fn insert_entry(
     Ok(())
 }
 
-fn load_main_lane(
+fn load_lanes(
     connection: &Connection,
     session_id: SessionId,
-) -> Result<crate::session::lane::Lane, StoreError> {
+) -> Result<Vec<crate::session::lane::Lane>, StoreError> {
     struct RawLane {
         name: String,
         leaf: Option<String>,
@@ -891,66 +891,72 @@ fn load_main_lane(
         config: String,
     }
 
-    let raw = connection
-        .query_row(
-            "SELECT name, leaf_id, current_operation_id,
-                    pending_entry_id, pending_prompt, config
-             FROM lanes WHERE session_id = ?1 AND name = ?2",
-            rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
-            |row| {
-                Ok(RawLane {
-                    name: row.get(0)?,
-                    leaf: row.get(1)?,
-                    current_operation: row.get(2)?,
-                    pending_entry: row.get(3)?,
-                    pending_prompt: row.get(4)?,
-                    config: row.get(5)?,
+    let mut statement = connection.prepare(
+        "SELECT name, leaf_id, current_operation_id, pending_entry_id, pending_prompt, config
+         FROM lanes WHERE session_id = ?1 ORDER BY name",
+    )?;
+    let mut rows = statement.query([session_id.as_uuid().to_string()])?;
+    let mut lanes = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw = RawLane {
+            name: row.get(0)?,
+            leaf: row.get(1)?,
+            current_operation: row.get(2)?,
+            pending_entry: row.get(3)?,
+            pending_prompt: row.get(4)?,
+            config: row.get(5)?,
+        };
+        let lane_name = raw.name.clone();
+        let leaf = raw
+            .leaf
+            .as_deref()
+            .map(|value| {
+                crate::ids::EntryId::parse(value).ok_or_else(|| {
+                    StoreError::Sqlite(format!("lane {lane_name:?} has a corrupt leaf id"))
                 })
+            })
+            .transpose()?;
+        let current_operation = raw
+            .current_operation
+            .as_deref()
+            .map(|value| {
+                Uuid::parse_str(value)
+                    .map(crate::ids::OperationId::from_uuid)
+                    .map_err(|_| {
+                        StoreError::Sqlite(format!(
+                            "lane {lane_name:?} has a corrupt current operation id"
+                        ))
+                    })
+            })
+            .transpose()?;
+        let pending_next_run = match (raw.pending_entry, raw.pending_prompt) {
+            (None, None) => None,
+            (Some(entry), Some(prompt)) => Some(crate::session::lane::NextRun {
+                entry_id: crate::ids::EntryId::parse(&entry).ok_or_else(|| {
+                    StoreError::Sqlite(format!("lane {lane_name:?} has a corrupt pending entry id"))
+                })?,
+                prompt,
+            }),
+            _ => {
+                return Err(StoreError::Sqlite(format!(
+                    "lane {lane_name:?} has partial pending next-run state"
+                )));
+            }
+        };
+        let config = serde_json::from_str(&raw.config).map_err(|err| {
+            StoreError::Sqlite(format!("lane {lane_name:?} has corrupt config: {err}"))
+        })?;
+        lanes.push(crate::session::lane::Lane {
+            name: raw.name,
+            state: crate::session::lane::State {
+                leaf,
+                current_operation,
+                pending_next_run,
             },
-        )
-        .map_err(StoreError::from)?;
-    let leaf = raw
-        .leaf
-        .as_deref()
-        .map(|value| {
-            crate::ids::EntryId::parse(value)
-                .ok_or_else(|| StoreError::Sqlite("corrupt lane leaf id".to_owned()))
-        })
-        .transpose()?;
-    let parse_operation = |value: &str| {
-        Uuid::parse_str(value)
-            .map(crate::ids::OperationId::from_uuid)
-            .map_err(|_| StoreError::Sqlite("corrupt current operation id".to_owned()))
-    };
-    let current_operation = raw
-        .current_operation
-        .as_deref()
-        .map(parse_operation)
-        .transpose()?;
-    let pending_next_run = match (raw.pending_entry, raw.pending_prompt) {
-        (None, None) => None,
-        (Some(entry), Some(prompt)) => Some(crate::session::lane::NextRun {
-            entry_id: crate::ids::EntryId::parse(&entry)
-                .ok_or_else(|| StoreError::Sqlite("corrupt pending entry id".to_owned()))?,
-            prompt,
-        }),
-        _ => {
-            return Err(StoreError::Sqlite(
-                "partial pending next-run state".to_owned(),
-            ));
-        }
-    };
-    let config = serde_json::from_str(&raw.config)
-        .map_err(|err| StoreError::Sqlite(format!("corrupt lane config: {err}")))?;
-    Ok(crate::session::lane::Lane {
-        name: raw.name,
-        state: crate::session::lane::State {
-            leaf,
-            current_operation,
-            pending_next_run,
-        },
-        config,
-    })
+            config,
+        });
+    }
+    Ok(lanes)
 }
 
 fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession, StoreError> {
@@ -973,18 +979,19 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(session_id),
             other => StoreError::from(other),
         })?;
-    let lane = load_main_lane(connection, session_id)?;
-    if lane.name != crate::session::lane::MAIN {
-        return Err(StoreError::Sqlite("main lane has invalid name".to_owned()));
-    }
+    let lanes = load_lanes(connection, session_id)?;
+    let main_lane = lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .ok_or_else(|| StoreError::Sqlite("session has no main lane".to_owned()))?;
     let session = SessionRecord {
         id: session_id,
         cwd,
         title,
         parent_session_id: parent_session_id.and_then(|text| SessionId::parse(&text)),
-        // Compatibility projection while runtime model selection migrates to
-        // lane config. The session row is no longer an authority for this.
-        initial_model_ref: lane.config.model_ref.clone(),
+        // Compatibility projection while launch defaults still live on the
+        // session record. Durable model authority is the main lane config.
+        initial_model_ref: main_lane.config.model_ref.clone(),
     };
 
     let mut statement = connection.prepare(
@@ -992,7 +999,8 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     )?;
     let mut entries = Vec::new();
     let mut rows = statement.query(rusqlite::params![id])?;
-    let mut previous = None;
+    let mut entry_ids = std::collections::HashSet::new();
+    let mut expected_seq = 1_u64;
     while let Some(row) = rows.next()? {
         let stored_id: String = row.get(0)?;
         let node_id = crate::ids::EntryId::parse(&stored_id)
@@ -1008,9 +1016,14 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         let seq: i64 = row.get(2)?;
         let seq = u64::try_from(seq)
             .map_err(|_| StoreError::Sqlite(format!("corrupt entry seq {seq}")))?;
-        if parent != previous {
+        if seq != expected_seq {
             return Err(StoreError::Sqlite(format!(
-                "main lane entry {node_id} does not extend its current leaf"
+                "entry {node_id} has sequence {seq}, expected {expected_seq}"
+            )));
+        }
+        if parent.is_some_and(|parent| !entry_ids.contains(&parent)) {
+            return Err(StoreError::Sqlite(format!(
+                "entry {node_id} points to a parent that does not precede it"
             )));
         }
         let payload: String = row.get(3)?;
@@ -1020,19 +1033,44 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             seq,
             value: decode("entry", payload)?,
         };
-        previous = Some(node.id);
+        if !entry_ids.insert(node.id) {
+            return Err(StoreError::Sqlite(format!(
+                "duplicate conversation entry {}",
+                node.id
+            )));
+        }
         entries.push(EntryRecord {
             id: node.id,
             seq: node.seq,
             parent: node.parent,
             entry: node.value,
         });
+        expected_seq += 1;
     }
-    if lane.state.leaf != previous {
-        return Err(StoreError::Sqlite(
-            "main lane leaf does not match the persisted branch".to_owned(),
-        ));
+
+    for lane in &lanes {
+        if lane
+            .state
+            .leaf
+            .is_some_and(|leaf| !entry_ids.contains(&leaf))
+        {
+            return Err(StoreError::Sqlite(format!(
+                "lane {:?} points to a missing conversation leaf",
+                lane.name
+            )));
+        }
+        if let Some(next_run) = &lane.state.pending_next_run
+            && entry_ids.contains(&next_run.entry_id)
+        {
+            return Err(StoreError::Sqlite(format!(
+                "lane {:?} pending next-run entry identity already exists",
+                lane.name
+            )));
+        }
     }
+    let lane_names: std::collections::HashSet<String> =
+        lanes.iter().map(|lane| lane.name.clone()).collect();
+
     let mut statement = connection.prepare(
         "SELECT o.id, o.accepted_seq, origin.lane_name, origin.source_leaf_id,
                 s.state_seq, s.payload
@@ -1058,6 +1096,11 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         let lane_name = lane_name.ok_or_else(|| {
             StoreError::Sqlite(format!("operation {op_id} has no immutable origin"))
         })?;
+        if !lane_names.contains(&lane_name) {
+            return Err(StoreError::Sqlite(format!(
+                "operation {op_id} names missing origin lane {lane_name:?}"
+            )));
+        }
         let source_leaf = source_leaf_raw
             .as_deref()
             .map(|raw| {
@@ -1066,6 +1109,11 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
                 })
             })
             .transpose()?;
+        if source_leaf.is_some_and(|leaf| !entry_ids.contains(&leaf)) {
+            return Err(StoreError::Sqlite(format!(
+                "operation {op_id} names a missing source leaf"
+            )));
+        }
         let checkpoint: CheckpointPayload = decode("checkpoint", payload)?;
         let snapshot_payload: String = connection.query_row(
             "SELECT payload FROM capability_snapshots WHERE id = ?1",
@@ -1088,44 +1136,59 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             source_leaf,
             latest: (state_seq as u64, checkpoint),
             capability_snapshot,
+            pending_inbox: Vec::new(),
         });
     }
 
-    let mut open_operations = operations
-        .iter()
-        .filter(|operation| !matches!(&operation.latest.1.state, OperationState::Finished(_)));
-    let open = open_operations.next().map(|operation| operation.id);
-    if open_operations.next().is_some() {
-        return Err(StoreError::Sqlite(
-            "main lane has multiple open operations".to_owned(),
-        ));
+    let mut open_by_lane = std::collections::HashMap::new();
+    for operation in &operations {
+        if matches!(&operation.latest.1.state, OperationState::Finished(_)) {
+            continue;
+        }
+        if open_by_lane
+            .insert(operation.lane_name.clone(), operation.id)
+            .is_some()
+        {
+            return Err(StoreError::Sqlite(format!(
+                "lane {:?} has multiple open operations",
+                operation.lane_name
+            )));
+        }
     }
-    if lane.state.current_operation != open {
-        return Err(StoreError::Sqlite(
-            "main lane current operation disagrees with durable operation state".to_owned(),
-        ));
-    }
-    if let Some(next_run) = &lane.state.pending_next_run
-        && entries.iter().any(|entry| entry.id == next_run.entry_id)
-    {
-        return Err(StoreError::Sqlite(
-            "pending next-run entry identity already exists".to_owned(),
-        ));
+    for lane in &lanes {
+        let open = open_by_lane.get(&lane.name).copied();
+        if lane.state.current_operation != open {
+            return Err(StoreError::Sqlite(format!(
+                "lane {:?} current operation disagrees with durable operation state",
+                lane.name
+            )));
+        }
     }
 
     let mut statement = connection.prepare(
-        "SELECT id, kind, text FROM inbox_items
+        "SELECT operation_id, id, kind, text FROM inbox_items
          WHERE session_id = ?1 AND status = 'pending' ORDER BY accepted_at",
     )?;
-    let mut pending_inbox = Vec::new();
     let mut inbox_rows = statement.query(rusqlite::params![id])?;
     while let Some(row) = inbox_rows.next()? {
-        let item_id: String = row.get(0)?;
-        let kind: String = row.get(1)?;
-        let text: String = row.get(2)?;
+        let operation_raw: String = row.get(0)?;
+        let item_id: String = row.get(1)?;
+        let kind: String = row.get(2)?;
+        let text: String = row.get(3)?;
+        let operation_uuid = Uuid::parse_str(&operation_raw)
+            .map_err(|err| StoreError::Sqlite(format!("corrupt inbox operation id: {err}")))?;
+        let operation_id = OperationId::from_uuid(operation_uuid);
         let uuid = Uuid::parse_str(&item_id)
             .map_err(|err| StoreError::Sqlite(format!("corrupt inbox id: {err}")))?;
-        pending_inbox.push(InboxRecord {
+        let operation = operations
+            .iter_mut()
+            .find(|operation| operation.id == operation_id)
+            .ok_or_else(|| {
+                StoreError::Sqlite(format!(
+                    "pending inbox item {item_id} belongs to an unloaded operation"
+                ))
+            })?;
+        operation.pending_inbox.push(InboxRecord {
             id: InboxId::from_uuid(uuid),
             kind: decode("inbox kind", kind)?,
             text,
@@ -1191,10 +1254,9 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
 
     Ok(LoadedSession {
         session,
-        lane,
+        lanes,
         entries,
         operations,
-        pending_inbox,
         assistant_frames,
         tool_progress,
         latest_usage,
@@ -1327,6 +1389,101 @@ mod tests {
         assert_eq!(loaded.session.initial_model_ref, "model-b");
         assert_eq!(loaded.entries.len(), 2);
         assert_eq!(leaf_after, leaf_before);
+    }
+
+    #[test]
+    fn load_preserves_a_branched_tree_and_all_lane_cursors() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        crate::store::schema::create_fresh(&mut connection).expect("schema");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        let session_id = SessionId::generate();
+        create_session(
+            &mut connection,
+            &SessionRecord {
+                id: session_id,
+                cwd: "/tmp".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-a".to_owned(),
+                parent_session_id: None,
+            },
+        )
+        .expect("session");
+
+        let root = EntryRecord::provision(
+            1,
+            SessionEntry::UserMessage {
+                text: "root".to_owned(),
+            },
+        );
+        let root_id = root.id;
+        append_entry(
+            &mut connection,
+            session_id,
+            crate::session::lane::MAIN,
+            &root,
+        )
+        .expect("root");
+
+        let worker_config =
+            serde_json::to_string(&crate::session::lane::Config::new("model-b")).expect("config");
+        connection
+            .execute(
+                "INSERT INTO lanes
+                    (session_id, name, leaf_id, current_operation_id,
+                     pending_entry_id, pending_prompt, config, created_at, updated_at)
+                 VALUES (?1, 'worker', ?2, NULL, NULL, NULL, ?3, 0, 0)",
+                rusqlite::params![
+                    session_id.as_uuid().to_string(),
+                    root_id.as_uuid().to_string(),
+                    worker_config,
+                ],
+            )
+            .expect("worker lane");
+
+        let main_child = EntryRecord::provision(
+            2,
+            SessionEntry::AssistantMessage {
+                text: "main".to_owned(),
+            },
+        )
+        .after(Some(root_id));
+        let main_child_id = main_child.id;
+        append_entry(
+            &mut connection,
+            session_id,
+            crate::session::lane::MAIN,
+            &main_child,
+        )
+        .expect("main child");
+
+        let worker_child = EntryRecord::provision(
+            3,
+            SessionEntry::AssistantMessage {
+                text: "worker".to_owned(),
+            },
+        )
+        .after(Some(root_id));
+        let worker_child_id = worker_child.id;
+        append_entry(&mut connection, session_id, "worker", &worker_child).expect("worker child");
+
+        let loaded = load(&connection, session_id).expect("branched load");
+        assert_eq!(loaded.entries.len(), 3);
+        assert_eq!(loaded.entries[2].parent, Some(root_id));
+        let main = loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == crate::session::lane::MAIN)
+            .expect("main lane");
+        let worker = loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "worker")
+            .expect("worker lane");
+        assert_eq!(main.state.leaf, Some(main_child_id));
+        assert_eq!(worker.state.leaf, Some(worker_child_id));
+        assert_eq!(worker.config.model_ref, "model-b");
     }
 
     #[test]

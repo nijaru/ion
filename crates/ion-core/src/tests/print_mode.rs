@@ -173,7 +173,10 @@ async fn pending_next_run_survives_close_and_promotes_after_reopen() {
         OperationState::Suspended
     );
     let pending = loaded
-        .lane
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("main lane")
         .state
         .pending_next_run
         .as_ref()

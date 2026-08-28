@@ -460,7 +460,10 @@ async fn effect_gate_crash_prefix_reopens_with_a_durable_queued_operation() {
     let loaded = store.load(session_id).await.expect("load");
     assert_eq!(loaded.operations.len(), 1);
     let pending = loaded
-        .lane
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("main lane")
         .state
         .pending_next_run
         .as_ref()

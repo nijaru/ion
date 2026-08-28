@@ -1196,7 +1196,6 @@ impl<P: Provider> SessionRuntime<P> {
             budget,
             parent,
         } = deps;
-        let reopen_entry_count = loaded.as_ref().map(|loaded| loaded.entries.len());
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
@@ -1248,7 +1247,7 @@ impl<P: Provider> SessionRuntime<P> {
             indeterminate_warning: None,
             closed: false,
             resumed: false,
-            reopen_entry_count,
+            reopen_entry_count: None,
         };
         if let Some(loaded) = loaded {
             runtime.resumed = true;
@@ -1275,15 +1274,60 @@ impl<P: Provider> SessionRuntime<P> {
                 .saturating_add(usage.cache_write)
         });
         let assistant_frames = loaded.assistant_frames;
-        self.selected_model_ref = loaded.lane.config.model_ref.clone();
-        self.pending_next_run = loaded.lane.state.pending_next_run.clone();
-        let mut max_seq = 0;
-        for record in loaded.entries {
-            max_seq = max_seq.max(record.seq);
-            self.entries.push(record);
+        let Some(main_lane) = loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == crate::session::lane::MAIN)
+            .cloned()
+        else {
+            error!(session = %self.session_id, "reopened session has no main lane; fencing");
+            self.closed = true;
+            return;
+        };
+        self.selected_model_ref = main_lane.config.model_ref.clone();
+        self.pending_next_run = main_lane.state.pending_next_run.clone();
+
+        let max_seq = loaded
+            .entries
+            .iter()
+            .map(|record| record.seq)
+            .max()
+            .unwrap_or(0);
+        let entries_by_id: std::collections::HashMap<_, _> = loaded
+            .entries
+            .iter()
+            .map(|record| (record.id, record))
+            .collect();
+        let mut branch = Vec::new();
+        let mut cursor = main_lane.state.leaf;
+        while let Some(entry_id) = cursor {
+            let Some(record) = entries_by_id.get(&entry_id) else {
+                error!(session = %self.session_id, entry = %entry_id, "main lane leaf path is incomplete; fencing");
+                self.closed = true;
+                return;
+            };
+            branch.push((*record).clone());
+            cursor = record.parent;
         }
+        branch.reverse();
+        self.reopen_entry_count = Some(branch.len());
+        self.entries = branch;
         self.next_entry_seq = max_seq + 1;
+
         for operation in loaded.operations {
+            if operation.lane_name != crate::session::lane::MAIN {
+                if !matches!(&operation.latest.1.state, OperationState::Finished(_)) {
+                    error!(
+                        session = %self.session_id,
+                        operation = %operation.id,
+                        lane = %operation.lane_name,
+                        "single-lane runtime cannot host an open non-main operation; fencing"
+                    );
+                    self.closed = true;
+                    return;
+                }
+                continue;
+            }
             let (state_seq, payload) = operation.latest;
             if matches!(
                 payload.state,
@@ -1311,7 +1355,7 @@ impl<P: Provider> SessionRuntime<P> {
                 ));
                 continue;
             }
-            let steers: Vec<InboxItem> = loaded
+            let steers: Vec<InboxItem> = operation
                 .pending_inbox
                 .iter()
                 .filter(|item| item.kind == InboxKind::Steer)
@@ -1341,7 +1385,7 @@ impl<P: Provider> SessionRuntime<P> {
                 cancel: self.cancel_root.child_token(),
                 state_seq,
                 open_effect: payload.open_effect.clone(),
-                pending_steers: loaded
+                pending_steers: operation
                     .pending_inbox
                     .iter()
                     .filter(|item| item.kind == InboxKind::Steer)

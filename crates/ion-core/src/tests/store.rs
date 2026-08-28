@@ -46,7 +46,12 @@ async fn restart_reproduces_the_logical_transcript() {
         OperationState::Finished(OperationOutcome::Completed)
     );
     assert!(!checkpoint.cancel_requested);
-    assert!(loaded.pending_inbox.is_empty());
+    assert!(
+        loaded
+            .operations
+            .iter()
+            .all(|operation| operation.pending_inbox.is_empty())
+    );
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 
@@ -199,8 +204,9 @@ async fn steer_is_durable_as_pending_inbox() {
 
     let store = SessionStore::open(&db).expect("reopen");
     let loaded = store.load(session_id).await.expect("load");
-    assert_eq!(loaded.pending_inbox.len(), 1);
-    assert_eq!(loaded.pending_inbox[0].text, "and also check tests");
+    let pending = &loaded.operations[0].pending_inbox;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].text, "and also check tests");
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
 

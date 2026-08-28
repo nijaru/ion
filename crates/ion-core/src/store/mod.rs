@@ -206,10 +206,11 @@ pub struct UsageRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedSession {
     pub session: SessionRecord,
-    pub(crate) lane: crate::session::lane::Lane,
+    /// Complete durable lane state over the shared conversation tree.
+    pub(crate) lanes: Vec<crate::session::lane::Lane>,
+    /// Complete immutable conversation tree in global durable sequence order.
     pub entries: Vec<EntryRecord>,
     pub operations: Vec<LoadedOperation>,
-    pub pending_inbox: Vec<InboxRecord>,
     pub assistant_frames: Vec<AssistantFrame>,
     pub tool_progress: Vec<ToolProgressCheckpoint>,
     /// Most recently committed model-step usage, loaded for runtime-owned
@@ -227,6 +228,8 @@ pub struct LoadedOperation {
     pub source_leaf: Option<EntryId>,
     pub latest: (u64, CheckpointPayload),
     pub capability_snapshot: crate::context::CapabilitySnapshot,
+    /// Pending durable input owned by this operation, never session-global.
+    pub(crate) pending_inbox: Vec<InboxRecord>,
 }
 
 #[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]
