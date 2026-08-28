@@ -1431,6 +1431,27 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("main lane exists while session runtime is live")
     }
 
+    fn resident(&self, operation_id: OperationId) -> Option<&ResidentOperation> {
+        self.operations.get(&operation_id)
+    }
+
+    fn resident_mut(&mut self, operation_id: OperationId) -> Option<&mut ResidentOperation> {
+        self.operations.get_mut(&operation_id)
+    }
+
+    fn active(&self, operation_id: OperationId) -> Option<&ActiveOperation> {
+        self.resident(operation_id).map(|resident| &resident.active)
+    }
+
+    fn live(&self, operation_id: OperationId) -> Option<&OperationResidency> {
+        self.resident(operation_id).map(|resident| &resident.live)
+    }
+
+    fn live_mut(&mut self, operation_id: OperationId) -> Option<&mut OperationResidency> {
+        self.resident_mut(operation_id)
+            .map(|resident| &mut resident.live)
+    }
+
     fn lane_resident_id(&self, lane_name: &str) -> Option<OperationId> {
         let lane = self.lanes.get(lane_name)?;
         lane.state.current_operation.or_else(|| {
@@ -1445,13 +1466,11 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn main_resident(&self) -> Option<&ResidentOperation> {
-        let operation_id = self.main_resident_id()?;
-        self.operations.get(&operation_id)
+        self.resident(self.main_resident_id()?)
     }
 
     fn main_resident_mut(&mut self) -> Option<&mut ResidentOperation> {
-        let operation_id = self.main_resident_id()?;
-        self.operations.get_mut(&operation_id)
+        self.resident_mut(self.main_resident_id()?)
     }
 
     fn main_active(&self) -> Option<&ActiveOperation> {
@@ -1475,9 +1494,12 @@ impl<P: Provider> SessionRuntime<P> {
         resident.active = active;
     }
 
-    fn remove_main_operation(&mut self) -> Option<ResidentOperation> {
-        let operation_id = self.main_resident_id()?;
+    fn remove_operation(&mut self, operation_id: OperationId) -> Option<ResidentOperation> {
         self.operations.remove(&operation_id)
+    }
+
+    fn remove_main_operation(&mut self) -> Option<ResidentOperation> {
+        self.remove_operation(self.main_resident_id()?)
     }
 
     fn lane_branch_records(&self, lane_name: &str) -> Option<Vec<&EntryRecord>> {
@@ -2818,19 +2840,11 @@ impl<P: Provider> SessionRuntime<P> {
         EntryRecord::provision(self.next_entry_seq, entry.clone()).after(self.main_leaf())
     }
 
-    fn emit_terminal_state(&mut self, state: &OperationState) {
-        // A terminal operation has no unsettled tools; any survivor is
-        // a cancelled or failed call whose spinner must not resurrect
-        // in a post-lag reconstruction.
-        self.main_live_mut()
-            .expect("main operation residency exists")
-            .live_tools
-            .clear();
+    fn emit_terminal_state_for(&mut self, operation_id: OperationId, state: &OperationState) {
+        if let Some(live) = self.live_mut(operation_id) {
+            live.live_tools.clear();
+        }
         if let OperationState::Finished(outcome) = state {
-            let Some(active) = self.main_active() else {
-                return;
-            };
-            let operation_id = active.machine.operation_id();
             match outcome {
                 OperationOutcome::Completed => {
                     self.emit(RuntimeEvent::OperationFinished {
@@ -2870,6 +2884,12 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
             }
+        }
+    }
+
+    fn emit_terminal_state(&mut self, state: &OperationState) {
+        if let Some(operation_id) = self.main_resident_id() {
+            self.emit_terminal_state_for(operation_id, state);
         }
     }
 

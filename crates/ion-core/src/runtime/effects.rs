@@ -10,17 +10,15 @@ impl<P: Provider> SessionRuntime<P> {
     ) {
         let provider = Arc::clone(&self.provider);
         let cancel = self
-            .main_active()
+            .active(operation_id)
             .map(|active| active.cancel.child_token())
             .unwrap_or_else(|| self.cancel_root.child_token());
         let out = self.engine_tx.clone();
-        self.main_live_mut()
-            .expect("main operation residency exists")
-            .model_step += 1;
-        let step = self
-            .main_live_mut()
-            .expect("main operation residency exists")
-            .model_step;
+        let live = self
+            .live_mut(operation_id)
+            .expect("operation residency exists before model execution");
+        live.model_step += 1;
+        let step = live.model_step;
         let request = ProviderRequest {
             operation_id,
             step,
@@ -38,41 +36,30 @@ impl<P: Provider> SessionRuntime<P> {
         });
     }
 
-    pub(crate) async fn persist_assistant_frame(&mut self) -> Result<(), StoreError> {
-        let Some(active) = self.main_active() else {
+    pub(crate) async fn persist_assistant_frame(
+        &mut self,
+        operation_id: OperationId,
+    ) -> Result<(), StoreError> {
+        let Some(effect_id) = self
+            .active(operation_id)
+            .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id))
+        else {
             return Ok(());
         };
-        let Some(effect) = active.open_effect.as_ref() else {
-            return Ok(());
-        };
+        let live = self
+            .live(operation_id)
+            .expect("operation residency exists while persisting assistant frame");
         let frame = AssistantFrame {
-            effect_id: effect.id,
+            effect_id,
             session_id: self.session_id,
-            operation_id: active.machine.operation_id(),
-            step: self
-                .main_live_mut()
-                .expect("main operation residency exists")
-                .model_step,
-            frame_seq: self
-                .main_live_mut()
-                .expect("main operation residency exists")
-                .assistant_frame_seq
-                .saturating_add(1),
-            text: bounded_frame_text(
-                &self
-                    .main_live_mut()
-                    .expect("main operation residency exists")
-                    .draft_text,
-            ),
-            thinking: bounded_frame_text(
-                &self
-                    .main_live_mut()
-                    .expect("main operation residency exists")
-                    .draft_thinking,
-            ),
+            operation_id,
+            step: live.model_step,
+            frame_seq: live.assistant_frame_seq.saturating_add(1),
+            text: bounded_frame_text(&live.draft_text),
+            thinking: bounded_frame_text(&live.draft_thinking),
         };
-        self.main_live_mut()
-            .expect("main operation residency exists")
+        self.live_mut(operation_id)
+            .expect("operation residency exists while installing assistant frame")
             .assistant_frame_seq = frame.frame_seq;
         self.store.upsert_assistant_frame(frame).await
     }
@@ -88,18 +75,18 @@ impl<P: Provider> SessionRuntime<P> {
             return;
         };
         let artifact_root = self.artifact_root.clone();
-        let cancel = self
-            .main_active()
-            .map(|active| active.cancel.child_token())
-            .unwrap_or_else(|| self.cancel_root.child_token());
-        let tool_tx = self.tool_tx.clone();
-        let (progress_tx, mut progress_rx) = mpsc::channel::<ToolProgress>(8);
         let ToolCall {
             operation_id,
             call_id,
             name,
             arguments,
         } = call;
+        let cancel = self
+            .active(operation_id)
+            .map(|active| active.cancel.child_token())
+            .unwrap_or_else(|| self.cancel_root.child_token());
+        let tool_tx = self.tool_tx.clone();
+        let (progress_tx, mut progress_rx) = mpsc::channel::<ToolProgress>(8);
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
             let execute = tools.execute_with_reconciliation(
@@ -139,22 +126,22 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     pub(crate) async fn handle_engine(&mut self, signal: EngineSignal) {
-        let Some((operation_id, compaction_pending)) = self.main_active().map(|active| {
-            (
-                active.machine.operation_id(),
-                matches!(active.machine.state(), OperationState::CompactionPending),
-            )
-        }) else {
-            debug!("ignored engine signal with no active operation");
+        let operation_id = signal_operation_id(&signal);
+        let Some((active_operation_id, compaction_pending)) =
+            self.active(operation_id).map(|active| {
+                (
+                    active.machine.operation_id(),
+                    matches!(active.machine.state(), OperationState::CompactionPending),
+                )
+            })
+        else {
+            debug!(%operation_id, "ignored engine signal for non-resident operation");
             return;
         };
-        if operation_id != signal_operation_id(&signal) {
-            debug!(?signal, "ignored stale engine signal");
-            return;
-        }
+        debug_assert_eq!(active_operation_id, operation_id);
         let model_step = self
-            .main_live()
-            .expect("main operation residency exists")
+            .live(operation_id)
+            .expect("resident operation has live execution state")
             .model_step;
         if signal_step(&signal) != model_step {
             debug!(?signal, "ignored engine signal from a stale model step");
@@ -171,13 +158,13 @@ impl<P: Provider> SessionRuntime<P> {
                 .await;
         }
         if compaction_pending {
-            self.settle_compaction(signal).await;
+            self.settle_compaction(operation_id, signal).await;
             return;
         }
         match signal {
             EngineSignal::TextDelta { text, .. } => {
-                self.main_live_mut()
-                    .expect("main operation residency exists")
+                self.live_mut(operation_id)
+                    .expect("resident operation has live execution state")
                     .draft_text
                     .push_str(&text);
                 self.emit(RuntimeEvent::AssistantTextDelta {
@@ -185,13 +172,14 @@ impl<P: Provider> SessionRuntime<P> {
                     operation_id,
                     text,
                 });
-                if let Err(err) = self.persist_assistant_frame().await {
-                    self.fail_operation_on_persistence(err).await;
+                if let Err(err) = self.persist_assistant_frame(operation_id).await {
+                    self.fail_operation_on_persistence_for(operation_id, err)
+                        .await;
                 }
             }
             EngineSignal::ThinkingDelta { text, .. } => {
-                self.main_live_mut()
-                    .expect("main operation residency exists")
+                self.live_mut(operation_id)
+                    .expect("resident operation has live execution state")
                     .draft_thinking
                     .push_str(&text);
                 self.emit(RuntimeEvent::ThinkingDelta {
@@ -199,15 +187,16 @@ impl<P: Provider> SessionRuntime<P> {
                     operation_id,
                     text,
                 });
-                if let Err(err) = self.persist_assistant_frame().await {
-                    self.fail_operation_on_persistence(err).await;
+                if let Err(err) = self.persist_assistant_frame(operation_id).await {
+                    self.fail_operation_on_persistence_for(operation_id, err)
+                        .await;
                 }
             }
             EngineSignal::UsageUpdate { usage, .. } => {
                 self.last_context_tokens =
                     Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
-                self.main_live_mut()
-                    .expect("main operation residency exists")
+                self.live_mut(operation_id)
+                    .expect("resident operation has live execution state")
                     .draft_usage = Some(usage);
                 self.emit(RuntimeEvent::UsageUpdate {
                     cursor: RuntimeCursor::default(),
@@ -220,55 +209,40 @@ impl<P: Provider> SessionRuntime<P> {
                     debug!(?call, "dropped tool call attributed to another operation");
                     return;
                 }
-                // Buffered until the step completes; tool calls are never
-                // executed from partial streamed JSON (DESIGN.md §15.2).
-                self.main_live_mut()
-                    .expect("main operation residency exists")
+                self.live_mut(operation_id)
+                    .expect("resident operation has live execution state")
                     .draft_calls
                     .push(call);
             }
             EngineSignal::Completed { .. } => {
                 let cancel_requested = self
-                    .main_active()
+                    .active(operation_id)
                     .is_some_and(|active| active.machine.cancel_requested());
-                let text = std::mem::take(
-                    &mut self
-                        .main_live_mut()
-                        .expect("main operation residency exists")
-                        .draft_text,
-                );
-                let tool_calls = std::mem::take(
-                    &mut self
-                        .main_live_mut()
-                        .expect("main operation residency exists")
-                        .draft_calls,
-                );
+                let live = self
+                    .live_mut(operation_id)
+                    .expect("resident operation has live execution state");
+                let text = std::mem::take(&mut live.draft_text);
+                let tool_calls = std::mem::take(&mut live.draft_calls);
                 let transition = if cancel_requested {
                     Transition::ProviderCancelled
                 } else {
                     Transition::ProviderCompleted { text, tool_calls }
                 };
-                self.settle_model_step(transition).await;
+                self.settle_model_step(operation_id, transition).await;
             }
             EngineSignal::Failed { message, .. } => {
                 let cancel_requested = self
-                    .main_active()
+                    .active(operation_id)
                     .is_some_and(|active| active.machine.cancel_requested());
+                let live = self
+                    .live(operation_id)
+                    .expect("resident operation has live execution state");
                 if !cancel_requested
                     && is_context_overflow(&message)
-                    && !self
-                        .main_live_mut()
-                        .expect("main operation residency exists")
-                        .overflow_retry_used
-                    && !self
-                        .main_live_mut()
-                        .expect("main operation residency exists")
-                        .last_step_was_compaction
+                    && !live.overflow_retry_used
+                    && !live.last_step_was_compaction
                 {
-                    // 14.7.4: one compaction, one retry. The failed
-                    // attempt produced no durable effect beyond its
-                    // intent; its partial request state is discarded.
-                    self.settle_overflow_to_compaction().await;
+                    self.settle_overflow_to_compaction(operation_id).await;
                     return;
                 }
                 let transition = if cancel_requested {
@@ -276,18 +250,19 @@ impl<P: Provider> SessionRuntime<P> {
                 } else {
                     Transition::ProviderFailed { message }
                 };
-                self.settle_model_step(transition).await;
+                self.settle_model_step(operation_id, transition).await;
             }
             EngineSignal::Cancelled { .. } => {
-                self.settle_model_step(Transition::ProviderCancelled).await;
+                self.settle_model_step(operation_id, Transition::ProviderCancelled)
+                    .await;
             }
             EngineSignal::ProviderExited { .. } => {
-                // A sentinel for the live step means the provider died
-                // without a terminal signal; earlier steps were already
-                // dropped by the step correlation above.
-                self.settle_model_step(Transition::ProviderFailed {
-                    message: "provider exited without a terminal signal".to_owned(),
-                })
+                self.settle_model_step(
+                    operation_id,
+                    Transition::ProviderFailed {
+                        message: "provider exited without a terminal signal".to_owned(),
+                    },
+                )
                 .await;
             }
         }
@@ -297,7 +272,11 @@ impl<P: Provider> SessionRuntime<P> {
     /// its typed outcome), semantic entries, and the next total state
     /// agree in one transaction. Every settlement path ends the live
     /// reasoning draft (display-only, §21.3).
-    pub(crate) async fn settle_model_step(&mut self, transition: Transition) {
+    pub(crate) async fn settle_model_step(
+        &mut self,
+        operation_id: OperationId,
+        transition: Transition,
+    ) {
         let mut staged = self
             .main_active()
             .cloned()
@@ -310,11 +289,11 @@ impl<P: Provider> SessionRuntime<P> {
             debug!("ignored settlement for an already-settled model step");
             return;
         }
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_thinking
             .clear();
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .last_step_was_compaction = false;
         let applied = staged
@@ -367,7 +346,8 @@ impl<P: Provider> SessionRuntime<P> {
         );
         request.assistant_frames_delete = frame_effect_id.into_iter().collect();
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
@@ -375,7 +355,7 @@ impl<P: Provider> SessionRuntime<P> {
         if let Some(usage) = settled_usage {
             self.latest_usage = Some(usage);
         }
-        self.emit_terminal_state(&applied.state.clone());
+        self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
         self.advance().await;
     }
@@ -384,8 +364,8 @@ impl<P: Provider> SessionRuntime<P> {
     /// the failed attempt's effect settles without entries, the
     /// Compaction intent commits in the same transaction, and the
     /// retry is the natural continuation after the summary lands.
-    pub(crate) async fn settle_overflow_to_compaction(&mut self) {
-        self.main_live_mut()
+    pub(crate) async fn settle_overflow_to_compaction(&mut self, operation_id: OperationId) {
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .overflow_retry_used = true;
         let mut staged = self
@@ -427,7 +407,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.main_live_mut().expect("main operation residency exists").model_step + 1,
+                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
                 "model": model,
                 "plan": plan
             }),
@@ -449,7 +429,8 @@ impl<P: Provider> SessionRuntime<P> {
         );
         request.assistant_frames_delete = frame_effect_id.into_iter().collect();
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
@@ -457,22 +438,22 @@ impl<P: Provider> SessionRuntime<P> {
         self.install_active(staged);
         // The failed attempt's partial buffers are discarded; usage
         // from a rejected request is not trustworthy.
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_text
             .clear();
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_thinking
             .clear();
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_calls
             .clear();
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_usage = None;
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .last_step_was_compaction = true;
         self.last_prefix_fingerprint = None;
@@ -483,7 +464,11 @@ impl<P: Provider> SessionRuntime<P> {
     /// Settle a compaction step: the summary becomes a readable entry
     /// covering everything before it; failure continues without a
     /// baseline (visible in tracing), unless cancellation was requested.
-    pub(crate) async fn settle_compaction(&mut self, signal: EngineSignal) {
+    pub(crate) async fn settle_compaction(
+        &mut self,
+        operation_id: OperationId,
+        signal: EngineSignal,
+    ) {
         let mut staged = self
             .main_active()
             .cloned()
@@ -494,7 +479,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         let transition = match signal {
             EngineSignal::TextDelta { text, .. } => {
-                self.main_live_mut()
+                self.live_mut(operation_id)
                     .expect("main operation residency exists")
                     .draft_text
                     .push_str(&text);
@@ -549,12 +534,13 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.emit_terminal_state(&applied.state.clone());
+        self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
         self.advance().await;
     }
@@ -572,12 +558,11 @@ impl<P: Provider> SessionRuntime<P> {
                 call_id,
                 output,
             } => {
-                let Some(active) = self.main_active() else {
+                let Some(active) = self.active(operation_id) else {
+                    debug!(%operation_id, %effect_id, "dropped tool progress for non-resident operation");
                     return;
                 };
-                if active.machine.operation_id() != operation_id
-                    || active.open_effect.as_ref().map(|effect| effect.id) != Some(effect_id)
-                {
+                if active.open_effect.as_ref().map(|effect| effect.id) != Some(effect_id) {
                     debug!(%operation_id, %effect_id, "dropped stale tool progress");
                     return;
                 }
@@ -591,7 +576,8 @@ impl<P: Provider> SessionRuntime<P> {
                     output,
                 };
                 if let Err(err) = self.store.upsert_tool_progress(progress).await {
-                    self.fail_operation_on_persistence(err).await;
+                    self.fail_operation_on_persistence_for(operation_id, err)
+                        .await;
                 } else {
                     self.emit(RuntimeEvent::ToolProgress {
                         cursor: RuntimeCursor::default(),
@@ -606,11 +592,9 @@ impl<P: Provider> SessionRuntime<P> {
         let call_id = result.call_id();
         let is_error = matches!(&result, ToolResult::Err { .. });
         let preview = result.display_preview();
-        let expected = self.main_active().and_then(|active| {
-            (active.machine.operation_id() == operation_id)
-                .then(|| active.open_effect.as_ref().map(|effect| effect.id))
-                .flatten()
-        });
+        let expected = self
+            .active(operation_id)
+            .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
         if expected != Some(effect_id) {
             // Stale or unknown tool result: operation and effect identity
             // must both match before the session writer mutates state.
@@ -648,13 +632,14 @@ impl<P: Provider> SessionRuntime<P> {
         );
         request.tool_progress_delete.push(effect_id);
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         staged.open_effect = None;
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .live_tools
             .retain(|pending| pending.call_id != call_id);
@@ -665,7 +650,7 @@ impl<P: Provider> SessionRuntime<P> {
             is_error,
             preview,
         });
-        self.emit_terminal_state(&applied.state.clone());
+        self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
         self.advance().await;
     }
@@ -673,31 +658,30 @@ impl<P: Provider> SessionRuntime<P> {
     /// A required commit failed: the staged clone is discarded and live
     /// state stays at its last durable checkpoint. Fail the operation
     /// visibly from that checkpoint; if even the failure commit fails,
-    /// fence the session — never continue as if durability succeeded
-    /// (DESIGN.md §26.2).
-    pub(crate) async fn fail_operation_on_persistence(&mut self, err: StoreError) {
-        let Some(active) = self.main_active() else {
-            error!(session = %self.session_id, %err, "persistence failed with no active operation");
+    /// fence the session — never continue as if durability succeeded.
+    pub(crate) async fn fail_operation_on_persistence_for(
+        &mut self,
+        operation_id: OperationId,
+        err: StoreError,
+    ) {
+        let Some(active) = self.active(operation_id) else {
+            error!(session = %self.session_id, %operation_id, %err, "persistence failed with no resident operation");
             return;
         };
-        let operation_id = active.machine.operation_id();
         error!(
             %operation_id,
             %err,
             "durable commit failed; failing the operation from its last checkpoint"
         );
         if matches!(active.machine.state(), OperationState::Finished(_)) {
-            // The failed write was the terminal checkpoint itself; the
-            // durable operation stays open and recoverable.
             self.emit(RuntimeEvent::OperationFailed {
                 cursor: RuntimeCursor::default(),
                 operation_id,
                 message: format!("persistence failed: {err}"),
             });
-            self.remove_main_operation();
+            self.remove_operation(operation_id);
             return;
         }
-        // Stage the failure from the untouched live machine.
         let mut staged = active.clone();
         staged
             .machine
@@ -723,15 +707,13 @@ impl<P: Provider> SessionRuntime<P> {
             Ok(()) => {
                 let applied_state = staged.machine.state().clone();
                 self.install_active(staged);
-                self.emit_terminal_state(&applied_state);
-                if let Some(active) = self.main_active() {
+                self.emit_terminal_state_for(operation_id, &applied_state);
+                if let Some(active) = self.active(operation_id) {
                     active.cancel.cancel();
                 }
-                self.remove_main_operation();
+                self.remove_operation(operation_id);
             }
             Err(second) => {
-                // Fatal: memory stays at the last confirmed checkpoint and
-                // the session is fenced — no further work is accepted.
                 error!(
                     %operation_id,
                     %second,
@@ -743,8 +725,17 @@ impl<P: Provider> SessionRuntime<P> {
                     message: format!("persistence failed fatally: {second}"),
                 });
                 self.closed = true;
-                self.remove_main_operation();
+                self.remove_operation(operation_id);
             }
         }
+    }
+
+    pub(crate) async fn fail_operation_on_persistence(&mut self, err: StoreError) {
+        let Some(operation_id) = self.main_resident_id() else {
+            error!(session = %self.session_id, %err, "persistence failed with no active main operation");
+            return;
+        };
+        self.fail_operation_on_persistence_for(operation_id, err)
+            .await;
     }
 }
