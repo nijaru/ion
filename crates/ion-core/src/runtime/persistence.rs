@@ -1,5 +1,6 @@
-use crate::effect::{CompactionInvocation, DurableEffect, ModelInvocation, ToolInvocation};
+use crate::effect::{CompactionInvocation, ModelInvocation, ToolInvocation};
 use crate::ids::{EffectId, InboxId, OperationId, SessionId};
+use crate::provider::ModelConfig;
 use crate::session::SessionEntry;
 use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
@@ -9,37 +10,51 @@ use crate::tool::ToolCall;
 
 use super::ActiveOperation;
 
-/// Decode one persisted model invocation through the single typed durable
-/// effect boundary. Recovery never knows the storage JSON field names.
-pub(super) fn model_invocation(effect: &EffectRecord) -> Option<ModelInvocation> {
-    match effect.decode().ok()? {
-        DurableEffect::Model(invocation) => Some(invocation),
-        _ => None,
-    }
+/// Compatibility adapter for the current `runtime/mod.rs` import surface.
+/// The storage payload is decoded into the typed durable model invocation;
+/// callers no longer know individual JSON field names. Remove this tuple
+/// adapter when the owner module is split and can import `ModelInvocation`
+/// directly.
+pub(super) fn model_step_from_input(
+    input: &serde_json::Value,
+) -> Option<(
+    u64,
+    ModelConfig,
+    crate::context::ContextPlan,
+    String,
+    String,
+    String,
+    String,
+)> {
+    let invocation: ModelInvocation = serde_json::from_value(input.clone()).ok()?;
+    Some((
+        invocation.step,
+        invocation.model,
+        invocation.plan,
+        invocation.capability_snapshot_id,
+        invocation.context_manifest_id,
+        invocation.prefix_fingerprint,
+        invocation.cache_expectation.as_str().to_owned(),
+    ))
 }
 
-/// Decode one persisted compaction invocation through the durable effect
-/// boundary.
-pub(super) fn compaction_invocation(effect: &EffectRecord) -> Option<CompactionInvocation> {
-    match effect.decode().ok()? {
-        DurableEffect::Compaction(invocation) => Some(invocation),
-        _ => None,
-    }
+/// Compatibility adapter for typed compaction invocation decoding.
+pub(super) fn compaction_from_input(
+    input: &serde_json::Value,
+) -> Option<(u64, ModelConfig, crate::context::ContextPlan)> {
+    let invocation: CompactionInvocation = serde_json::from_value(input.clone()).ok()?;
+    Some((invocation.step, invocation.model, invocation.plan))
 }
 
-/// Decode one persisted tool invocation, restoring the durable operation id
-/// from the owning operation record rather than inventing identity.
-pub(super) fn tool_invocation(
+/// Compatibility adapter for typed tool invocation decoding. The operation id
+/// is authoritative on the owning durable operation and is intentionally not
+/// reconstructed from effect payload bytes.
+pub(super) fn tool_call_from_input(
     operation_id: OperationId,
-    effect: &EffectRecord,
-) -> Option<(ToolCall, ToolInvocation)> {
-    match effect.decode().ok()? {
-        DurableEffect::Tool(invocation) => {
-            let call = invocation.clone().into_call(operation_id);
-            Some((call, invocation))
-        }
-        _ => None,
-    }
+    input: &serde_json::Value,
+) -> Option<ToolCall> {
+    let invocation: ToolInvocation = serde_json::from_value(input.clone()).ok()?;
+    Some(invocation.into_call(operation_id))
 }
 
 /// Build the durable record of one staged transition. Entry sequences are
