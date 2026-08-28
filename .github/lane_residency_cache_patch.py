@@ -293,6 +293,24 @@ text = text.replace("lane.state.current_operation", "lane.durable.state.current_
 text = text.replace("let mut cursor = lane.state.leaf;", "let mut cursor = lane.durable.state.leaf;")
 text = text.replace("            .state\n            .leaf;", "            .durable\n            .state\n            .leaf;")
 text = text.replace("        let lane = self\n            .lanes\n            .get_mut(&lane_name)\n            .expect(\"operation lane exists after durable commit\");\n", "        let lane = &mut self\n            .lanes\n            .get_mut(&lane_name)\n            .expect(\"operation lane exists after durable commit\")\n            .durable;\n")
+# The two locals below are already `&mut session::lane::Lane`: one comes from
+# `main_lane_mut()`, the other from `.durable` above. Do not wrap them twice.
+for old, new, label in (
+    (
+        "        lane.durable.state.current_operation = Some(operation_id);",
+        "        lane.state.current_operation = Some(operation_id);",
+        "accepted-operation local lane",
+    ),
+    (
+        "        lane.durable.state.current_operation = if terminal { None } else { Some(operation_id) };",
+        "        lane.state.current_operation = if terminal { None } else { Some(operation_id) };",
+        "commit-transition local lane",
+    ),
+):
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 match, found {count}")
+    text = text.replace(old, new, 1)
 runtime.write_text(text)
 
 # Main command/config paths now mutate or read main lane-local observations.
