@@ -33,21 +33,27 @@ pub use delegate::{
     ChildContextMode, ChildHandle, ChildManager, ChildObservation, ChildSpec, ChildStatus,
     DelegateConfig, child_budget_default, child_tools,
 };
+// Canonical public vocabulary for durable child-session APIs. The old names
+// remain exported during the architecture-normalization migration.
+pub use delegate::{ChildHandle as ChildSessionRef, ChildObservation as ChildSnapshot};
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};
 pub use ids::{OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
+pub use ids::{RuntimeCursor as EventCursor, RuntimeInstanceId as SessionInstanceId};
 pub use mcp::{McpService, ServerDef};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
-    EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, ScriptedMessage,
-    ScriptedProvider, SwitchingProvider, TokenUsage,
+    EngineSignal, ModelCapabilities, ModelConfig, ModelEvent, ModelRequest, Provider,
+    ProviderRequest, ResolvedModel, ScriptedMessage, ScriptedProvider, SwitchingProvider,
+    TokenUsage,
 };
 pub use runtime::{
     ChildRuntimeConfig, EventSubscription, IndeterminateWarning, LiveOperationState,
     OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
     SessionHandle, SessionSnapshot,
 };
+pub use runtime::{ChildRuntimeConfig as ChildSessionConfig, RuntimeBudget as OperationBudget};
 pub use session::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition, TransitionError,
