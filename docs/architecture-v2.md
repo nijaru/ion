@@ -144,7 +144,7 @@ Residency describes where an admitted agent is currently executable:
 - future remote host;
 - inactive/hibernated but durable.
 
-Residency is runtime state, not conversation semantics and not agent identity.
+Residency is runtime state, not conversation semantics and not agent identity. A session task/process is an incarnation of a durable session, never the durable identity itself.
 
 ### Family control
 
