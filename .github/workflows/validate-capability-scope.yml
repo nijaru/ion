@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply scoped capability patch
-        run: python .github/capability_scope_patch.py
+        run: |
+          python .github/capability_scope_patch.py
+          python .github/capability_scope_fix.py
       - name: Validate Rust 1.98
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add DESIGN.md crates/ion-core/src
-          git rm -f .github/capability_scope_patch.py .github/workflows/validate-capability-scope.yml
+          git rm -f .github/capability_scope_patch.py .github/capability_scope_fix.py .github/workflows/validate-capability-scope.yml
           git commit -m 'refactor(core): scope lane capabilities structurally'
           git push origin HEAD:main
