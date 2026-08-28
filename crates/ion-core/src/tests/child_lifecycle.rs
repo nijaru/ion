@@ -37,10 +37,7 @@ async fn completed_children_release_live_child_slots() {
     assert!(!first.is_error, "first child failed: {first:?}");
     let first_handle = child_handle(&first.output);
     let waited = tools[2]
-        .call(
-            json!({"handle": first_handle}),
-            CancellationToken::new(),
-        )
+        .call(json!({"handle": first_handle}), CancellationToken::new())
         .await;
     assert!(!waited.is_error, "first wait failed: {waited:?}");
     assert!(waited.output.contains("finished"), "{waited:?}");
@@ -57,10 +54,7 @@ async fn completed_children_release_live_child_slots() {
     );
     let second_handle = child_handle(&second.output);
     let waited = tools[2]
-        .call(
-            json!({"handle": second_handle}),
-            CancellationToken::new(),
-        )
+        .call(json!({"handle": second_handle}), CancellationToken::new())
         .await;
     assert!(!waited.is_error, "second wait failed: {waited:?}");
 
