@@ -1433,20 +1433,22 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
+    fn lane(&self, lane_name: &str) -> Option<&crate::session::lane::Lane> {
+        self.lanes.get(lane_name).map(|lane| &lane.durable)
+    }
+
+    fn lane_mut(&mut self, lane_name: &str) -> Option<&mut crate::session::lane::Lane> {
+        self.lanes.get_mut(lane_name).map(|lane| &mut lane.durable)
+    }
+
     fn main_lane(&self) -> &crate::session::lane::Lane {
-        &self
-            .lanes
-            .get(crate::session::lane::MAIN)
+        self.lane(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
-            .durable
     }
 
     fn main_lane_mut(&mut self) -> &mut crate::session::lane::Lane {
-        &mut self
-            .lanes
-            .get_mut(crate::session::lane::MAIN)
+        self.lane_mut(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
-            .durable
     }
 
     fn lane_live(&self, lane_name: &str) -> Option<&LaneResidency> {
@@ -1555,10 +1557,6 @@ impl<P: Provider> SessionRuntime<P> {
         self.operations.remove(&operation_id)
     }
 
-    fn remove_main_operation(&mut self) -> Option<ResidentOperation> {
-        self.remove_operation(self.main_resident_id()?)
-    }
-
     fn lane_branch_records(&self, lane_name: &str) -> Option<Vec<&EntryRecord>> {
         let lane = self.lanes.get(lane_name)?;
         let mut branch = Vec::new();
@@ -1582,8 +1580,12 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("live main lane branch is complete")
     }
 
-    fn main_leaf(&self) -> Option<EntryId> {
-        self.main_lane().state.leaf
+    fn lane_leaf(&self, lane_name: &str) -> Option<EntryId> {
+        self.lane(lane_name).and_then(|lane| lane.state.leaf)
+    }
+
+    fn lane_pending_next_run(&self, lane_name: &str) -> Option<&crate::session::lane::NextRun> {
+        self.lane(lane_name)?.state.pending_next_run.as_ref()
     }
 
     fn main_model_ref(&self) -> &str {
@@ -1591,7 +1593,7 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn main_pending_next_run(&self) -> Option<&crate::session::lane::NextRun> {
-        self.main_lane().state.pending_next_run.as_ref()
+        self.lane_pending_next_run(crate::session::lane::MAIN)
     }
 
     fn install_tree_entries(&mut self, entries: Vec<EntryRecord>) {
@@ -1623,16 +1625,27 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
         info!(session = %self.session_id, "session opened");
-        if self.main_active().is_some() || !self.suspended_operations.is_empty() {
+        if !self.operations.is_empty() || !self.suspended_operations.is_empty() {
             self.recover_open_operation().await;
         }
-        if !self.closed
-            && self.main_active().is_none()
-            && self.main_pending_next_run().is_some()
-            && self.promote_pending_next_run().await
-            && let Some(operation_id) = self.main_resident_id()
-        {
-            self.advance(operation_id).await;
+        if !self.closed {
+            let pending_lanes = self
+                .lanes
+                .iter()
+                .filter(|(_, lane)| {
+                    lane.durable.state.current_operation.is_none()
+                        && lane.durable.state.pending_next_run.is_some()
+                })
+                .map(|(name, _)| name.clone())
+                .collect::<Vec<_>>();
+            for lane_name in pending_lanes {
+                if let Some(operation_id) = self.promote_pending_next_run(&lane_name).await {
+                    self.advance(operation_id).await;
+                }
+                if self.closed {
+                    break;
+                }
+            }
         }
         loop {
             tokio::select! {
@@ -1737,9 +1750,11 @@ impl<P: Provider> SessionRuntime<P> {
                 entry_id: pending.entry_id,
             });
         }
-        let (active, _) = self.accept_operation_record(prompt, None).await?;
+        let (active, _) = self
+            .accept_operation_record(crate::session::lane::MAIN, prompt, None)
+            .await?;
         let operation_id = active.machine.operation_id();
-        self.start_active(active);
+        self.start_active(crate::session::lane::MAIN, active);
         self.advance(operation_id).await;
         Ok(operation_id)
     }
@@ -1757,9 +1772,11 @@ impl<P: Provider> SessionRuntime<P> {
             });
         }
         if self.main_active().is_none() {
-            let (active, entry_id) = self.accept_operation_record(prompt, None).await?;
+            let (active, entry_id) = self
+                .accept_operation_record(crate::session::lane::MAIN, prompt, None)
+                .await?;
             let operation_id = active.machine.operation_id();
-            self.start_active(active);
+            self.start_active(crate::session::lane::MAIN, active);
             self.advance(operation_id).await;
             return Ok(entry_id);
         }
@@ -1786,6 +1803,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// state before this acceptance boundary.
     async fn accept_operation_record(
         &mut self,
+        lane_name: &str,
         prompt: String,
         reservation: Option<crate::session::lane::NextRun>,
     ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
@@ -1804,10 +1822,11 @@ impl<P: Provider> SessionRuntime<P> {
             Some(next_run) => EntryRecord {
                 id: next_run.entry_id,
                 seq: self.next_entry_seq,
-                parent: self.main_leaf(),
+                parent: self.lane_leaf(lane_name),
                 entry: applied.entries[0].clone(),
             },
-            None => self.stage_entry(&applied.entries[0]),
+            None => EntryRecord::provision(self.next_entry_seq, applied.entries[0].clone())
+                .after(self.lane_leaf(lane_name)),
         };
         let entry_id = entry.id;
         let checkpoint = CheckpointRecord {
@@ -1824,7 +1843,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.store
             .begin_operation(
                 self.session_id,
-                crate::session::lane::MAIN,
+                lane_name,
                 operation_id,
                 root_inbox,
                 checkpoint,
@@ -1836,7 +1855,9 @@ impl<P: Provider> SessionRuntime<P> {
         let entry_leaf = entry.id;
         self.install_tree_entries(vec![entry]);
         self.next_entry_seq += 1;
-        let lane = self.main_lane_mut();
+        let lane = self
+            .lane_mut(lane_name)
+            .expect("accepted operation lane remains resident");
         lane.state.leaf = Some(entry_leaf);
         lane.state.current_operation = Some(operation_id);
         if reservation.is_some() {
@@ -1856,13 +1877,12 @@ impl<P: Provider> SessionRuntime<P> {
         ))
     }
 
-    fn start_active(&mut self, active: ActiveOperation) {
+    fn start_active(&mut self, lane_name: &str, active: ActiveOperation) {
         let operation_id = active.machine.operation_id();
         let prompt = active.machine.prompt().to_owned();
-        let previous = self.operations.insert(
-            operation_id,
-            ResidentOperation::new(crate::session::lane::MAIN, active),
-        );
+        let previous = self
+            .operations
+            .insert(operation_id, ResidentOperation::new(lane_name, active));
         debug_assert!(previous.is_none(), "operation residency identity is unique");
         self.emit(RuntimeEvent::OperationStarted {
             cursor: RuntimeCursor::default(),
@@ -1871,30 +1891,30 @@ impl<P: Provider> SessionRuntime<P> {
         });
     }
 
-    async fn promote_pending_next_run(&mut self) -> bool {
-        if self.main_active().is_some() {
-            return false;
+    async fn promote_pending_next_run(&mut self, lane_name: &str) -> Option<OperationId> {
+        if self.lane_resident_id(lane_name).is_some() {
+            return None;
         }
-        let Some(next_run) = self.main_pending_next_run().cloned() else {
-            return false;
-        };
+        let next_run = self.lane_pending_next_run(lane_name)?.clone();
         match self
-            .accept_operation_record(next_run.prompt.clone(), Some(next_run.clone()))
+            .accept_operation_record(lane_name, next_run.prompt.clone(), Some(next_run.clone()))
             .await
         {
             Ok((active, _)) => {
-                self.start_active(active);
-                true
+                let operation_id = active.machine.operation_id();
+                self.start_active(lane_name, active);
+                Some(operation_id)
             }
             Err(err) => {
                 error!(
                     session = %self.session_id,
+                    lane = lane_name,
                     entry = %next_run.entry_id,
                     %err,
                     "could not promote the durable next run; fencing until reopen"
                 );
                 self.closed = true;
-                false
+                None
             }
         }
     }
@@ -2059,9 +2079,9 @@ impl<P: Provider> SessionRuntime<P> {
                 OperationState::Finished(_) => {
                     let lane_name = self.operation_lane_name(operation_id).map(str::to_owned);
                     self.remove_operation(operation_id);
-                    if lane_name.as_deref() == Some(crate::session::lane::MAIN)
-                        && self.promote_pending_next_run().await
-                        && let Some(next_operation_id) = self.main_resident_id()
+                    if let Some(lane_name) = lane_name
+                        && let Some(next_operation_id) =
+                            self.promote_pending_next_run(&lane_name).await
                     {
                         operation_id = next_operation_id;
                         continue;
@@ -2991,10 +3011,6 @@ impl<P: Provider> SessionRuntime<P> {
         Ok(())
     }
 
-    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
-        EntryRecord::provision(self.next_entry_seq, entry.clone()).after(self.main_leaf())
-    }
-
     fn emit_terminal_state_for(&mut self, operation_id: OperationId, state: &OperationState) {
         if let Some(live) = self.live_mut(operation_id) {
             live.live_tools.clear();
@@ -3039,12 +3055,6 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
             }
-        }
-    }
-
-    fn emit_terminal_state(&mut self, state: &OperationState) {
-        if let Some(operation_id) = self.main_resident_id() {
-            self.emit_terminal_state_for(operation_id, state);
         }
     }
 

@@ -12,6 +12,15 @@ pub(super) fn handle_command(
                     .and_then(|()| create_session(connection, &record).map_err(StoreError::from)),
             );
         }
+        StoreCommand::CreateLane {
+            session_id,
+            lane,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                create_lane(connection, session_id, &lane).map_err(StoreError::from)
+            }));
+        }
         StoreCommand::BeginOperation {
             session_id,
             lane_name,
@@ -236,6 +245,50 @@ fn create_session(
             now,
         ],
     )?;
+    tx.commit()
+}
+
+fn create_lane(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane: &crate::session::lane::Lane,
+) -> Result<(), rusqlite::Error> {
+    if lane.name.is_empty() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "lane name cannot be empty".to_owned(),
+        ));
+    }
+    if lane.state.current_operation.is_some() || lane.state.pending_next_run.is_some() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a new lane must be idle and have no pending input".to_owned(),
+        ));
+    }
+    let tx = connection.transaction()?;
+    let config = serde_json::to_string(&lane.config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let now = now_ms();
+    tx.execute(
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_entry_id, pending_prompt, config, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?5)",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            lane.name,
+            lane.state.leaf.map(|id| id.as_uuid().to_string()),
+            config,
+            now,
+        ],
+    )?;
+    let changed = tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "lane session is missing".to_owned(),
+        ));
+    }
     tx.commit()
 }
 
@@ -1426,21 +1479,20 @@ mod tests {
         )
         .expect("root");
 
-        let worker_config =
-            serde_json::to_string(&crate::session::lane::Config::new("model-b")).expect("config");
-        connection
-            .execute(
-                "INSERT INTO lanes
-                    (session_id, name, leaf_id, current_operation_id,
-                     pending_entry_id, pending_prompt, config, created_at, updated_at)
-                 VALUES (?1, 'worker', ?2, NULL, NULL, NULL, ?3, 0, 0)",
-                rusqlite::params![
-                    session_id.as_uuid().to_string(),
-                    root_id.as_uuid().to_string(),
-                    worker_config,
-                ],
-            )
-            .expect("worker lane");
+        create_lane(
+            &mut connection,
+            session_id,
+            &crate::session::lane::Lane {
+                name: "worker".to_owned(),
+                state: crate::session::lane::State {
+                    leaf: Some(root_id),
+                    current_operation: None,
+                    pending_next_run: None,
+                },
+                config: crate::session::lane::Config::new("model-b"),
+            },
+        )
+        .expect("worker lane");
 
         let main_child = EntryRecord::provision(
             2,

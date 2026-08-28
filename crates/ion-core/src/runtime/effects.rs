@@ -737,13 +737,4 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
     }
-
-    pub(crate) async fn fail_operation_on_persistence(&mut self, err: StoreError) {
-        let Some(operation_id) = self.main_resident_id() else {
-            error!(session = %self.session_id, %err, "persistence failed with no active main operation");
-            return;
-        };
-        self.fail_operation_on_persistence_for(operation_id, err)
-            .await;
-    }
 }

@@ -255,6 +255,11 @@ enum StoreCommand {
         record: SessionRecord,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    CreateLane {
+        session_id: SessionId,
+        lane: crate::session::lane::Lane,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
     BeginOperation {
         session_id: SessionId,
         lane_name: String,
@@ -427,6 +432,33 @@ impl SessionStore {
     pub async fn create_session(&self, record: SessionRecord) -> Result<(), StoreError> {
         self.request(|reply| StoreCommand::CreateSession { record, reply })
             .await
+    }
+
+    /// Create one durable lane anchored at an existing conversation leaf.
+    /// The lane must be idle at creation; operations and pending input are
+    /// admitted by their own transactions after topology exists.
+    pub async fn create_lane(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        source_leaf: Option<EntryId>,
+        model_ref: impl Into<String>,
+    ) -> Result<(), StoreError> {
+        let lane = crate::session::lane::Lane {
+            name: lane_name.into(),
+            state: crate::session::lane::State {
+                leaf: source_leaf,
+                current_operation: None,
+                pending_next_run: None,
+            },
+            config: crate::session::lane::Config::new(model_ref),
+        };
+        self.request(|reply| StoreCommand::CreateLane {
+            session_id,
+            lane,
+            reply,
+        })
+        .await
     }
 
     /// Durably accept an operation: the operation row, its root inbox
