@@ -1,19 +1,11 @@
-//! Durable session topology.
+//! Durable session ownership boundary.
 //!
-//! A session owns passive append-only conversation history plus active lanes
-//! that point into that history. The current operation reducer still lives in
-//! `operation`; its temporary re-exports below keep the existing runtime build
-//! green while callers migrate to the new domain boundary.
+//! Conversation-tree and lane state will live here once they are introduced
+//! together with their persistence transactions. The existing execution
+//! reducer has moved to `operation`; this narrow migration seam keeps current
+//! runtime callers building while they move to the correct module.
 
-mod lane;
-mod tree;
-
-pub(crate) use lane::{LaneConfig, LaneId, LaneState};
-pub(crate) use tree::{Entry, EntryId};
-
-// Migration seam: these types describe operation execution, not session
-// topology. New code should import them from `crate::operation`.
 pub(crate) use crate::operation::{
-    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
-    OperationState, SessionEntry, Transition, TransitionError,
+    EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
+    SessionEntry, Transition,
 };
