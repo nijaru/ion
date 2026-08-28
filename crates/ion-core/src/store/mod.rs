@@ -44,12 +44,24 @@ pub struct SessionRecord {
     pub parent_session_id: Option<SessionId>,
 }
 
-/// One entry to append; `seq` is storage-assigned by the runtime's
-/// per-session counter.
+/// One semantic entry provisioned by the session transition before the store
+/// sees it. `seq` orders durable commits; `id` is the stable tree identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EntryRecord {
+    pub id: EntryId,
     pub seq: u64,
     pub entry: SessionEntry,
+}
+
+impl EntryRecord {
+    #[must_use]
+    pub(crate) fn provision(seq: u64, entry: SessionEntry) -> Self {
+        Self {
+            id: EntryId::generate(),
+            seq,
+            entry,
+        }
+    }
 }
 
 /// A total operation-state checkpoint (DESIGN.md §10.1). Carries

@@ -670,7 +670,7 @@ fn insert_entry(
         })
         .transpose()?;
     let node = crate::session::tree::Entry {
-        id: crate::ids::EntryId::generate(),
+        id: entry.id,
         parent,
         seq: entry.seq,
         value: entry.entry.clone(),
@@ -1012,28 +1012,23 @@ mod tests {
         )
         .expect("session");
 
-        append_entry(
-            &mut connection,
-            session_id,
-            &EntryRecord {
-                seq: 1,
-                entry: SessionEntry::UserMessage {
-                    text: "hello".to_owned(),
-                },
+        let first_record = EntryRecord::provision(
+            1,
+            SessionEntry::UserMessage {
+                text: "hello".to_owned(),
             },
-        )
-        .expect("first entry");
-        append_entry(
-            &mut connection,
-            session_id,
-            &EntryRecord {
-                seq: 2,
-                entry: SessionEntry::AssistantMessage {
-                    text: "hi".to_owned(),
-                },
+        );
+        let first_expected = first_record.id;
+        append_entry(&mut connection, session_id, &first_record).expect("first entry");
+
+        let second_record = EntryRecord::provision(
+            2,
+            SessionEntry::AssistantMessage {
+                text: "hi".to_owned(),
             },
-        )
-        .expect("second entry");
+        );
+        let second_expected = second_record.id;
+        append_entry(&mut connection, session_id, &second_record).expect("second entry");
 
         let first: String = connection
             .query_row("SELECT id FROM entries WHERE seq = 1", [], |row| row.get(0))
@@ -1043,6 +1038,8 @@ mod tests {
             .expect("second id");
         let first_id = crate::EntryId::parse(&first).expect("first entry id");
         let second_id = crate::EntryId::parse(&second).expect("second entry id");
+        assert_eq!(first_id, first_expected);
+        assert_eq!(second_id, second_expected);
         assert_ne!(first_id, second_id);
         assert_eq!(first_id.as_uuid().get_version_num(), 7);
         assert_eq!(second_id.as_uuid().get_version_num(), 7);

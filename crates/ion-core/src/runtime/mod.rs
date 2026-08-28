@@ -2564,10 +2564,7 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
-        EntryRecord {
-            seq: self.next_entry_seq,
-            entry: entry.clone(),
-        }
+        EntryRecord::provision(self.next_entry_seq, entry.clone())
     }
 
     fn emit_terminal_state(&mut self, state: &OperationState) {

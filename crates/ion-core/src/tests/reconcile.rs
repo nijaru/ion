@@ -198,12 +198,12 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
         text: "go".to_owned(),
         status: crate::InboxStatus::Applied,
     };
-    let entry = EntryRecord {
-        seq: 1,
-        entry: SessionEntry::UserMessage {
+    let entry = EntryRecord::provision(
+        1,
+        SessionEntry::UserMessage {
             text: "go".to_owned(),
         },
-    };
+    );
     let checkpoint = CheckpointRecord {
         state_seq: 1,
         payload: CheckpointPayload {
