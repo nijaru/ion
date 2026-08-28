@@ -1,6 +1,7 @@
 //! Ion-core test suite, one module per owning boundary.
 
 mod budget_children;
+mod child_lifecycle;
 mod compaction;
 mod context_usage;
 mod crash_recovery;
