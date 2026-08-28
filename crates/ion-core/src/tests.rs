@@ -6,6 +6,7 @@ mod compaction;
 mod context_usage;
 mod crash_recovery;
 mod mcp;
+mod multi_lane;
 mod native_tools;
 mod operation_flow;
 mod policy_trust;

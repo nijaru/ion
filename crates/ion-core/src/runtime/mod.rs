@@ -407,11 +407,17 @@ impl EventSubscription {
 }
 
 enum SessionCommand {
+    CreateLane {
+        lane_name: String,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    },
     SubmitIfIdle {
+        lane_name: String,
         prompt: String,
         reply: oneshot::Sender<Result<OperationId, CommandError>>,
     },
     NextRun {
+        lane_name: String,
         prompt: String,
         reply: oneshot::Sender<Result<crate::ids::EntryId, CommandError>>,
     },
@@ -438,6 +444,7 @@ enum SessionCommand {
         reply: oneshot::Sender<Result<bool, CommandError>>,
     },
     SwitchModel {
+        lane_name: String,
         model_ref: String,
         reply: oneshot::Sender<Result<String, CommandError>>,
     },
@@ -493,14 +500,38 @@ impl fmt::Debug for SessionHandle {
 }
 
 impl SessionHandle {
-    /// Accept a prompt durably and open a new operation only when idle.
+    /// Create a shared-history lane at the main lane's current durable leaf.
+    /// The new lane inherits the main lane's current model configuration.
+    pub async fn create_lane(&self, lane_name: impl Into<String>) -> Result<(), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::CreateLane {
+                lane_name: lane_name.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Accept a prompt durably on main and open a new operation only when idle.
     pub async fn submit_if_idle(
         &self,
+        prompt: impl Into<String>,
+    ) -> Result<OperationId, CommandError> {
+        self.submit_if_idle_on_lane(crate::session::lane::MAIN, prompt)
+            .await
+    }
+
+    /// Accept a prompt durably on one named lane only when that lane is idle.
+    pub async fn submit_if_idle_on_lane(
+        &self,
+        lane_name: impl Into<String>,
         prompt: impl Into<String>,
     ) -> Result<OperationId, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::SubmitIfIdle {
+                lane_name: lane_name.into(),
                 prompt: prompt.into(),
                 reply,
             })
@@ -508,16 +539,27 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
 
-    /// Persist the lane's next-run input. If the lane is idle, it is
-    /// accepted immediately; otherwise only its semantic entry identity is
-    /// reserved. An `OperationId` does not exist until actual acceptance.
+    /// Persist main's next-run input. If main is idle it is accepted
+    /// immediately; otherwise only its semantic entry identity is reserved.
     pub async fn next_run(
         &self,
+        prompt: impl Into<String>,
+    ) -> Result<crate::ids::EntryId, CommandError> {
+        self.next_run_on_lane(crate::session::lane::MAIN, prompt)
+            .await
+    }
+
+    /// Persist one named lane's next-run input. Operation identity is created
+    /// only when that lane actually accepts the run.
+    pub async fn next_run_on_lane(
+        &self,
+        lane_name: impl Into<String>,
         prompt: impl Into<String>,
     ) -> Result<crate::ids::EntryId, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::NextRun {
+                lane_name: lane_name.into(),
                 prompt: prompt.into(),
                 reply,
             })
@@ -555,12 +597,23 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::Closed)?
     }
 
-    /// Durably select the model used by future model steps. A running
-    /// step keeps its frozen model snapshot. Returns the previous id.
+    /// Durably select the model used by future main-lane model steps.
+    /// A running step keeps its frozen model snapshot. Returns the previous id.
     pub async fn switch_model(&self, model_ref: impl Into<String>) -> Result<String, CommandError> {
+        self.switch_model_on_lane(crate::session::lane::MAIN, model_ref)
+            .await
+    }
+
+    /// Durably select the model used by future steps on one named lane.
+    pub async fn switch_model_on_lane(
+        &self,
+        lane_name: impl Into<String>,
+        model_ref: impl Into<String>,
+    ) -> Result<String, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::SwitchModel {
+                lane_name: lane_name.into(),
                 model_ref: model_ref.into(),
                 reply,
             })
@@ -1446,11 +1499,6 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("main lane exists while session runtime is live")
     }
 
-    fn main_lane_mut(&mut self) -> &mut crate::session::lane::Lane {
-        self.lane_mut(crate::session::lane::MAIN)
-            .expect("main lane exists while session runtime is live")
-    }
-
     fn lane_live(&self, lane_name: &str) -> Option<&LaneResidency> {
         self.lanes.get(lane_name).map(|lane| &lane.live)
     }
@@ -1471,11 +1519,6 @@ impl<P: Provider> SessionRuntime<P> {
 
     fn main_lane_live(&self) -> &LaneResidency {
         self.lane_live(crate::session::lane::MAIN)
-            .expect("main lane exists while session runtime is live")
-    }
-
-    fn main_lane_live_mut(&mut self) -> &mut LaneResidency {
-        self.lane_live_mut(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
     }
 
@@ -1592,10 +1635,6 @@ impl<P: Provider> SessionRuntime<P> {
         &self.main_lane().config.model_ref
     }
 
-    fn main_pending_next_run(&self) -> Option<&crate::session::lane::NextRun> {
-        self.lane_pending_next_run(crate::session::lane::MAIN)
-    }
-
     fn install_tree_entries(&mut self, entries: Vec<EntryRecord>) {
         for record in entries {
             let index = self.tree_entries.len();
@@ -1676,12 +1715,24 @@ impl<P: Provider> SessionRuntime<P> {
     /// Returns true when the session loop must exit.
     async fn handle_command(&mut self, command: SessionCommand) -> bool {
         match command {
-            SessionCommand::SubmitIfIdle { prompt, reply } => {
-                let _ = reply.send(self.submit_if_idle(prompt).await);
+            SessionCommand::CreateLane { lane_name, reply } => {
+                let _ = reply.send(self.create_lane(lane_name).await);
                 false
             }
-            SessionCommand::NextRun { prompt, reply } => {
-                let _ = reply.send(self.next_run(prompt).await);
+            SessionCommand::SubmitIfIdle {
+                lane_name,
+                prompt,
+                reply,
+            } => {
+                let _ = reply.send(self.submit_if_idle_on_lane(lane_name, prompt).await);
+                false
+            }
+            SessionCommand::NextRun {
+                lane_name,
+                prompt,
+                reply,
+            } => {
+                let _ = reply.send(self.next_run_on_lane(lane_name, prompt).await);
                 false
             }
             SessionCommand::Steer { text, reply } => {
@@ -1718,8 +1769,12 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(Ok(requested));
                 false
             }
-            SessionCommand::SwitchModel { model_ref, reply } => {
-                let _ = reply.send(self.switch_model(model_ref).await);
+            SessionCommand::SwitchModel {
+                lane_name,
+                model_ref,
+                reply,
+            } => {
+                let _ = reply.send(self.switch_model_on_lane(lane_name, model_ref).await);
                 false
             }
             SessionCommand::Subscribe { reply } => {
@@ -1736,25 +1791,68 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    async fn submit_if_idle(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+    async fn create_lane(&mut self, lane_name: String) -> Result<(), CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        if let Some(active) = self.main_active() {
-            return Err(CommandError::Busy {
-                operation_id: active.machine.operation_id(),
-            });
+        let lane_name = lane_name.trim().to_owned();
+        if lane_name.is_empty() {
+            return Err(CommandError::InvalidLaneName);
         }
-        if let Some(pending) = self.main_pending_next_run() {
+        if self.lanes.contains_key(&lane_name) {
+            return Err(CommandError::LaneExists(lane_name));
+        }
+        let source_leaf = self.main_lane().state.leaf;
+        let model_ref = self.main_model_ref().to_owned();
+        self.store
+            .create_lane(
+                self.session_id,
+                lane_name.clone(),
+                source_leaf,
+                model_ref.clone(),
+            )
+            .await
+            .map_err(persistence_command_error)?;
+        let previous = self.lanes.insert(
+            lane_name.clone(),
+            ResidentLane::new(crate::session::lane::Lane {
+                name: lane_name,
+                state: crate::session::lane::State {
+                    leaf: source_leaf,
+                    current_operation: None,
+                    pending_next_run: None,
+                },
+                config: crate::session::lane::Config::new(model_ref),
+            }),
+        );
+        debug_assert!(previous.is_none(), "lane topology identity is unique");
+        Ok(())
+    }
+
+    async fn submit_if_idle_on_lane(
+        &mut self,
+        lane_name: String,
+        prompt: String,
+    ) -> Result<OperationId, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if self.lane(&lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name));
+        }
+        if let Some(operation_id) = self.lane_resident_id(&lane_name) {
+            return Err(CommandError::Busy { operation_id });
+        }
+        if let Some(pending) = self.lane_pending_next_run(&lane_name) {
             return Err(CommandError::NextRunQueued {
                 entry_id: pending.entry_id,
             });
         }
         let (active, _) = self
-            .accept_operation_record(crate::session::lane::MAIN, prompt, None)
+            .accept_operation_record(&lane_name, prompt, None)
             .await?;
         let operation_id = active.machine.operation_id();
-        self.start_active(crate::session::lane::MAIN, active);
+        self.start_active(&lane_name, active);
         self.advance(operation_id).await;
         Ok(operation_id)
     }
@@ -1762,21 +1860,28 @@ impl<P: Provider> SessionRuntime<P> {
     /// Persist one next-run input durably. A busy lane receives only a
     /// provisioned semantic entry identity; operation identity is created
     /// when the lane becomes idle and actually accepts the run.
-    async fn next_run(&mut self, prompt: String) -> Result<crate::ids::EntryId, CommandError> {
+    async fn next_run_on_lane(
+        &mut self,
+        lane_name: String,
+        prompt: String,
+    ) -> Result<crate::ids::EntryId, CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        if let Some(pending) = self.main_pending_next_run() {
+        if self.lane(&lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name));
+        }
+        if let Some(pending) = self.lane_pending_next_run(&lane_name) {
             return Err(CommandError::NextRunQueued {
                 entry_id: pending.entry_id,
             });
         }
-        if self.main_active().is_none() {
+        if self.lane_resident_id(&lane_name).is_none() {
             let (active, entry_id) = self
-                .accept_operation_record(crate::session::lane::MAIN, prompt, None)
+                .accept_operation_record(&lane_name, prompt, None)
                 .await?;
             let operation_id = active.machine.operation_id();
-            self.start_active(crate::session::lane::MAIN, active);
+            self.start_active(&lane_name, active);
             self.advance(operation_id).await;
             return Ok(entry_id);
         }
@@ -1784,16 +1889,15 @@ impl<P: Provider> SessionRuntime<P> {
         let next_run = crate::session::lane::NextRun::reserve(prompt);
         let entry_id = next_run.entry_id;
         self.store
-            .queue_next_run(
-                self.session_id,
-                crate::session::lane::MAIN,
-                next_run.clone(),
-            )
+            .queue_next_run(self.session_id, &lane_name, next_run.clone())
             .await
             .map_err(persistence_command_error)?;
         self.wait_effect_boundary(EffectBoundary::PendingNextRunCommit)
             .await;
-        self.main_lane_mut().state.pending_next_run = Some(next_run);
+        self.lane_mut(&lane_name)
+            .expect("queued lane remains resident")
+            .state
+            .pending_next_run = Some(next_run);
         Ok(entry_id)
     }
 
@@ -1919,32 +2023,48 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    async fn switch_model(&mut self, model_ref: String) -> Result<String, CommandError> {
+    async fn switch_model_on_lane(
+        &mut self,
+        lane_name: String,
+        model_ref: String,
+    ) -> Result<String, CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
+        }
+        if self.lane(&lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name));
         }
         let model_ref = model_ref.trim().to_owned();
         if model_ref.is_empty() || !self.provider.supports_model(&model_ref) {
             return Err(CommandError::UnsupportedModel(model_ref));
         }
-        let previous = self.main_model_ref().to_owned();
+        let previous = self
+            .lane(&lane_name)
+            .expect("checked lane")
+            .config
+            .model_ref
+            .clone();
         if model_ref == previous {
             return Ok(previous);
         }
         self.store
             .set_lane_config(
                 self.session_id,
-                crate::session::lane::MAIN,
+                &lane_name,
                 crate::session::lane::Config::new(model_ref.clone()),
             )
             .await
             .map_err(persistence_command_error)?;
-        self.main_lane_mut().config.model_ref = model_ref;
-        // Model-relative metadata and hint throttling cannot cross a
-        // selection boundary.
-        self.main_lane_live_mut().context_window = None;
-        self.main_lane_live_mut().model_capabilities = None;
-        self.main_lane_live_mut().last_prefix_fingerprint = None;
+        self.lane_mut(&lane_name)
+            .expect("configured lane remains resident")
+            .config
+            .model_ref = model_ref;
+        let live = self
+            .lane_live_mut(&lane_name)
+            .expect("configured lane residency remains live");
+        live.context_window = None;
+        live.model_capabilities = None;
+        live.last_prefix_fingerprint = None;
         Ok(previous)
     }
 
@@ -3344,6 +3464,7 @@ impl RuntimeHandle {
         let (reply, _rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::SubmitIfIdle {
+                lane_name: crate::session::lane::MAIN.to_owned(),
                 prompt: String::from("fill"),
                 reply,
             })
