@@ -37,12 +37,16 @@ impl CacheExpectation {
     }
 }
 
+fn legacy_harness_profile() -> HarnessProfile {
+    HarnessProfile::default_v1()
+}
+
 /// Exact immutable input for one ordinary model-step effect (DESIGN.md §5).
 ///
 /// The initial v0 durable encoding predates the explicit harness-profile field,
 /// so deserializing an omitted field means exactly `ion/default@1`. New typed
-/// writers include it explicitly; this default is only a deterministic reading
-/// rule for already-created v0 records, not a moving launch default.
+/// writers include it explicitly; this is a frozen compatibility rule rather
+/// than whatever the launch default may mean in a future release.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelStepPlan {
     pub step: u64,
@@ -50,7 +54,7 @@ pub struct ModelStepPlan {
     pub plan: ContextPlan,
     pub capability_snapshot_id: String,
     pub context_manifest_id: String,
-    #[serde(default)]
+    #[serde(default = "legacy_harness_profile")]
     pub harness_profile: HarnessProfile,
     pub prefix_fingerprint: String,
     pub cache_expectation: CacheExpectation,
@@ -64,7 +68,7 @@ pub struct CompactionInvocation {
     pub step: u64,
     pub model: ModelConfig,
     pub plan: ContextPlan,
-    #[serde(default)]
+    #[serde(default = "legacy_harness_profile")]
     pub harness_profile: HarnessProfile,
 }
 
@@ -245,6 +249,27 @@ mod tests {
         let DurableEffect::ModelStep(decoded) = record.decode().expect("legacy step decodes")
         else {
             panic!("expected a model step");
+        };
+        assert_eq!(decoded.harness_profile, HarnessProfile::default_v1());
+    }
+
+    #[test]
+    fn legacy_v0_compaction_decodes_to_the_frozen_default_profile() {
+        let value = serde_json::json!({
+            "step": 3,
+            "model": model_step_plan().model,
+            "plan": model_step_plan().plan,
+        });
+        let record = EffectRecord {
+            id: EffectId::generate(),
+            kind: "compaction".to_owned(),
+            recovery_class: RecoveryClass::ReplaySafe,
+            effective_input: value,
+            attempt: 1,
+        };
+        let DurableEffect::Compaction(decoded) = record.decode().expect("legacy compaction decodes")
+        else {
+            panic!("expected compaction");
         };
         assert_eq!(decoded.harness_profile, HarnessProfile::default_v1());
     }
