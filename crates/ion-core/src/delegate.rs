@@ -225,12 +225,10 @@ impl<P> ChildManager<P> {
             .copied()
             .collect();
         for session_id in ids {
-            let loaded = self
-                .config
-                .store
-                .load(session_id)
-                .await
-                .map_err(|err| format!("child {session_id} unavailable while reaping: {err}"))?;
+            let loaded =
+                self.config.store.load(session_id).await.map_err(|err| {
+                    format!("child {session_id} unavailable while reaping: {err}")
+                })?;
             let finished = loaded
                 .operations
                 .iter()
