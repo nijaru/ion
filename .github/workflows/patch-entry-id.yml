@@ -23,37 +23,41 @@ jobs:
 
           runtime = Path('crates/ion-core/src/runtime/mod.rs')
           text = runtime.read_text()
-          old = '''    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
-              EntryRecord {
-                  seq: self.next_entry_seq,
-                  entry: entry.clone(),
-              }
-          }
-          '''
-          new = '''    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
-              EntryRecord::provision(self.next_entry_seq, entry.clone())
-          }
-          '''
+          old = (
+              "    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {\n"
+              "        EntryRecord {\n"
+              "            seq: self.next_entry_seq,\n"
+              "            entry: entry.clone(),\n"
+              "        }\n"
+              "    }\n"
+          )
+          new = (
+              "    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {\n"
+              "        EntryRecord::provision(self.next_entry_seq, entry.clone())\n"
+              "    }\n"
+          )
           if text.count(old) != 1:
               raise SystemExit('runtime stage_entry pattern did not match exactly once')
           runtime.write_text(text.replace(old, new))
 
           reconcile = Path('crates/ion-core/src/tests/reconcile.rs')
           text = reconcile.read_text()
-          old = '''    let entry = EntryRecord {
-              seq: 1,
-              entry: SessionEntry::UserMessage {
-                  text: "go".to_owned(),
-              },
-          };
-          '''
-          new = '''    let entry = EntryRecord::provision(
-              1,
-              SessionEntry::UserMessage {
-                  text: "go".to_owned(),
-              },
-          );
-          '''
+          old = (
+              "    let entry = EntryRecord {\n"
+              "        seq: 1,\n"
+              "        entry: SessionEntry::UserMessage {\n"
+              "            text: \"go\".to_owned(),\n"
+              "        },\n"
+              "    };\n"
+          )
+          new = (
+              "    let entry = EntryRecord::provision(\n"
+              "        1,\n"
+              "        SessionEntry::UserMessage {\n"
+              "            text: \"go\".to_owned(),\n"
+              "        },\n"
+              "    );\n"
+          )
           if text.count(old) != 1:
               raise SystemExit('reconcile entry pattern did not match exactly once')
           reconcile.write_text(text.replace(old, new))
