@@ -143,8 +143,9 @@ impl EffectRecord {
                 .map(DurableEffect::Compaction)
                 .map_err(|err| format!("invalid durable compaction effect {}: {err}", self.id)),
             kind if kind.starts_with("tool:") => {
-                let invocation: ToolInvocation = serde_json::from_value(self.effective_input.clone())
-                    .map_err(|err| format!("invalid durable tool effect {}: {err}", self.id))?;
+                let invocation: ToolInvocation =
+                    serde_json::from_value(self.effective_input.clone())
+                        .map_err(|err| format!("invalid durable tool effect {}: {err}", self.id))?;
                 let encoded_name = kind.trim_start_matches("tool:");
                 if invocation.tool != encoded_name {
                     return Err(format!(
