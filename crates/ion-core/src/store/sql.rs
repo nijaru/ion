@@ -629,9 +629,8 @@ fn insert_entry(
             })
         })
         .transpose()?;
-    let id = crate::ids::EntryId::for_seq(session_id, entry.seq);
     let node = crate::session::tree::Entry {
-        id,
+        id: crate::ids::EntryId::generate(),
         parent,
         seq: entry.seq,
         value: entry.entry.clone(),
@@ -756,12 +755,6 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         let seq: i64 = row.get(2)?;
         let seq = u64::try_from(seq)
             .map_err(|_| StoreError::Sqlite(format!("corrupt entry seq {seq}")))?;
-        let expected_id = crate::ids::EntryId::for_seq(session_id, seq);
-        if node_id != expected_id {
-            return Err(StoreError::Sqlite(format!(
-                "entry identity mismatch at sequence {seq}"
-            )));
-        }
         if parent != previous {
             return Err(StoreError::Sqlite(format!(
                 "main lane entry {node_id} does not extend its current leaf"
@@ -943,7 +936,7 @@ mod tests {
     #[test]
     fn appends_extend_main_lane_and_model_config_is_lane_owned() {
         let mut connection = Connection::open_in_memory().expect("database");
-        super::schema::create_fresh(&mut connection).expect("schema");
+        crate::store::schema::create_fresh(&mut connection).expect("schema");
         connection
             .pragma_update(None, "foreign_keys", "ON")
             .expect("foreign keys");
@@ -983,13 +976,27 @@ mod tests {
         )
         .expect("second entry");
 
-        let first = crate::EntryId::for_seq(session_id, 1);
-        let second = crate::EntryId::for_seq(session_id, 2);
+        let first: String = connection
+            .query_row("SELECT id FROM entries WHERE seq = 1", [], |row| row.get(0))
+            .expect("first id");
+        let second: String = connection
+            .query_row("SELECT id FROM entries WHERE seq = 2", [], |row| row.get(0))
+            .expect("second id");
+        let first_id = crate::EntryId::parse(&first).expect("first entry id");
+        let second_id = crate::EntryId::parse(&second).expect("second entry id");
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_id.as_uuid().get_version_num(), 7);
+        assert_eq!(second_id.as_uuid().get_version_num(), 7);
+
         let first_parent: Option<String> = connection
-            .query_row("SELECT parent_id FROM entries WHERE seq = 1", [], |row| row.get(0))
+            .query_row("SELECT parent_id FROM entries WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
             .expect("first parent");
         let second_parent: Option<String> = connection
-            .query_row("SELECT parent_id FROM entries WHERE seq = 2", [], |row| row.get(0))
+            .query_row("SELECT parent_id FROM entries WHERE seq = 2", [], |row| {
+                row.get(0)
+            })
             .expect("second parent");
         let leaf: Option<String> = connection
             .query_row(
@@ -999,8 +1006,8 @@ mod tests {
             )
             .expect("leaf");
         assert!(first_parent.is_none());
-        assert_eq!(second_parent.as_deref(), Some(first.as_uuid().to_string().as_str()));
-        assert_eq!(leaf.as_deref(), Some(second.as_uuid().to_string().as_str()));
+        assert_eq!(second_parent.as_deref(), Some(first.as_str()));
+        assert_eq!(leaf.as_deref(), Some(second.as_str()));
 
         append_entry(
             &mut connection,
