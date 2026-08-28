@@ -3,18 +3,19 @@
 //! SQLite currently stores an effect kind plus a JSON payload for a compact,
 //! inspectable v0 schema. The rest of Ion must not depend on that encoding.
 //! This module is the one translation boundary between the storage encoding
-//! and typed model/tool/maintenance invocations used by runtime and recovery.
+//! and typed model/tool/maintenance plans used by runtime and recovery.
 
 use serde_json::Value;
 
 use crate::context::ContextPlan;
+use crate::harness::HarnessProfile;
 use crate::ids::{EffectId, OperationId};
-use crate::provider::ResolvedModel;
+use crate::provider::ModelConfig;
 use crate::store::EffectRecord;
 use crate::tool::{CanonicalTarget, RecoveryClass, ToolCall, ToolCallId};
 
-/// Prompt-cache expectation captured with a model invocation for diagnostics
-/// and evaluation. It is metadata, not a correctness or replay decision.
+/// Prompt-cache expectation captured with a model step for diagnostics and
+/// evaluation. It is metadata, not a correctness or replay decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CacheExpectation {
@@ -36,26 +37,35 @@ impl CacheExpectation {
     }
 }
 
-/// Exact durable input for one ordinary model invocation.
+/// Exact immutable input for one ordinary model-step effect (DESIGN.md §5).
+///
+/// The initial v0 durable encoding predates the explicit harness-profile field,
+/// so deserializing an omitted field means exactly `ion/default@1`. New typed
+/// writers include it explicitly; this default is only a deterministic reading
+/// rule for already-created v0 records, not a moving launch default.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ModelInvocation {
+pub struct ModelStepPlan {
     pub step: u64,
-    pub model: ResolvedModel,
+    pub model: ModelConfig,
     pub plan: ContextPlan,
     pub capability_snapshot_id: String,
     pub context_manifest_id: String,
+    #[serde(default)]
+    pub harness_profile: HarnessProfile,
     pub prefix_fingerprint: String,
     pub cache_expectation: CacheExpectation,
 }
 
 /// Exact durable input for one harness-owned compaction model invocation.
-/// Compaction remains a distinct purpose for now; later operation-state
-/// normalization can represent both with a common model-invocation state.
+/// Compaction remains a distinct maintenance purpose in the operation machine;
+/// it does not become a second agent loop.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CompactionInvocation {
     pub step: u64,
-    pub model: ResolvedModel,
+    pub model: ModelConfig,
     pub plan: ContextPlan,
+    #[serde(default)]
+    pub harness_profile: HarnessProfile,
 }
 
 /// Exact durable input for an admitted tool invocation.
@@ -88,7 +98,7 @@ impl ToolInvocation {
 /// exposed as an architectural contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DurableEffect {
-    Model(ModelInvocation),
+    ModelStep(ModelStepPlan),
     Tool(ToolInvocation),
     Compaction(CompactionInvocation),
 }
@@ -96,7 +106,7 @@ pub enum DurableEffect {
 impl DurableEffect {
     fn kind(&self) -> String {
         match self {
-            Self::Model(_) => "model_step".to_owned(),
+            Self::ModelStep(_) => "model_step".to_owned(),
             Self::Tool(invocation) => format!("tool:{}", invocation.tool),
             Self::Compaction(_) => "compaction".to_owned(),
         }
@@ -104,7 +114,7 @@ impl DurableEffect {
 
     fn encode(&self) -> Value {
         match self {
-            Self::Model(invocation) => serde_json::to_value(invocation),
+            Self::ModelStep(plan) => serde_json::to_value(plan),
             Self::Tool(invocation) => serde_json::to_value(invocation),
             Self::Compaction(invocation) => serde_json::to_value(invocation),
         }
@@ -114,7 +124,8 @@ impl DurableEffect {
 
 impl EffectRecord {
     /// Construct an effect record from typed semantic input. Runtime code should
-    /// use this rather than assembling `kind`/JSON payloads by hand.
+    /// use this rather than assembling `kind`/JSON payloads by hand as call
+    /// sites are migrated into their ownership modules.
     #[must_use]
     pub fn new(
         id: EffectId,
@@ -131,14 +142,14 @@ impl EffectRecord {
         }
     }
 
-    /// Decode the legacy SQLite/checkpoint representation at one boundary.
-    /// A mismatch is corruption or a programmer error; callers must fence or
-    /// fail visibly instead of guessing.
+    /// Decode the SQLite/checkpoint representation at one boundary. A mismatch
+    /// is corruption or a programmer error; callers must fence or fail visibly
+    /// instead of guessing.
     pub fn decode(&self) -> Result<DurableEffect, String> {
         match self.kind.as_str() {
             "model_step" => serde_json::from_value(self.effective_input.clone())
-                .map(DurableEffect::Model)
-                .map_err(|err| format!("invalid durable model effect {}: {err}", self.id)),
+                .map(DurableEffect::ModelStep)
+                .map_err(|err| format!("invalid durable model-step effect {}: {err}", self.id)),
             "compaction" => serde_json::from_value(self.effective_input.clone())
                 .map(DurableEffect::Compaction)
                 .map_err(|err| format!("invalid durable compaction effect {}: {err}", self.id)),
@@ -179,10 +190,10 @@ mod tests {
     use super::*;
     use crate::provider::ModelCapabilities;
 
-    fn model_invocation() -> ModelInvocation {
-        ModelInvocation {
+    fn model_step_plan() -> ModelStepPlan {
+        ModelStepPlan {
             step: 7,
-            model: ResolvedModel {
+            model: ModelConfig {
                 model_ref: "test/model".to_owned(),
                 context_window: Some(131_072),
                 capabilities: ModelCapabilities {
@@ -198,22 +209,43 @@ mod tests {
             },
             capability_snapshot_id: "cap-1".to_owned(),
             context_manifest_id: "ctx-1".to_owned(),
+            harness_profile: HarnessProfile::default_v1(),
             prefix_fingerprint: "prefix-1".to_owned(),
             cache_expectation: CacheExpectation::PrefixReuseExpected,
         }
     }
 
     #[test]
-    fn model_effect_round_trips_exactly() {
-        let invocation = model_invocation();
+    fn model_step_effect_round_trips_exactly() {
+        let plan = model_step_plan();
         let record = EffectRecord::new(
             EffectId::generate(),
-            DurableEffect::Model(invocation.clone()),
+            DurableEffect::ModelStep(plan.clone()),
             RecoveryClass::ReplaySafe,
             1,
         );
         assert_eq!(record.kind, "model_step");
-        assert_eq!(record.decode(), Ok(DurableEffect::Model(invocation)));
+        assert_eq!(record.decode(), Ok(DurableEffect::ModelStep(plan)));
+    }
+
+    #[test]
+    fn legacy_v0_model_step_decodes_to_the_frozen_default_profile() {
+        let mut value = serde_json::to_value(model_step_plan()).expect("model step serializes");
+        value
+            .as_object_mut()
+            .expect("model step is an object")
+            .remove("harness_profile");
+        let record = EffectRecord {
+            id: EffectId::generate(),
+            kind: "model_step".to_owned(),
+            recovery_class: RecoveryClass::ReplaySafe,
+            effective_input: value,
+            attempt: 1,
+        };
+        let DurableEffect::ModelStep(decoded) = record.decode().expect("legacy step decodes") else {
+            panic!("expected a model step");
+        };
+        assert_eq!(decoded.harness_profile, HarnessProfile::default_v1());
     }
 
     #[test]
@@ -257,7 +289,7 @@ mod tests {
     fn replay_attempt_preserves_input_and_changes_only_attempt_identity() {
         let record = EffectRecord::new(
             EffectId::generate(),
-            DurableEffect::Model(model_invocation()),
+            DurableEffect::ModelStep(model_step_plan()),
             RecoveryClass::ReplaySafe,
             3,
         );

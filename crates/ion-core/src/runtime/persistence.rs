@@ -1,4 +1,4 @@
-use crate::effect::{CompactionInvocation, ModelInvocation, ToolInvocation};
+use crate::effect::{CompactionInvocation, ModelStepPlan, ToolInvocation};
 use crate::ids::{EffectId, InboxId, OperationId, SessionId};
 use crate::provider::ModelConfig;
 use crate::session::SessionEntry;
@@ -10,11 +10,9 @@ use crate::tool::ToolCall;
 
 use super::ActiveOperation;
 
-/// Compatibility adapter for the current `runtime/mod.rs` import surface.
-/// The storage payload is decoded into the typed durable model invocation;
-/// callers no longer know individual JSON field names. Remove this tuple
-/// adapter when the owner module is split and can import `ModelInvocation`
-/// directly.
+/// Decode one persisted model-step plan through the typed durable boundary.
+/// The owner module still consumes the historical tuple shape; JSON field
+/// knowledge and harness-profile validation stay here.
 pub(super) fn model_step_from_input(
     input: &serde_json::Value,
 ) -> Option<(
@@ -26,31 +24,36 @@ pub(super) fn model_step_from_input(
     String,
     String,
 )> {
-    let invocation: ModelInvocation = serde_json::from_value(input.clone()).ok()?;
+    let model_step: ModelStepPlan = serde_json::from_value(input.clone()).ok()?;
+    if !model_step.harness_profile.is_consistent() {
+        return None;
+    }
     Some((
-        invocation.step,
-        invocation.model,
-        invocation.plan,
-        invocation.capability_snapshot_id,
-        invocation.context_manifest_id,
-        invocation.prefix_fingerprint,
-        invocation.cache_expectation.as_str().to_owned(),
+        model_step.step,
+        model_step.model,
+        model_step.plan,
+        model_step.capability_snapshot_id,
+        model_step.context_manifest_id,
+        model_step.prefix_fingerprint,
+        model_step.cache_expectation.as_str().to_owned(),
     ))
 }
 
-/// Compatibility adapter for typed compaction invocation decoding.
+/// Decode one persisted harness-owned compaction invocation.
 pub(super) fn compaction_from_input(
     input: &serde_json::Value,
 ) -> Option<(u64, ModelConfig, crate::context::ContextPlan)> {
     let invocation: CompactionInvocation = serde_json::from_value(input.clone()).ok()?;
+    if !invocation.harness_profile.is_consistent() {
+        return None;
+    }
     Some((invocation.step, invocation.model, invocation.plan))
 }
 
-/// Compatibility adapter for typed tool invocation decoding. The operation id
-/// is authoritative on the owning durable operation and is intentionally not
-/// reconstructed from effect payload bytes. Return the typed invocation too so
-/// recovery never needs to reach back into raw effect JSON for reconciliation
-/// or call identity.
+/// Decode one persisted tool invocation. The operation id is authoritative on
+/// the owning durable operation and is intentionally not reconstructed from
+/// effect payload bytes. Return the typed invocation too so recovery never
+/// reaches back into raw effect JSON for reconciliation or call identity.
 pub(super) fn tool_call_from_input(
     operation_id: OperationId,
     input: &serde_json::Value,
@@ -61,8 +64,8 @@ pub(super) fn tool_call_from_input(
 }
 
 /// Build the durable record of one staged transition. Entry sequences are
-/// computed from the caller's next value and returned so the allocator
-/// only advances after the commit succeeds (DESIGN.md §26.2).
+/// computed from the caller's next value and returned so the allocator only
+/// advances after the commit succeeds (DESIGN.md §26.2).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_commit_request(
     session_id: SessionId,

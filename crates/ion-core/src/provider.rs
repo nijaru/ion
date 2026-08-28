@@ -1,8 +1,9 @@
 //! Provider port used by the operation engine.
 //!
-//! One `run` call is one model-step effect (DESIGN.md §6, §10.3): projected
-//! input plus a frozen tool snapshot in, one validated provider generation out.
-//! The session owner drives the operation loop; a provider never drives tools.
+//! One `run` call is one ModelStep effect (DESIGN.md §6, §10.3): project
+//! input plus a frozen tool snapshot in, one validated provider
+//! generation out. The `SessionRuntime` owns the operation loop; a
+//! provider never drives tools itself.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -29,7 +30,9 @@ pub struct TokenUsage {
     pub cache_write: u64,
 }
 
-/// Capabilities advertised for an exact resolved model.
+/// Provider identity and metadata frozen for one model-step attempt.
+/// Recovery must use this exact identity rather than the host's current
+/// launch default (DESIGN.md §§6, 11.3, 14.8).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelCapabilities {
     /// The adapter can expose provider reasoning as a separate live signal.
@@ -53,56 +56,49 @@ impl Default for ModelCapabilities {
     }
 }
 
-/// Exact provider/model identity and metadata frozen for one model-step
-/// attempt. Recovery must use this resolved value rather than a host launch
-/// default (DESIGN.md §§6, 11.3, 14.8).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ResolvedModel {
+pub struct ModelConfig {
     pub model_ref: String,
     pub context_window: Option<u64>,
     pub capabilities: ModelCapabilities,
 }
 
-/// Compatibility name retained while callers migrate to [`ResolvedModel`].
-pub type ModelConfig = ResolvedModel;
-
-/// Immutable provider input for one model invocation.
+/// What one model step asks the provider: the operation it belongs to,
+/// the projected input, and the frozen model/capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ModelRequest {
+pub struct ProviderRequest {
     pub operation_id: OperationId,
-    /// Monotonic model-step counter within the operation. Providers echo it in
-    /// every event so the session owner can drop stale generations.
+    /// Monotonic model-step counter within the operation. Providers echo
+    /// it in every signal so the runtime can drop stale generations.
     pub step: u64,
-    /// Exact provider/model identity and metadata persisted with the effect.
-    pub model: ResolvedModel,
-    /// Deterministic projection of local semantic state for this invocation.
+    /// Exact provider identity and metadata persisted with the effect.
+    pub model: ModelConfig,
+    /// The deterministic projection of session state for this step
+    /// (DESIGN.md §14, §31 invariant 15).
     pub plan: ContextPlan,
-    /// Frozen model-facing tool definitions for this invocation.
     pub tools: Vec<ToolSpec>,
 }
 
-/// Compatibility name retained while callers migrate to [`ModelRequest`].
-pub type ProviderRequest = ModelRequest;
-
-/// Normalized provider → session events for one model invocation.
-/// A stream becomes durable assistant content only at a validated completion
-/// boundary (DESIGN.md §15.1).
+/// Signals flowing provider → session runtime for one model step
+/// (DESIGN.md §15.1). A provider stream becomes durable semantic
+/// assistant content only at a validated completion boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ModelEvent {
+pub enum EngineSignal {
     TextDelta {
         operation_id: OperationId,
         step: u64,
         text: String,
     },
-    /// Streamed provider reasoning. Display-only: it is never promoted to
-    /// semantic assistant content merely because it was streamed.
+    /// Streamed reasoning text from a reasoning model (OpenRouter
+    /// `delta.reasoning`). Display-only: thinking is never buffered
+    /// into assistant content or durable entries.
     ThinkingDelta {
         operation_id: OperationId,
         step: u64,
         text: String,
     },
-    /// One complete provider-native tool call. Never execute partial streamed
-    /// JSON (DESIGN.md §15.2).
+    /// One complete provider-native tool call. Never executed from
+    /// partial streamed JSON (DESIGN.md §15.2).
     ToolCallCompleted {
         operation_id: OperationId,
         step: u64,
@@ -121,34 +117,34 @@ pub enum ModelEvent {
         operation_id: OperationId,
         step: u64,
     },
-    /// Provider token accounting for this invocation, when available.
+    /// Token usage reported by the provider for this step, when it
+    /// exposes one. Buffered and persisted at the settlement boundary,
+    /// independent of operation success (DESIGN.md §27.2).
     UsageUpdate {
         operation_id: OperationId,
         step: u64,
         usage: TokenUsage,
     },
-    /// The provider task returned without a terminal event. `step` correlates
-    /// the sentinel so a stale task cannot settle a later invocation.
+    /// The provider's task finished without a terminal signal for its
+    /// model step. `step` tags the spawning step so stale sentinels from
+    /// earlier steps are ignored.
     ProviderExited {
         operation_id: OperationId,
         step: u64,
     },
 }
 
-/// Compatibility name retained while callers migrate to [`ModelEvent`].
-pub type EngineSignal = ModelEvent;
-
-/// Provider adapter: one `run` call executes exactly one model invocation.
+/// A provider adapter executing one model step per `run` call.
 pub trait Provider: Send + Sync + 'static {
     fn run(
         &self,
-        request: ModelRequest,
+        request: ProviderRequest,
         cancel: CancellationToken,
-        out: mpsc::Sender<ModelEvent>,
+        out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send;
 
-    /// Initial model selection for a newly-created session. Hosts may choose
-    /// it, but the session persists it before any model effect.
+    /// Initial model selection for a newly-created session. Hosts may
+    /// choose it, but the session persists it before any model effect.
     fn initial_model_ref(&self) -> String {
         std::any::type_name::<Self>().to_owned()
     }
@@ -158,7 +154,8 @@ pub trait Provider: Send + Sync + 'static {
         model_ref == self.initial_model_ref()
     }
 
-    /// Context capacity for an exact model id. Adapters must not guess.
+    /// Metadata for an exact model id. `None` means unknown: hints
+    /// degrade to an absolute threshold and overflow is the backstop.
     fn context_window_for(&self, model_ref: &str) -> impl Future<Output = Option<u64>> + Send {
         let supported = self.supports_model(model_ref);
         async move {
@@ -170,17 +167,18 @@ pub trait Provider: Send + Sync + 'static {
         }
     }
 
-    /// Context capacity for this provider's fixed model.
+    /// Metadata for this provider's fixed model. Adapters must not guess.
     fn context_window(&self) -> impl Future<Output = Option<u64>> + Send {
         std::future::ready(None)
     }
 
-    /// Capabilities for this provider's fixed model. Defaults are conservative.
+    /// Capabilities for the provider's fixed model. Defaults are
+    /// conservative and adapters override them when they can prove support.
     fn capabilities(&self) -> impl Future<Output = ModelCapabilities> + Send {
         std::future::ready(ModelCapabilities::default())
     }
 
-    /// Capabilities for an exact model id. Unknown models never inherit
+    /// Capabilities for an exact model id. Unknown models do not grant
     /// capabilities merely because a host requested them.
     fn capabilities_for(&self, model_ref: &str) -> impl Future<Output = ModelCapabilities> + Send {
         let supported = self.supports_model(model_ref);
@@ -197,9 +195,9 @@ pub trait Provider: Send + Sync + 'static {
 impl<P: Provider> Provider for Arc<P> {
     async fn run(
         &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-        out: mpsc::Sender<ModelEvent>,
+        request: ProviderRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
     ) {
         (**self).run(request, cancel, out).await
     }
@@ -229,9 +227,9 @@ impl<P: Provider> Provider for Arc<P> {
     }
 }
 
-/// Host-composed model resolver. The session owner owns model selection; each
-/// immutable [`ModelRequest`] selects an exact cached provider. Locks protect
-/// only the cache and are never held over I/O.
+/// Host-composed provider resolver. SessionRuntime owns the selected
+/// model id; each immutable ProviderRequest selects an exact cached
+/// provider. Locks protect only the cache and are never held over I/O.
 pub struct SwitchingProvider<P: Provider> {
     initial_model: String,
     providers: Mutex<HashMap<String, Arc<P>>>,
@@ -283,13 +281,13 @@ impl<P: Provider> SwitchingProvider<P> {
 impl<P: Provider> Provider for SwitchingProvider<P> {
     async fn run(
         &self,
-        request: ModelRequest,
-        cancel: CancellationToken,
-        out: mpsc::Sender<ModelEvent>,
+        request: ProviderRequest,
+        cancel: tokio_util::sync::CancellationToken,
+        out: mpsc::Sender<EngineSignal>,
     ) {
         let Some(provider) = self.provider_for(&request.model.model_ref) else {
             let _ = out
-                .send(ModelEvent::Failed {
+                .send(EngineSignal::Failed {
                     operation_id: request.operation_id,
                     step: request.step,
                     message: format!("model {} is unavailable", request.model.model_ref),
@@ -326,24 +324,26 @@ impl<P: Provider> Provider for SwitchingProvider<P> {
     }
 }
 
-/// One scripted model-step action used by deterministic tests.
+/// One scripted model step. A script drives successive steps: the
+/// runtime executes admitted tools between steps and starts the next
+/// step with the projected continuation.
 #[derive(Debug, Clone)]
 pub enum ScriptedMessage {
-    Text {
-        delay: Duration,
-        text: String,
-    },
-    Thinking {
-        text: String,
-    },
+    /// Emit `text` as an assistant text delta. `delay` is waited first
+    /// (cancellation-aware).
+    Text { delay: Duration, text: String },
+    /// Emit `text` as a reasoning delta (display-only surface).
+    Thinking { text: String },
+    /// Emit one complete tool call, then complete the step. The runtime
+    /// runs the tool and starts the next step.
     ToolCall {
         name: String,
         arguments: serde_json::Value,
     },
+    /// Emit a usage update, then continue with the next message.
     Usage(TokenUsage),
-    Fail {
-        message: String,
-    },
+    /// Fail the step with the given message.
+    Fail { message: String },
 }
 
 impl ScriptedMessage {
@@ -372,8 +372,10 @@ impl ScriptedMessage {
     }
 }
 
-/// Deterministic provider that plays a scripted transcript across successive
-/// model invocations.
+/// A provider adapter that plays a scripted transcript across successive
+/// model steps. Each `run` consumes script messages until the step
+/// completes: text messages stream as deltas; a tool-call message emits
+/// the call and ends the step.
 #[derive(Debug)]
 pub struct ScriptedProvider {
     cursor: Mutex<ScriptCursor>,
@@ -399,12 +401,15 @@ impl ScriptedProvider {
         }
     }
 
+    /// Set the model context window the runtime should assume (§14.8).
     #[must_use]
     pub fn with_context_window(mut self, tokens: u64) -> Self {
         self.context_window = Some(tokens);
         self
     }
 
+    /// Mark prompt-cache metrics as supported by this scripted adapter.
+    /// Tests use this to exercise cache-expectation diagnostics.
     #[must_use]
     pub fn with_prompt_cache(mut self, enabled: bool) -> Self {
         self.prompt_cache = enabled;
@@ -432,9 +437,9 @@ impl Provider for ScriptedProvider {
 
     fn run(
         &self,
-        request: ModelRequest,
+        request: ProviderRequest,
         cancel: CancellationToken,
-        out: mpsc::Sender<ModelEvent>,
+        out: mpsc::Sender<EngineSignal>,
     ) -> impl Future<Output = ()> + Send {
         let operation_id = request.operation_id;
         let step = request.step;
@@ -449,11 +454,15 @@ impl Provider for ScriptedProvider {
                     message
                 };
                 let Some(message) = message else {
-                    let _ = out.send(ModelEvent::Completed { operation_id, step }).await;
+                    let _ = out
+                        .send(EngineSignal::Completed { operation_id, step })
+                        .await;
                     return;
                 };
                 if cancel.is_cancelled() {
-                    let _ = out.send(ModelEvent::Cancelled { operation_id, step }).await;
+                    let _ = out
+                        .send(EngineSignal::Cancelled { operation_id, step })
+                        .await;
                     return;
                 }
                 match message {
@@ -461,18 +470,22 @@ impl Provider for ScriptedProvider {
                         if !delay.is_zero() {
                             tokio::select! {
                                 () = cancel.cancelled() => {
-                                    let _ = out.send(ModelEvent::Cancelled { operation_id, step }).await;
+                                    let _ = out
+                                        .send(EngineSignal::Cancelled { operation_id, step })
+                                        .await;
                                     return;
                                 }
                                 () = sleep(delay) => {}
                             }
                         }
                         if cancel.is_cancelled() {
-                            let _ = out.send(ModelEvent::Cancelled { operation_id, step }).await;
+                            let _ = out
+                                .send(EngineSignal::Cancelled { operation_id, step })
+                                .await;
                             return;
                         }
                         if out
-                            .send(ModelEvent::TextDelta {
+                            .send(EngineSignal::TextDelta {
                                 operation_id,
                                 step,
                                 text,
@@ -485,7 +498,7 @@ impl Provider for ScriptedProvider {
                     }
                     ScriptedMessage::Thinking { text } => {
                         if out
-                            .send(ModelEvent::ThinkingDelta {
+                            .send(EngineSignal::ThinkingDelta {
                                 operation_id,
                                 step,
                                 text,
@@ -498,7 +511,7 @@ impl Provider for ScriptedProvider {
                     }
                     ScriptedMessage::Fail { message } => {
                         let _ = out
-                            .send(ModelEvent::Failed {
+                            .send(EngineSignal::Failed {
                                 operation_id,
                                 step,
                                 message,
@@ -508,7 +521,7 @@ impl Provider for ScriptedProvider {
                     }
                     ScriptedMessage::Usage(usage) => {
                         if out
-                            .send(ModelEvent::UsageUpdate {
+                            .send(EngineSignal::UsageUpdate {
                                 operation_id,
                                 step,
                                 usage,
@@ -522,7 +535,7 @@ impl Provider for ScriptedProvider {
                     ScriptedMessage::ToolCall { name, arguments } => {
                         let call_id = self.call_ids.fetch_add(1, Ordering::Relaxed);
                         if out
-                            .send(ModelEvent::ToolCallCompleted {
+                            .send(EngineSignal::ToolCallCompleted {
                                 operation_id,
                                 step,
                                 call: ToolCall {
@@ -537,7 +550,9 @@ impl Provider for ScriptedProvider {
                         {
                             return;
                         }
-                        let _ = out.send(ModelEvent::Completed { operation_id, step }).await;
+                        let _ = out
+                            .send(EngineSignal::Completed { operation_id, step })
+                            .await;
                         return;
                     }
                 }
