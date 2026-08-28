@@ -10,6 +10,7 @@
 
 mod context;
 mod delegate;
+mod effect;
 mod error;
 mod extensions;
 mod ids;
@@ -36,6 +37,9 @@ pub use delegate::{
 // Canonical public vocabulary for durable child-session APIs. The old names
 // remain exported during the architecture-normalization migration.
 pub use delegate::{ChildHandle as ChildSessionRef, ChildObservation as ChildSnapshot};
+pub use effect::{
+    CacheExpectation, CompactionInvocation, DurableEffect, ModelInvocation, ToolInvocation,
+};
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};
 pub use ids::{OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
