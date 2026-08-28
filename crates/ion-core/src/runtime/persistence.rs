@@ -48,13 +48,16 @@ pub(super) fn compaction_from_input(
 
 /// Compatibility adapter for typed tool invocation decoding. The operation id
 /// is authoritative on the owning durable operation and is intentionally not
-/// reconstructed from effect payload bytes.
+/// reconstructed from effect payload bytes. Return the typed invocation too so
+/// recovery never needs to reach back into raw effect JSON for reconciliation
+/// or call identity.
 pub(super) fn tool_call_from_input(
     operation_id: OperationId,
     input: &serde_json::Value,
-) -> Option<ToolCall> {
+) -> Option<(ToolCall, ToolInvocation)> {
     let invocation: ToolInvocation = serde_json::from_value(input.clone()).ok()?;
-    Some(invocation.into_call(operation_id))
+    let call = invocation.clone().into_call(operation_id);
+    Some((call, invocation))
 }
 
 /// Build the durable record of one staged transition. Entry sequences are
