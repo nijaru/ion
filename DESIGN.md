@@ -1,7 +1,7 @@
 # Ion — Durable Harness Architecture
 
 **Status:** normative architecture contract for the Rust implementation  
-**Date:** 2026-08-27  
+**Date:** 2026-08-28  
 **Scope:** durable harness, session/runtime ownership, effects, tools, agents, and persistence  
 **Primary implementation target:** Rust 1.98.0, Edition 2024, Tokio, macOS + Linux first
 
@@ -27,11 +27,16 @@ Ion owns its contracts. External systems are evidence, not compatibility targets
 
 Reference weighting:
 
-1. **Pi 2** is the primary practical and architectural reference for the harness. Its conversation-tree/lane model, one-writer session semantics, provision-before-effect discipline, forks, cache-friendly history growth, and explicit-state redesign are the leading alpha.
-2. **DeepSeek Harness / Cordis** is the strongest independent cross-check for scoped ownership, lifecycle, and shared infrastructure with agent-local visibility.
-3. **Codex** is a high-value independent production reference for family-scoped agent control, lineage, budgets, messaging, sandbox/policy boundaries, and Rust implementation choices.
-4. **Grok Build** is useful concrete Rust evidence for background/resumable agents, worktree isolation, and concurrency.
-5. **Prime Agent** is a pressure test for recursive and long-running compositions, not a source of core semantics.
+1. **Pi 2** is the primary durable-session reference: parent-linked history, lanes as active cursors, one writer with one open operation per lane, parallel slow effects, forks, provision-before-effect identity, replay/reconciliation, and explicit total lane/operation state. Ion follows the logical model rather than Pi's TypeScript API or JSONL persistence.
+2. **DeepSeek Harness / Cordis** is the strongest ownership/composition cross-check: agent-scoped visibility, lifecycle-owned registrations/resources, private setup followed by one publication point, rollback on failed admission, and one authority per independent fact.
+3. **Codex** is the strongest production constraint on multi-agent control: family-scoped authority, execution/rollout budgets, control lineage separate from history lineage, retained identity separate from live capacity, cancellation, recovery, and headless lifecycle visibility.
+4. **Zed / Agent Client Protocol (ACP)** is the primary interoperability signal for the client/agent boundary: explicit session lifecycle, prompt/update/cancel flow, capability negotiation, permissions, and ordered resume updates.
+5. **VS Code Agent Host / Agent Host Protocol (AHP)** is complementary evidence for a persistent host that owns sessions independently of editor clients, supports reconnect from snapshot plus ordered actions, and can serve multiple local or remote clients.
+6. **Grok Build** is strong inspectable Rust evidence for background/resumable agents, worktree isolation, transition-driven waiting, per-agent workspace identity, and host-stamped lifecycle facts.
+7. **Cloudflare Agents** reinforces the identity/residency distinction: durable agent identity must not depend on an always-running process.
+8. **Prime Agent** and **Headlong** are experimental stress tests for recursive, persistent, message-driven, and long-running compositions. Their benchmark or shared-mind choices are not core architecture authority.
+
+Cursor and Warp/Oz are product/UX evidence for parallel sessions, worktrees, remote agents, and unified agent views. Factory Droid and Amp are useful closed-source references only where public docs or blogs expose concrete observable semantics; do not infer their internals. OpenCode remains low-weight because repeated rewrites weaken convergence claims. Gemini CLI is not an architectural reference.
 
 Do not transliterate another system's TypeScript API, physical persistence format, compatibility baggage, or framework vocabulary into Rust.
 
@@ -123,7 +128,7 @@ Lane state is a latest-value durable record. At minimum:
 LaneState
   leaf: Option<EntryId>
   current_operation: Option<OperationId>
-  pending_next_run: Vec<QueuedInput>
+  pending_next_run: Option<NextRun>
 ```
 
 It must be readable directly; recovery must not reconstruct it by folding queue/history events.
@@ -140,9 +145,9 @@ Input has explicit delivery semantics instead of being modeled as several hidden
 - **follow-up**: operation-owned input that belongs to the current run but waits until its current continuation settles;
 - **notify**: durable delivery that need not implicitly start model work when such a caller exists.
 
-The current `enqueue` API is migration vocabulary. Its target meaning is **queue next-run input**, not create another `Accepted` operation behind an active one.
+`next_run` queues at most one lane-owned input outside any operation. It provisions the semantic `EntryId` immediately, but no `OperationId` exists until the lane actually accepts that run.
 
-When a run is accepted, the transition atomically captures the lane's pending next-run input, appends the resulting semantic entries, creates the immutable operation record and first total state, and installs `current_operation`.
+When a run is accepted, the transition atomically captures the lane's pending next-run input, preserves its provisioned semantic entry identity, provisions the `OperationId`, appends the resulting semantic entries, creates the immutable operation record and first total state, installs `current_operation`, and clears the captured pending input.
 
 ### 6.3 Total lane configuration
 
@@ -152,7 +157,7 @@ Conversation navigation changes the lane leaf; it does not implicitly time-trave
 
 Each model generation freezes the exact effective configuration it uses. Later lane-config changes do not alter an in-flight or recovered generation whose input was already persisted.
 
-`SessionEntry::ModelChanged` is migration scaffolding and must disappear once lane configuration is authoritative.
+Model selection exists only as authoritative lane configuration; it is not semantic conversation history.
 
 ## 7. Operations
 
@@ -170,7 +175,7 @@ Operation
   accepted ordering/time metadata
 ```
 
-The mutable side is an append-only sequence of **total** state revisions. One latest revision plus immutable acceptance must be sufficient to determine what may happen next.
+The mutable side is a **total** latest operation state. One latest state plus immutable acceptance must be sufficient to determine what may happen next. Historical revisions may be retained when audit, debugging, or evaluation earns them, but recovery never depends on folding partial history.
 
 ```text
 OperationState
@@ -181,7 +186,7 @@ OperationState
   complete continuation state
 ```
 
-Historical revisions may be retained for audit and debugging, but no prior revision may be required to fill missing fields in the current state.
+No prior revision may be required to fill missing fields in the current state.
 
 Cancellation is orthogonal control over active workflow state rather than an artificial workflow phase.
 
@@ -218,7 +223,7 @@ Ion uses SQLite and should use it naturally:
 - conversation entries are immutable rows with IDs and parent links;
 - lanes have a directly readable current-state projection plus configuration;
 - operation acceptance is immutable;
-- operation-state revisions are append-only total records indexed so the latest revision is cheap to load;
+- the latest total operation state is directly readable, with revision history retained only where it provides real audit/debug/evaluation value;
 - effects and usage remain separately queryable durable records;
 - foreign keys and transaction constraints enforce topology where practical.
 
@@ -295,7 +300,13 @@ Workspace placement is independent:
 
 Foreground/background is a waiting/observation choice, not an agent type.
 
-### 13.1 Lineage
+### 13.1 Durable identity and residency
+
+An agent address is durable semantic identity. It must not embed a Tokio task, process incarnation, terminal/client attachment, execution permit, or foreground/background choice. The host provisions authoritative identity before work begins; worker code does not self-report host-owned facts such as identity, control parentage, workspace identity, or delivery mode.
+
+Residency describes where an admitted agent is currently executable: an in-process session task, a future local worker process, a future remote host, or inactive/hibernated durable state. Residency is runtime state, not identity or conversation semantics.
+
+### 13.2 Lineage
 
 Control/spawn lineage and history lineage are distinct durable relationships.
 
@@ -309,23 +320,40 @@ fork_source_entry_id: Option<EntryId>
 
 A fresh child may have control lineage without history lineage. A user fork may have history lineage without a control parent. A fork-context child may have both.
 
-### 13.2 Family-scoped control
+### 13.3 Family-scoped control
 
-A root/session family may own a control plane above individual lanes/sessions for:
+A root/session family owns one control authority above individual lanes/sessions for:
 
-- stable agent identity/path;
+- stable agent identity/path and control parentage;
+- retained/admitted descendants;
 - lane/fork/fresh/external spawn admission;
+- execution permits and concurrency/depth/token/time/rollout budgets;
 - direct messaging;
 - observe/wait/status;
-- cancel/interrupt/resume;
-- descendant accounting;
-- concurrency/depth/token/time budgets;
-- background completion routing;
-- recovery of admitted children.
+- cancel/interrupt/resume and cancellation ownership;
+- deterministic recovery/reattachment;
+- background completion routing.
 
-This is family-scoped, not one process-global mutable registry. `ChildManager` and the test-only delegation path are migration scaffolding rather than target architecture.
+This is family-scoped, not one process-global mutable registry. Separate roots must not accidentally share namespaces, budgets, or cancellation trees. Retained identity and active execution capacity are separate: a completed agent may remain observable after releasing its execution permit. `ChildManager` and the test-only delegation path are migration scaffolding rather than target architecture.
 
 Swarm/reviewer/supervisor strategies are ordinary compositions over this API, not privileged phases in the model loop.
+
+### 13.4 Admission, waiting, and messaging
+
+Spawn is admission-first:
+
+1. provision durable identity and requested topology;
+2. privately construct and validate scoped capabilities/resources;
+3. durably publish/admit exactly once;
+4. return the stable address promptly;
+5. start or attach execution residency;
+6. observe completion separately.
+
+Failed or racing setup rolls back private resources. Foreground behavior is `spawn + wait`; background behavior is spawn without that wait. Completion is not part of identity creation.
+
+Waiting wakes from authoritative state transitions rather than polling. One/any/all are distinct semantics; cancellation/deadline is explicit; dropping a waiter cannot consume completion or mutate durable agent state.
+
+User prompts, agent-to-agent messages, background completion, schedules, heartbeats, and future external events converge on durable session input rather than mutating another session's projected context directly. Delivery policy decides whether an input steers active work, becomes a follow-up, becomes the lane's next run, or remains informational.
 
 ## 14. Scoped model-facing contributions
 
@@ -354,6 +382,10 @@ One loaded session should naturally correspond to one session/harness owner task
 A future higher-level `Host` or family controller may own multiple loaded session harnesses when concrete lifecycle needs require it.
 
 A likely eventual public shape is one session-oriented harness plus lane-targeting command surfaces. Exact names should be chosen once the topology migration is real; do not proliferate temporary `Runtime*`, `Manager`, `Service`, or `Handle` types merely to sketch it.
+
+### 16.1 Client/host boundary
+
+The execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote or multi-client protocols project an initial snapshot plus ordered runtime/session events/actions and send commands carrying stable semantic IDs. A client disconnect must not implicitly cancel durable work. Settle this boundary before redesigning the TUI so frontend ownership never leaks into execution semantics.
 
 ## 17. Rust API and module discipline
 
@@ -405,18 +437,33 @@ There is no separate older MSRV promise unless Ion deliberately chooses one late
 
 CI is a validation mechanism, not an architecture authority. Update it when its checks no longer match the repository's declared toolchain contract.
 
-## 19. Implementation order
+## 19. Current implementation checkpoint
 
-1. Make `EntryId` independently provisioned before persistence and complete the parent-linked tree + durable `main` lane store slice.
-2. Make lane configuration authoritative and remove `ModelChanged` from semantic history.
-3. Add total lane state (`leaf`, `current_operation`, `pending_next_run`).
-4. Separate immutable operation acceptance from append-only total operation-state revisions and bind each operation to a lane/source leaf.
-5. Change current queue behavior so `enqueue` becomes lane-owned next-run input rather than a second queued operation.
-6. Map current CLI/ACP behavior onto `main`, then allow multiple lanes and concurrent slow lane effects under the one session writer.
-7. Finish typed effect writers/codecs and remove raw effect-JSON knowledge from runtime/store control flow.
-8. Generalize child creation into family-scoped lane/fork/fresh agent control with reconcilable identities and explicit lineage.
-9. Add lifecycle-owned contribution scopes only from concrete tool/context/extension needs.
-10. Shrink/rename the public Rust API once ownership is stable; then perform the separate Rust/code-hygiene pass.
-11. Establish/expand `ion-eval` before adding speculative long-horizon or swarm policy.
+The current workstream has already established:
 
-Research from here is question-driven at implementation boundaries, not another broad framework survey.
+- authoritative UUIDv7 `EntryId` provisioning before persistence;
+- the parent-linked conversation tree and durable lane rows;
+- total lane state/configuration (`leaf`, `current_operation`, one `pending_next_run`, model config);
+- `next_run` reserving only semantic entry identity while `OperationId` is created at acceptance;
+- lane-addressable operation admission with immutable accepting lane and exact source leaf;
+- later commits deriving lane ownership from immutable origin;
+- model selection exclusively in lane config;
+- tree-aware recovery that loads and validates every durable lane over the shared tree, with pending durable inbox restored per operation;
+- Rust 1.98.0 as the workspace/toolchain/CI contract.
+
+Storage and recovery can now represent multiple lanes. Live execution still projects `main` and owns singleton active-operation/draft/effect state; that is the active boundary.
+
+## 20. Implementation order
+
+1. Retain the full conversation tree and all durable lane state in the live session owner while preserving the current `main` projection.
+2. Replace singleton active-operation/draft/effect residency with operation-addressed, lane-owned runtime state; route provider/tool signals by stable operation identity.
+3. Add the runtime-owned lane admission surface together with its durable transaction, then allow concurrent slow effects across lanes under the one session writer.
+4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
+5. Replace child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when a concrete owner exists.
+6. Add durable agent messaging/background completion through the common session-input path.
+7. Add scoped capability publication/teardown around agent creation/resume.
+8. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery and multi-agent invariants.
+9. Shrink/rename public Rust API and remove dead migration scaffolding once ownership is stable.
+10. Redesign the TUI only after the authoritative session/agent host contract is coherent, with ACP as a first-class client boundary.
+
+Research from here is question-driven at concrete implementation boundaries, not another broad framework survey.

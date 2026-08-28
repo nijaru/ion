@@ -314,9 +314,12 @@ impl<P: Provider> SessionRuntime<P> {
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let model = self.current_model_config().await;
         let (_, manifest) = self.current_context_manifest();
+        let branch = self.main_branch_records();
         let mut plan = project_with_manifest(
-            self.entries.iter().map(|record| &record.entry),
-            self.first_entry_seq(),
+            branch.iter().map(|record| &record.entry),
+            branch
+                .first()
+                .map_or(self.next_entry_seq, |record| record.seq),
             &manifest,
         );
         plan.messages.push(crate::context::ContextMessage::User {
