@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply source patch
-        run: python .github/lane_residency_cache_patch.py
+        run: |
+          python .github/lane_residency_cache_patch.py
+          python .github/lane_residency_cache_fix.py
       - name: Validate Rust
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add crates/ion-core/src
-          git rm -f .github/lane_residency_cache_patch.py .github/workflows/lane-residency-cache.yml
+          git rm -f .github/lane_residency_cache_patch.py .github/lane_residency_cache_fix.py .github/workflows/lane-residency-cache.yml
           git commit -m 'refactor(core): scope runtime observations to lanes'
           git push origin HEAD:refactor/reopen-entry-ids
