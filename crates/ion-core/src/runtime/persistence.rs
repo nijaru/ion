@@ -25,7 +25,7 @@ pub(super) fn model_step_from_input(
     String,
 )> {
     let model_step: ModelStepPlan = serde_json::from_value(input.clone()).ok()?;
-    if !model_step.harness_profile.is_consistent() {
+    if !model_step.harness_profile.is_supported() {
         return None;
     }
     Some((
@@ -44,7 +44,7 @@ pub(super) fn compaction_from_input(
     input: &serde_json::Value,
 ) -> Option<(u64, ModelConfig, crate::context::ContextPlan)> {
     let invocation: CompactionInvocation = serde_json::from_value(input.clone()).ok()?;
-    if !invocation.harness_profile.is_consistent() {
+    if !invocation.harness_profile.is_supported() {
         return None;
     }
     Some((invocation.step, invocation.model, invocation.plan))
