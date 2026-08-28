@@ -130,15 +130,22 @@ CREATE TABLE IF NOT EXISTS operation_origins (
 
 -- Current runtime accepts on the hidden main lane. Capture its exact source
 -- leaf in the same SQLite statement/transaction as the immutable operation row.
+-- VALUES rather than INSERT...SELECT is intentional: if main is absent, the
+-- origin row still attempts to reference it and the foreign key rejects the
+-- operation instead of silently admitting an origin-less run.
 -- Multi-lane acceptance will replace this v0 trigger with an explicit lane
 -- argument without changing the operation-origin contract.
 CREATE TRIGGER IF NOT EXISTS operation_origin_on_insert
 AFTER INSERT ON operations
 BEGIN
     INSERT INTO operation_origins (operation_id, session_id, lane_name, source_leaf_id)
-    SELECT NEW.id, NEW.session_id, 'main', leaf_id
-    FROM lanes
-    WHERE session_id = NEW.session_id AND name = 'main';
+    VALUES (
+        NEW.id,
+        NEW.session_id,
+        'main',
+        (SELECT leaf_id FROM lanes
+         WHERE session_id = NEW.session_id AND name = 'main')
+    );
 END;
 
 CREATE TRIGGER IF NOT EXISTS operation_origins_no_update
@@ -454,6 +461,64 @@ mod tests {
             connection
                 .execute(
                     "DELETE FROM operation_origins WHERE operation_id = 'operation'",
+                    [],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn operation_origin_captures_non_root_source_leaf() {
+        let connection = seeded_connection();
+        connection
+            .execute(
+                "INSERT INTO entries (session_id, seq, id, parent_id, kind, payload, created_at)
+                 VALUES ('session', 1, 'entry-1', NULL, 'user_message', '{}', 1)",
+                [],
+            )
+            .expect("entry");
+        connection
+            .execute(
+                "UPDATE lanes SET leaf_id = 'entry-1' WHERE session_id = 'session' AND name = 'main'",
+                [],
+            )
+            .expect("move lane");
+        connection
+            .execute(
+                "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+                 VALUES ('operation-2', 'session', 'run', 2, 2)",
+                [],
+            )
+            .expect("second operation");
+        let source: Option<String> = connection
+            .query_row(
+                "SELECT source_leaf_id FROM operation_origins WHERE operation_id = 'operation-2'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("source");
+        assert_eq!(source.as_deref(), Some("entry-1"));
+    }
+
+    #[test]
+    fn operation_acceptance_requires_main_lane() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        create_fresh(&mut connection).expect("schema");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        connection
+            .execute(
+                "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
+                 VALUES ('orphan', 0, 0, '/tmp', '', NULL)",
+                [],
+            )
+            .expect("session");
+        assert!(
+            connection
+                .execute(
+                    "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+                     VALUES ('orphan-operation', 'orphan', 'run', 0, 1)",
                     [],
                 )
                 .is_err()
