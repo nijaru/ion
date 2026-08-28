@@ -98,14 +98,16 @@ if not inserted_live:
     raise SystemExit("operation_live insertion failed")
 text = "".join(out)
 
-# Replace constructor assignments for the moved fields with one owned value.
+# Replace only top-level SessionRuntime constructor assignments for the moved
+# fields. Deeper initializers (for example SessionSnapshot::live) must remain.
 lines = text.splitlines(keepends=True)
 out = []
 inserted_init = False
 for line in lines:
     stripped = line.strip()
     field = stripped.split(":", 1)[0] if ":" in stripped else None
-    if field in FIELDS and line.startswith("            "):
+    indent = len(line) - len(line.lstrip(" "))
+    if field in FIELDS and indent == 12:
         continue
     out.append(line)
     if line == "            operation: None,\n":
