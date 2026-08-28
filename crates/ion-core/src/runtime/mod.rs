@@ -27,7 +27,7 @@ use crate::context::{
 };
 use crate::error::{CommandError, RuntimeError};
 use crate::ids::{
-    EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,
+    AgentId, EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,
 };
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
 use crate::provider::{
@@ -411,6 +411,12 @@ enum SessionCommand {
         lane_name: String,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
+    AdmitAgentLane {
+        agent_id: AgentId,
+        control_parent_id: AgentId,
+        source_lane_name: String,
+        reply: oneshot::Sender<Result<String, CommandError>>,
+    },
     SubmitIfIdle {
         lane_name: String,
         prompt: String,
@@ -507,6 +513,24 @@ impl SessionHandle {
         self.tx
             .try_send(SessionCommand::CreateLane {
                 lane_name: lane_name.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    pub(crate) async fn admit_agent_lane(
+        &self,
+        agent_id: AgentId,
+        control_parent_id: AgentId,
+        source_lane_name: impl Into<String>,
+    ) -> Result<String, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::AdmitAgentLane {
+                agent_id,
+                control_parent_id,
+                source_lane_name: source_lane_name.into(),
                 reply,
             })
             .map_err(command_send_error)?;
@@ -731,6 +755,7 @@ impl<P: Provider> Composition<P> {
         let session = SessionHandle { tx };
         let provider = Arc::new(self.provider);
         let tools = Arc::new(self.tools);
+        let runtime_store = self.store.clone();
         let artifact_root = self.store.artifact_root();
         let trusted_resources = self.trusted_resources;
         let effect_gate = self.effect_gate;
@@ -771,6 +796,7 @@ impl<P: Provider> Composition<P> {
         Runtime {
             session,
             session_id,
+            store: runtime_store,
             join,
         }
     }
@@ -781,6 +807,7 @@ impl<P: Provider> Composition<P> {
 pub struct Runtime {
     session: SessionHandle,
     session_id: SessionId,
+    store: SessionStore,
     join: JoinHandle<()>,
 }
 
@@ -1032,6 +1059,22 @@ impl Runtime {
     #[must_use]
     pub const fn session_id(&self) -> SessionId {
         self.session_id
+    }
+
+    /// Attach the family-scoped agent authority for this durable root.
+    /// Existing retained identities and active descendant residency are
+    /// reconstructed from the store before the controller is returned.
+    pub async fn agent_family(
+        &self,
+        max_active: usize,
+    ) -> Result<crate::agent::Family, crate::agent::Error> {
+        crate::agent::Family::attach(
+            self.session_id,
+            self.session.clone(),
+            self.store.clone(),
+            max_active,
+        )
+        .await
     }
 
     pub async fn join(self) -> Result<(), RuntimeError> {
@@ -1719,6 +1762,18 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.create_lane(lane_name).await);
                 false
             }
+            SessionCommand::AdmitAgentLane {
+                agent_id,
+                control_parent_id,
+                source_lane_name,
+                reply,
+            } => {
+                let _ = reply.send(
+                    self.admit_agent_lane(agent_id, control_parent_id, source_lane_name)
+                        .await,
+                );
+                false
+            }
             SessionCommand::SubmitIfIdle {
                 lane_name,
                 prompt,
@@ -1827,6 +1882,51 @@ impl<P: Provider> SessionRuntime<P> {
         );
         debug_assert!(previous.is_none(), "lane topology identity is unique");
         Ok(())
+    }
+
+    async fn admit_agent_lane(
+        &mut self,
+        agent_id: AgentId,
+        control_parent_id: AgentId,
+        source_lane_name: String,
+    ) -> Result<String, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let source = self
+            .lane(&source_lane_name)
+            .ok_or_else(|| CommandError::LaneNotFound(source_lane_name.clone()))?;
+        let source_leaf = source.state.leaf;
+        let model_ref = source.config.model_ref.clone();
+        let lane_name = agent_id.to_string();
+        if self.lanes.contains_key(&lane_name) {
+            return Err(CommandError::LaneExists(lane_name));
+        }
+        self.store
+            .admit_lane_agent(
+                self.session_id,
+                agent_id,
+                control_parent_id,
+                lane_name.clone(),
+                source_leaf,
+                model_ref.clone(),
+            )
+            .await
+            .map_err(persistence_command_error)?;
+        let previous = self.lanes.insert(
+            lane_name.clone(),
+            ResidentLane::new(crate::session::lane::Lane {
+                name: lane_name.clone(),
+                state: crate::session::lane::State {
+                    leaf: source_leaf,
+                    current_operation: None,
+                    pending_next_run: None,
+                },
+                config: crate::session::lane::Config::new(model_ref),
+            }),
+        );
+        debug_assert!(previous.is_none(), "agent lane identity is unique");
+        Ok(lane_name)
     }
 
     async fn submit_if_idle_on_lane(

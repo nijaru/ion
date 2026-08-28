@@ -21,6 +21,18 @@ pub(super) fn handle_command(
                 create_lane(connection, session_id, &lane).map_err(StoreError::from)
             }));
         }
+        StoreCommand::AdmitLaneAgent {
+            session_id,
+            agent_id,
+            control_parent_id,
+            lane,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                admit_lane_agent(connection, session_id, agent_id, control_parent_id, &lane)
+                    .map_err(StoreError::from)
+            }));
+        }
         StoreCommand::BeginOperation {
             session_id,
             lane_name,
@@ -245,6 +257,14 @@ fn create_session(
             now,
         ],
     )?;
+    let root_agent = AgentId::root(record.id).as_uuid().to_string();
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, NULL, ?2, 'main', 'root', NULL, NULL, ?3)",
+        rusqlite::params![root_agent, record.id.as_uuid().to_string(), now],
+    )?;
     tx.commit()
 }
 
@@ -287,6 +307,77 @@ fn create_lane(
     if changed != 1 {
         return Err(rusqlite::Error::InvalidParameterName(
             "lane session is missing".to_owned(),
+        ));
+    }
+    tx.commit()
+}
+
+fn admit_lane_agent(
+    connection: &mut Connection,
+    session_id: SessionId,
+    agent_id: AgentId,
+    control_parent_id: AgentId,
+    lane: &crate::session::lane::Lane,
+) -> Result<(), rusqlite::Error> {
+    if lane.name.is_empty() || lane.name == crate::session::lane::MAIN {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "agent lane name must be non-empty and non-main".to_owned(),
+        ));
+    }
+    if lane.state.current_operation.is_some() || lane.state.pending_next_run.is_some() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a new agent lane must be idle and have no pending input".to_owned(),
+        ));
+    }
+    let tx = connection.transaction()?;
+    let session = session_id.as_uuid().to_string();
+    let parent = control_parent_id.as_uuid().to_string();
+    let (parent_family, parent_session, parent_leaf): (String, String, Option<String>) = tx
+        .query_row(
+            "SELECT a.family_session_id, a.session_id, lane.leaf_id
+             FROM agents a
+             JOIN lanes lane ON lane.session_id = a.session_id AND lane.name = a.lane_name
+             WHERE a.id = ?1",
+            [&parent],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    let source_leaf = lane.state.leaf.map(|id| id.as_uuid().to_string());
+    if parent_family != session || parent_session != session || parent_leaf != source_leaf {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "agent lane must anchor at its control parent's current lane leaf".to_owned(),
+        ));
+    }
+    let config = serde_json::to_string(&lane.config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let now = now_ms();
+    tx.execute(
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_entry_id, pending_prompt, config, created_at, updated_at
+         ) VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?5)",
+        rusqlite::params![session, lane.name, source_leaf, config, now],
+    )?;
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, ?3, ?2, ?4, 'lane', ?2, ?5, ?6)",
+        rusqlite::params![
+            agent_id.as_uuid().to_string(),
+            session,
+            parent,
+            lane.name,
+            source_leaf,
+            now,
+        ],
+    )?;
+    let changed = tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session, now],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "agent family session is missing".to_owned(),
         ));
     }
     tx.commit()
@@ -1012,6 +1103,133 @@ fn load_lanes(
     Ok(lanes)
 }
 
+fn load_agents(
+    connection: &Connection,
+    session_id: SessionId,
+    lane_names: &std::collections::HashSet<String>,
+    entry_ids: &std::collections::HashSet<EntryId>,
+) -> Result<Vec<AgentRecord>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT id, family_session_id, control_parent_id, session_id, lane_name,
+                history_kind, source_session_id, source_entry_id
+         FROM agents WHERE family_session_id = ?1 ORDER BY created_at, id",
+    )?;
+    let mut rows = statement.query([session_id.as_uuid().to_string()])?;
+    let mut agents = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw_id: String = row.get(0)?;
+        let raw_family: String = row.get(1)?;
+        let raw_parent: Option<String> = row.get(2)?;
+        let raw_session: String = row.get(3)?;
+        let lane_name: String = row.get(4)?;
+        let history_kind: String = row.get(5)?;
+        let raw_source_session: Option<String> = row.get(6)?;
+        let raw_source_entry: Option<String> = row.get(7)?;
+        let id = AgentId::parse(&raw_id)
+            .ok_or_else(|| StoreError::Sqlite("corrupt agent id".to_owned()))?;
+        let family_session_id = SessionId::parse(&raw_family)
+            .ok_or_else(|| StoreError::Sqlite(format!("agent {id} has corrupt family id")))?;
+        let control_parent_id = raw_parent
+            .as_deref()
+            .map(|raw| {
+                AgentId::parse(raw).ok_or_else(|| {
+                    StoreError::Sqlite(format!("agent {id} has corrupt control parent"))
+                })
+            })
+            .transpose()?;
+        let target_session_id = SessionId::parse(&raw_session)
+            .ok_or_else(|| StoreError::Sqlite(format!("agent {id} has corrupt target session")))?;
+        if family_session_id != session_id || target_session_id != session_id {
+            return Err(StoreError::Sqlite(format!(
+                "agent {id} is outside the loaded session family"
+            )));
+        }
+        if !lane_names.contains(&lane_name) {
+            return Err(StoreError::Sqlite(format!(
+                "agent {id} addresses missing lane {lane_name:?}"
+            )));
+        }
+        let history = match history_kind.as_str() {
+            "root" => {
+                if id != AgentId::root(session_id)
+                    || control_parent_id.is_some()
+                    || lane_name != crate::session::lane::MAIN
+                    || raw_source_session.is_some()
+                    || raw_source_entry.is_some()
+                {
+                    return Err(StoreError::Sqlite(format!(
+                        "root agent {id} has inconsistent topology"
+                    )));
+                }
+                AgentHistory::Root
+            }
+            "lane" => {
+                let source_session_id = raw_source_session
+                    .as_deref()
+                    .and_then(SessionId::parse)
+                    .ok_or_else(|| {
+                        StoreError::Sqlite(format!("agent {id} has corrupt history session"))
+                    })?;
+                if source_session_id != session_id || control_parent_id.is_none() {
+                    return Err(StoreError::Sqlite(format!(
+                        "lane agent {id} has inconsistent family topology"
+                    )));
+                }
+                let source_entry_id = raw_source_entry
+                    .as_deref()
+                    .map(|raw| {
+                        EntryId::parse(raw).ok_or_else(|| {
+                            StoreError::Sqlite(format!("agent {id} has corrupt history entry"))
+                        })
+                    })
+                    .transpose()?;
+                if source_entry_id.is_some_and(|entry| !entry_ids.contains(&entry)) {
+                    return Err(StoreError::Sqlite(format!(
+                        "agent {id} names a missing history entry"
+                    )));
+                }
+                AgentHistory::SharedLane {
+                    source_session_id,
+                    source_entry_id,
+                }
+            }
+            other => {
+                return Err(StoreError::Sqlite(format!(
+                    "agent {id} has unknown history kind {other:?}"
+                )));
+            }
+        };
+        agents.push(AgentRecord {
+            id,
+            family_session_id,
+            control_parent_id,
+            session_id: target_session_id,
+            lane_name,
+            history,
+        });
+    }
+    let ids = agents
+        .iter()
+        .map(|agent| agent.id)
+        .collect::<std::collections::HashSet<_>>();
+    if !ids.contains(&AgentId::root(session_id)) {
+        return Err(StoreError::Sqlite(
+            "session family has no root agent".to_owned(),
+        ));
+    }
+    for agent in &agents {
+        if let Some(parent) = agent.control_parent_id
+            && !ids.contains(&parent)
+        {
+            return Err(StoreError::Sqlite(format!(
+                "agent {} names a missing control parent {parent}",
+                agent.id
+            )));
+        }
+    }
+    Ok(agents)
+}
+
 fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession, StoreError> {
     fn decode<T: serde::de::DeserializeOwned>(
         what: &'static str,
@@ -1123,6 +1341,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     }
     let lane_names: std::collections::HashSet<String> =
         lanes.iter().map(|lane| lane.name.clone()).collect();
+    let agents = load_agents(connection, session_id, &lane_names, &entry_ids)?;
 
     let mut statement = connection.prepare(
         "SELECT o.id, o.accepted_seq, origin.lane_name, origin.source_leaf_id,
@@ -1307,6 +1526,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
 
     Ok(LoadedSession {
         session,
+        agents,
         lanes,
         entries,
         operations,

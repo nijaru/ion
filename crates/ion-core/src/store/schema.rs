@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 18;
+const SCHEMA_VERSION: i64 = 19;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -118,6 +118,46 @@ CREATE TABLE IF NOT EXISTS lanes (
 
 CREATE UNIQUE INDEX IF NOT EXISTS lanes_pending_entry_unique
     ON lanes (pending_entry_id) WHERE pending_entry_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS agents (
+    id TEXT PRIMARY KEY,
+    family_session_id TEXT NOT NULL REFERENCES sessions(id),
+    control_parent_id TEXT REFERENCES agents(id),
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    lane_name TEXT NOT NULL,
+    history_kind TEXT NOT NULL,
+    source_session_id TEXT REFERENCES sessions(id),
+    source_entry_id TEXT,
+    created_at INTEGER NOT NULL,
+    UNIQUE (session_id, lane_name),
+    FOREIGN KEY (session_id, lane_name) REFERENCES lanes(session_id, name),
+    FOREIGN KEY (source_session_id, source_entry_id) REFERENCES entries(session_id, id),
+    CHECK (
+        (history_kind = 'root'
+         AND control_parent_id IS NULL
+         AND id = family_session_id
+         AND session_id = family_session_id
+         AND lane_name = 'main'
+         AND source_session_id IS NULL
+         AND source_entry_id IS NULL)
+        OR
+        (history_kind = 'lane'
+         AND control_parent_id IS NOT NULL
+         AND source_session_id IS NOT NULL)
+    )
+);
+
+CREATE TRIGGER IF NOT EXISTS agents_no_update
+BEFORE UPDATE ON agents
+BEGIN
+    SELECT RAISE(ABORT, 'agent topology is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS agents_no_delete
+BEFORE DELETE ON agents
+BEGIN
+    SELECT RAISE(ABORT, 'agent topology is immutable');
+END;
 
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,

@@ -40,6 +40,43 @@ impl fmt::Display for SessionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+pub struct AgentId(Uuid);
+
+impl AgentId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    /// Deterministic durable identity of one session family's root agent.
+    #[must_use]
+    pub const fn root(session_id: SessionId) -> Self {
+        Self(session_id.as_uuid())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for AgentId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "agent-{}", self.0)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct OperationId(Uuid);
 
 impl OperationId {

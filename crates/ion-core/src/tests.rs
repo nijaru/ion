@@ -1,5 +1,7 @@
 //! Ion-core test suite, one module per owning boundary.
 
+mod agent_family;
+mod agent_store;
 mod budget_children;
 mod child_lifecycle;
 mod compaction;

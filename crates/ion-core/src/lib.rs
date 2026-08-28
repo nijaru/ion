@@ -5,6 +5,7 @@
 //! authoritative only through durable transitions. The current implementation
 //! is migrating from one linear session operation to a tree/lane substrate.
 
+mod agent;
 mod context;
 mod delegate;
 mod effect;
@@ -23,6 +24,7 @@ mod session;
 mod store;
 mod tool;
 
+pub use agent::{Error as AgentError, Family as AgentFamily, Status as AgentStatus};
 pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest,
@@ -39,7 +41,7 @@ pub use effect::{
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};
 pub use harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
-pub use ids::{EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
+pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,

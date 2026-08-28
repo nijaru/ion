@@ -18,7 +18,7 @@ use rusqlite::{Connection, OptionalExtension};
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::ids::{EffectId, EntryId, InboxId, OperationId, SessionId};
+use crate::ids::{AgentId, EffectId, EntryId, InboxId, OperationId, SessionId};
 use crate::session::{InboxKind, OperationState, SessionEntry};
 use crate::tool::RecoveryClass;
 
@@ -202,10 +202,35 @@ pub struct UsageRow {
     pub cache_write_tokens: u64,
 }
 
+/// Immutable durable history topology captured when an agent identity is
+/// published. Execution state remains on the addressed lane/operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum AgentHistory {
+    Root,
+    SharedLane {
+        source_session_id: SessionId,
+        source_entry_id: Option<EntryId>,
+    },
+}
+
+/// Durable semantic agent identity and control/history topology. This record
+/// deliberately contains no task/process/permit or completion state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AgentRecord {
+    pub(crate) id: AgentId,
+    pub(crate) family_session_id: SessionId,
+    pub(crate) control_parent_id: Option<AgentId>,
+    pub(crate) session_id: SessionId,
+    pub(crate) lane_name: String,
+    pub(crate) history: AgentHistory,
+}
+
 /// A session loaded from the store.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedSession {
     pub session: SessionRecord,
+    /// Durable semantic identities retained by this session family.
+    pub(crate) agents: Vec<AgentRecord>,
     /// Complete durable lane state over the shared conversation tree.
     pub(crate) lanes: Vec<crate::session::lane::Lane>,
     /// Complete immutable conversation tree in global durable sequence order.
@@ -257,6 +282,13 @@ enum StoreCommand {
     },
     CreateLane {
         session_id: SessionId,
+        lane: crate::session::lane::Lane,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    AdmitLaneAgent {
+        session_id: SessionId,
+        agent_id: AgentId,
+        control_parent_id: AgentId,
         lane: crate::session::lane::Lane,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
@@ -455,6 +487,36 @@ impl SessionStore {
         };
         self.request(|reply| StoreCommand::CreateLane {
             session_id,
+            lane,
+            reply,
+        })
+        .await
+    }
+
+    /// Atomically publish a retained shared-history agent identity and the lane
+    /// it addresses. A failure cannot leave an orphan lane or identity.
+    pub(crate) async fn admit_lane_agent(
+        &self,
+        session_id: SessionId,
+        agent_id: AgentId,
+        control_parent_id: AgentId,
+        lane_name: impl Into<String>,
+        source_leaf: Option<EntryId>,
+        model_ref: impl Into<String>,
+    ) -> Result<(), StoreError> {
+        let lane = crate::session::lane::Lane {
+            name: lane_name.into(),
+            state: crate::session::lane::State {
+                leaf: source_leaf,
+                current_operation: None,
+                pending_next_run: None,
+            },
+            config: crate::session::lane::Config::new(model_ref),
+        };
+        self.request(|reply| StoreCommand::AdmitLaneAgent {
+            session_id,
+            agent_id,
+            control_parent_id,
             lane,
             reply,
         })
