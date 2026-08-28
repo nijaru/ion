@@ -280,7 +280,7 @@ impl<P: Provider> SessionRuntime<P> {
         transition: Transition,
     ) {
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("settle needs an operation");
         if !matches!(
@@ -315,7 +315,7 @@ impl<P: Provider> SessionRuntime<P> {
         // Usage persists with the settlement, independent of operation
         // success (DESIGN.md §27.2).
         let settled_usage = self
-            .main_live_mut()
+            .live_mut(operation_id)
             .expect("main operation residency exists")
             .draft_usage
             .take();
@@ -323,7 +323,7 @@ impl<P: Provider> SessionRuntime<P> {
             .map(|u| {
                 vec![UsageRecord {
                     step: self
-                        .main_live_mut()
+                        .live_mut(operation_id)
                         .expect("main operation residency exists")
                         .model_step,
                     input_tokens: u.input,
@@ -361,7 +361,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
-        self.advance().await;
+        self.advance(operation_id).await;
     }
 
     /// Settle a context-overflow failure into a compaction (14.7.4):
@@ -373,13 +373,15 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("main operation residency exists")
             .overflow_retry_used = true;
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("settle needs an operation");
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
-        let model = self.current_model_config().await;
+        let model = self.current_model_config(operation_id).await;
         let (_, manifest) = self.current_context_manifest();
-        let branch = self.main_branch_records();
+        let branch = self
+            .operation_branch_records(operation_id)
+            .expect("resident operation lane branch is complete");
         let mut plan = project_with_manifest(
             branch.iter().map(|record| &record.entry),
             branch
@@ -476,7 +478,7 @@ impl<P: Provider> SessionRuntime<P> {
         signal: EngineSignal,
     ) {
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("settle needs an operation");
         if !matches!(staged.machine.state(), OperationState::CompactionPending) {
@@ -494,7 +496,7 @@ impl<P: Provider> SessionRuntime<P> {
             EngineSignal::Completed { .. } => {
                 let summary = std::mem::take(
                     &mut self
-                        .main_live_mut()
+                        .live_mut(operation_id)
                         .expect("main operation residency exists")
                         .draft_text,
                 );
@@ -548,7 +550,7 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
-        self.advance().await;
+        self.advance(operation_id).await;
     }
 
     pub(crate) async fn handle_tool_result(&mut self, settlement: ToolSettlement) {
@@ -610,7 +612,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.wait_effect_boundary(EffectBoundary::ToolSettlement)
             .await;
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("settle needs an operation");
         let applied = staged
@@ -658,7 +660,7 @@ impl<P: Provider> SessionRuntime<P> {
         });
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
-        self.advance().await;
+        self.advance(operation_id).await;
     }
 
     /// A required commit failed: the staged clone is discarded and live

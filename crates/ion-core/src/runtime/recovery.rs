@@ -299,7 +299,9 @@ impl<P: Provider> SessionRuntime<P> {
                         self.emit_terminal_state(&applied.state);
                         self.install_active(staged);
                         warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
-                        self.advance().await;
+                        if let Some(operation_id) = self.main_resident_id() {
+                            self.advance(operation_id).await;
+                        }
                     }
                     RecoveryClass::Reconcile => {
                         let operation_id = self
@@ -439,7 +441,9 @@ impl<P: Provider> SessionRuntime<P> {
                                 staged.open_effect = None;
                                 self.install_active(staged);
                                 info!(%operation_id, "reconciled a pending file mutation as already applied");
-                                self.advance().await;
+                                if let Some(operation_id) = self.main_resident_id() {
+                                    self.advance(operation_id).await;
+                                }
                             }
                             crate::tool::ReconcileVerdict::Conflict
                             | crate::tool::ReconcileVerdict::Unknown => {
@@ -475,7 +479,9 @@ impl<P: Provider> SessionRuntime<P> {
                                 self.emit_terminal_state(&applied.state);
                                 self.install_active(staged);
                                 warn!(%operation_id, "a pending file mutation settled as indeterminate (conflict)");
-                                self.advance().await;
+                                if let Some(operation_id) = self.main_resident_id() {
+                                    self.advance(operation_id).await;
+                                }
                             }
                         }
                     }
@@ -543,7 +549,9 @@ impl<P: Provider> SessionRuntime<P> {
             | OperationState::Suspended => {
                 // Quiescent or fully-committed states continue through
                 // ordinary flow.
-                self.advance().await;
+                if let Some(operation_id) = self.main_resident_id() {
+                    self.advance(operation_id).await;
+                }
             }
             OperationState::Finished(_) => {}
         }

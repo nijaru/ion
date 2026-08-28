@@ -1457,6 +1457,11 @@ impl<P: Provider> SessionRuntime<P> {
         self.lanes.get_mut(lane_name).map(|lane| &mut lane.live)
     }
 
+    fn operation_lane_live(&self, operation_id: OperationId) -> Option<&LaneResidency> {
+        let lane_name = self.operation_lane_name(operation_id)?;
+        self.lane_live(lane_name)
+    }
+
     fn operation_lane_live_mut(&mut self, operation_id: OperationId) -> Option<&mut LaneResidency> {
         let lane_name = self.operation_lane_name(operation_id)?.to_owned();
         self.lane_live_mut(&lane_name)
@@ -1568,6 +1573,10 @@ impl<P: Provider> SessionRuntime<P> {
         Some(branch)
     }
 
+    fn operation_branch_records(&self, operation_id: OperationId) -> Option<Vec<&EntryRecord>> {
+        self.lane_branch_records(self.operation_lane_name(operation_id)?)
+    }
+
     fn main_branch_records(&self) -> Vec<&EntryRecord> {
         self.lane_branch_records(crate::session::lane::MAIN)
             .expect("live main lane branch is complete")
@@ -1621,8 +1630,9 @@ impl<P: Provider> SessionRuntime<P> {
             && self.main_active().is_none()
             && self.main_pending_next_run().is_some()
             && self.promote_pending_next_run().await
+            && let Some(operation_id) = self.main_resident_id()
         {
-            self.advance().await;
+            self.advance(operation_id).await;
         }
         loop {
             tokio::select! {
@@ -1730,7 +1740,7 @@ impl<P: Provider> SessionRuntime<P> {
         let (active, _) = self.accept_operation_record(prompt, None).await?;
         let operation_id = active.machine.operation_id();
         self.start_active(active);
-        self.advance().await;
+        self.advance(operation_id).await;
         Ok(operation_id)
     }
 
@@ -1748,8 +1758,9 @@ impl<P: Provider> SessionRuntime<P> {
         }
         if self.main_active().is_none() {
             let (active, entry_id) = self.accept_operation_record(prompt, None).await?;
+            let operation_id = active.machine.operation_id();
             self.start_active(active);
-            self.advance().await;
+            self.advance(operation_id).await;
             return Ok(entry_id);
         }
 
@@ -1970,8 +1981,9 @@ impl<P: Provider> SessionRuntime<P> {
         if !applied_now {
             staged.pending_steers.push(inbox_id);
         }
+        let operation_id = staged.machine.operation_id();
         self.install_active(staged);
-        self.advance().await;
+        self.advance(operation_id).await;
         Ok(())
     }
 
@@ -1982,16 +1994,14 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let active_id = self
-            .main_active()
-            .map(|active| active.machine.operation_id());
-        if active_id.is_none() {
-            return Err(CommandError::NoActiveOperation);
-        }
-        if active_id != Some(operation_id) {
-            return Err(CommandError::NotActive { operation_id });
-        }
-        let mut staged = self.main_active().cloned().expect("checked above");
+        let Some(active) = self.active(operation_id) else {
+            return if self.operations.is_empty() {
+                Err(CommandError::NoActiveOperation)
+            } else {
+                Err(CommandError::NotActive { operation_id })
+            };
+        };
+        let mut staged = active.clone();
         staged
             .machine
             .apply(Transition::CancelRequested)
@@ -2017,18 +2027,18 @@ impl<P: Provider> SessionRuntime<P> {
         self.install_active(staged);
         self.wait_effect_boundary(EffectBoundary::CancellationSignal)
             .await;
-        self.main_active()
+        self.active(operation_id)
             .expect("cancelled operation installed")
             .cancel
             .cancel();
         // A parked approval has no live effect to settle the cancellation;
         // the operation is terminal now, so surface it and idle the slot.
-        if let Some(active) = self.main_active()
+        if let Some(active) = self.active(operation_id)
             && matches!(active.machine.state(), OperationState::Finished(_))
         {
             let state = active.machine.state().clone();
-            self.emit_terminal_state(&state);
-            self.advance().await;
+            self.emit_terminal_state_for(operation_id, &state);
+            self.advance(operation_id).await;
         }
         Ok(())
     }
@@ -2037,64 +2047,69 @@ impl<P: Provider> SessionRuntime<P> {
     /// inbox items at their boundaries, then start the next model step
     /// or admit the next planned tool. Each move commits durably before
     /// its effect starts (§12.1).
-    async fn advance(&mut self) {
+    async fn advance(&mut self, mut operation_id: OperationId) {
         loop {
             let Some(state) = self
-                .main_active()
+                .active(operation_id)
                 .map(|active| active.machine.state().clone())
             else {
                 return;
             };
             match state {
                 OperationState::Finished(_) => {
-                    self.remove_main_operation();
-                    if self.promote_pending_next_run().await {
+                    let lane_name = self.operation_lane_name(operation_id).map(str::to_owned);
+                    self.remove_operation(operation_id);
+                    if lane_name.as_deref() == Some(crate::session::lane::MAIN)
+                        && self.promote_pending_next_run().await
+                        && let Some(next_operation_id) = self.main_resident_id()
+                    {
+                        operation_id = next_operation_id;
                         continue;
                     }
                     return;
                 }
                 OperationState::Accepted | OperationState::NeedAssistant => {
                     if self
-                        .main_active()
+                        .active(operation_id)
                         .is_some_and(|active| active.machine.has_queued_steers())
                     {
-                        if !self.drain_queued().await {
+                        if !self.drain_queued(operation_id).await {
                             return;
                         }
                         continue;
                     }
                     if let Some(request) = self
-                        .main_live_mut()
+                        .live_mut(operation_id)
                         .expect("main operation residency exists")
                         .pending_compact
                         .take()
                     {
                         // The run has settled; compact now with the
                         // caller's preservation instructions.
-                        if !self.start_compaction(request).await {
+                        if !self.start_compaction(operation_id, request).await {
                             return;
                         }
                         return;
                     }
-                    if self.safety_net_compaction_due() {
+                    if self.safety_net_compaction_due(operation_id) {
                         // §14.7.3: compact at the continuation boundary
                         // when the context nears the model's window.
-                        if !self.start_compaction(None).await {
+                        if !self.start_compaction(operation_id, None).await {
                             return;
                         }
                         return;
                     }
-                    if !self.start_model_step().await {
+                    if !self.start_model_step(operation_id).await {
                         return;
                     }
                     return;
                 }
                 OperationState::NeedContinuation => {
                     if self
-                        .main_active()
+                        .active(operation_id)
                         .is_some_and(|active| active.machine.has_queued_steers())
                     {
-                        if !self.drain_queued().await {
+                        if !self.drain_queued(operation_id).await {
                             return;
                         }
                         continue;
@@ -2102,7 +2117,7 @@ impl<P: Provider> SessionRuntime<P> {
                     panic!("NeedContinuation without queued inbox is impossible state");
                 }
                 OperationState::ToolsPlanned { .. } => {
-                    if !self.admit_next_tool().await {
+                    if !self.admit_next_tool(operation_id).await {
                         return;
                     }
                     return;
@@ -2114,10 +2129,10 @@ impl<P: Provider> SessionRuntime<P> {
 
     /// Drain queued steers as one durable transaction at a reasoning
     /// boundary. Returns false when persistence failed.
-    async fn drain_queued(&mut self) -> bool {
+    async fn drain_queued(&mut self, operation_id: OperationId) -> bool {
         let (mut staged, request, new_entry_seq) = {
             let active = self
-                .main_active()
+                .active(operation_id)
                 .cloned()
                 .expect("drain needs an operation");
             let mut staged = active.clone();
@@ -2146,7 +2161,8 @@ impl<P: Provider> SessionRuntime<P> {
             (staged, request, new_entry_seq)
         };
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return false;
         }
         self.next_entry_seq = new_entry_seq;
@@ -2158,22 +2174,45 @@ impl<P: Provider> SessionRuntime<P> {
     /// Project the model-step input from canonical entries and the current
     /// manifest. Compaction is harness-owned; no synthetic model message
     /// is injected into this projection.
-    async fn current_model_config(&mut self) -> ModelConfig {
-        let selected_model_ref = self.main_model_ref().to_owned();
-        let capabilities = match self.main_lane_live().model_capabilities.as_ref() {
+    async fn current_model_config(&mut self, operation_id: OperationId) -> ModelConfig {
+        let lane_name = self
+            .operation_lane_name(operation_id)
+            .expect("resident operation has an owning lane")
+            .to_owned();
+        let selected_model_ref = self
+            .lanes
+            .get(&lane_name)
+            .expect("operation lane exists")
+            .durable
+            .config
+            .model_ref
+            .clone();
+        let capabilities = match self
+            .lane_live(&lane_name)
+            .expect("operation lane residency exists")
+            .model_capabilities
+            .as_ref()
+        {
             Some((model_ref, capabilities)) if model_ref == &selected_model_ref => *capabilities,
             _ => {
                 let capabilities = self.provider.capabilities_for(&selected_model_ref).await;
-                self.main_lane_live_mut().model_capabilities =
-                    Some((selected_model_ref.clone(), capabilities));
+                self.lane_live_mut(&lane_name)
+                    .expect("operation lane residency exists")
+                    .model_capabilities = Some((selected_model_ref.clone(), capabilities));
                 capabilities
             }
         };
-        let context_window = match self.main_lane_live().context_window {
+        let context_window = match self
+            .lane_live(&lane_name)
+            .expect("operation lane residency exists")
+            .context_window
+        {
             Some(window) => Some(window),
             None => {
                 let window = self.provider.context_window_for(&selected_model_ref).await;
-                self.main_lane_live_mut().context_window = window;
+                self.lane_live_mut(&lane_name)
+                    .expect("operation lane residency exists")
+                    .context_window = window;
                 window
             }
         };
@@ -2190,11 +2229,21 @@ impl<P: Provider> SessionRuntime<P> {
         (snapshot, manifest)
     }
 
-    fn cache_expectation(&self, model: &ModelConfig, prefix_fingerprint: &str) -> &'static str {
+    fn cache_expectation(
+        &self,
+        operation_id: OperationId,
+        model: &ModelConfig,
+        prefix_fingerprint: &str,
+    ) -> &'static str {
         if !model.capabilities.prompt_cache {
             return "unsupported";
         }
-        match self.main_lane_live().last_prefix_fingerprint.as_deref() {
+        match self
+            .operation_lane_live(operation_id)
+            .expect("resident operation has an owning lane")
+            .last_prefix_fingerprint
+            .as_deref()
+        {
             None => "cold_start",
             Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
             Some(_) => "prefix_changed",
@@ -2203,10 +2252,13 @@ impl<P: Provider> SessionRuntime<P> {
 
     async fn project_model_step_plan(
         &mut self,
+        operation_id: OperationId,
         manifest: &ContextManifest,
     ) -> crate::context::ContextPlan {
-        let _ = self.current_model_config().await;
-        let branch = self.main_branch_records();
+        let _ = self.current_model_config(operation_id).await;
+        let branch = self
+            .operation_branch_records(operation_id)
+            .expect("resident operation lane branch is complete");
         project_with_manifest(
             branch.iter().map(|record| &record.entry),
             branch
@@ -2228,18 +2280,25 @@ impl<P: Provider> SessionRuntime<P> {
     /// token threshold would be wrong for every model except the one
     /// it was tuned for. Unknown windows disable the net; overflow
     /// recovery (14.7.4) is the backstop.
-    fn safety_net_compaction_due(&self) -> bool {
+    fn safety_net_compaction_due(&self, operation_id: OperationId) -> bool {
         const RESERVE_TOKENS: u64 = 16_000;
         if self
-            .main_live()
+            .live(operation_id)
             .expect("main operation residency exists")
             .last_step_was_compaction
         {
             return false;
         }
-        match self.main_lane_live().context_window {
+        match self
+            .operation_lane_live(operation_id)
+            .expect("resident operation has an owning lane")
+            .context_window
+        {
             Some(window) => {
-                self.main_lane_live().last_context_tokens.unwrap_or(0)
+                self.operation_lane_live(operation_id)
+                    .expect("resident operation has an owning lane")
+                    .last_context_tokens
+                    .unwrap_or(0)
                     > window.saturating_sub(RESERVE_TOKENS)
             }
             None => false,
@@ -2249,10 +2308,16 @@ impl<P: Provider> SessionRuntime<P> {
     /// Commit the compaction effect intent, then spawn the provider
     /// effect that produces the readable summary. Returns false when
     /// persistence failed.
-    async fn start_compaction(&mut self, instructions: Option<String>) -> bool {
-        let model = self.current_model_config().await;
+    async fn start_compaction(
+        &mut self,
+        operation_id: OperationId,
+        instructions: Option<String>,
+    ) -> bool {
+        let model = self.current_model_config(operation_id).await;
         let (_, manifest) = self.current_context_manifest();
-        let branch = self.main_branch_records();
+        let branch = self
+            .operation_branch_records(operation_id)
+            .expect("resident operation lane branch is complete");
         let mut plan = project_with_manifest(
             branch.iter().map(|record| &record.entry),
             branch
@@ -2268,7 +2333,7 @@ impl<P: Provider> SessionRuntime<P> {
         plan.messages
             .push(crate::context::ContextMessage::User { content });
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("compaction needs an operation");
         let applied = staged
@@ -2283,7 +2348,7 @@ impl<P: Provider> SessionRuntime<P> {
             kind: "compaction".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.main_live_mut().expect("main operation residency exists").model_step + 1,
+                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
                 "model": model,
                 "plan": plan
             }),
@@ -2304,16 +2369,19 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return false;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.install_active(staged);
-        self.main_live_mut()
+        self.live_mut(operation_id)
             .expect("main operation residency exists")
             .last_step_was_compaction = true;
-        self.main_lane_live_mut().last_prefix_fingerprint = None;
+        self.operation_lane_live_mut(operation_id)
+            .expect("resident operation has an owning lane")
+            .last_prefix_fingerprint = None;
         info!(%operation_id, "starting automatic compaction");
         self.wait_effect_boundary(EffectBoundary::CompactionExecution)
             .await;
@@ -2325,8 +2393,8 @@ impl<P: Provider> SessionRuntime<P> {
     /// effect. Returns false when persistence failed.
     /// Fail the active operation durably for a spent budget
     /// dimension (§20.5): model-visible, terminal, no retry.
-    async fn fail_budgeted(&mut self, dimension: &str) {
-        if self.main_active().is_none() {
+    async fn fail_budgeted(&mut self, operation_id: OperationId, dimension: &str) {
+        if self.active(operation_id).is_none() {
             return;
         }
         let message = format!("operation budget exceeded: {dimension}");
@@ -2355,7 +2423,8 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
@@ -2363,27 +2432,29 @@ impl<P: Provider> SessionRuntime<P> {
         // Emits OperationFailed for the Failed outcome (terminal event
         // contract); idling here mirrors the approval-required path so
         // no command observes a Finished-but-open operation.
-        self.emit_terminal_state(&applied.state);
-        self.remove_main_operation();
+        self.emit_terminal_state_for(operation_id, &applied.state);
+        self.remove_operation(operation_id);
     }
 
-    async fn start_model_step(&mut self) -> bool {
+    async fn start_model_step(&mut self, operation_id: OperationId) -> bool {
         if self.budget.max_model_steps.is_some_and(|max| {
-            self.main_live_mut()
+            self.live_mut(operation_id)
                 .expect("main operation residency exists")
                 .model_step
                 >= u64::from(max)
         }) {
             // Budget bounds are runtime-enforced (§20.5): the
             // operation fails model-visibly instead of looping.
-            self.fail_budgeted("model steps").await;
+            self.fail_budgeted(operation_id, "model steps").await;
             return false;
         }
         let (_, planning_manifest) = self.current_context_manifest();
-        let plan = self.project_model_step_plan(&planning_manifest).await;
-        let model = self.current_model_config().await;
+        let plan = self
+            .project_model_step_plan(operation_id, &planning_manifest)
+            .await;
+        let model = self.current_model_config(operation_id).await;
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("step needs an operation");
         let step_registry = self.tools.snapshot();
@@ -2412,13 +2483,13 @@ impl<P: Provider> SessionRuntime<P> {
         let context_manifest =
             ContextManifest::new(&capability_snapshot, self.trusted_resources.clone());
         let prefix_fingerprint = context_manifest.stable_prefix_fingerprint(&model.model_ref);
-        let cache_expectation = self.cache_expectation(&model, &prefix_fingerprint);
+        let cache_expectation = self.cache_expectation(operation_id, &model, &prefix_fingerprint);
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: "model_step".to_owned(),
             recovery_class: RecoveryClass::ReplaySafe,
             effective_input: serde_json::json!({
-                "step": self.main_live_mut().expect("main operation residency exists").model_step + 1,
+                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
                 "model": model,
                 "plan": plan,
                 "capability_snapshot_id": capability_snapshot.id,
@@ -2446,7 +2517,8 @@ impl<P: Provider> SessionRuntime<P> {
         );
         request.context_manifests.push(context_manifest);
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return false;
         }
         self.wait_effect_boundary(EffectBoundary::ModelExecution)
@@ -2454,7 +2526,9 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         self.install_active(staged);
-        self.main_lane_live_mut().last_prefix_fingerprint = Some(prefix_fingerprint);
+        self.operation_lane_live_mut(operation_id)
+            .expect("resident operation has an owning lane")
+            .last_prefix_fingerprint = Some(prefix_fingerprint);
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -2462,11 +2536,11 @@ impl<P: Provider> SessionRuntime<P> {
     /// Commit a tool effect intent, then spawn the tool effect (or
     /// settle a validation denial through the normal path). Returns
     /// false when persistence failed.
-    async fn admit_next_tool(&mut self) -> bool {
+    async fn admit_next_tool(&mut self, operation_id: OperationId) -> bool {
         // The policy gate runs before any effect intent is committed
         // (§17.3): peek the next call, canonicalize it, and decide.
         let Some(call) = self
-            .main_active()
+            .active(operation_id)
             .and_then(|active| active.machine.next_planned_call().cloned())
         else {
             error!(session = %self.session_id, "admit with no planned call; fencing");
@@ -2474,7 +2548,7 @@ impl<P: Provider> SessionRuntime<P> {
             return false;
         };
         let active_capability = self
-            .main_active()
+            .active(operation_id)
             .and_then(|active| active.capability_snapshot.identity(&call.name))
             .map(str::to_owned);
         let current_capability = self
@@ -2484,7 +2558,7 @@ impl<P: Provider> SessionRuntime<P> {
             .identity(&call.name)
             .map(str::to_owned);
         let step_tools = self
-            .main_active()
+            .active(operation_id)
             .map(|active| active.tool_registry.clone())
             .expect("admit needs the current step tool registry");
         let canonical = if active_capability == current_capability {
@@ -2517,7 +2591,7 @@ impl<P: Provider> SessionRuntime<P> {
         // Tool-call budget (§20.5): spent budget denies further calls
         // model-visibly; the model can still finish its turn.
         let over_tool_budget = self.budget.max_tool_calls.is_some_and(|max| {
-            self.main_live_mut()
+            self.live_mut(operation_id)
                 .expect("main operation residency exists")
                 .operation_tool_calls
                 >= max
@@ -2533,7 +2607,7 @@ impl<P: Provider> SessionRuntime<P> {
                 // before acknowledgment; nothing executes and no effect
                 // intent is committed until the decision arrives.
                 let mut staged = self
-                    .main_active()
+                    .active(operation_id)
                     .cloned()
                     .expect("admit needs an operation");
                 staged
@@ -2554,7 +2628,8 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                 );
                 if let Err(err) = self.commit_transition(request).await {
-                    self.fail_operation_on_persistence(err).await;
+                    self.fail_operation_on_persistence_for(operation_id, err)
+                        .await;
                     return false;
                 }
                 self.next_entry_seq = new_entry_seq;
@@ -2574,7 +2649,7 @@ impl<P: Provider> SessionRuntime<P> {
             // committed as an effect intent; the operation terminates
             // with the durable ApprovalRequired outcome.
             let mut staged = self
-                .main_active()
+                .active(operation_id)
                 .cloned()
                 .expect("admit needs an operation");
             let applied = staged
@@ -2597,18 +2672,19 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
             );
             if let Err(err) = self.commit_transition(request).await {
-                self.fail_operation_on_persistence(err).await;
+                self.fail_operation_on_persistence_for(operation_id, err)
+                    .await;
                 return false;
             }
             self.next_entry_seq = new_entry_seq;
             staged.state_seq += 1;
             self.install_active(staged);
             warn!(tool = %call.name, "approval required; terminating the operation");
-            self.emit_terminal_state(&applied.state);
+            self.emit_terminal_state_for(operation_id, &applied.state);
             // Terminal: idle the operation here (the caller's arm
             // returns without re-reading state), synchronously so no
             // command can observe a Finished-but-open operation.
-            self.remove_main_operation();
+            self.remove_operation(operation_id);
             return true;
         }
 
@@ -2639,6 +2715,7 @@ impl<P: Provider> SessionRuntime<P> {
             None
         };
         self.commit_tool_admission(
+            operation_id,
             Transition::AdmitNextTool,
             "admit next tool from ToolsPlanned",
             canonical,
@@ -2657,6 +2734,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// (§17.3). Returns false when persistence failed.
     async fn commit_tool_admission(
         &mut self,
+        operation_id: OperationId,
         transition: Transition,
         expect: &'static str,
         canonical: Result<crate::tool::CanonicalTarget, String>,
@@ -2664,11 +2742,11 @@ impl<P: Provider> SessionRuntime<P> {
         denial: Option<String>,
     ) -> bool {
         let step_tools = self
-            .main_active()
+            .active(operation_id)
             .map(|active| active.tool_registry.clone())
             .expect("tool admission needs the current step tool registry");
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
             .expect("admit needs an operation");
         let applied = staged.machine.apply(transition).expect(expect);
@@ -2709,7 +2787,8 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         if let Err(err) = self.commit_transition(request).await {
-            self.fail_operation_on_persistence(err).await;
+            self.fail_operation_on_persistence_for(operation_id, err)
+                .await;
             return false;
         }
         self.next_entry_seq = new_entry_seq;
@@ -2730,18 +2809,18 @@ impl<P: Provider> SessionRuntime<P> {
         } else {
             self.wait_effect_boundary(EffectBoundary::ToolExecution)
                 .await;
-            self.main_live_mut()
+            self.live_mut(operation_id)
                 .expect("main operation residency exists")
                 .operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
             let reconciliation = self
-                .main_active()
+                .active(operation_id)
                 .and_then(|active| active.open_effect.as_ref())
                 .and_then(|effect| effect.effective_input.get("reconciliation"))
                 .cloned();
             let effect_id = self
-                .main_active()
+                .active(operation_id)
                 .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
             self.spawn_tool_effect(effect_id, call, reconciliation, step_tools);
         }
@@ -2761,12 +2840,13 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        let Some(active) = self.main_active() else {
-            return Err(CommandError::NoActiveOperation);
+        let Some(active) = self.active(operation_id) else {
+            return if self.operations.is_empty() {
+                Err(CommandError::NoActiveOperation)
+            } else {
+                Err(CommandError::NotActive { operation_id })
+            };
         };
-        if active.machine.operation_id() != operation_id {
-            return Err(CommandError::NotActive { operation_id });
-        }
         let Some(call) = active.machine.state().staged_call().cloned() else {
             return Err(CommandError::NoPendingApproval { operation_id });
         };
@@ -2791,16 +2871,17 @@ impl<P: Provider> SessionRuntime<P> {
             );
             if let Err(err) = self.commit_transition(request).await {
                 let message = err.to_string();
-                self.fail_operation_on_persistence(err).await;
+                self.fail_operation_on_persistence_for(operation_id, err)
+                    .await;
                 return Err(CommandError::Persistence(message));
             }
             self.next_entry_seq = new_entry_seq;
             staged.state_seq += 1;
             let state = staged.machine.state().clone();
             self.install_active(staged);
-            self.emit_terminal_state(&state);
+            self.emit_terminal_state_for(operation_id, &state);
             info!(operation = %operation_id, "approval denied; the operation continues");
-            self.advance().await;
+            self.advance(operation_id).await;
             return Ok(());
         }
         // Approval: the staged operation stays parked; the admission
@@ -2825,7 +2906,7 @@ impl<P: Provider> SessionRuntime<P> {
         };
         let mut denial = canonical.as_ref().err().cloned();
         if self.budget.max_tool_calls.is_some_and(|max| {
-            self.main_live_mut()
+            self.live_mut(operation_id)
                 .expect("main operation residency exists")
                 .operation_tool_calls
                 >= max
@@ -2852,6 +2933,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.install_active(staged);
         let committed = self
             .commit_tool_admission(
+                operation_id,
                 Transition::ApproveCall,
                 "approve a parked call",
                 canonical,
