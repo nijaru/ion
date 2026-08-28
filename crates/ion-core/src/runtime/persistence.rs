@@ -1,6 +1,5 @@
-use crate::context::ContextPlan;
+use crate::effect::{CompactionInvocation, DurableEffect, ModelInvocation, ToolInvocation};
 use crate::ids::{EffectId, InboxId, OperationId, SessionId};
-use crate::provider::ModelConfig;
 use crate::session::SessionEntry;
 use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
@@ -10,74 +9,37 @@ use crate::tool::ToolCall;
 
 use super::ActiveOperation;
 
-/// Reconstruct a tool call from a persisted effect's exact effective input.
-///
-/// The operation id is owned by the durable operation record, not by the
-/// effect payload. Recovery must preserve that identity; it must never mint a
-/// new semantic id while reconstructing already-accepted work.
-pub(super) fn tool_call_from_input(
+/// Decode one persisted model invocation through the single typed durable
+/// effect boundary. Recovery never knows the storage JSON field names.
+pub(super) fn model_invocation(effect: &EffectRecord) -> Option<ModelInvocation> {
+    match effect.decode().ok()? {
+        DurableEffect::Model(invocation) => Some(invocation),
+        _ => None,
+    }
+}
+
+/// Decode one persisted compaction invocation through the durable effect
+/// boundary.
+pub(super) fn compaction_invocation(effect: &EffectRecord) -> Option<CompactionInvocation> {
+    match effect.decode().ok()? {
+        DurableEffect::Compaction(invocation) => Some(invocation),
+        _ => None,
+    }
+}
+
+/// Decode one persisted tool invocation, restoring the durable operation id
+/// from the owning operation record rather than inventing identity.
+pub(super) fn tool_invocation(
     operation_id: OperationId,
-    input: &serde_json::Value,
-) -> Option<ToolCall> {
-    Some(ToolCall {
-        operation_id,
-        call_id: input.get("call_id")?.as_u64()?,
-        name: input.get("tool")?.as_str()?.to_owned(),
-        arguments: input.get("arguments")?.clone(),
-    })
-}
-
-/// Reconstruct the frozen model snapshot from a persisted provider
-/// effect's exact effective input (DESIGN.md §14.8). Recovery replays
-/// this identity or fences; it never substitutes a launch default.
-pub(super) fn model_from_input(model: &serde_json::Value) -> Option<ModelConfig> {
-    Some(ModelConfig {
-        model_ref: model.get("model_ref")?.as_str()?.to_owned(),
-        context_window: model
-            .get("context_window")
-            .and_then(serde_json::Value::as_u64),
-        capabilities: serde_json::from_value(model.get("capabilities")?.clone()).ok()?,
-    })
-}
-
-/// `(step, model, plan)` from a persisted model-step effect input.
-pub(super) fn model_step_from_input(
-    input: &serde_json::Value,
-) -> Option<(
-    u64,
-    ModelConfig,
-    ContextPlan,
-    String,
-    String,
-    String,
-    String,
-)> {
-    let step = input.get("step")?.as_u64()?;
-    let model = model_from_input(input.get("model")?)?;
-    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
-    let capability_snapshot_id = input.get("capability_snapshot_id")?.as_str()?.to_owned();
-    let context_manifest_id = input.get("context_manifest_id")?.as_str()?.to_owned();
-    let prefix_fingerprint = input.get("prefix_fingerprint")?.as_str()?.to_owned();
-    let cache_expectation = input.get("cache_expectation")?.as_str()?.to_owned();
-    Some((
-        step,
-        model,
-        plan,
-        capability_snapshot_id,
-        context_manifest_id,
-        prefix_fingerprint,
-        cache_expectation,
-    ))
-}
-
-/// `(step, model, plan)` from a persisted compaction effect input.
-pub(super) fn compaction_from_input(
-    input: &serde_json::Value,
-) -> Option<(u64, ModelConfig, ContextPlan)> {
-    let step = input.get("step")?.as_u64()?;
-    let model = model_from_input(input.get("model")?)?;
-    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
-    Some((step, model, plan))
+    effect: &EffectRecord,
+) -> Option<(ToolCall, ToolInvocation)> {
+    match effect.decode().ok()? {
+        DurableEffect::Tool(invocation) => {
+            let call = invocation.clone().into_call(operation_id);
+            Some((call, invocation))
+        }
+        _ => None,
+    }
 }
 
 /// Build the durable record of one staged transition. Entry sequences are
