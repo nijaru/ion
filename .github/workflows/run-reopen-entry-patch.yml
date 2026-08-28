@@ -34,6 +34,14 @@ jobs:
           if script.count(old) != 1:
               raise SystemExit('generic test loop did not match exactly once')
           exec(compile(script.replace(old, new), '<reopen-entry-patch>', 'exec'))
+
+          crash = Path('crates/ion-core/src/tests/crash_recovery.rs')
+          text = crash.read_text()
+          malformed = '|record| matches!(&record.entry,\n        entry,\n'
+          fixed = '|record| matches!(\n        &record.entry,\n'
+          if text.count(malformed) != 2:
+              raise SystemExit('expected exactly two multiline crash-recovery matches')
+          crash.write_text(text.replace(malformed, fixed))
           PY
           cargo fmt
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
