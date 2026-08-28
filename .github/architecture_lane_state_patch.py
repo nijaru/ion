@@ -1,0 +1,1029 @@
+from pathlib import Path
+import re
+
+
+def replace_once(path: str, old: str, new: str, label: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    count = text.count(old)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 match, found {count}")
+    p.write_text(text.replace(old, new))
+
+
+def regex_once(path: str, pattern: str, replacement: str, label: str) -> None:
+    p = Path(path)
+    text = p.read_text()
+    new, count = re.subn(pattern, replacement, text, count=1, flags=re.S)
+    if count != 1:
+        raise SystemExit(f"{label}: expected 1 match, found {count}")
+    p.write_text(new)
+
+
+Path("crates/ion-core/src/session/lane.rs").write_text(
+    '''use crate::ids::{EntryId, OperationId};
+
+pub(crate) const MAIN: &str = "main";
+
+/// Model-facing execution selection for future work on one lane.
+///
+/// This is deliberately separate from semantic conversation history. More
+/// fields belong here only when the runtime has a real owner for them.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct Config {
+    pub(crate) model_ref: String,
+}
+
+impl Config {
+    pub(crate) fn new(model_ref: impl Into<String>) -> Self {
+        Self {
+            model_ref: model_ref.into(),
+        }
+    }
+}
+
+/// Durable identity reserved for the next run while a lane is busy.
+///
+/// The IDs are provisioned when queueing is acknowledged, but no operation
+/// row or semantic entry exists until the lane actually accepts this run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NextRun {
+    pub(crate) operation_id: OperationId,
+    pub(crate) entry_id: EntryId,
+    pub(crate) prompt: String,
+}
+
+impl NextRun {
+    pub(crate) fn reserve(prompt: String) -> Self {
+        Self {
+            operation_id: OperationId::generate(),
+            entry_id: EntryId::generate(),
+            prompt,
+        }
+    }
+}
+
+/// Directly readable current state of one durable lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct State {
+    pub(crate) leaf: Option<EntryId>,
+    pub(crate) current_operation: Option<OperationId>,
+    pub(crate) pending_next_run: Option<NextRun>,
+}
+
+/// Current durable state and configuration of a lane.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Lane {
+    pub(crate) name: String,
+    pub(crate) state: State,
+    pub(crate) config: Config,
+}
+'''
+)
+
+replace_once(
+    "crates/ion-core/src/store/schema.rs",
+    "const SCHEMA_VERSION: i64 = 16;",
+    "const SCHEMA_VERSION: i64 = 17;",
+    "schema version",
+)
+replace_once(
+    "crates/ion-core/src/store/schema.rs",
+    '''CREATE TABLE IF NOT EXISTS lanes (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    name TEXT NOT NULL,
+    leaf_id TEXT,
+    config TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, name),
+    FOREIGN KEY (session_id, leaf_id) REFERENCES entries(session_id, id)
+);
+
+CREATE TABLE IF NOT EXISTS operations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    accepted_seq INTEGER NOT NULL,
+    UNIQUE (session_id, accepted_seq)
+);
+''',
+    '''CREATE TABLE IF NOT EXISTS lanes (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    name TEXT NOT NULL,
+    leaf_id TEXT,
+    current_operation_id TEXT,
+    pending_operation_id TEXT,
+    pending_entry_id TEXT,
+    pending_prompt TEXT,
+    config TEXT NOT NULL,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, name),
+    FOREIGN KEY (session_id, leaf_id) REFERENCES entries(session_id, id),
+    FOREIGN KEY (session_id, current_operation_id) REFERENCES operations(session_id, id),
+    CHECK (
+        (pending_operation_id IS NULL AND pending_entry_id IS NULL AND pending_prompt IS NULL)
+        OR
+        (pending_operation_id IS NOT NULL AND pending_entry_id IS NOT NULL AND pending_prompt IS NOT NULL)
+    ),
+    CHECK (pending_operation_id IS NULL OR pending_operation_id != current_operation_id)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS lanes_pending_operation_unique
+    ON lanes (pending_operation_id) WHERE pending_operation_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS lanes_pending_entry_unique
+    ON lanes (pending_entry_id) WHERE pending_entry_id IS NOT NULL;
+
+CREATE TABLE IF NOT EXISTS operations (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    kind TEXT NOT NULL,
+    accepted_at INTEGER NOT NULL,
+    accepted_seq INTEGER NOT NULL,
+    UNIQUE (session_id, id),
+    UNIQUE (session_id, accepted_seq)
+);
+''',
+    "lane schema",
+)
+
+replace_once(
+    "crates/ion-core/src/store/mod.rs",
+    '''pub struct LoadedSession {
+    pub session: SessionRecord,
+    pub entries: Vec<EntryRecord>,
+    pub operations: Vec<LoadedOperation>,
+''',
+    '''pub struct LoadedSession {
+    pub session: SessionRecord,
+    pub(crate) lane: crate::session::lane::Lane,
+    pub entries: Vec<EntryRecord>,
+    pub operations: Vec<LoadedOperation>,
+''',
+    "LoadedSession lane",
+)
+replace_once(
+    "crates/ion-core/src/store/mod.rs",
+    '''    SetMainLaneConfig {
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    Load {
+''',
+    '''    SetMainLaneConfig {
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    QueueMainNextRun {
+        session_id: SessionId,
+        next_run: crate::session::lane::NextRun,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    Load {
+''',
+    "store command queue next run",
+)
+replace_once(
+    "crates/ion-core/src/store/mod.rs",
+    '''    pub(crate) async fn set_main_lane_config(
+        &self,
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn load(&self, session_id: SessionId) -> Result<LoadedSession, StoreError> {
+''',
+    '''    pub(crate) async fn set_main_lane_config(
+        &self,
+        session_id: SessionId,
+        config: crate::session::lane::Config,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
+            reply,
+        })
+        .await
+    }
+
+    /// Reserve the next run on the hidden `main` lane without
+    /// creating an operation or semantic entry yet.
+    pub(crate) async fn queue_main_next_run(
+        &self,
+        session_id: SessionId,
+        next_run: crate::session::lane::NextRun,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::QueueMainNextRun {
+            session_id,
+            next_run,
+            reply,
+        })
+        .await
+    }
+
+    pub async fn load(&self, session_id: SessionId) -> Result<LoadedSession, StoreError> {
+''',
+    "store queue method",
+)
+
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''        StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
+            }));
+        }
+        StoreCommand::Load { session_id, reply } => {
+''',
+    '''        StoreCommand::SetMainLaneConfig {
+            session_id,
+            config,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
+            }));
+        }
+        StoreCommand::QueueMainNextRun {
+            session_id,
+            next_run,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                queue_main_next_run(connection, session_id, &next_run).map_err(StoreError::from)
+            }));
+        }
+        StoreCommand::Load { session_id, reply } => {
+''',
+    "store dispatch queue next run",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''    tx.execute(
+        "INSERT INTO lanes (session_id, name, leaf_id, config, created_at, updated_at)
+         VALUES (?1, ?2, NULL, ?3, ?4, ?4)",
+        rusqlite::params![
+            record.id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            config,
+            now,
+        ],
+    )?;
+''',
+    '''    tx.execute(
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_operation_id, pending_entry_id, pending_prompt,
+            config, created_at, updated_at
+         ) VALUES (?1, ?2, NULL, NULL, NULL, NULL, NULL, ?3, ?4, ?4)",
+        rusqlite::params![
+            record.id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            config,
+            now,
+        ],
+    )?;
+''',
+    "create total lane row",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''fn append_entry(
+    connection: &mut Connection,
+''',
+    '''fn queue_main_next_run(
+    connection: &mut Connection,
+    session_id: SessionId,
+    next_run: &crate::session::lane::NextRun,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let operation_id = next_run.operation_id.as_uuid().to_string();
+    let entry_id = next_run.entry_id.as_uuid().to_string();
+    let operation_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM operations WHERE id = ?1)",
+        [&operation_id],
+        |row| row.get(0),
+    )?;
+    let entry_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM entries WHERE id = ?1)",
+        [&entry_id],
+        |row| row.get(0),
+    )?;
+    if operation_exists || entry_exists {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "reserved next-run identity already exists".to_owned(),
+        ));
+    }
+    let now = now_ms();
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            pending_operation_id = ?3,
+            pending_entry_id = ?4,
+            pending_prompt = ?5,
+            updated_at = ?6
+         WHERE session_id = ?1 AND name = ?2
+           AND current_operation_id IS NOT NULL
+           AND pending_operation_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            operation_id,
+            entry_id,
+            next_run.prompt,
+            now,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane cannot reserve another next run".to_owned(),
+        ));
+    }
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now],
+    )?;
+    tx.commit()
+}
+
+fn append_entry(
+    connection: &mut Connection,
+''',
+    "queue function insertion",
+)
+
+regex_once(
+    "crates/ion-core/src/store/sql.rs",
+    r'''fn begin_operation\(\n.*?\n\}\n\nfn commit\(''',
+    '''fn begin_operation(
+    connection: &mut Connection,
+    session_id: SessionId,
+    operation_id: OperationId,
+    root_inbox: &InboxRecord,
+    checkpoint: &CheckpointRecord,
+    entry: &EntryRecord,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let session = session_id.as_uuid().to_string();
+    let operation = operation_id.as_uuid().to_string();
+    let entry_id = entry.id.as_uuid().to_string();
+    let (current, pending_operation, pending_entry, pending_prompt): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT current_operation_id, pending_operation_id, pending_entry_id, pending_prompt
+         FROM lanes WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![session, crate::session::lane::MAIN],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    if current.is_some() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane already has a current operation".to_owned(),
+        ));
+    }
+    let user_prompt = match &entry.entry {
+        SessionEntry::UserMessage { text } => text,
+        _ => {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "operation acceptance must append its user prompt".to_owned(),
+            ));
+        }
+    };
+    if user_prompt != &checkpoint.payload.prompt || root_inbox.text.as_str() != user_prompt {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "operation prompt disagrees with its accepted entry".to_owned(),
+        ));
+    }
+    match (pending_operation, pending_entry, pending_prompt) {
+        (None, None, None) => {}
+        (Some(reserved_operation), Some(reserved_entry), Some(reserved_prompt))
+            if reserved_operation == operation
+                && reserved_entry == entry_id
+                && reserved_prompt.as_str() == user_prompt => {}
+        _ => {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "operation does not match the lane's reserved next run".to_owned(),
+            ));
+        }
+    }
+
+    let accepted_seq: i64 = tx.query_row(
+        "SELECT COALESCE(MAX(accepted_seq), 0) + 1 FROM operations WHERE session_id = ?1",
+        [&session],
+        |row| row.get(0),
+    )?;
+    tx.execute(
+        "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+         VALUES (?1, ?2, 'run', ?3, ?4)",
+        rusqlite::params![operation, session, now_ms(), accepted_seq],
+    )?;
+    insert_inbox(&tx, session_id, operation_id, root_inbox)?;
+    insert_capability_snapshot(&tx, &checkpoint.capability_snapshot)?;
+    insert_checkpoint(&tx, operation_id, checkpoint)?;
+    insert_entry(&tx, session_id, entry)?;
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            current_operation_id = ?3,
+            pending_operation_id = NULL,
+            pending_entry_id = NULL,
+            pending_prompt = NULL,
+            updated_at = ?4
+         WHERE session_id = ?1 AND name = ?2 AND current_operation_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            operation_id.as_uuid().to_string(),
+            now_ms(),
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane lost operation admission".to_owned(),
+        ));
+    }
+    tx.commit()?;
+    Ok(())
+}
+
+fn commit(''',
+    "begin operation lane admission",
+)
+
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    insert_capability_snapshot(&tx, &request.checkpoint.capability_snapshot)?;
+''',
+    '''fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let operation_id = request.operation_id.as_uuid().to_string();
+    let current: Option<String> = tx.query_row(
+        "SELECT current_operation_id FROM lanes WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![
+            request.session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+        ],
+        |row| row.get(0),
+    )?;
+    if current.as_deref() != Some(operation_id.as_str()) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "operation is not the main lane's current operation".to_owned(),
+        ));
+    }
+    insert_capability_snapshot(&tx, &request.checkpoint.capability_snapshot)?;
+''',
+    "commit current operation guard",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''    for effect_id in &request.tool_progress_delete {
+        tx.execute(
+            "DELETE FROM tool_progress WHERE effect_id = ?1",
+            rusqlite::params![effect_id.as_uuid().to_string()],
+        )?;
+    }
+    tx.commit()?;
+    Ok(())
+}
+''',
+    '''    for effect_id in &request.tool_progress_delete {
+        tx.execute(
+            "DELETE FROM tool_progress WHERE effect_id = ?1",
+            rusqlite::params![effect_id.as_uuid().to_string()],
+        )?;
+    }
+    if matches!(&request.checkpoint.payload.state, OperationState::Finished(_)) {
+        let changed = tx.execute(
+            "UPDATE lanes SET current_operation_id = NULL, updated_at = ?4
+             WHERE session_id = ?1 AND name = ?2 AND current_operation_id = ?3",
+            rusqlite::params![
+                request.session_id.as_uuid().to_string(),
+                crate::session::lane::MAIN,
+                operation_id,
+                now_ms(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "terminal operation no longer owns the main lane".to_owned(),
+            ));
+        }
+    }
+    tx.commit()?;
+    Ok(())
+}
+''',
+    "terminal lane release",
+)
+
+regex_once(
+    "crates/ion-core/src/store/sql.rs",
+    r'''fn load_main_lane\(.*?\n\}\n\nfn load\(''',
+    '''fn load_main_lane(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<crate::session::lane::Lane, StoreError> {
+    let (name, leaf, current_operation, pending_operation, pending_entry, pending_prompt, config): (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        String,
+    ) = connection
+        .query_row(
+            "SELECT name, leaf_id, current_operation_id,
+                    pending_operation_id, pending_entry_id, pending_prompt, config
+             FROM lanes WHERE session_id = ?1 AND name = ?2",
+            rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                ))
+            },
+        )
+        .map_err(StoreError::from)?;
+    let leaf = leaf
+        .as_deref()
+        .map(|raw| {
+            crate::ids::EntryId::parse(raw)
+                .ok_or_else(|| StoreError::Sqlite("corrupt lane leaf id".to_owned()))
+        })
+        .transpose()?;
+    let parse_operation = |raw: &str, what: &str| {
+        Uuid::parse_str(raw)
+            .map(crate::ids::OperationId::from_uuid)
+            .map_err(|_| StoreError::Sqlite(format!("corrupt {what} operation id")))
+    };
+    let current_operation = current_operation
+        .as_deref()
+        .map(|raw| parse_operation(raw, "current"))
+        .transpose()?;
+    let pending_next_run = match (pending_operation, pending_entry, pending_prompt) {
+        (None, None, None) => None,
+        (Some(operation), Some(entry), Some(prompt)) => Some(crate::session::lane::NextRun {
+            operation_id: parse_operation(&operation, "pending")?,
+            entry_id: crate::ids::EntryId::parse(&entry)
+                .ok_or_else(|| StoreError::Sqlite("corrupt pending entry id".to_owned()))?,
+            prompt,
+        }),
+        _ => {
+            return Err(StoreError::Sqlite(
+                "partial pending next-run state".to_owned(),
+            ));
+        }
+    };
+    let config = serde_json::from_str(&config)
+        .map_err(|err| StoreError::Sqlite(format!("corrupt lane config: {err}")))?;
+    Ok(crate::session::lane::Lane {
+        name,
+        state: crate::session::lane::State {
+            leaf,
+            current_operation,
+            pending_next_run,
+        },
+        config,
+    })
+}
+
+fn load(''',
+    "load total lane",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    "    if lane.leaf != previous {",
+    "    if lane.state.leaf != previous {",
+    "lane leaf validation",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''    let mut statement = connection.prepare(
+        "SELECT id, kind, text FROM inbox_items
+''',
+    '''    let mut open_operations = operations.iter().filter(|operation| {
+        !matches!(&operation.latest.1.state, OperationState::Finished(_))
+    });
+    let open = open_operations.next().map(|operation| operation.id);
+    if open_operations.next().is_some() {
+        return Err(StoreError::Sqlite(
+            "main lane has multiple open operations".to_owned(),
+        ));
+    }
+    if lane.state.current_operation != open {
+        return Err(StoreError::Sqlite(
+            "main lane current operation disagrees with durable operation state".to_owned(),
+        ));
+    }
+    if let Some(next_run) = &lane.state.pending_next_run {
+        if operations.iter().any(|operation| operation.id == next_run.operation_id) {
+            return Err(StoreError::Sqlite(
+                "pending next-run operation identity already exists".to_owned(),
+            ));
+        }
+        if entries.iter().any(|entry| entry.id == next_run.entry_id) {
+            return Err(StoreError::Sqlite(
+                "pending next-run entry identity already exists".to_owned(),
+            ));
+        }
+    }
+
+    let mut statement = connection.prepare(
+        "SELECT id, kind, text FROM inbox_items
+''',
+    "lane load validation",
+)
+replace_once(
+    "crates/ion-core/src/store/sql.rs",
+    '''    Ok(LoadedSession {
+        session,
+        entries,
+''',
+    '''    Ok(LoadedSession {
+        session,
+        lane,
+        entries,
+''',
+    "return loaded lane",
+)
+
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''    operation: Option<ActiveOperation>,
+    /// Accepted operations waiting for the single active operation to
+    /// reach a terminal outcome. Each remains a complete durable
+    /// `Accepted` checkpoint until promotion.
+    queued_operations: Vec<ActiveOperation>,
+''',
+    '''    operation: Option<ActiveOperation>,
+    /// Durable input reserved for the next run while `main` is busy.
+    /// No operation machine exists until the lane becomes idle.
+    pending_next_run: Option<crate::session::lane::NextRun>,
+''',
+    "runtime pending field",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''            operation: None,
+            queued_operations: Vec::new(),
+''',
+    '''            operation: None,
+            pending_next_run: None,
+''',
+    "runtime pending init",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''        let assistant_frames = loaded.assistant_frames;
+        self.selected_model_ref = loaded.session.initial_model_ref.clone();
+''',
+    '''        let assistant_frames = loaded.assistant_frames;
+        self.selected_model_ref = loaded.lane.config.model_ref.clone();
+        self.pending_next_run = loaded.lane.state.pending_next_run.clone();
+''',
+    "restore lane state",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''            if matches!(payload.state, OperationState::Accepted) {
+                // Accepted-but-not-started operations are durable queued
+                // work, not competing active transition authorities.
+                self.queued_operations.push(active);
+            } else if self.operation.replace(active).is_some() {
+                error!(
+                    session = %self.session_id,
+                    operation = %operation.id,
+                    "multiple non-queued open operations in durable state; refusing to guess"
+                );
+                self.closed = true;
+                return;
+            }
+''',
+    '''            if self.operation.replace(active).is_some() {
+                error!(
+                    session = %self.session_id,
+                    operation = %operation.id,
+                    "multiple open operations in durable state; refusing to guess"
+                );
+                self.closed = true;
+                return;
+            }
+''',
+    "restore one current operation",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''        if self.operation.is_none()
+            && !self.queued_operations.is_empty()
+            && self.promote_next_queued()
+        {
+            self.advance().await;
+        }
+''',
+    '''        if !self.closed
+            && self.operation.is_none()
+            && self.pending_next_run.is_some()
+            && self.promote_pending_next_run().await
+        {
+            self.advance().await;
+        }
+''',
+    "startup pending promotion",
+)
+
+regex_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    r'''    async fn submit_if_idle\(.*?\n    async fn switch_model\(''',
+    '''    async fn submit_if_idle(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if let Some(active) = &self.operation {
+            return Err(CommandError::Busy {
+                operation_id: active.machine.operation_id(),
+            });
+        }
+        if let Some(pending) = &self.pending_next_run {
+            return Err(CommandError::Busy {
+                operation_id: pending.operation_id,
+            });
+        }
+        self.accept_operation(prompt).await
+    }
+
+    /// Accept one prompt durably. When `main` is busy, reserve stable
+    /// identities and durable input only; the operation itself is created
+    /// when the lane becomes idle.
+    async fn enqueue(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if self.operation.is_none() && self.pending_next_run.is_none() {
+            return self.accept_operation(prompt).await;
+        }
+        if let Some(pending) = &self.pending_next_run {
+            return Err(CommandError::Busy {
+                operation_id: self
+                    .operation
+                    .as_ref()
+                    .map_or(pending.operation_id, |active| active.machine.operation_id()),
+            });
+        }
+        let next_run = crate::session::lane::NextRun::reserve(prompt);
+        let operation_id = next_run.operation_id;
+        self.store
+            .queue_main_next_run(self.session_id, next_run.clone())
+            .await
+            .map_err(persistence_command_error)?;
+        self.wait_effect_boundary(EffectBoundary::QueuedAcceptanceCommit)
+            .await;
+        self.pending_next_run = Some(next_run);
+        Ok(operation_id)
+    }
+
+    async fn accept_operation(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+        let active = self.accept_operation_record(prompt, None).await?;
+        let operation_id = active.machine.operation_id();
+        self.start_active(active);
+        self.advance().await;
+        Ok(operation_id)
+    }
+
+    /// Create the durable operation only when the lane is free. A
+    /// reservation supplies pre-provisioned semantic identities but does
+    /// not freeze model/tool capability state before this boundary.
+    async fn accept_operation_record(
+        &mut self,
+        prompt: String,
+        reservation: Option<crate::session::lane::NextRun>,
+    ) -> Result<ActiveOperation, CommandError> {
+        let operation_id = reservation
+            .as_ref()
+            .map_or_else(OperationId::generate, |next_run| next_run.operation_id);
+        let tool_registry = self.tools.snapshot();
+        let (machine, applied) =
+            OperationMachine::accept(operation_id, prompt.clone(), tool_registry.specs());
+        let capability_snapshot = tool_registry.capability_snapshot();
+        let root_inbox = InboxRecord {
+            id: InboxId::generate(),
+            kind: InboxKind::Prompt,
+            text: prompt,
+            status: InboxStatus::Applied,
+        };
+        let entry = match reservation.as_ref() {
+            Some(next_run) => EntryRecord {
+                id: next_run.entry_id,
+                seq: self.next_entry_seq,
+                parent: self.entries.last().map(|record| record.id),
+                entry: applied.entries[0].clone(),
+            },
+            None => self.stage_entry(&applied.entries[0]),
+        };
+        let checkpoint = CheckpointRecord {
+            state_seq: 1,
+            payload: CheckpointPayload {
+                state: machine.state().clone(),
+                cancel_requested: false,
+                prompt: machine.prompt().to_owned(),
+                capability_snapshot_id: capability_snapshot.id.clone(),
+                open_effect: None,
+            },
+            capability_snapshot: capability_snapshot.clone(),
+        };
+        self.store
+            .begin_operation(
+                self.session_id,
+                operation_id,
+                root_inbox,
+                checkpoint,
+                entry.clone(),
+            )
+            .await
+            .map_err(persistence_command_error)?;
+
+        self.entries.push(entry);
+        self.next_entry_seq += 1;
+        if reservation.is_some() {
+            self.pending_next_run = None;
+        }
+        Ok(ActiveOperation {
+            machine,
+            capability_snapshot,
+            tool_registry,
+            cancel: self.cancel_root.child_token(),
+            state_seq: 1,
+            open_effect: None,
+            pending_steers: Vec::new(),
+        })
+    }
+
+    fn start_active(&mut self, active: ActiveOperation) {
+        let operation_id = active.machine.operation_id();
+        let prompt = active.machine.prompt().to_owned();
+        self.operation = Some(active);
+        self.draft_text.clear();
+        self.draft_thinking.clear();
+        self.assistant_frame_seq = 0;
+        self.draft_calls.clear();
+        self.draft_usage = None;
+        self.live_tools.clear();
+        self.pending_compact = None;
+        self.overflow_retry_used = false;
+        self.last_step_was_compaction = false;
+        self.model_step = 0;
+        self.operation_tool_calls = 0;
+        self.emit(RuntimeEvent::OperationStarted {
+            cursor: RuntimeCursor::default(),
+            operation_id,
+            prompt,
+        });
+    }
+
+    async fn promote_pending_next_run(&mut self) -> bool {
+        if self.operation.is_some() {
+            return false;
+        }
+        let Some(next_run) = self.pending_next_run.clone() else {
+            return false;
+        };
+        match self
+            .accept_operation_record(next_run.prompt.clone(), Some(next_run.clone()))
+            .await
+        {
+            Ok(active) => {
+                self.start_active(active);
+                true
+            }
+            Err(err) => {
+                error!(
+                    session = %self.session_id,
+                    operation = %next_run.operation_id,
+                    %err,
+                    "could not promote the durable next run; fencing until reopen"
+                );
+                self.closed = true;
+                false
+            }
+        }
+    }
+
+    async fn switch_model(''',
+    "runtime queue model",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''                OperationState::Finished(_) => {
+                    self.operation.take();
+                    if self.promote_next_queued() {
+                        continue;
+                    }
+                    return;
+                }
+''',
+    '''                OperationState::Finished(_) => {
+                    self.operation.take();
+                    if self.promote_pending_next_run().await {
+                        continue;
+                    }
+                    return;
+                }
+''',
+    "terminal pending promotion",
+)
+replace_once(
+    "crates/ion-core/src/runtime/mod.rs",
+    '''    /// Accept a prompt durably. If another operation is active, the new
+    /// operation waits in acceptance order and is promoted after the active
+    /// operation reaches a terminal outcome.
+''',
+    '''    /// Accept a prompt durably. If another operation is active, reserve
+    /// stable identity for the lane's next run; its operation is created only
+    /// after the active operation reaches a terminal outcome.
+''',
+    "SessionHandle enqueue docs",
+)
+
+replace_once(
+    "crates/ion-core/src/tests/print_mode.rs",
+    '''    let loaded = store.load(session_id).await.expect("load queued state");
+    assert_eq!(loaded.operations.len(), 2);
+    assert_eq!(loaded.operations[0].id, first);
+    assert_eq!(loaded.operations[1].id, second);
+    assert_eq!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Suspended
+    );
+    assert_eq!(
+        loaded.operations[1].latest.1.state,
+        OperationState::Accepted
+    );
+''',
+    '''    let loaded = store.load(session_id).await.expect("load queued state");
+    assert_eq!(loaded.operations.len(), 1);
+    assert_eq!(loaded.operations[0].id, first);
+    assert_eq!(
+        loaded.operations[0].latest.1.state,
+        OperationState::Suspended
+    );
+    let pending = loaded
+        .lane
+        .state
+        .pending_next_run
+        .as_ref()
+        .expect("durable next run");
+    assert_eq!(pending.operation_id, second);
+    assert_eq!(pending.prompt, "queued");
+''',
+    "print reopen pending assertion",
+)
+replace_once(
+    "crates/ion-core/src/tests/crash_recovery.rs",
+    '''    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.operations.len(), 2);
+    assert!(matches!(
+        loaded.operations[1].latest.1.state,
+        OperationState::Accepted
+    ));
+''',
+    '''    let loaded = store.load(session_id).await.expect("load");
+    assert_eq!(loaded.operations.len(), 1);
+    let pending = loaded
+        .lane
+        .state
+        .pending_next_run
+        .as_ref()
+        .expect("durable next run");
+    assert_eq!(pending.prompt, "second");
+    assert!(
+        loaded
+            .operations
+            .iter()
+            .all(|operation| operation.id != pending.operation_id),
+        "a queued run must not exist as an Accepted operation"
+    );
+''',
+    "crash queue pending assertion",
+)
