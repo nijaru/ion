@@ -1,9 +1,7 @@
-//! Durable identity newtypes (DESIGN.md §11.2).
+//! Durable identity newtypes.
 //!
-//! Sessions, operations, effects, and entries use UUIDv7. UUID ordering
-//! is never semantic: each session has a storage-assigned monotonic
-//! integer `seq` for durable order, and live runtime events keep a
-//! separate in-memory cursor.
+//! Durable semantic identities use UUIDv7 and stay independent from storage
+//! ordering. Live runtime events keep a separate in-memory cursor.
 
 use std::fmt;
 
@@ -64,6 +62,42 @@ impl OperationId {
 impl fmt::Display for OperationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "op-{}", self.0)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct EntryId(Uuid);
+
+impl EntryId {
+    /// Provision a semantic conversation-entry identity before persistence.
+    /// Sequence numbers remain independent storage-order metadata.
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    /// Parse the bare UUID form stored in SQLite (no display prefix).
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for EntryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "entry-{}", self.0)
     }
 }
 
@@ -160,5 +194,19 @@ impl RuntimeInstanceId {
 impl fmt::Display for RuntimeInstanceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "runtime-{}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_identity_is_uuid_v7_and_independent_from_ordering() {
+        let first = EntryId::generate();
+        let second = EntryId::generate();
+        assert_ne!(first, second);
+        assert_eq!(EntryId::parse(&first.as_uuid().to_string()), Some(first));
+        assert_eq!(first.as_uuid().get_version_num(), 7);
     }
 }

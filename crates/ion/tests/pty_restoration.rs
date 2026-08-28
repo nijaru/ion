@@ -112,7 +112,7 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
             // Make the pty the controlling terminal so kernel hangup
             // (master close) reaches the child, and become its
             // foreground group like a real login shell would.
-            libc::ioctl(0, libc::TIOCSCTTY.into(), 0 as libc::c_ulong);
+            libc::ioctl(0, libc::TIOCSCTTY, 0 as libc::c_ulong);
             libc::tcsetpgrp(0, libc::getpgrp());
             Ok(())
         });

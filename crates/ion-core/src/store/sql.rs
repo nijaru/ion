@@ -179,21 +179,37 @@ fn check_injected(flag: &AtomicBool) -> Result<(), StoreError> {
     }
 }
 
-fn create_session(connection: &Connection, record: &SessionRecord) -> Result<(), rusqlite::Error> {
+fn create_session(
+    connection: &mut Connection,
+    record: &SessionRecord,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
     let now = now_ms();
-    connection.execute(
-        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id, initial_model_ref)
-         VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6)",
+    tx.execute(
+        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
+         VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
         rusqlite::params![
             record.id.as_uuid().to_string(),
             now,
             record.cwd,
             record.title,
             record.parent_session_id.map(|id| id.as_uuid().to_string()),
-            record.initial_model_ref,
         ],
     )?;
-    Ok(())
+    let config = crate::session::lane::Config::new(record.initial_model_ref.clone());
+    let config = serde_json::to_string(&config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    tx.execute(
+        "INSERT INTO lanes (session_id, name, leaf_id, config, created_at, updated_at)
+         VALUES (?1, ?2, NULL, ?3, ?4, ?4)",
+        rusqlite::params![
+            record.id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            config,
+            now,
+        ],
+    )?;
+    tx.commit()
 }
 
 fn append_entry(
@@ -588,21 +604,100 @@ fn insert_entry(
     session_id: SessionId,
     entry: &EntryRecord,
 ) -> Result<(), rusqlite::Error> {
-    let payload = serde_json::to_string(&entry.entry)
+    let expected_seq: i64 = connection.query_row(
+        "SELECT COALESCE(MAX(seq), 0) + 1 FROM entries WHERE session_id = ?1",
+        [session_id.as_uuid().to_string()],
+        |row| row.get(0),
+    )?;
+    if entry.seq != expected_seq as u64 {
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "entry sequence {} is not the next durable sequence {expected_seq}",
+            entry.seq
+        )));
+    }
+
+    let (leaf_id, config): (Option<String>, String) = connection.query_row(
+        "SELECT leaf_id, config FROM lanes WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let parent = leaf_id
+        .as_deref()
+        .map(|raw| {
+            crate::ids::EntryId::parse(raw).ok_or_else(|| {
+                rusqlite::Error::InvalidParameterName("main lane has invalid leaf id".to_owned())
+            })
+        })
+        .transpose()?;
+    let node = crate::session::tree::Entry {
+        id: crate::ids::EntryId::generate(),
+        parent,
+        seq: entry.seq,
+        value: entry.entry.clone(),
+    };
+    let payload = serde_json::to_string(&node.value)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     connection.execute(
-        "INSERT INTO entries (session_id, seq, id, kind, payload, created_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+        "INSERT INTO entries (session_id, seq, id, parent_id, kind, payload, created_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             session_id.as_uuid().to_string(),
-            entry.seq as i64,
-            Uuid::now_v7().to_string(),
-            entry_kind(&entry.entry),
+            node.seq as i64,
+            node.id.as_uuid().to_string(),
+            node.parent.map(|parent| parent.as_uuid().to_string()),
+            entry_kind(&node.value),
             payload,
             now_ms(),
         ],
     )?;
+
+    let mut config: crate::session::lane::Config = serde_json::from_str(&config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    if let SessionEntry::ModelChanged { model_ref } = &node.value {
+        config.model_ref.clone_from(model_ref);
+    }
+    let config = serde_json::to_string(&config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let changed = connection.execute(
+        "UPDATE lanes SET leaf_id = ?3, config = ?4, updated_at = ?5
+         WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            node.id.as_uuid().to_string(),
+            config,
+            now_ms(),
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane is missing".to_owned(),
+        ));
+    }
     Ok(())
+}
+
+fn load_main_lane(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<crate::session::lane::Lane, StoreError> {
+    let (name, leaf, config): (String, Option<String>, String) = connection
+        .query_row(
+            "SELECT name, leaf_id, config FROM lanes WHERE session_id = ?1 AND name = ?2",
+            rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .map_err(StoreError::from)?;
+    let leaf = leaf
+        .as_deref()
+        .map(|raw| {
+            crate::ids::EntryId::parse(raw)
+                .ok_or_else(|| StoreError::Sqlite("corrupt lane leaf id".to_owned()))
+        })
+        .transpose()?;
+    let config = serde_json::from_str(&config)
+        .map_err(|err| StoreError::Sqlite(format!("corrupt lane config: {err}")))?;
+    Ok(crate::session::lane::Lane { name, leaf, config })
 }
 
 fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession, StoreError> {
@@ -615,37 +710,79 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     }
 
     let id = session_id.as_uuid().to_string();
-    let session = connection
+    let (cwd, title, parent_session_id): (String, String, Option<String>) = connection
         .query_row(
-            "SELECT cwd, title, parent_session_id, initial_model_ref FROM sessions WHERE id = ?1",
+            "SELECT cwd, title, parent_session_id FROM sessions WHERE id = ?1",
             rusqlite::params![id],
-            |row| {
-                Ok(SessionRecord {
-                    id: session_id,
-                    cwd: row.get(0)?,
-                    title: row.get(1)?,
-                    parent_session_id: row
-                        .get::<_, Option<String>>(2)?
-                        .and_then(|text| SessionId::parse(&text)),
-                    initial_model_ref: row.get(3)?,
-                })
-            },
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         )
         .map_err(|err| match err {
             rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(session_id),
             other => StoreError::from(other),
         })?;
+    let lane = load_main_lane(connection, session_id)?;
+    if lane.name != crate::session::lane::MAIN {
+        return Err(StoreError::Sqlite("main lane has invalid name".to_owned()));
+    }
+    let session = SessionRecord {
+        id: session_id,
+        cwd,
+        title,
+        parent_session_id: parent_session_id.and_then(|text| SessionId::parse(&text)),
+        // Compatibility projection while runtime model selection migrates to
+        // lane config. The session row is no longer an authority for this.
+        initial_model_ref: lane.config.model_ref.clone(),
+    };
 
-    let mut statement = connection
-        .prepare("SELECT seq, payload FROM entries WHERE session_id = ?1 ORDER BY seq")?;
+    let mut statement = connection.prepare(
+        "SELECT id, parent_id, seq, payload FROM entries WHERE session_id = ?1 ORDER BY seq",
+    )?;
     let mut entries = Vec::new();
     let mut rows = statement.query(rusqlite::params![id])?;
+    let mut previous = None;
     while let Some(row) = rows.next()? {
-        let seq: i64 = row.get(0)?;
+        let stored_id: String = row.get(0)?;
+        let node_id = crate::ids::EntryId::parse(&stored_id)
+            .ok_or_else(|| StoreError::Sqlite("corrupt entry id".to_owned()))?;
+        let parent_raw: Option<String> = row.get(1)?;
+        let parent = parent_raw
+            .as_deref()
+            .map(|raw| {
+                crate::ids::EntryId::parse(raw)
+                    .ok_or_else(|| StoreError::Sqlite("corrupt entry parent id".to_owned()))
+            })
+            .transpose()?;
+        let seq: i64 = row.get(2)?;
         let seq = u64::try_from(seq)
             .map_err(|_| StoreError::Sqlite(format!("corrupt entry seq {seq}")))?;
-        let payload: String = row.get(1)?;
-        entries.push((seq, decode("entry", payload)?));
+        if parent != previous {
+            return Err(StoreError::Sqlite(format!(
+                "main lane entry {node_id} does not extend its current leaf"
+            )));
+        }
+        let payload: String = row.get(3)?;
+        let node = crate::session::tree::Entry {
+            id: node_id,
+            parent,
+            seq,
+            value: decode("entry", payload)?,
+        };
+        previous = Some(node.id);
+        entries.push((node.seq, node.value));
+    }
+    if lane.leaf != previous {
+        return Err(StoreError::Sqlite(
+            "main lane leaf does not match the persisted branch".to_owned(),
+        ));
+    }
+    if let Some(model_ref) = entries.iter().rev().find_map(|(_, entry)| match entry {
+        SessionEntry::ModelChanged { model_ref } => Some(model_ref),
+        _ => None,
+    }) && model_ref != &lane.config.model_ref
+    {
+        return Err(StoreError::Sqlite(
+            "main lane model config disagrees with the migration entry".to_owned(),
+        ));
     }
 
     let mut statement = connection.prepare(
@@ -790,4 +927,101 @@ fn now_ms() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| i64::try_from(d.as_millis()).unwrap_or(i64::MAX))
         .unwrap_or(0)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn appends_extend_main_lane_and_model_config_is_lane_owned() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        crate::store::schema::create_fresh(&mut connection).expect("schema");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        let session_id = SessionId::from_uuid(Uuid::nil());
+        create_session(
+            &mut connection,
+            &SessionRecord {
+                id: session_id,
+                cwd: "/tmp".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-a".to_owned(),
+                parent_session_id: None,
+            },
+        )
+        .expect("session");
+
+        append_entry(
+            &mut connection,
+            session_id,
+            &EntryRecord {
+                seq: 1,
+                entry: SessionEntry::UserMessage {
+                    text: "hello".to_owned(),
+                },
+            },
+        )
+        .expect("first entry");
+        append_entry(
+            &mut connection,
+            session_id,
+            &EntryRecord {
+                seq: 2,
+                entry: SessionEntry::AssistantMessage {
+                    text: "hi".to_owned(),
+                },
+            },
+        )
+        .expect("second entry");
+
+        let first: String = connection
+            .query_row("SELECT id FROM entries WHERE seq = 1", [], |row| row.get(0))
+            .expect("first id");
+        let second: String = connection
+            .query_row("SELECT id FROM entries WHERE seq = 2", [], |row| row.get(0))
+            .expect("second id");
+        let first_id = crate::EntryId::parse(&first).expect("first entry id");
+        let second_id = crate::EntryId::parse(&second).expect("second entry id");
+        assert_ne!(first_id, second_id);
+        assert_eq!(first_id.as_uuid().get_version_num(), 7);
+        assert_eq!(second_id.as_uuid().get_version_num(), 7);
+
+        let first_parent: Option<String> = connection
+            .query_row("SELECT parent_id FROM entries WHERE seq = 1", [], |row| {
+                row.get(0)
+            })
+            .expect("first parent");
+        let second_parent: Option<String> = connection
+            .query_row("SELECT parent_id FROM entries WHERE seq = 2", [], |row| {
+                row.get(0)
+            })
+            .expect("second parent");
+        let leaf: Option<String> = connection
+            .query_row(
+                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
+                [session_id.as_uuid().to_string()],
+                |row| row.get(0),
+            )
+            .expect("leaf");
+        assert!(first_parent.is_none());
+        assert_eq!(second_parent.as_deref(), Some(first.as_str()));
+        assert_eq!(leaf.as_deref(), Some(second.as_str()));
+
+        append_entry(
+            &mut connection,
+            session_id,
+            &EntryRecord {
+                seq: 3,
+                entry: SessionEntry::ModelChanged {
+                    model_ref: "model-b".to_owned(),
+                },
+            },
+        )
+        .expect("model change");
+        let loaded = load(&connection, session_id).expect("load");
+        assert_eq!(loaded.session.initial_model_ref, "model-b");
+        assert_eq!(loaded.entries.len(), 3);
+    }
 }

@@ -12,6 +12,10 @@ pub(super) use crate::context::{
 };
 pub(super) use crate::error::{CommandError, RuntimeError};
 pub(super) use crate::ids::{EffectId, InboxId, OperationId};
+pub(super) use crate::operation::{
+    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
+    OperationState, SessionEntry, Transition,
+};
 pub(super) use crate::policy::{AllowlistPolicy, PolicyEngine};
 pub(super) use crate::provider::{
     EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider,
@@ -19,10 +23,6 @@ pub(super) use crate::provider::{
 pub(super) use crate::runtime::{
     EffectBoundary, EffectGate, OperationStatus, Runtime, RuntimeEvent, SaturatedHandle,
     SessionHandle,
-};
-pub(super) use crate::session::{
-    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
-    OperationState, SessionEntry, Transition,
 };
 pub(super) use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EntryRecord, InboxRecord, SessionRecord,

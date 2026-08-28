@@ -1,4 +1,4 @@
-use crate::context::ContextPlan;
+use crate::effect::{CompactionInvocation, ModelStepPlan, ToolInvocation};
 use crate::ids::{EffectId, InboxId, OperationId, SessionId};
 use crate::provider::ModelConfig;
 use crate::session::SessionEntry;
@@ -10,75 +10,62 @@ use crate::tool::ToolCall;
 
 use super::ActiveOperation;
 
-/// Reconstruct a tool call from a persisted effect's exact effective
-/// input (DESIGN.md §12.1). Returns None for inputs from older schemas
-/// that lack the call identity.
-pub(super) fn tool_call_from_input(input: &serde_json::Value) -> Option<ToolCall> {
-    let operation_id = OperationId::from_uuid(uuid::Uuid::now_v7());
-    Some(ToolCall {
-        operation_id,
-        call_id: input.get("call_id")?.as_u64()?,
-        name: input.get("tool")?.as_str()?.to_owned(),
-        arguments: input.get("arguments")?.clone(),
-    })
-}
-
-/// Reconstruct the frozen model snapshot from a persisted provider
-/// effect's exact effective input (DESIGN.md §14.8). Recovery replays
-/// this identity or fences; it never substitutes a launch default.
-pub(super) fn model_from_input(model: &serde_json::Value) -> Option<ModelConfig> {
-    Some(ModelConfig {
-        model_ref: model.get("model_ref")?.as_str()?.to_owned(),
-        context_window: model
-            .get("context_window")
-            .and_then(serde_json::Value::as_u64),
-        capabilities: serde_json::from_value(model.get("capabilities")?.clone()).ok()?,
-    })
-}
-
-/// `(step, model, plan)` from a persisted model-step effect input.
+/// Decode one persisted model-step plan through the typed durable boundary.
+/// The owner module still consumes the historical tuple shape; JSON field
+/// knowledge and harness-profile validation stay here.
 pub(super) fn model_step_from_input(
     input: &serde_json::Value,
 ) -> Option<(
     u64,
     ModelConfig,
-    ContextPlan,
+    crate::context::ContextPlan,
     String,
     String,
     String,
     String,
 )> {
-    let step = input.get("step")?.as_u64()?;
-    let model = model_from_input(input.get("model")?)?;
-    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
-    let capability_snapshot_id = input.get("capability_snapshot_id")?.as_str()?.to_owned();
-    let context_manifest_id = input.get("context_manifest_id")?.as_str()?.to_owned();
-    let prefix_fingerprint = input.get("prefix_fingerprint")?.as_str()?.to_owned();
-    let cache_expectation = input.get("cache_expectation")?.as_str()?.to_owned();
+    let model_step: ModelStepPlan = serde_json::from_value(input.clone()).ok()?;
+    if !model_step.harness_profile.is_supported() {
+        return None;
+    }
     Some((
-        step,
-        model,
-        plan,
-        capability_snapshot_id,
-        context_manifest_id,
-        prefix_fingerprint,
-        cache_expectation,
+        model_step.step,
+        model_step.model,
+        model_step.plan,
+        model_step.capability_snapshot_id,
+        model_step.context_manifest_id,
+        model_step.prefix_fingerprint,
+        model_step.cache_expectation.as_str().to_owned(),
     ))
 }
 
-/// `(step, model, plan)` from a persisted compaction effect input.
+/// Decode one persisted harness-owned compaction invocation.
 pub(super) fn compaction_from_input(
     input: &serde_json::Value,
-) -> Option<(u64, ModelConfig, ContextPlan)> {
-    let step = input.get("step")?.as_u64()?;
-    let model = model_from_input(input.get("model")?)?;
-    let plan = serde_json::from_value(input.get("plan")?.clone()).ok()?;
-    Some((step, model, plan))
+) -> Option<(u64, ModelConfig, crate::context::ContextPlan)> {
+    let invocation: CompactionInvocation = serde_json::from_value(input.clone()).ok()?;
+    if !invocation.harness_profile.is_supported() {
+        return None;
+    }
+    Some((invocation.step, invocation.model, invocation.plan))
+}
+
+/// Decode one persisted tool invocation. The operation id is authoritative on
+/// the owning durable operation and is intentionally not reconstructed from
+/// effect payload bytes. Return the typed invocation too so recovery never
+/// reaches back into raw effect JSON for reconciliation or call identity.
+pub(super) fn tool_call_from_input(
+    operation_id: OperationId,
+    input: &serde_json::Value,
+) -> Option<(ToolCall, ToolInvocation)> {
+    let invocation: ToolInvocation = serde_json::from_value(input.clone()).ok()?;
+    let call = invocation.clone().into_call(operation_id);
+    Some((call, invocation))
 }
 
 /// Build the durable record of one staged transition. Entry sequences are
-/// computed from the caller's next value and returned so the allocator
-/// only advances after the commit succeeds (DESIGN.md §26.2).
+/// computed from the caller's next value and returned so the allocator only
+/// advances after the commit succeeds (DESIGN.md §26.2).
 #[allow(clippy::too_many_arguments)]
 pub(super) fn build_commit_request(
     session_id: SessionId,
