@@ -329,14 +329,21 @@ impl<P: Provider> Provider for SwitchingProvider<P> {
 /// One scripted model-step action used by deterministic tests.
 #[derive(Debug, Clone)]
 pub enum ScriptedMessage {
-    Text { delay: Duration, text: String },
-    Thinking { text: String },
+    Text {
+        delay: Duration,
+        text: String,
+    },
+    Thinking {
+        text: String,
+    },
     ToolCall {
         name: String,
         arguments: serde_json::Value,
     },
     Usage(TokenUsage),
-    Fail { message: String },
+    Fail {
+        message: String,
+    },
 }
 
 impl ScriptedMessage {
