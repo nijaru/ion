@@ -3,7 +3,7 @@
 **Status:** normative architecture contract for the Rust implementation  
 **Date:** 2026-08-27  
 **Scope:** durable harness, session/runtime ownership, effects, tools, agents, and persistence  
-**Primary implementation target:** stable Rust 2024 edition, Tokio, macOS + Linux first
+**Primary implementation target:** Rust 1.98.0, Edition 2024, Tokio, macOS + Linux first
 
 ## 1. Product definition
 
@@ -368,7 +368,7 @@ Follow the repository's Rust expert guidance and idiomatic Rust conventions:
 - `Manager`, `Service`, `Controller`, `Factory`, `Handle`, `Config`, and `Record` only when the term expresses a real domain/lifetime distinction;
 - builders only when optional staged construction genuinely improves the API;
 - split modules by ownership/cohesion, not line count;
-- dependencies are acceptable when they simplify or strengthen the implementation enough to earn their maintenance/MSRV cost;
+- dependencies are acceptable when they simplify or strengthen the implementation enough to earn their maintenance and compatibility cost;
 - do not add future types that have no production owner yet.
 
 Current domain direction:
@@ -392,13 +392,16 @@ ion-core/src/
 
 ## 18. Validation and CI
 
-The repository declares Rust 1.94 as MSRV while development follows the named `stable` channel.
+Ion currently targets and pins Rust **1.98.0**. The workspace `rust-version`, checked-in toolchain, and CI compiler should describe the same contract.
 
-CI should eventually make both promises explicit:
+CI validates that contract with:
 
-- latest stable: format, Clippy (`--workspace --all-targets --all-features -- -D warnings`), and tests;
-- Rust 1.94: explicit MSRV build/check coverage sufficient to catch accidental newer-language/library/dependency requirements;
-- dependency/security auditing remains a separate concern.
+- `cargo fmt --check`;
+- `cargo clippy --locked --workspace --all-targets --all-features -- -D warnings`;
+- `cargo test --locked --workspace`;
+- dependency/security auditing as a separate scheduled concern.
+
+There is no separate older MSRV promise unless Ion deliberately chooses one later. Dependencies should be judged on correctness, fit, maintenance cost, and compatibility with the current toolchain rather than avoided merely to preserve an obsolete support floor.
 
 CI is a validation mechanism, not an architecture authority. Update it when its checks no longer match the repository's declared toolchain contract.
 
