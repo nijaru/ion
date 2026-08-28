@@ -8,16 +8,7 @@ use uuid::Uuid;
 /// to an entry that will be committed atomically with that state. Storage
 /// sequence numbers are ordering metadata, not identity.
 #[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    Hash,
-    PartialOrd,
-    Ord,
-    serde::Serialize,
-    serde::Deserialize,
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
 )]
 pub(crate) struct EntryId(Uuid);
 
