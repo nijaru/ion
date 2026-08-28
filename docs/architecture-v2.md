@@ -1,9 +1,9 @@
 # Architecture v2 migration note
 
-**Status:** rationale and migration guide for `refactor/architecture-normalization`.  
+**Status:** rationale and migration guide for the architecture now merged to `main`.  
 **Normative design:** [`../DESIGN.md`](../DESIGN.md).
 
-This note records why the architecture branch changed direction and how the existing implementation should move toward the canonical design. It is not a second contract.
+This note records why the architecture changed direction and how the remaining implementation should move toward the canonical design. It is not a second contract.
 
 ## Reference weighting
 
@@ -76,12 +76,14 @@ Use SQLite naturally rather than emulating Pi's log format:
 
 - immutable `entries(id, parent_id, seq, payload, ...)`;
 - one directly readable lane current-state/config projection;
-- immutable operation acceptance rows with lane + source-entry identity;
+- immutable operation acceptance with lane + source-entry identity;
 - append-only total operation-state revisions;
 - effects/usage/inbox/evidence in typed supporting tables/codecs;
 - transactions and foreign keys enforcing cross-record invariants.
 
-A directly readable current-state projection is compatible with append-only revision history. The current schema now retains every total operation-state revision in an immutable ledger while keeping the existing latest-state row as a cheap recovery projection. Later store cleanup can make the revision ledger the explicit write API without changing the durable semantics again.
+A directly readable current-state projection is compatible with append-only revision history. The current schema retains every total operation-state revision in an immutable ledger while keeping the existing latest-state row as a cheap recovery projection.
+
+Operation topology is now captured separately in immutable `operation_origins`. While the runtime still addresses only hidden `main`, accepting an operation atomically records the exact lane and pre-acceptance source leaf. The database rejects operation acceptance if that lane cannot be resolved. When lane-targeted runtime commands become real, the current main-lane capture path should become an explicit lane argument without changing the origin contract.
 
 Ion is still pre-1.0, so schema iterations may archive older development databases rather than carrying migration machinery whose compatibility value is not yet real.
 
@@ -96,11 +98,11 @@ The architecture should become more Rust-like as it settles, not more framework-
 - `agent/` appears only when family-scoped control owns production behavior;
 - modules provide naming context instead of root-level type-name prefixes;
 - private implementation types should disappear from `ion_core::*` rather than merely receive prettier names;
-- dependencies are fine when they materially improve correctness/clarity and respect the toolchain contract.
+- dependencies are fine when they materially improve correctness/clarity and respect the Rust 1.98.0 toolchain contract.
 
 ## Migration checkpoint
 
-Already landed on this branch:
+Already landed on `main`:
 
 - runtime/store/tool module normalization;
 - operation reducer moved from the misleading old session module into `operation/`;
@@ -111,23 +113,27 @@ Already landed on this branch:
 - child live-slot leak fix;
 - parent-linked entry schema and a durable `main` lane;
 - entry identity decoupled from storage sequence and represented as UUIDv7;
-- append-only total operation-state revision retention plus a current-state recovery projection.
+- append-only total operation-state revision retention plus a current-state recovery projection;
+- immutable operation-origin capture of accepting lane + exact source leaf;
+- Rust 1.98.0 as the pinned workspace/toolchain/CI contract.
 
-Two migration boundaries still remain explicit:
+Three migration boundaries remain especially important:
 
 - entry IDs are currently generated inside store insertion; the target ownership is the authoritative session transition provisioning the UUIDv7 before persistence so later lane/fork references can name intended entries before the write starts;
-- model changes still use `SessionEntry::ModelChanged` to bridge old runtime behavior into lane config; the target is direct lane-config mutation with no semantic model-change entry.
+- model changes still use `SessionEntry::ModelChanged` to bridge old runtime behavior into lane config; the target is direct lane-config mutation with no semantic model-change entry;
+- busy-lane prompts still become complete queued `Accepted` operations in live/durable state; the target is lane-owned `pending_next_run` input with an operation created only at actual run acceptance.
 
 ## Next implementation slices
 
 1. Move UUIDv7 entry provisioning from store insertion to the authoritative session transition.
 2. Make lane config authoritative and remove `ModelChanged`.
 3. Add total lane state and move busy-lane queueing to `pending_next_run`.
-4. Bind immutable operation acceptance to lane/source leaf and make the operation revision ledger the explicit persistence write boundary.
+4. Thread the existing immutable operation origin through load/runtime types and make operation acceptance explicitly lane-addressable.
 5. Remove `queued_operations` from the live runtime and map current `enqueue` compatibility behavior onto next-run input.
 6. Generalize the session owner from only `main` to multiple lanes and concurrent slow effects.
 7. Finish typed effect codecs/admission boundaries.
 8. Replace special-purpose child/delegate paths with family-scoped agent control.
-9. Reconcile public API/module names and CI/MSRV validation after the durable ownership model is stable.
+9. Reconcile the public API/module vocabulary after the durable ownership model is stable.
+10. Establish/expand `ion-eval` before adding higher-level orchestration policy.
 
 Broad architecture surveying is complete enough to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.
