@@ -196,7 +196,7 @@ pub struct UsageRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedSession {
     pub session: SessionRecord,
-    pub entries: Vec<(u64, SessionEntry)>,
+    pub entries: Vec<EntryRecord>,
     pub operations: Vec<LoadedOperation>,
     pub pending_inbox: Vec<InboxRecord>,
     pub assistant_frames: Vec<AssistantFrame>,

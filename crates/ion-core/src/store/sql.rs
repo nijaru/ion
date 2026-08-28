@@ -808,14 +808,18 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             value: decode("entry", payload)?,
         };
         previous = Some(node.id);
-        entries.push((node.seq, node.value));
+        entries.push(EntryRecord {
+            id: node.id,
+            seq: node.seq,
+            entry: node.value,
+        });
     }
     if lane.leaf != previous {
         return Err(StoreError::Sqlite(
             "main lane leaf does not match the persisted branch".to_owned(),
         ));
     }
-    if let Some(model_ref) = entries.iter().rev().find_map(|(_, entry)| match entry {
+    if let Some(model_ref) = entries.iter().rev().find_map(|entry| match &entry.entry {
         SessionEntry::ModelChanged { model_ref } => Some(model_ref),
         _ => None,
     }) && model_ref != &lane.config.model_ref
