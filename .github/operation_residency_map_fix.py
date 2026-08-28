@@ -114,4 +114,41 @@ new_check = '''for path in (runtime, effects, recovery):\n    text = path.read_t
 if old_check not in text:
     raise SystemExit("final singleton checker mismatch")
 text = text.replace(old_check, new_check, 1)
+
+borrow_fixes = r'''# Borrow shaping for map-backed residency. Capture stable operation facts before
+# mutating live residency so no map reference survives a mutable self borrow.
+text = effects.read_text()
+fn_start = text.index("    pub(crate) async fn handle_engine(&mut self, signal: EngineSignal) {")
+fn_end = text.index("    /// Commit a model-step settlement atomically", fn_start)
+function = text[fn_start:fn_end]
+match_marker = "        match signal {\n"
+match_offset = function.index(match_marker)
+body = function[match_offset + len(match_marker):]
+body = body.replace("active.machine.operation_id()", "operation_id")
+prefix = '''    pub(crate) async fn handle_engine(&mut self, signal: EngineSignal) {\n        let Some((operation_id, compaction_pending)) = self.main_active().map(|active| {\n            (\n                active.machine.operation_id(),\n                matches!(active.machine.state(), OperationState::CompactionPending),\n            )\n        }) else {\n            debug!("ignored engine signal with no active operation");\n            return;\n        };\n        if operation_id != signal_operation_id(&signal) {\n            debug!(?signal, "ignored stale engine signal");\n            return;\n        }\n        let model_step = self\n            .main_live()\n            .expect("main operation residency exists")\n            .model_step;\n        if signal_step(&signal) != model_step {\n            debug!(?signal, "ignored engine signal from a stale model step");\n            return;\n        }\n        if matches!(\n            &signal,\n            EngineSignal::Completed { .. }\n                | EngineSignal::Failed { .. }\n                | EngineSignal::Cancelled { .. }\n                | EngineSignal::ProviderExited { .. }\n        ) {\n            self.wait_effect_boundary(EffectBoundary::ModelSettlement)\n                .await;\n        }\n        if compaction_pending {\n            self.settle_compaction(signal).await;\n            return;\n        }\n        match signal {\n'''
+text = text[:fn_start] + prefix + body + text[fn_end:]
+effects.write_text(text)
+
+# Reads of this flag use immutable residency; assignments need the mutable view.
+text = runtime.read_text()
+text = re.sub(
+    r'self\.main_live\(\)\s*\.expect\("main operation residency exists"\)\s*\.last_step_was_compaction\s*=',
+    'self.main_live_mut().expect("main operation residency exists").last_step_was_compaction =',
+    text,
+)
+
+# Close stages an owned clone, releases the map borrow before persistence, then
+# republishes the committed active core. The cancellation token remains shared.
+close_start = text.index("    async fn close_internal(&mut self) -> Result<(), CommandError> {")
+block_start = text.index("        if let Some(active) = self.main_active_mut() {", close_start)
+block_end = text.index("        self.cancel_root.cancel();", block_start)
+replacement = '''        if let Some(mut staged) = self.main_active().cloned() {\n            let cancel = staged.cancel.clone();\n            staged\n                .machine\n                .apply(Transition::Suspend)\n                .expect("suspend from an open operation");\n            staged.open_effect = None;\n            let (request, new_entry_seq) = build_commit_request(\n                self.session_id,\n                &staged,\n                staged.state_seq + 1,\n                self.next_entry_seq,\n                Vec::new(),\n                Vec::new(),\n                Vec::new(),\n                Vec::new(),\n                Vec::new(),\n                Vec::new(),\n                Vec::new(),\n            );\n            if let Some(gate) = close_gate {\n                gate.wait(EffectBoundary::CloseSuspendCommit).await;\n            }\n            match self.store.commit(request).await {\n                Ok(()) => {\n                    self.next_entry_seq = new_entry_seq;\n                    self.install_active(staged);\n                }\n                Err(err) => {\n                    error!(\n                        session = %self.session_id,\n                        %err,\n                        "suspend checkpoint failed; durable operation stays open"\n                    );\n                }\n            }\n            cancel.cancel();\n        }\n'''
+text = text[:block_start] + replacement + text[block_end:]
+runtime.write_text(text)
+
+'''
+marker = "# A few direct singleton forms are intentionally explicit rather than hidden\n"
+if marker not in text:
+    raise SystemExit("borrow-fix insertion marker missing")
+text = text.replace(marker, borrow_fixes + marker, 1)
 path.write_text(text)
