@@ -36,4 +36,27 @@ text = text.replace(
     '''        let (machine, applied) = match &input.kind {\\n            InboxKind::Prompt => {\\n                OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())\\n            }\\n            InboxKind::AgentMessage { from } => OperationMachine::accept_agent_message(\\n                operation_id,\\n                *from,\\n                input.text.clone(),\\n                tool_registry.specs(),\\n            ),\\n            InboxKind::Steer => unreachable!("steer cannot open a new operation"),\\n        };''',
 )
 
+# Append exact exhaustive-match updates after the main transform. Keep these
+# explicit so the new durable semantic variant cannot disappear behind `_`.
+text += r'''
+
+p = Path("crates/ion-core/src/store/sql.rs")
+source = p.read_text()
+source = source.replace(
+    '''        SessionEntry::UserMessage { .. } => "user_message",\n        SessionEntry::AssistantMessage { .. } => "assistant_message",''',
+    '''        SessionEntry::UserMessage { .. } => "user_message",\n        SessionEntry::AgentMessage { .. } => "agent_message",\n        SessionEntry::AssistantMessage { .. } => "assistant_message",''',
+    1,
+)
+p.write_text(source)
+
+p = Path("crates/ion-core/src/tests/compaction.rs")
+source = p.read_text()
+source = source.replace(
+    '''        SessionEntry::UserMessage { .. } => "user_message",\n        SessionEntry::AssistantMessage { .. } => "assistant_message",''',
+    '''        SessionEntry::UserMessage { .. } => "user_message",\n        SessionEntry::AgentMessage { .. } => "agent_message",\n        SessionEntry::AssistantMessage { .. } => "assistant_message",''',
+    1,
+)
+p.write_text(source)
+'''
+
 p.write_text(text)
