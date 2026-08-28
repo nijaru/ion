@@ -1,0 +1,37 @@
+name: Validate scoped lane capabilities
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply scoped capability patch
+        run: python .github/capability_scope_patch.py
+      - name: Validate Rust 1.98
+        run: |
+          cargo fmt
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace
+      - name: Commit validated source
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add DESIGN.md crates/ion-core/src
+          git rm -f .github/capability_scope_patch.py .github/workflows/validate-capability-scope.yml
+          git commit -m 'refactor(core): scope lane capabilities structurally'
+          git push origin HEAD:main
