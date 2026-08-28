@@ -17,6 +17,12 @@ replace_once(
     '''enum ToolSignal {\n    Progress {\n        operation_id: OperationId,\n        effect_id: EffectId,\n        call_id: u64,\n        output: String,\n    },\n    Settled {\n        operation_id: OperationId,\n        effect_id: EffectId,\n        result: ToolResult,\n    },\n}\n''',
     "tool signals carry operation identity",
 )
+replace_once(
+    runtime,
+    '''            let _ = self.tool_tx.try_send(ToolSignal::Settled {\n                effect_id,\n                result: ToolResult::Err {\n''',
+    '''            let _ = self.tool_tx.try_send(ToolSignal::Settled {\n                operation_id: call.operation_id,\n                effect_id,\n                result: ToolResult::Err {\n''',
+    "synthetic denial settlement routes by operation",
+)
 
 effects = "crates/ion-core/src/runtime/effects.rs"
 replace_once(
