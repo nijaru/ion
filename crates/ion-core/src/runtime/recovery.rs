@@ -63,20 +63,27 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let Some(invocation) = model_invocation(&open) else {
-                    error!(session = %self.session_id, effect = %open.id, "pending model step has an invalid durable invocation; fencing");
+                let Some((
+                    step,
+                    model,
+                    plan,
+                    persisted_snapshot_id,
+                    persisted_manifest_id,
+                    persisted_prefix_fingerprint,
+                    persisted_cache_expectation,
+                )) = model_step_from_input(&open.effective_input)
+                else {
+                    error!(session = %self.session_id, "pending model step lacks an exact model snapshot; fencing");
                     self.closed = true;
                     return;
                 };
-                let step = invocation.step;
-                let model = invocation.model;
-                let plan = invocation.plan;
-                let persisted_snapshot_id = invocation.capability_snapshot_id;
-                let persisted_manifest_id = invocation.context_manifest_id;
-                let persisted_prefix_fingerprint = invocation.prefix_fingerprint;
                 let mut staged = self.operation.clone().expect("operation present");
                 let snapshot_id = staged.capability_snapshot.id.clone();
-                if snapshot_id != persisted_snapshot_id || persisted_manifest_id.is_empty() {
+                if snapshot_id != persisted_snapshot_id
+                    || persisted_manifest_id.is_empty()
+                    || persisted_prefix_fingerprint.is_empty()
+                    || persisted_cache_expectation.is_empty()
+                {
                     error!(session = %self.session_id, "pending model step capability snapshot disagrees with checkpoint; fencing");
                     self.closed = true;
                     return;
@@ -96,7 +103,13 @@ impl<P: Provider> SessionRuntime<P> {
                     id: open.id,
                     settlement: serde_json::json!({ "recovered": "process_loss" }),
                 }];
-                let effect = open.next_attempt();
+                let effect = EffectRecord {
+                    id: EffectId::generate(),
+                    kind: open.kind.clone(),
+                    recovery_class: open.recovery_class,
+                    effective_input: open.effective_input.clone(),
+                    attempt: open.attempt + 1,
+                };
                 staged.open_effect = Some(effect.clone());
                 let (mut request, new_entry_seq) = build_commit_request(
                     self.session_id,
@@ -135,14 +148,11 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let Some(invocation) = compaction_invocation(&open) else {
-                    error!(session = %self.session_id, effect = %open.id, "pending compaction has an invalid durable invocation; fencing");
+                let Some((step, model, plan)) = compaction_from_input(&open.effective_input) else {
+                    error!(session = %self.session_id, "pending compaction lacks an exact model snapshot; fencing");
                     self.closed = true;
                     return;
                 };
-                let step = invocation.step;
-                let model = invocation.model;
-                let plan = invocation.plan;
                 let mut staged = self.operation.clone().expect("operation present");
                 staged
                     .machine
@@ -152,7 +162,13 @@ impl<P: Provider> SessionRuntime<P> {
                     id: open.id,
                     settlement: serde_json::json!({ "recovered": "process_loss" }),
                 }];
-                let effect = open.next_attempt();
+                let effect = EffectRecord {
+                    id: EffectId::generate(),
+                    kind: open.kind.clone(),
+                    recovery_class: open.recovery_class,
+                    effective_input: open.effective_input.clone(),
+                    attempt: open.attempt + 1,
+                };
                 staged.open_effect = Some(effect.clone());
                 let (request, new_entry_seq) = build_commit_request(
                     self.session_id,
@@ -186,20 +202,20 @@ impl<P: Provider> SessionRuntime<P> {
                     self.closed = true;
                     return;
                 };
-                let operation_id = self
-                    .operation
-                    .as_ref()
-                    .expect("operation present")
-                    .machine
-                    .operation_id();
-                let Some((call, invocation)) = tool_invocation(operation_id, &open) else {
-                    error!(session = %self.session_id, effect = %open.id, "pending tool effect has an invalid durable invocation; fencing");
-                    self.closed = true;
-                    return;
-                };
                 match open.recovery_class {
                     RecoveryClass::ReplaySafe => {
-                        // Re-execute with the exact typed durable invocation.
+                        // Re-execute with the exact effective input and the
+                        // durable operation identity that originally owned it.
+                        let operation_id = self
+                            .operation
+                            .as_ref()
+                            .expect("operation present")
+                            .machine
+                            .operation_id();
+                        let call = tool_call_from_input(operation_id, &open.effective_input)
+                            .unwrap_or_else(|| {
+                                panic!("replay-safe tool effect without a usable input")
+                            });
                         let mut staged = self.operation.clone().expect("operation present");
                         staged
                             .machine
@@ -209,7 +225,13 @@ impl<P: Provider> SessionRuntime<P> {
                             id: open.id,
                             settlement: serde_json::json!({ "recovered": "process_loss" }),
                         }];
-                        let effect = open.next_attempt();
+                        let effect = EffectRecord {
+                            id: EffectId::generate(),
+                            kind: open.kind.clone(),
+                            recovery_class: open.recovery_class,
+                            effective_input: open.effective_input.clone(),
+                            attempt: open.attempt + 1,
+                        };
                         staged.open_effect = Some(effect.clone());
                         let (mut request, new_entry_seq) = build_commit_request(
                             self.session_id,
@@ -286,11 +308,13 @@ impl<P: Provider> SessionRuntime<P> {
                         self.advance().await;
                     }
                     RecoveryClass::Reconcile => {
-                        // Reconciliation data is part of the typed admitted
-                        // invocation. Recovery no longer knows effect JSON keys.
-                        let evidence = invocation
-                            .reconciliation
-                            .clone()
+                        // §12.3: classify the pending file mutation
+                        // against the recorded evidence and the file
+                        // state found after process loss.
+                        let evidence = open
+                            .effective_input
+                            .get("reconciliation")
+                            .cloned()
                             .unwrap_or(serde_json::Value::Null);
                         let verdict = match &evidence {
                             serde_json::Value::Null => crate::tool::ReconcileVerdict::Unknown,
@@ -318,7 +342,20 @@ impl<P: Provider> SessionRuntime<P> {
                         };
                         match verdict {
                             crate::tool::ReconcileVerdict::SafeToExecute => {
-                                // The recorded preimage proves re-execution is safe.
+                                // The evidence proves re-execution is
+                                // exactly-once: the file still matches
+                                // the recorded preimage. Preserve the original
+                                // durable operation identity on reconstruction.
+                                let operation_id = self
+                                    .operation
+                                    .as_ref()
+                                    .expect("operation present")
+                                    .machine
+                                    .operation_id();
+                                let call = tool_call_from_input(operation_id, &open.effective_input)
+                                    .unwrap_or_else(|| {
+                                        panic!("reconcilable tool effect without a usable input")
+                                    });
                                 let mut staged = self.operation.clone().expect("operation present");
                                 staged
                                     .machine
@@ -330,7 +367,13 @@ impl<P: Provider> SessionRuntime<P> {
                                         "recovered": "reconciled_preimage_match",
                                     }),
                                 }];
-                                let effect = open.next_attempt();
+                                let effect = EffectRecord {
+                                    id: EffectId::generate(),
+                                    kind: open.kind.clone(),
+                                    recovery_class: open.recovery_class,
+                                    effective_input: open.effective_input.clone(),
+                                    attempt: open.attempt + 1,
+                                };
                                 let effect_id = effect.id;
                                 staged.open_effect = Some(effect.clone());
                                 let (mut request, new_entry_seq) = build_commit_request(
@@ -339,7 +382,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     staged.state_seq + 1,
                                     self.next_entry_seq,
                                     Vec::new(),
-                                    vec![effect],
+                                    vec![effect.clone()],
                                     settled,
                                     Vec::new(),
                                     Vec::new(),
@@ -371,14 +414,20 @@ impl<P: Provider> SessionRuntime<P> {
                                 info!(%operation_id, "reconciled a pending file mutation by preimage match");
                             }
                             crate::tool::ReconcileVerdict::AlreadyApplied => {
-                                // The postimage is on disk: settle the effect as
-                                // completed without repeating it.
+                                // The postimage is on disk: settle the
+                                // effect as completed without repeating
+                                // it.
+                                let call_id = open
+                                    .effective_input
+                                    .get("call_id")
+                                    .and_then(|v| v.as_u64())
+                                    .unwrap_or_default();
                                 let mut staged = self.operation.clone().expect("operation present");
                                 let applied = staged
                                     .machine
                                     .apply(Transition::ToolSettled {
                                         result: ToolResult::Ok {
-                                            call_id: invocation.call_id,
+                                            call_id,
                                             output: "recovered: already applied".to_owned(),
                                             artifact: None,
                                         },
@@ -420,8 +469,8 @@ impl<P: Provider> SessionRuntime<P> {
                             crate::tool::ReconcileVerdict::Conflict
                             | crate::tool::ReconcileVerdict::Unknown => {
                                 // The file matches neither record, or no
-                                // evidence exists: never overwrite; the user
-                                // decides (§12.2, §12.3).
+                                // evidence exists: never overwrite; the
+                                // user decides (§12.2, §12.3).
                                 let mut staged = self.operation.clone().expect("operation present");
                                 let applied = staged
                                     .machine
