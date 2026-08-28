@@ -50,6 +50,9 @@ pub struct SessionRecord {
 pub struct EntryRecord {
     pub id: EntryId,
     pub seq: u64,
+    /// Parent in the semantic conversation tree. Session transitions
+    /// bind this before persistence; the store only validates it.
+    pub(crate) parent: Option<EntryId>,
     pub entry: SessionEntry,
 }
 
@@ -59,8 +62,15 @@ impl EntryRecord {
         Self {
             id: EntryId::generate(),
             seq,
+            parent: None,
             entry,
         }
+    }
+
+    #[must_use]
+    pub(crate) fn after(mut self, parent: Option<EntryId>) -> Self {
+        self.parent = parent;
+        self
     }
 }
 

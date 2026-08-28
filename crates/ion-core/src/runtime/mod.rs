@@ -2571,7 +2571,12 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    async fn commit_transition(&mut self, request: CommitRequest) -> Result<(), StoreError> {
+    async fn commit_transition(&mut self, mut request: CommitRequest) -> Result<(), StoreError> {
+        let mut parent = self.entries.last().map(|record| record.id);
+        for entry in &mut request.entries {
+            entry.parent = parent;
+            parent = Some(entry.id);
+        }
         let entries = request.entries.clone();
         self.store.commit(request).await?;
         self.entries.extend(entries);
@@ -2580,6 +2585,7 @@ impl<P: Provider> SessionRuntime<P> {
 
     fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
         EntryRecord::provision(self.next_entry_seq, entry.clone())
+            .after(self.entries.last().map(|record| record.id))
     }
 
     fn emit_terminal_state(&mut self, state: &OperationState) {

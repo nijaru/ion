@@ -661,7 +661,7 @@ fn insert_entry(
         rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
-    let parent = leaf_id
+    let expected_parent = leaf_id
         .as_deref()
         .map(|raw| {
             crate::ids::EntryId::parse(raw).ok_or_else(|| {
@@ -669,9 +669,14 @@ fn insert_entry(
             })
         })
         .transpose()?;
+    if entry.parent != expected_parent {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "entry parent does not match the main lane leaf".to_owned(),
+        ));
+    }
     let node = crate::session::tree::Entry {
         id: entry.id,
-        parent,
+        parent: entry.parent,
         seq: entry.seq,
         value: entry.entry.clone(),
     };
@@ -811,6 +816,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         entries.push(EntryRecord {
             id: node.id,
             seq: node.seq,
+            parent: node.parent,
             entry: node.value,
         });
     }
@@ -1030,7 +1036,8 @@ mod tests {
             SessionEntry::AssistantMessage {
                 text: "hi".to_owned(),
             },
-        );
+        )
+        .after(Some(first_expected));
         let second_expected = second_record.id;
         append_entry(&mut connection, session_id, &second_record).expect("second entry");
 
