@@ -1429,19 +1429,6 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = max_seq + 1;
 
         for operation in loaded.operations {
-            if operation.lane_name != crate::session::lane::MAIN {
-                if !matches!(&operation.latest.1.state, OperationState::Finished(_)) {
-                    error!(
-                        session = %self.session_id,
-                        operation = %operation.id,
-                        lane = %operation.lane_name,
-                        "single-lane runtime cannot host an open non-main operation; fencing"
-                    );
-                    self.closed = true;
-                    return;
-                }
-                continue;
-            }
             let (state_seq, payload) = operation.latest;
             if matches!(
                 payload.state,

@@ -140,21 +140,21 @@ impl<P: Provider> SessionRuntime<P> {
                     staged.open_effect = Some(effect);
                     self.install_active(staged);
                     self.live_mut(operation_id)
-                        .expect("main operation residency exists")
+                        .expect("operation residency exists")
                         .model_step = step.saturating_sub(1);
                     self.operation_lane_live_mut(operation_id)
                         .expect("recovered operation has an owning lane")
                         .last_prefix_fingerprint = Some(persisted_prefix_fingerprint);
                     self.live_mut(operation_id)
-                        .expect("main operation residency exists")
+                        .expect("operation residency exists")
                         .draft_text
                         .clear();
                     self.live_mut(operation_id)
-                        .expect("main operation residency exists")
+                        .expect("operation residency exists")
                         .draft_thinking
                         .clear();
                     self.live_mut(operation_id)
-                        .expect("main operation residency exists")
+                        .expect("operation residency exists")
                         .assistant_frame_seq = 0;
                     warn!(%operation_id, model = %model.model_ref, "recovered a pending model step by replay");
                     self.spawn_model_step(operation_id, model, plan, tools);
@@ -212,7 +212,7 @@ impl<P: Provider> SessionRuntime<P> {
                     staged.open_effect = Some(effect);
                     self.install_active(staged);
                     self.live_mut(operation_id)
-                        .expect("main operation residency exists")
+                        .expect("operation residency exists")
                         .model_step = step.saturating_sub(1);
                     warn!(%operation_id, model = %model.model_ref, "recovered a pending compaction step by replay");
                     self.spawn_model_step(operation_id, model, plan, Vec::new());
