@@ -247,6 +247,31 @@ impl Family {
         Ok(operation_id)
     }
 
+    /// Send a durable message between retained agents. An active target
+    /// receives it as continuation input at the next reasoning boundary; an
+    /// idle target starts a new operation rooted in the typed agent message.
+    pub async fn send(
+        &self,
+        from: AgentId,
+        to: AgentId,
+        text: impl Into<String>,
+    ) -> Result<OperationId, Error> {
+        let lane_name = {
+            let retained = self.retained.lock().expect("agent family poisoned");
+            if !retained.contains_key(&from) {
+                return Err(Error::UnknownAgent(from));
+            }
+            retained
+                .get(&to)
+                .map(|agent| agent.lane_name.clone())
+                .ok_or(Error::UnknownAgent(to))?
+        };
+        Ok(self
+            .session
+            .send_agent_message(from, lane_name, text)
+            .await?)
+    }
+
     /// Observe authoritative durable operation state for one retained agent.
     /// Reading a terminal/suspended state also releases any stale local permit;
     /// it never consumes or deletes the durable completion.

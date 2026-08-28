@@ -296,6 +296,11 @@ fn project_with_system<'a>(
                     content: text.clone(),
                 });
             }
+            SessionEntry::AgentMessage { from, text } => {
+                messages.push(ContextMessage::User {
+                    content: format!("[Message from {from}]\n{text}"),
+                });
+            }
             SessionEntry::AssistantMessage { text } => {
                 messages.push(ContextMessage::Assistant {
                     content: text.clone(),

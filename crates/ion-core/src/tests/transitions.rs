@@ -239,7 +239,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     // Queued, not applied: the model step is in flight.
     assert_eq!(machine.state(), &OperationState::AssistantEffectPending);
     assert!(applied.entries.is_empty());
-    assert!(machine.has_queued_steers());
+    assert!(machine.has_queued_inputs());
 
     machine
         .apply(Transition::ProviderCompleted {
@@ -250,7 +250,7 @@ fn steer_during_effect_queues_and_applies_at_the_boundary() {
     // Accepted input exists, so the operation continues.
     assert_eq!(machine.state(), &OperationState::NeedContinuation);
 
-    let drained = machine.drain_steers().expect("steer drain");
+    let drained = machine.drain_inputs().expect("steer drain");
     assert_eq!(drained.len(), 1);
     assert_eq!(machine.state(), &OperationState::NeedAssistant);
     assert_eq!(

@@ -299,3 +299,101 @@ async fn agent_wait_set_rejects_missing_execution_and_duplicates() {
     runtime.session().close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn agent_messages_use_durable_inbox_and_preserve_sender_provenance() {
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(180),
+        ..SharedLogProvider::default()
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime =
+        start_runtime_with_store(provider.clone(), ToolRegistry::default(), store.clone());
+    let family = runtime.agent_family(1).await.expect("family");
+    let root = family.root();
+    let sender = family.admit_lane(root).await.expect("sender admission");
+    let target = family.admit_lane(root).await.expect("target admission");
+    let target_operation = family
+        .start(target, "initial target work")
+        .await
+        .expect("target start");
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if !provider.requests().is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("first provider step started");
+
+    assert_eq!(
+        family
+            .send(sender, target, "coordinate on the API boundary")
+            .await
+            .expect("active message delivery"),
+        target_operation
+    );
+    family
+        .wait_one(target, CancellationToken::new(), None)
+        .await
+        .expect("target completion");
+
+    let requests = provider.requests();
+    assert_eq!(
+        requests.len(),
+        2,
+        "queued message must cause a continuation step"
+    );
+    assert!(requests[1].plan.messages.iter().any(|message| {
+        matches!(
+            message,
+            crate::ContextMessage::User { content }
+                if content == &format!(
+                    "[Message from {sender}]\ncoordinate on the API boundary"
+                )
+        )
+    }));
+
+    let idle_target = family
+        .admit_lane(root)
+        .await
+        .expect("idle target admission");
+    let idle_operation = family
+        .send(sender, idle_target, "start from this handoff")
+        .await
+        .expect("idle message delivery");
+    assert!(matches!(
+        family.status(idle_target).await.expect("idle target became active"),
+        crate::AgentStatus::Active { operation_id, .. } if operation_id == idle_operation
+    ));
+    family
+        .wait_one(idle_target, CancellationToken::new(), None)
+        .await
+        .expect("idle-message operation completion");
+
+    let loaded = store
+        .load(runtime.session_id())
+        .await
+        .expect("load messages");
+    let messages = loaded
+        .entries
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            crate::SessionEntry::AgentMessage { from, text } => Some((*from, text.clone())),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        messages,
+        vec![
+            (sender, "coordinate on the API boundary".to_owned()),
+            (sender, "start from this handoff".to_owned()),
+        ]
+    );
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}

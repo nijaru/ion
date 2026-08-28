@@ -521,6 +521,13 @@ fn push_entry_lines(
                 out.push(Line::from(format!("{prefix}{logical_line}")).style(palette.user_entry));
             }
         }
+        ion_core::SessionEntry::AgentMessage { from, text } => {
+            let rendered = format!("[Message from {from}]\n{text}");
+            for (i, logical_line) in rendered.split('\n').enumerate() {
+                let prefix = if i == 0 { "> " } else { "  " };
+                out.push(Line::from(format!("{prefix}{logical_line}")).style(palette.user_entry));
+            }
+        }
         ion_core::SessionEntry::AssistantMessage { text } => {
             let total = text.lines().count();
             for (i, logical_line) in text.split('\n').enumerate() {

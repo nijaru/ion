@@ -76,7 +76,7 @@ fn compaction_transitions_are_total() {
         })
         .expect("complete with queued steer");
     machine
-        .drain_steers()
+        .drain_inputs()
         .expect("drain steers at the reasoning boundary");
     let applied = machine
         .apply(Transition::StartCompaction {
@@ -196,6 +196,7 @@ async fn large_context_compacts_at_the_continuation_boundary() {
 fn entry_kind_name(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
+        SessionEntry::AgentMessage { .. } => "agent_message",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",

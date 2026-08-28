@@ -580,6 +580,13 @@ fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
                 "sessionUpdate": "user_message_chunk",
                 "content": { "type": "text", "text": text },
             })),
+            ion_core::SessionEntry::AgentMessage { from, text } => updates.push(json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {
+                    "type": "text",
+                    "text": format!("[Message from {from}]\n{text}"),
+                },
+            })),
             ion_core::SessionEntry::AssistantMessage { text } => updates.push(json!({
                 "sessionUpdate": "agent_message_chunk",
                 "content": { "type": "text", "text": text },

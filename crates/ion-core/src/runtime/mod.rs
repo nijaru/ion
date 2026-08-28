@@ -431,6 +431,12 @@ enum SessionCommand {
         text: String,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
+    SendAgentMessage {
+        from: AgentId,
+        lane_name: String,
+        text: String,
+        reply: oneshot::Sender<Result<OperationId, CommandError>>,
+    },
     Cancel {
         operation_id: OperationId,
         reply: oneshot::Sender<Result<(), CommandError>>,
@@ -597,6 +603,24 @@ impl SessionHandle {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::Steer {
+                text: text.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    pub(crate) async fn send_agent_message(
+        &self,
+        from: AgentId,
+        lane_name: impl Into<String>,
+        text: impl Into<String>,
+    ) -> Result<OperationId, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::SendAgentMessage {
+                from,
+                lane_name: lane_name.into(),
                 text: text.into(),
                 reply,
             })
@@ -1121,7 +1145,7 @@ struct ActiveOperation {
     /// The one in-flight effect intent, if any.
     open_effect: Option<EffectRecord>,
     /// Inbox items durably accepted but not yet applied.
-    pending_steers: Vec<InboxId>,
+    pending_inputs: Vec<InboxId>,
 }
 
 /// Ephemeral execution state owned by the currently resident operation.
@@ -1486,10 +1510,10 @@ impl<P: Provider> SessionRuntime<P> {
                 cancel: self.cancel_root.child_token(),
                 state_seq,
                 open_effect: payload.open_effect.clone(),
-                pending_steers: operation
+                pending_inputs: operation
                     .pending_inbox
                     .iter()
-                    .filter(|item| item.kind == InboxKind::Steer)
+                    .filter(|item| !matches!(&item.kind, InboxKind::Prompt))
                     .map(|item| item.id)
                     .collect(),
             };
@@ -1781,6 +1805,15 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.enqueue_steer(text).await);
                 false
             }
+            SessionCommand::SendAgentMessage {
+                from,
+                lane_name,
+                text,
+                reply,
+            } => {
+                let _ = reply.send(self.send_agent_message(from, lane_name, text).await);
+                false
+            }
             SessionCommand::Cancel {
                 operation_id,
                 reply,
@@ -1998,15 +2031,42 @@ impl<P: Provider> SessionRuntime<P> {
         prompt: String,
         reservation: Option<crate::session::lane::NextRun>,
     ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
+        self.accept_operation_input(
+            lane_name,
+            InboxItem {
+                kind: InboxKind::Prompt,
+                text: prompt,
+            },
+            reservation,
+        )
+        .await
+    }
+
+    async fn accept_operation_input(
+        &mut self,
+        lane_name: &str,
+        input: InboxItem,
+        reservation: Option<crate::session::lane::NextRun>,
+    ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
         let operation_id = OperationId::generate();
         let tool_registry = self.tools.snapshot();
-        let (machine, applied) =
-            OperationMachine::accept(operation_id, prompt.clone(), tool_registry.specs());
+        let (machine, applied) = match &input.kind {
+            InboxKind::Prompt => {
+                OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())
+            }
+            InboxKind::AgentMessage { from } => OperationMachine::accept_agent_message(
+                operation_id,
+                *from,
+                input.text.clone(),
+                tool_registry.specs(),
+            ),
+            InboxKind::Steer => unreachable!("steer cannot open a new operation"),
+        };
         let capability_snapshot = tool_registry.capability_snapshot();
         let root_inbox = InboxRecord {
             id: InboxId::generate(),
-            kind: InboxKind::Prompt,
-            text: prompt,
+            kind: input.kind,
+            text: input.text,
             status: InboxStatus::Applied,
         };
         let entry = match reservation.as_ref() {
@@ -2062,7 +2122,7 @@ impl<P: Provider> SessionRuntime<P> {
                 cancel: self.cancel_root.child_token(),
                 state_seq: 1,
                 open_effect: None,
-                pending_steers: Vec::new(),
+                pending_inputs: Vec::new(),
             },
             entry_id,
         ))
@@ -2159,27 +2219,75 @@ impl<P: Provider> SessionRuntime<P> {
         if self.closed {
             return Err(CommandError::Closed);
         }
+        let operation_id = self
+            .main_active()
+            .map(|active| active.machine.operation_id())
+            .ok_or(CommandError::NoActiveOperation)?;
+        self.enqueue_operation_input(
+            operation_id,
+            InboxItem {
+                kind: InboxKind::Steer,
+                text,
+            },
+        )
+        .await
+    }
+
+    async fn send_agent_message(
+        &mut self,
+        from: AgentId,
+        lane_name: String,
+        text: String,
+    ) -> Result<OperationId, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if self.lane(&lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name));
+        }
+        let input = InboxItem {
+            kind: InboxKind::AgentMessage { from },
+            text,
+        };
+        if let Some(operation_id) = self.lane_resident_id(&lane_name) {
+            self.enqueue_operation_input(operation_id, input).await?;
+            return Ok(operation_id);
+        }
+        if let Some(pending) = self.lane_pending_next_run(&lane_name) {
+            return Err(CommandError::NextRunQueued {
+                entry_id: pending.entry_id,
+            });
+        }
+        let (active, _) = self.accept_operation_input(&lane_name, input, None).await?;
+        let operation_id = active.machine.operation_id();
+        self.start_active(&lane_name, active);
+        self.advance(operation_id).await;
+        Ok(operation_id)
+    }
+
+    async fn enqueue_operation_input(
+        &mut self,
+        operation_id: OperationId,
+        item: InboxItem,
+    ) -> Result<(), CommandError> {
         let inbox_id = InboxId::generate();
         // Stage on a full clone; a failed commit discards the clone and
         // never mutates live state (DESIGN.md §26.2).
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
-            .ok_or(CommandError::NoActiveOperation)?;
+            .ok_or(CommandError::NotActive { operation_id })?;
+        let record_kind = item.kind.clone();
+        let record_text = item.text.clone();
         let applied = staged
             .machine
-            .apply(Transition::ApplyInbox {
-                item: InboxItem {
-                    kind: InboxKind::Steer,
-                    text: text.clone(),
-                },
-            })
-            .expect("inbox apply from an active operation");
+            .apply(Transition::ApplyInbox { item })
+            .expect("continuation input apply from an active operation");
         let applied_now = !applied.entries.is_empty();
         let record = InboxRecord {
             id: inbox_id,
-            kind: InboxKind::Steer,
-            text,
+            kind: record_kind,
+            text: record_text,
             status: if applied_now {
                 InboxStatus::Applied
             } else {
@@ -2206,9 +2314,8 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         if !applied_now {
-            staged.pending_steers.push(inbox_id);
+            staged.pending_inputs.push(inbox_id);
         }
-        let operation_id = staged.machine.operation_id();
         self.install_active(staged);
         self.advance(operation_id).await;
         Ok(())
@@ -2298,7 +2405,7 @@ impl<P: Provider> SessionRuntime<P> {
                 OperationState::Accepted | OperationState::NeedAssistant => {
                     if self
                         .active(operation_id)
-                        .is_some_and(|active| active.machine.has_queued_steers())
+                        .is_some_and(|active| active.machine.has_queued_inputs())
                     {
                         if !self.drain_queued(operation_id).await {
                             return;
@@ -2334,7 +2441,7 @@ impl<P: Provider> SessionRuntime<P> {
                 OperationState::NeedContinuation => {
                     if self
                         .active(operation_id)
-                        .is_some_and(|active| active.machine.has_queued_steers())
+                        .is_some_and(|active| active.machine.has_queued_inputs())
                     {
                         if !self.drain_queued(operation_id).await {
                             return;
@@ -2354,7 +2461,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    /// Drain queued steers as one durable transaction at a reasoning
+    /// Drain queued continuation inputs as one durable transaction at a reasoning
     /// boundary. Returns false when persistence failed.
     async fn drain_queued(&mut self, operation_id: OperationId) -> bool {
         let (mut staged, request, new_entry_seq) = {
@@ -2363,9 +2470,9 @@ impl<P: Provider> SessionRuntime<P> {
                 .cloned()
                 .expect("drain needs an operation");
             let mut staged = active.clone();
-            let drained = staged.machine.drain_steers().expect("steer drain");
+            let drained = staged.machine.drain_inputs().expect("input drain");
             let applied_ids = staged
-                .pending_steers
+                .pending_inputs
                 .drain(..drained.len())
                 .collect::<Vec<_>>();
             let mut entries = Vec::new();

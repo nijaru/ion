@@ -501,23 +501,32 @@ fn begin_operation(
             "lane {lane_name:?} already has a current operation"
         )));
     }
-    let user_prompt = match &entry.entry {
-        SessionEntry::UserMessage { text } => text,
+    let accepted_text = match (&root_inbox.kind, &entry.entry) {
+        (InboxKind::Prompt, SessionEntry::UserMessage { text }) => text,
+        (
+            InboxKind::AgentMessage { from },
+            SessionEntry::AgentMessage {
+                from: entry_from,
+                text,
+            },
+        ) if from == entry_from => text,
         _ => {
             return Err(rusqlite::Error::InvalidParameterName(
-                "operation acceptance must append its user prompt".to_owned(),
+                "operation root inbox disagrees with its semantic entry".to_owned(),
             ));
         }
     };
-    if user_prompt != &checkpoint.payload.prompt || root_inbox.text.as_str() != user_prompt {
+    if accepted_text != &checkpoint.payload.prompt || root_inbox.text.as_str() != accepted_text {
         return Err(rusqlite::Error::InvalidParameterName(
-            "operation prompt disagrees with its accepted entry".to_owned(),
+            "operation input disagrees with its accepted entry".to_owned(),
         ));
     }
     match (pending_entry, pending_prompt) {
         (None, None) => {}
         (Some(reserved_entry), Some(reserved_prompt))
-            if reserved_entry == entry_id && reserved_prompt.as_str() == user_prompt => {}
+            if matches!(&root_inbox.kind, InboxKind::Prompt)
+                && reserved_entry == entry_id
+                && reserved_prompt.as_str() == accepted_text => {}
         _ => {
             return Err(rusqlite::Error::InvalidParameterName(
                 "operation does not match the lane's reserved next run".to_owned(),
@@ -896,6 +905,20 @@ fn insert_inbox(
         InboxStatus::Pending => "pending",
         InboxStatus::Applied => "applied",
     };
+    if let InboxKind::AgentMessage { from } = &item.kind {
+        let sender_exists: bool = connection.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM agents WHERE id = ?1 AND family_session_id = ?2
+            )",
+            rusqlite::params![from.as_uuid().to_string(), session_id.as_uuid().to_string(),],
+            |row| row.get(0),
+        )?;
+        if !sender_exists {
+            return Err(rusqlite::Error::InvalidParameterName(format!(
+                "agent message sender {from} is not retained by this family"
+            )));
+        }
+    }
     connection.execute(
         "INSERT INTO inbox_items (id, session_id, operation_id, kind, text, status, accepted_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -1539,6 +1562,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
 fn entry_kind(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
+        SessionEntry::AgentMessage { .. } => "agent_message",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",

@@ -7,7 +7,7 @@
 //! the session entry log until the SQLite store takes over (§32 Step 2).
 
 use crate::context::ContextPlan;
-use crate::ids::OperationId;
+use crate::ids::{AgentId, OperationId};
 use crate::provider::ModelConfig;
 use crate::tool::{ToolCall, ToolResult, ToolSpec};
 
@@ -20,6 +20,8 @@ pub enum InboxKind {
     /// Joins the active operation; applied at the next safe continuation
     /// boundary (the next model step).
     Steer,
+    /// Durable direct input from another retained agent in the same family.
+    AgentMessage { from: AgentId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -40,6 +42,10 @@ pub enum SessionEntry {
         summary: String,
     },
     UserMessage {
+        text: String,
+    },
+    AgentMessage {
+        from: AgentId,
         text: String,
     },
     /// Only validated completed provider output becomes this entry.
@@ -272,7 +278,7 @@ pub struct OperationMachine {
     state: OperationState,
     /// Accepted steers, applied at the next reasoning boundary (the next
     /// model step, including tool continuations) — §9.2.
-    steers: Vec<InboxItem>,
+    pending_inputs: Vec<InboxItem>,
     /// Capability snapshot for the current model step. The runtime replaces
     /// this at each safe model-step boundary (DESIGN.md §18.2).
     step_tools: Vec<ToolSpec>,
@@ -302,9 +308,36 @@ impl OperationMachine {
             operation_id,
             cancel_requested: false,
             state: OperationState::Accepted,
-            steers: Vec::new(),
+            pending_inputs: Vec::new(),
             step_tools: tools,
             prompt,
+        };
+        (machine, applied)
+    }
+
+    #[must_use]
+    pub(crate) fn accept_agent_message(
+        operation_id: OperationId,
+        from: AgentId,
+        text: String,
+        tools: Vec<ToolSpec>,
+    ) -> (Self, Applied) {
+        let applied = Applied {
+            state: OperationState::Accepted,
+            entries: vec![SessionEntry::AgentMessage {
+                from,
+                text: text.clone(),
+            }],
+            intents: Vec::new(),
+            cancel_effects: false,
+        };
+        let machine = Self {
+            operation_id,
+            cancel_requested: false,
+            state: OperationState::Accepted,
+            pending_inputs: Vec::new(),
+            step_tools: tools,
+            prompt: text,
         };
         (machine, applied)
     }
@@ -318,13 +351,13 @@ impl OperationMachine {
         tools: Vec<ToolSpec>,
         state: OperationState,
         cancel_requested: bool,
-        steers: Vec<InboxItem>,
+        pending_inputs: Vec<InboxItem>,
     ) -> Self {
         Self {
             operation_id,
             prompt,
             state,
-            steers,
+            pending_inputs,
             step_tools: tools,
             cancel_requested,
         }
@@ -374,10 +407,10 @@ impl OperationMachine {
         self.cancel_requested
     }
 
-    /// True when queued steers wait for the next reasoning boundary.
+    /// True when durable continuation inputs wait for the next reasoning boundary.
     #[must_use]
-    pub fn has_queued_steers(&self) -> bool {
-        !self.steers.is_empty()
+    pub fn has_queued_inputs(&self) -> bool {
+        !self.pending_inputs.is_empty()
     }
 
     /// Apply one transition. Invalid state/transition pairs are typed
@@ -415,9 +448,9 @@ impl OperationMachine {
     }
 
     fn apply_inbox(&mut self, item: InboxItem) -> Result<Applied, TransitionError> {
-        let applies_now = match item.kind {
-            // Steer joins at the next reasoning boundary (§9.2).
-            InboxKind::Steer => matches!(
+        let applies_now = match &item.kind {
+            // Continuation inputs join at the next reasoning boundary (§9.2).
+            InboxKind::Steer | InboxKind::AgentMessage { .. } => matches!(
                 self.state,
                 OperationState::Accepted
                     | OperationState::NeedAssistant
@@ -432,9 +465,17 @@ impl OperationMachine {
         };
         if applies_now {
             self.state = OperationState::NeedAssistant;
+            let entry = match item.kind {
+                InboxKind::Steer => SessionEntry::UserMessage { text: item.text },
+                InboxKind::AgentMessage { from } => SessionEntry::AgentMessage {
+                    from,
+                    text: item.text,
+                },
+                InboxKind::Prompt => unreachable!("rejected above"),
+            };
             Ok(Applied {
                 state: self.state.clone(),
-                entries: vec![SessionEntry::UserMessage { text: item.text }],
+                entries: vec![entry],
                 intents: Vec::new(),
                 cancel_effects: false,
             })
@@ -449,7 +490,9 @@ impl OperationMachine {
                 | OperationState::ToolEffectPending { .. }
         ) {
             match item.kind {
-                InboxKind::Steer => self.steers.push(item),
+                InboxKind::Steer | InboxKind::AgentMessage { .. } => {
+                    self.pending_inputs.push(item);
+                }
                 InboxKind::Prompt => unreachable!("rejected above"),
             }
             Ok(Applied {
@@ -506,7 +549,7 @@ impl OperationMachine {
         }
         let mut entries = vec![SessionEntry::AssistantMessage { text }];
         if tool_calls.is_empty() {
-            if self.has_queued_steers() {
+            if self.has_queued_inputs() {
                 self.state = OperationState::NeedContinuation;
             } else {
                 self.state = OperationState::Finished(OperationOutcome::Completed);
@@ -926,15 +969,14 @@ impl OperationMachine {
         })
     }
 
-    /// Drain queued steers at a reasoning boundary. Each applied item
-    /// moves the machine to [`OperationState::NeedAssistant`].
-    pub fn drain_steers(&mut self) -> Result<Vec<Applied>, TransitionError> {
-        let mut applied = Vec::new();
-        while let Some(item) = self.steers.first().cloned() {
-            self.steers.remove(0);
-            applied.push(self.apply_inbox(item)?);
-        }
-        Ok(applied)
+    /// Drain queued continuation inputs at a reasoning boundary. Each
+    /// applied item moves the machine to [`OperationState::NeedAssistant`].
+    pub fn drain_inputs(&mut self) -> Result<Vec<Applied>, TransitionError> {
+        let pending = std::mem::take(&mut self.pending_inputs);
+        pending
+            .into_iter()
+            .map(|item| self.apply_inbox(item))
+            .collect()
     }
 }
 
