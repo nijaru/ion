@@ -1,0 +1,68 @@
+name: Patch entry-id migration
+
+on:
+  push:
+    branches:
+      - refactor/provision-entry-ids
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/provision-entry-ids
+      - name: Apply surgical patches
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          runtime = Path('crates/ion-core/src/runtime/mod.rs')
+          text = runtime.read_text()
+          old = '''    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
+              EntryRecord {
+                  seq: self.next_entry_seq,
+                  entry: entry.clone(),
+              }
+          }
+          '''
+          new = '''    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
+              EntryRecord::provision(self.next_entry_seq, entry.clone())
+          }
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('runtime stage_entry pattern did not match exactly once')
+          runtime.write_text(text.replace(old, new))
+
+          reconcile = Path('crates/ion-core/src/tests/reconcile.rs')
+          text = reconcile.read_text()
+          old = '''    let entry = EntryRecord {
+              seq: 1,
+              entry: SessionEntry::UserMessage {
+                  text: "go".to_owned(),
+              },
+          };
+          '''
+          new = '''    let entry = EntryRecord::provision(
+              1,
+              SessionEntry::UserMessage {
+                  text: "go".to_owned(),
+              },
+          );
+          '''
+          if text.count(old) != 1:
+              raise SystemExit('reconcile entry pattern did not match exactly once')
+          reconcile.write_text(text.replace(old, new))
+          PY
+          cargo fmt
+      - name: Commit patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/ion-core/src/runtime/mod.rs crates/ion-core/src/tests/reconcile.rs
+          git commit -m 'refactor(core): provision direct entry ids'
+          git push origin HEAD:refactor/provision-entry-ids
