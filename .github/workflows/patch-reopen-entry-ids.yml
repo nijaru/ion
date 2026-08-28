@@ -24,15 +24,6 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
-          import re
-
-          def replace_once(path, old, new, label):
-              p = Path(path)
-              text = p.read_text()
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f'{label}: expected exactly one match, got {count}')
-              p.write_text(text.replace(old, new))
 
           # Context projection accepts borrowed semantic payloads from either
           # plain slices or durable EntryRecord iterators without cloning.
@@ -115,10 +106,7 @@ jobs:
               '        self.next_entry_seq += 1;\n',
               1,
           )
-          text = text.replace(
-              '        let applied_entries = applied.entries.clone();\n',
-              '',
-          )
+          text = text.replace('        let applied_entries = applied.entries.clone();\n', '')
           text = text.replace(
               '        if applied_now {\n'
               '            self.entries.extend(applied_entries);\n'
@@ -128,6 +116,16 @@ jobs:
               '        if !applied_now {\n'
               '            staged.pending_steers.push(inbox_id);\n'
               '        }\n',
+          )
+          text = text.replace(
+              '        let (mut staged, drained, request, new_entry_seq) = {\n',
+              '        let (mut staged, request, new_entry_seq) = {\n',
+          )
+          text = text.replace(
+              '            (staged, drained, request, new_entry_seq)\n'
+              '        };\n',
+              '            (staged, request, new_entry_seq)\n'
+              '        };\n',
           )
           text = text.replace(
               '        for applied in &drained {\n'
@@ -170,8 +168,17 @@ jobs:
               '                .map(|record| record.entry.clone())\n'
               '                .collect(),\n',
           )
-          # Route existing CommitRequest writes through the one install boundary.
+          # Route ordinary CommitRequest writes through the one install boundary.
           text = text.replace('self.store.commit(request).await', 'self.commit_transition(request).await')
+          # Suspension already holds a mutable borrow of the active operation and
+          # never appends entries, so keep that one write directly on the store.
+          text = text.replace(
+              '            match self.commit_transition(request).await {\n'
+              '                Ok(()) => {\n',
+              '            match self.store.commit(request).await {\n'
+              '                Ok(()) => {\n',
+              1,
+          )
           marker = (
               '    fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {\n'
               '        EntryRecord::provision(self.next_entry_seq, entry.clone())\n'
@@ -217,7 +224,6 @@ jobs:
           # already authoritative for model selection.
           p = Path('crates/ion-core/src/delegate.rs')
           text = p.read_text()
-          text = text.replace('|(_, entry)| match entry {', '|record| match &record.entry {')
           text = text.replace('|(_, entry)| match entry {', '|record| match &record.entry {')
           old = (
               '        let model_ref = loaded\n'
@@ -273,21 +279,70 @@ jobs:
               text = p.read_text()
               text = text.replace('|(_, entry)| match entry {', '|record| match &record.entry {')
               text = text.replace('|(_, entry)| matches!(entry,', '|record| matches!(&record.entry,')
+              text = text.replace('|(_, entry)| matches!(', '|record| matches!(&record.entry,')
               text = text.replace('|(_, entry)| !matches!(entry,', '|record| !matches!(&record.entry,')
+              text = text.replace('|(_, entry)| !matches!(', '|record| !matches!(&record.entry,')
               text = text.replace('|(_, entry)| {', '|record| {\n            let entry = &record.entry;')
               text = text.replace('|(_, e)| entry_kind_name(e)', '|record| entry_kind_name(&record.entry)')
               text = text.replace('.last().expect("entries").1', '.last().expect("entries").entry')
               p.write_text(text)
 
+          # Test helper accepts semantic entries from either snapshots or mapped
+          # durable records; callers state which projection they are testing.
           p = Path('crates/ion-core/src/tests/support.rs')
           text = p.read_text()
-          old = 'pub(super) fn entry_kinds(entries: &[(u64, crate::SessionEntry)]) -> Vec<&\'static str> {\n'
-          new = 'pub(super) fn entry_kinds(entries: &[crate::EntryRecord]) -> Vec<&\'static str> {\n'
+          old = (
+              'pub(super) fn entry_kinds(entries: &[(u64, crate::SessionEntry)]) -> Vec<&\'static str> {\n'
+              '    entries\n'
+              '        .iter()\n'
+              '        .map(|(_, entry)| match entry {\n'
+          )
+          new = (
+              "pub(super) fn entry_kinds<'a>(\n"
+              "    entries: impl IntoIterator<Item = &'a crate::SessionEntry>,\n"
+              ") -> Vec<&'static str> {\n"
+              '    entries\n'
+              '        .into_iter()\n'
+              '        .map(|entry| match entry {\n'
+          )
           if text.count(old) != 1:
-              raise SystemExit('entry_kinds signature did not match exactly once')
-          text = text.replace(old, new)
-          text = text.replace('.map(|(_, entry)| match entry {', '.map(|record| match &record.entry {')
+              raise SystemExit('entry_kinds helper did not match exactly once')
+          p.write_text(text.replace(old, new))
+
+          p = Path('crates/ion-core/src/tests/store.rs')
+          text = p.read_text().replace(
+              'entry_kinds(&loaded.entries)',
+              'entry_kinds(loaded.entries.iter().map(|record| &record.entry))',
+          )
           p.write_text(text)
+
+          p = Path('crates/ion-core/src/tests/reopen_schema.rs')
+          text = p.read_text()
+          old = (
+              '        entry_kinds(\n'
+              '            &snapshot\n'
+              '                .entries\n'
+              '                .iter()\n'
+              '                .enumerate()\n'
+              '                .map(|(i, e)| (i as u64, e.clone()))\n'
+              '                .collect::<Vec<_>>()\n'
+              '        ),\n'
+              '        entry_kinds(\n'
+              '            &before\n'
+              '                .entries\n'
+              '                .iter()\n'
+              '                .enumerate()\n'
+              '                .map(|(i, e)| (i as u64, e.clone()))\n'
+              '                .collect::<Vec<_>>()\n'
+              '        )\n'
+          )
+          new = (
+              '        entry_kinds(&snapshot.entries),\n'
+              '        entry_kinds(&before.entries)\n'
+          )
+          if text.count(old) != 1:
+              raise SystemExit('reopen snapshot entry-kind comparison did not match exactly once')
+          p.write_text(text.replace(old, new))
           PY
           cargo fmt
           cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
