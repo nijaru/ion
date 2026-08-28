@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 15;
+const SCHEMA_VERSION: i64 = 16;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -110,10 +110,24 @@ CREATE TABLE IF NOT EXISTS lanes (
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
+    lane_name TEXT NOT NULL,
+    source_leaf_id TEXT,
     kind TEXT NOT NULL,
     accepted_at INTEGER NOT NULL,
-    accepted_seq INTEGER NOT NULL
+    accepted_seq INTEGER NOT NULL,
+    UNIQUE (session_id, accepted_seq),
+    FOREIGN KEY (session_id, lane_name) REFERENCES lanes(session_id, name),
+    FOREIGN KEY (session_id, source_leaf_id) REFERENCES entries(session_id, id)
 );
+
+-- An operation's topology is immutable acceptance data. Runtime state changes
+-- belong in operation_state; rebinding an accepted run to another lane or
+-- source leaf would make recovery history-dependent.
+CREATE TRIGGER IF NOT EXISTS operations_topology_immutable
+BEFORE UPDATE OF session_id, lane_name, source_leaf_id ON operations
+BEGIN
+    SELECT RAISE(ABORT, 'operation topology is immutable');
+END;
 
 -- Direct latest-state projection used by recovery. The append-only revision
 -- ledger below is populated atomically by triggers from every insert/update,
@@ -275,8 +289,16 @@ mod tests {
             .expect("session");
         connection
             .execute(
-                "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
-                 VALUES ('operation', 'session', 'run', 0, 1)",
+                "INSERT INTO lanes (session_id, name, leaf_id, config, created_at, updated_at)
+                 VALUES ('session', 'main', NULL, '{}', 0, 0)",
+                [],
+            )
+            .expect("lane");
+        connection
+            .execute(
+                "INSERT INTO operations (
+                    id, session_id, lane_name, source_leaf_id, kind, accepted_at, accepted_seq
+                 ) VALUES ('operation', 'session', 'main', NULL, 'run', 0, 1)",
                 [],
             )
             .expect("operation");
@@ -377,6 +399,27 @@ mod tests {
                 .execute(
                     "DELETE FROM operation_state_revisions
                      WHERE operation_id = 'operation' AND state_seq = 1",
+                    [],
+                )
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn operation_topology_cannot_be_rebound() {
+        let connection = seeded_connection();
+        assert!(
+            connection
+                .execute(
+                    "UPDATE operations SET lane_name = 'other' WHERE id = 'operation'",
+                    [],
+                )
+                .is_err()
+        );
+        assert!(
+            connection
+                .execute(
+                    "UPDATE operations SET source_leaf_id = 'entry' WHERE id = 'operation'",
                     [],
                 )
                 .is_err()
