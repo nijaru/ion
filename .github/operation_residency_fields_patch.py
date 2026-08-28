@@ -70,7 +70,10 @@ text = text.replace(anchor, residency, 1)
 # fields that remain session- or lane-owned.
 lines = text.splitlines(keepends=True)
 start = next(i for i, line in enumerate(lines) if line == "struct SessionRuntime<P> {\n")
-end = next(i for i in range(start + 1, len(lines)) if lines[i] == "}\n" and lines[i + 1].startswith("\nimpl<P: Provider> SessionRuntime"))
+impl_start = next(
+    i for i in range(start + 1, len(lines)) if lines[i] == "impl<P: Provider> SessionRuntime<P> {\n"
+)
+end = max(i for i in range(start + 1, impl_start) if lines[i] == "}\n")
 out = lines[: start + 1]
 pending_docs: list[str] = []
 inserted_live = False
