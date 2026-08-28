@@ -81,6 +81,8 @@ Use SQLite naturally rather than emulating Pi's log format:
 - effects/usage/inbox/evidence in typed supporting tables/codecs;
 - transactions and foreign keys enforcing cross-record invariants.
 
+A directly readable current-state projection is compatible with append-only revision history. The current schema now retains every total operation-state revision in an immutable ledger while keeping the existing latest-state row as a cheap recovery projection. Later store cleanup can make the revision ledger the explicit write API without changing the durable semantics again.
+
 Ion is still pre-1.0, so schema iterations may archive older development databases rather than carrying migration machinery whose compatibility value is not yet real.
 
 ## Rust/API direction
@@ -107,19 +109,21 @@ Already landed on this branch:
 - malformed durable-effect fencing;
 - simplified `ion/default@1` harness identity;
 - child live-slot leak fix;
-- initial schema work for tree parent links and a durable `main` lane.
+- parent-linked entry schema and a durable `main` lane;
+- entry identity decoupled from storage sequence and represented as UUIDv7;
+- append-only total operation-state revision retention plus a current-state recovery projection.
 
-The initial tree/lane store slice still contains two intentional migration shortcuts that must not become final contracts:
+Two migration boundaries still remain explicit:
 
-- entry identity is temporarily coupled to sequence in the current branch implementation; the target is an independently provisioned UUIDv7 `EntryId`;
+- entry IDs are currently generated inside store insertion; the target ownership is the authoritative session transition provisioning the UUIDv7 before persistence so later lane/fork references can name intended entries before the write starts;
 - model changes still use `SessionEntry::ModelChanged` to bridge old runtime behavior into lane config; the target is direct lane-config mutation with no semantic model-change entry.
 
 ## Next implementation slices
 
-1. Replace sequence-derived entry IDs with writer-provisioned UUIDv7 IDs; validate the tree/main-lane store slice.
+1. Move UUIDv7 entry provisioning from store insertion to the authoritative session transition.
 2. Make lane config authoritative and remove `ModelChanged`.
 3. Add total lane state and move busy-lane queueing to `pending_next_run`.
-4. Bind immutable operation acceptance to lane/source leaf and make operation-state storage append-only total revisions.
+4. Bind immutable operation acceptance to lane/source leaf and make the operation revision ledger the explicit persistence write boundary.
 5. Remove `queued_operations` from the live runtime and map current `enqueue` compatibility behavior onto next-run input.
 6. Generalize the session owner from only `main` to multiple lanes and concurrent slow effects.
 7. Finish typed effect codecs/admission boundaries.
