@@ -80,7 +80,7 @@ ACP is the better signal for Ion's interoperable frontend boundary; AHP is corro
 
 Cursor and Warp/Oz are useful evidence that users benefit from parallel sessions, worktrees, cloud/remote agents, and unified agent lists. Their closed internals are not primary substrate evidence.
 
-Factory Droid and Amp are also useful closed-source product/system references when their public documentation exposes concrete session, background, remote, or multi-agent semantics. Ion can use those observable semantics as evidence without inferring or designing around uninspectable internals.
+Factory Droid and Amp are useful closed-source product/system references when their public documentation exposes concrete session, background, remote, or multi-agent semantics. Ion can use those observable semantics as supporting evidence without inferring or designing around uninspectable internals.
 
 OpenCode remains low-weight because repeated rewrites weaken architectural convergence claims. Gemini CLI is not an architectural reference.
 
