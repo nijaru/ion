@@ -217,10 +217,12 @@ pub(super) fn temp_db(name: &str) -> std::path::PathBuf {
     dir.join("sessions.db")
 }
 
-pub(super) fn entry_kinds(entries: &[(u64, crate::SessionEntry)]) -> Vec<&'static str> {
+pub(super) fn entry_kinds<'a>(
+    entries: impl IntoIterator<Item = &'a crate::SessionEntry>,
+) -> Vec<&'static str> {
     entries
-        .iter()
-        .map(|(_, entry)| match entry {
+        .into_iter()
+        .map(|entry| match entry {
             crate::SessionEntry::UserMessage { .. } => "user_message",
             crate::SessionEntry::ModelChanged { .. } => "model_changed",
             crate::SessionEntry::AssistantMessage { .. } => "assistant_message",

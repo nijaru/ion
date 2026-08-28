@@ -103,7 +103,7 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     let transcript = loaded
         .entries
         .iter()
-        .map(|(_, entry)| serde_json::to_string(entry).unwrap_or_default())
+        .map(|record| serde_json::to_string(&record.entry).unwrap_or_default())
         .collect::<Vec<_>>()
         .join("\n");
     assert!(

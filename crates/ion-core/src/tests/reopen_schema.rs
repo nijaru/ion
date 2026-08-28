@@ -61,24 +61,7 @@ async fn reopen_rebuilds_an_open_operation_and_blocks_new_work() {
         "the runtime owns the reopen boundary used by frontends"
     );
     // The transcript reproduced exactly what was committed before close.
-    assert_eq!(
-        entry_kinds(
-            &snapshot
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (i as u64, e.clone()))
-                .collect::<Vec<_>>()
-        ),
-        entry_kinds(
-            &before
-                .entries
-                .iter()
-                .enumerate()
-                .map(|(i, e)| (i as u64, e.clone()))
-                .collect::<Vec<_>>()
-        )
-    );
+    assert_eq!(entry_kinds(&snapshot.entries), entry_kinds(&before.entries));
     // The settlement is durable: the latest checkpoint is terminal.
     let loaded = store.load(session_id).await.expect("load");
     assert_eq!(loaded.operations.len(), 1);

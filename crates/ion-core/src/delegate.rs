@@ -369,7 +369,7 @@ impl<P> ChildManager<P> {
             .entries
             .iter()
             .rev()
-            .find_map(|(_, entry)| match entry {
+            .find_map(|record| match &record.entry {
                 crate::session::SessionEntry::AssistantMessage { text }
                     if matches!(state, OperationState::Finished(OperationOutcome::Completed)) =>
                 {
@@ -480,16 +480,7 @@ impl<P> ChildManager<P> {
         if matches!(operation.latest.1.state, OperationState::Finished(_)) {
             return self.observe(handle).await;
         }
-        let model_ref = loaded
-            .entries
-            .iter()
-            .filter_map(|(_, entry)| match entry {
-                crate::session::SessionEntry::ModelChanged { model_ref } => Some(model_ref),
-                _ => None,
-            })
-            .next_back()
-            .cloned()
-            .unwrap_or_else(|| loaded.session.initial_model_ref.clone());
+        let model_ref = loaded.session.initial_model_ref.clone();
         let provider = match self.config.make_provider_for_model.as_ref() {
             Some(make_provider) => make_provider(model_ref.clone()),
             None => {
@@ -524,10 +515,13 @@ impl<P> ChildManager<P> {
             cancel_for_watch.cancelled().await;
             let _ = session_for_watch.cancel(operation_id).await;
         });
-        let objective = loaded.entries.iter().find_map(|(_, entry)| match entry {
-            crate::session::SessionEntry::UserMessage { text } => Some(text.clone()),
-            _ => None,
-        });
+        let objective = loaded
+            .entries
+            .iter()
+            .find_map(|record| match &record.entry {
+                crate::session::SessionEntry::UserMessage { text } => Some(text.clone()),
+                _ => None,
+            });
         self.children
             .lock()
             .expect("child manager poisoned")
@@ -1082,12 +1076,11 @@ async fn fork_context(
         .load(parent_id)
         .await
         .map_err(|err| format!("could not load parent context: {err}"))?;
-    let first_seq = loaded.entries.first().map_or(1, |(seq, _)| *seq);
-    let entries: Vec<_> = loaded.entries.into_iter().map(|(_, entry)| entry).collect();
-    if entries.is_empty() {
+    if loaded.entries.is_empty() {
         return Ok(None);
     }
-    let plan = project(&entries, first_seq);
+    let first_seq = loaded.entries.first().map_or(1, |record| record.seq);
+    let plan = project(loaded.entries.iter().map(|record| &record.entry), first_seq);
     Ok(Some(render_fork_context(&plan)))
 }
 

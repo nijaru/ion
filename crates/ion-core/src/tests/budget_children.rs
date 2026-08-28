@@ -101,7 +101,8 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
     let tool_intents = loaded
         .entries
         .iter()
-        .filter(|(_, entry)| {
+        .filter(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .map(|text| text.contains("echo two"))
                 .unwrap_or(false)
@@ -241,7 +242,8 @@ async fn child_uses_parent_workspace_for_relative_tools() {
     let child_id = parent
         .entries
         .iter()
-        .find_map(|(_, entry)| {
+        .find_map(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .ok()
                 .filter(|text| text.contains("child completed"))
@@ -250,7 +252,8 @@ async fn child_uses_parent_workspace_for_relative_tools() {
         .expect("child reference");
     let child = store.load(child_id).await.expect("child session");
     assert_eq!(child.session.cwd, workspace_text);
-    assert!(child.entries.iter().any(|(_, entry)| {
+    assert!(child.entries.iter().any(|record| {
+        let entry = &record.entry;
         serde_json::to_string(entry)
             .map(|text| text.contains("from parent workspace"))
             .unwrap_or(false)
@@ -350,7 +353,8 @@ async fn two_read_only_children_run_and_report_lineage() {
     let tool_output = loaded
         .entries
         .iter()
-        .find_map(|(_, entry)| {
+        .find_map(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .ok()
                 .filter(|text| text.contains("child answer"))
@@ -440,7 +444,8 @@ async fn fork_context_and_model_override_are_explicit() {
     let child_id = parent
         .entries
         .iter()
-        .find_map(|(_, entry)| {
+        .find_map(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .ok()
                 .filter(|text| text.contains("child answer"))
@@ -452,7 +457,7 @@ async fn fork_context_and_model_override_are_explicit() {
     let prompt = child
         .entries
         .iter()
-        .find_map(|(_, entry)| match entry {
+        .find_map(|record| match &record.entry {
             crate::SessionEntry::UserMessage { text } => Some(text),
             _ => None,
         })
@@ -506,7 +511,8 @@ async fn child_cannot_widen_capabilities() {
     let tool_output = loaded
         .entries
         .iter()
-        .find_map(|(_, entry)| {
+        .find_map(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .ok()
                 .filter(|text| text.contains("child failed"))
@@ -581,7 +587,8 @@ async fn budget_stops_a_runaway_child() {
     let tool_output = loaded
         .entries
         .iter()
-        .find_map(|(_, entry)| {
+        .find_map(|record| {
+            let entry = &record.entry;
             serde_json::to_string(entry)
                 .ok()
                 .filter(|text| text.contains("budget exceeded"))

@@ -30,7 +30,7 @@ async fn restart_reproduces_the_logical_transcript() {
     let store = SessionStore::open(&db).expect("reopen store");
     let loaded = store.load(session_id).await.expect("load");
     assert_eq!(
-        entry_kinds(&loaded.entries),
+        entry_kinds(loaded.entries.iter().map(|record| &record.entry)),
         [
             "user_message",
             "assistant_message",

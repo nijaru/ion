@@ -146,7 +146,7 @@ async fn effect_gate_crash_prefix_reopens_before_tool_execution() {
         !loaded
             .entries
             .iter()
-            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+            .any(|record| matches!(&record.entry, SessionEntry::ToolResult { .. }))
     );
 
     runtime.crash();
@@ -228,8 +228,8 @@ async fn effect_gate_crash_prefix_reopens_after_tool_execution() {
         Some(RuntimeEvent::OperationFinished { .. })
     ));
     let loaded = store.load(session_id).await.expect("load");
-    assert!(loaded.entries.iter().any(|(_, entry)| matches!(
-        entry,
+    assert!(loaded.entries.iter().any(|record| matches!(
+        &record.entry,
         SessionEntry::ToolResult {
             result: ToolResult::Ok { output, .. }
         } if output.contains("persisted bytes")
@@ -326,7 +326,7 @@ async fn effect_gate_crash_prefix_reopens_before_compaction_execution() {
         loaded
             .entries
             .iter()
-            .all(|(_, entry)| !matches!(entry, SessionEntry::Compaction { .. }))
+            .all(|record| !matches!(&record.entry, SessionEntry::Compaction { .. }))
     );
 
     runtime.crash();
@@ -349,7 +349,7 @@ async fn effect_gate_crash_prefix_reopens_before_compaction_execution() {
         loaded
             .entries
             .iter()
-            .any(|(_, entry)| matches!(entry, SessionEntry::Compaction { .. }))
+            .any(|record| matches!(&record.entry, SessionEntry::Compaction { .. }))
     );
     session.close().await.expect("close");
     runtime.join().await.expect("join");
@@ -498,7 +498,7 @@ async fn effect_gate_crash_prefix_reopens_with_a_durable_queued_operation() {
         loaded
             .entries
             .iter()
-            .filter(|(_, entry)| matches!(entry, SessionEntry::UserMessage { .. }))
+            .filter(|record| matches!(&record.entry, SessionEntry::UserMessage { .. }))
             .count(),
         2
     );
@@ -719,8 +719,8 @@ async fn crash_during_replayable_tool_recovers_by_reexecution() {
         checkpoint.state,
         OperationState::Finished(OperationOutcome::Completed)
     );
-    assert!(loaded.entries.iter().any(|(_, entry)| matches!(
-        entry,
+    assert!(loaded.entries.iter().any(|record| matches!(
+        &record.entry,
         SessionEntry::ToolResult {
             result: ToolResult::Ok { output, .. },
         } if output.contains("persisted bytes")
@@ -789,7 +789,7 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
         !loaded
             .entries
             .iter()
-            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+            .any(|record| matches!(&record.entry, SessionEntry::ToolResult { .. }))
     );
 
     // The session accepts new work after the indeterminate settlement.
@@ -833,7 +833,7 @@ async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
         !loaded
             .entries
             .iter()
-            .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. })),
+            .any(|record| matches!(&record.entry, SessionEntry::ToolResult { .. })),
         "nothing may have executed before the decision"
     );
 
@@ -894,7 +894,7 @@ async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
         loaded
             .entries
             .iter()
-            .filter(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+            .filter(|record| matches!(&record.entry, SessionEntry::ToolResult { .. }))
             .count(),
         1
     );

@@ -1101,8 +1101,8 @@ struct SessionRuntime<P> {
     cancel_root: CancellationToken,
     tracker: TaskTracker,
     cursor: RuntimeCursor,
-    /// Canonical semantic session view, mirroring the durable store.
-    entries: Vec<SessionEntry>,
+    /// Canonical semantic records, mirroring the durable store.
+    entries: Vec<EntryRecord>,
     /// Next storage-assigned entry sequence.
     next_entry_seq: u64,
     operation: Option<ActiveOperation>,
@@ -1275,9 +1275,9 @@ impl<P: Provider> SessionRuntime<P> {
         let assistant_frames = loaded.assistant_frames;
         self.selected_model_ref = loaded.session.initial_model_ref.clone();
         let mut max_seq = 0;
-        for (seq, entry) in loaded.entries {
-            max_seq = max_seq.max(seq);
-            self.entries.push(entry);
+        for record in loaded.entries {
+            max_seq = max_seq.max(record.seq);
+            self.entries.push(record);
         }
         self.next_entry_seq = max_seq + 1;
         for operation in loaded.operations {
@@ -1541,7 +1541,13 @@ impl<P: Provider> SessionRuntime<P> {
         };
         // Accepted intent is durable before acknowledgment (P4, §9.1).
         self.store
-            .begin_operation(self.session_id, operation_id, root_inbox, checkpoint, entry)
+            .begin_operation(
+                self.session_id,
+                operation_id,
+                root_inbox,
+                checkpoint,
+                entry.clone(),
+            )
             .await
             .map_err(persistence_command_error)?;
         if is_queued {
@@ -1558,7 +1564,7 @@ impl<P: Provider> SessionRuntime<P> {
             open_effect: None,
             pending_steers: Vec::new(),
         };
-        self.entries.extend(applied.entries.iter().cloned());
+        self.entries.push(entry);
         self.next_entry_seq += 1;
         if self.operation.is_none() && self.queued_operations.is_empty() {
             self.start_active(active);
@@ -1652,7 +1658,6 @@ impl<P: Provider> SessionRuntime<P> {
             })
             .expect("inbox apply from an active operation");
         let applied_now = !applied.entries.is_empty();
-        let applied_entries = applied.entries.clone();
         let record = InboxRecord {
             id: inbox_id,
             kind: InboxKind::Steer,
@@ -1683,9 +1688,7 @@ impl<P: Provider> SessionRuntime<P> {
 
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        if applied_now {
-            self.entries.extend(applied_entries);
-        } else {
+        if !applied_now {
             staged.pending_steers.push(inbox_id);
         }
         self.operation = Some(staged);
@@ -1760,7 +1763,9 @@ impl<P: Provider> SessionRuntime<P> {
     /// its effect starts (§12.1).
     /// The durable seq of the first in-memory transcript entry.
     fn first_entry_seq(&self) -> u64 {
-        self.next_entry_seq - self.entries.len() as u64
+        self.entries
+            .first()
+            .map_or(self.next_entry_seq, |record| record.seq)
     }
 
     async fn advance(&mut self) {
@@ -1839,7 +1844,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// Drain queued steers as one durable transaction at a reasoning
     /// boundary. Returns false when persistence failed.
     async fn drain_queued(&mut self) -> bool {
-        let (mut staged, drained, request, new_entry_seq) = {
+        let (mut staged, request, new_entry_seq) = {
             let active = self.operation.clone().expect("drain needs an operation");
             let mut staged = active.clone();
             let drained = staged.machine.drain_steers().expect("steer drain");
@@ -1864,17 +1869,14 @@ impl<P: Provider> SessionRuntime<P> {
                 applied_ids,
                 Vec::new(),
             );
-            (staged, drained, request, new_entry_seq)
+            (staged, request, new_entry_seq)
         };
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return false;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        for applied in &drained {
-            self.entries.extend(applied.entries.iter().cloned());
-        }
         self.operation = Some(staged);
         true
     }
@@ -1933,7 +1935,11 @@ impl<P: Provider> SessionRuntime<P> {
         manifest: &ContextManifest,
     ) -> crate::context::ContextPlan {
         let _ = self.current_model_config().await;
-        project_with_manifest(&self.entries, self.first_entry_seq(), manifest)
+        project_with_manifest(
+            self.entries.iter().map(|record| &record.entry),
+            self.first_entry_seq(),
+            manifest,
+        )
     }
 
     async fn wait_effect_boundary(&self, boundary: EffectBoundary) {
@@ -1967,7 +1973,11 @@ impl<P: Provider> SessionRuntime<P> {
     async fn start_compaction(&mut self, instructions: Option<String>) -> bool {
         let model = self.current_model_config().await;
         let (_, manifest) = self.current_context_manifest();
-        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), &manifest);
+        let mut plan = project_with_manifest(
+            self.entries.iter().map(|record| &record.entry),
+            self.first_entry_seq(),
+            &manifest,
+        );
         let mut content = crate::context::SUMMARIZE_INSTRUCTION.to_owned();
         if let Some(instructions) = instructions {
             content.push_str("\n\nPreservation instructions from the caller: ");
@@ -2011,7 +2021,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return false;
         }
@@ -2060,13 +2070,12 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.entries.extend(applied.entries);
         // Emits OperationFailed for the Failed outcome (terminal event
         // contract); idling here mirrors the approval-required path so
         // no command observes a Finished-but-open operation.
@@ -2148,7 +2157,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         request.context_manifests.push(context_manifest);
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return false;
         }
@@ -2254,7 +2263,7 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                     Vec::new(),
                 );
-                if let Err(err) = self.store.commit(request).await {
+                if let Err(err) = self.commit_transition(request).await {
                     self.fail_operation_on_persistence(err).await;
                     return false;
                 }
@@ -2294,7 +2303,7 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
             );
-            if let Err(err) = self.store.commit(request).await {
+            if let Err(err) = self.commit_transition(request).await {
                 self.fail_operation_on_persistence(err).await;
                 return false;
             }
@@ -2404,7 +2413,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return false;
         }
@@ -2484,14 +2493,13 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
             );
-            if let Err(err) = self.store.commit(request).await {
+            if let Err(err) = self.commit_transition(request).await {
                 let message = err.to_string();
                 self.fail_operation_on_persistence(err).await;
                 return Err(CommandError::Persistence(message));
             }
             self.next_entry_seq = new_entry_seq;
             staged.state_seq += 1;
-            self.entries.extend(applied.entries);
             let state = staged.machine.state().clone();
             self.operation = Some(staged);
             self.emit_terminal_state(&state);
@@ -2561,6 +2569,13 @@ impl<P: Provider> SessionRuntime<P> {
                 "approval commit failed; the operation failed from its last checkpoint".to_owned(),
             ))
         }
+    }
+
+    async fn commit_transition(&mut self, request: CommitRequest) -> Result<(), StoreError> {
+        let entries = request.entries.clone();
+        self.store.commit(request).await?;
+        self.entries.extend(entries);
+        Ok(())
     }
 
     fn stage_entry(&mut self, entry: &SessionEntry) -> EntryRecord {
@@ -2642,7 +2657,11 @@ impl<P: Provider> SessionRuntime<P> {
                     state: active.machine.state().clone(),
                 },
             },
-            entries: self.entries.clone(),
+            entries: self
+                .entries
+                .iter()
+                .map(|record| record.entry.clone())
+                .collect(),
             model_ref: self.selected_model_ref.clone(),
             latest_usage: self.latest_usage,
             live: self.operation.as_ref().map(|_| LiveOperationState {

@@ -252,23 +252,30 @@ impl ContextMessage {
 /// deterministic. `first_seq` is the durable seq of `entries[0]`, so a
 /// compaction baseline can name what it covers (§14.7).
 #[must_use]
-pub fn project(entries: &[SessionEntry], first_seq: u64) -> ContextPlan {
+pub fn project<'a>(
+    entries: impl IntoIterator<Item = &'a SessionEntry>,
+    first_seq: u64,
+) -> ContextPlan {
     project_with_system(entries, first_seq, SYSTEM_SECTION.to_owned())
 }
 
 /// Project entries using one stable context manifest.
 #[must_use]
-pub fn project_with_manifest(
-    entries: &[SessionEntry],
+pub fn project_with_manifest<'a>(
+    entries: impl IntoIterator<Item = &'a SessionEntry>,
     first_seq: u64,
     manifest: &ContextManifest,
 ) -> ContextPlan {
     project_with_system(entries, first_seq, manifest.system.clone())
 }
 
-fn project_with_system(entries: &[SessionEntry], first_seq: u64, system: String) -> ContextPlan {
+fn project_with_system<'a>(
+    entries: impl IntoIterator<Item = &'a SessionEntry>,
+    first_seq: u64,
+    system: String,
+) -> ContextPlan {
     let mut messages: Vec<ContextMessage> = Vec::new();
-    for (index, entry) in entries.iter().enumerate() {
+    for (index, entry) in entries.into_iter().enumerate() {
         match entry {
             SessionEntry::Compaction {
                 covers_through_seq,

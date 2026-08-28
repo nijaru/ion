@@ -183,7 +183,7 @@ async fn large_context_compacts_at_the_continuation_boundary() {
     let kinds: Vec<_> = loaded
         .entries
         .iter()
-        .map(|(_, e)| entry_kind_name(e))
+        .map(|record| entry_kind_name(&record.entry))
         .collect();
     assert!(kinds.contains(&"compaction"), "{kinds:?}");
     assert_eq!(
@@ -308,10 +308,10 @@ async fn context_overflow_compacts_once_and_retries() {
     );
     let loaded = store.load(session_id).await.expect("load");
     assert!(
-        loaded
-            .entries
-            .iter()
-            .any(|(_, entry)| matches!(entry, crate::session::SessionEntry::Compaction { .. })),
+        loaded.entries.iter().any(|record| matches!(
+            &record.entry,
+            crate::session::SessionEntry::Compaction { .. }
+        )),
         "the overflow compaction must be durable"
     );
 }

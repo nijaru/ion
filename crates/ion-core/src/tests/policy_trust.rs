@@ -115,14 +115,13 @@ async fn default_policy_terminates_bash_as_approval_required() {
         loaded.operations[0].latest.1.state,
         OperationState::Finished(OperationOutcome::ApprovalRequired { ref tool }) if tool == "bash"
     ));
-    let has_call = loaded
-        .entries
-        .iter()
-        .any(|(_, entry)| matches!(entry, SessionEntry::ToolCall { call } if call.name == "bash"));
+    let has_call = loaded.entries.iter().any(
+        |record| matches!(&record.entry, SessionEntry::ToolCall { call } if call.name == "bash"),
+    );
     let has_result = loaded
         .entries
         .iter()
-        .any(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }));
+        .any(|record| matches!(&record.entry, SessionEntry::ToolResult { .. }));
     assert!(has_call, "the planned call stays visible");
     assert!(!has_result, "nothing executed");
 }
@@ -451,7 +450,7 @@ async fn interactive_runtime_parks_bash_and_approval_executes_it() {
     let started = loaded
         .entries
         .iter()
-        .filter(|(_, entry)| matches!(entry, SessionEntry::ToolResult { .. }))
+        .filter(|record| matches!(&record.entry, SessionEntry::ToolResult { .. }))
         .count();
     assert_eq!(
         started, 1,
@@ -505,7 +504,8 @@ async fn interactive_deny_is_model_visible_and_the_operation_continues() {
     // exists for a call that never started.
     let loaded = store.load(session_id).await.expect("load");
     assert!(
-        loaded.entries.iter().any(|(_, entry)| {
+        loaded.entries.iter().any(|record| {
+            let entry = &record.entry;
             matches!(entry, SessionEntry::ToolResult { result: ToolResult::Err { error, .. } } if error.contains("denied"))
         }),
         "the denial is model-visible: {loaded:?}"
@@ -618,7 +618,8 @@ async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
     let loaded = store.load(session_id).await.expect("load");
-    let denied = loaded.entries.iter().any(|(_, entry)| {
+    let denied = loaded.entries.iter().any(|record| {
+        let entry = &record.entry;
         matches!(entry, SessionEntry::ToolResult {
             result: ToolResult::Err { error, .. },
         } if error.contains("denied by test policy"))

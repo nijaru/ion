@@ -290,13 +290,12 @@ impl<P: Provider> SessionRuntime<P> {
             usage,
         );
         request.assistant_frames_delete = frame_effect_id.into_iter().collect();
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.entries.extend(applied.entries);
         if let Some(usage) = settled_usage {
             self.latest_usage = Some(usage);
         }
@@ -315,7 +314,11 @@ impl<P: Provider> SessionRuntime<P> {
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let model = self.current_model_config().await;
         let (_, manifest) = self.current_context_manifest();
-        let mut plan = project_with_manifest(&self.entries, self.first_entry_seq(), &manifest);
+        let mut plan = project_with_manifest(
+            self.entries.iter().map(|record| &record.entry),
+            self.first_entry_seq(),
+            &manifest,
+        );
         plan.messages.push(crate::context::ContextMessage::User {
             content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),
         });
@@ -361,7 +364,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         request.assistant_frames_delete = frame_effect_id.into_iter().collect();
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
         }
@@ -437,13 +440,12 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
-        self.entries.extend(applied.entries);
         self.emit_terminal_state(&applied.state.clone());
         self.operation = Some(staged);
         self.advance().await;
@@ -526,14 +528,13 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
         );
         request.tool_progress_delete.push(effect_id);
-        if let Err(err) = self.store.commit(request).await {
+        if let Err(err) = self.commit_transition(request).await {
             self.fail_operation_on_persistence(err).await;
             return;
         }
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         staged.open_effect = None;
-        self.entries.extend(applied.entries);
         self.live_tools.retain(|pending| pending.call_id != call_id);
         self.emit(RuntimeEvent::ToolSettled {
             cursor: RuntimeCursor::default(),
@@ -596,7 +597,7 @@ impl<P: Provider> SessionRuntime<P> {
             Vec::new(),
             Vec::new(),
         );
-        match self.store.commit(request).await {
+        match self.commit_transition(request).await {
             Ok(()) => {
                 let applied_state = staged.machine.state().clone();
                 self.operation = Some(staged);

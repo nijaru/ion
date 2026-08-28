@@ -158,7 +158,7 @@ async fn mcp_tool_flows_through_the_normal_operation_path() {
     let loaded = store.load(session_id).await.expect("load");
     // user -> assistant -> tool call -> tool result -> assistant(done)
     assert_eq!(loaded.entries.len(), 5);
-    let last = &loaded.entries.last().expect("entries").1;
+    let last = &loaded.entries.last().expect("entries").entry;
     assert!(
         serde_json::to_string(last)
             .map(|text| text.contains("done"))

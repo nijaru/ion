@@ -336,7 +336,8 @@ async fn preimage_intact_reexecutes_the_write_exactly_once() {
         "recovery must execute the intended write"
     );
     let loaded = store.load(session_id).await.expect("load");
-    let recovered = loaded.entries.iter().any(|(_, entry)| {
+    let recovered = loaded.entries.iter().any(|record| {
+        let entry = &record.entry;
         matches!(entry, SessionEntry::ToolResult {
             result: ToolResult::Ok { output, .. },
         } if output == "written")
@@ -366,7 +367,8 @@ async fn postimage_present_settles_without_repeating() {
     runtime.join().await.expect("join");
 
     let loaded = store.load(session_id).await.expect("load");
-    let settled = loaded.entries.iter().any(|(_, entry)| {
+    let settled = loaded.entries.iter().any(|record| {
+        let entry = &record.entry;
         matches!(entry, SessionEntry::ToolResult {
             result: ToolResult::Ok { output, .. },
         } if output.contains("already applied"))

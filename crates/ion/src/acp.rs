@@ -565,17 +565,17 @@ fn parse_session_id(value: &str) -> Result<ion_core::SessionId, String> {
         .ok_or_else(|| format!("invalid sessionId {value:?}"))
 }
 
-fn replay_history(entries: &[(u64, ion_core::SessionEntry)]) -> Vec<Value> {
+fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
     let results: HashMap<u64, &ion_core::ToolResult> = entries
         .iter()
-        .filter_map(|(_, entry)| match entry {
+        .filter_map(|record| match &record.entry {
             ion_core::SessionEntry::ToolResult { result } => Some((result.call_id(), result)),
             _ => None,
         })
         .collect();
     let mut updates = Vec::new();
-    for (_, entry) in entries {
-        match entry {
+    for record in entries {
+        match &record.entry {
             ion_core::SessionEntry::UserMessage { text } => updates.push(json!({
                 "sessionUpdate": "user_message_chunk",
                 "content": { "type": "text", "text": text },

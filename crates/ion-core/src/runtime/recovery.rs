@@ -42,7 +42,7 @@ impl<P: Provider> SessionRuntime<P> {
                     .map(|effect| vec![effect.id])
                     .unwrap_or_default(),
             };
-            if let Err(err) = self.store.commit(request).await {
+            if let Err(err) = self.commit_transition(request).await {
                 error!(session = %self.session_id, error = %err, "could not settle a suspended operation");
                 self.closed = true;
                 return;
@@ -119,7 +119,7 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                 );
                 request.assistant_frames_delete.push(open.id);
-                if let Err(err) = self.store.commit(request).await {
+                if let Err(err) = self.commit_transition(request).await {
                     self.fail_operation_on_persistence(err).await;
                     return;
                 }
@@ -171,7 +171,7 @@ impl<P: Provider> SessionRuntime<P> {
                     Vec::new(),
                     Vec::new(),
                 );
-                if let Err(err) = self.store.commit(request).await {
+                if let Err(err) = self.commit_transition(request).await {
                     self.fail_operation_on_persistence(err).await;
                     return;
                 }
@@ -230,7 +230,7 @@ impl<P: Provider> SessionRuntime<P> {
                             Vec::new(),
                         );
                         request.tool_progress_delete.push(open.id);
-                        if let Err(err) = self.store.commit(request).await {
+                        if let Err(err) = self.commit_transition(request).await {
                             self.fail_operation_on_persistence(err).await;
                             return;
                         }
@@ -276,7 +276,7 @@ impl<P: Provider> SessionRuntime<P> {
                             Vec::new(),
                             Vec::new(),
                         );
-                        if let Err(err) = self.store.commit(request).await {
+                        if let Err(err) = self.commit_transition(request).await {
                             self.fail_operation_on_persistence(err).await;
                             return;
                         }
@@ -284,7 +284,6 @@ impl<P: Provider> SessionRuntime<P> {
                         self.next_entry_seq = new_entry_seq;
                         staged.state_seq += 1;
                         staged.open_effect = None;
-                        self.entries.extend(applied.entries);
                         self.emit_terminal_state(&applied.state);
                         self.operation = Some(staged);
                         warn!(%operation_id, "an unresolved never-replay effect settled as indeterminate");
@@ -362,7 +361,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                 );
                                 request.tool_progress_delete.push(open.id);
-                                if let Err(err) = self.store.commit(request).await {
+                                if let Err(err) = self.commit_transition(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
                                 }
@@ -417,7 +416,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                 );
                                 request.tool_progress_delete.push(open.id);
-                                if let Err(err) = self.store.commit(request).await {
+                                if let Err(err) = self.commit_transition(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
                                 }
@@ -425,7 +424,6 @@ impl<P: Provider> SessionRuntime<P> {
                                 self.next_entry_seq = new_entry_seq;
                                 staged.state_seq += 1;
                                 staged.open_effect = None;
-                                self.entries.extend(applied.entries);
                                 self.operation = Some(staged);
                                 info!(%operation_id, "reconciled a pending file mutation as already applied");
                                 self.advance().await;
@@ -452,7 +450,7 @@ impl<P: Provider> SessionRuntime<P> {
                                     Vec::new(),
                                 );
                                 request.tool_progress_delete.push(open.id);
-                                if let Err(err) = self.store.commit(request).await {
+                                if let Err(err) = self.commit_transition(request).await {
                                     self.fail_operation_on_persistence(err).await;
                                     return;
                                 }
@@ -460,7 +458,6 @@ impl<P: Provider> SessionRuntime<P> {
                                 self.next_entry_seq = new_entry_seq;
                                 staged.state_seq += 1;
                                 staged.open_effect = None;
-                                self.entries.extend(applied.entries);
                                 self.emit_terminal_state(&applied.state);
                                 self.operation = Some(staged);
                                 warn!(%operation_id, "a pending file mutation settled as indeterminate (conflict)");
@@ -512,7 +509,7 @@ impl<P: Provider> SessionRuntime<P> {
                         Vec::new(),
                         Vec::new(),
                     );
-                    if let Err(err) = self.store.commit(request).await {
+                    if let Err(err) = self.commit_transition(request).await {
                         self.fail_operation_on_persistence(err).await;
                         return;
                     }
