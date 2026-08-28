@@ -52,6 +52,24 @@ source = source.replace(
     1,
 )
 p.write_text(source)
+
+p = Path("crates/ion/src/acp.rs")
+source = p.read_text()
+source = source.replace(
+    '''            ion_core::SessionEntry::UserMessage { text } => updates.push(json!({\n                "sessionUpdate": "user_message_chunk",\n                "content": { "type": "text", "text": text },\n            })),\n            ion_core::SessionEntry::AssistantMessage { text } => updates.push(json!({''',
+    '''            ion_core::SessionEntry::UserMessage { text } => updates.push(json!({\n                "sessionUpdate": "user_message_chunk",\n                "content": { "type": "text", "text": text },\n            })),\n            ion_core::SessionEntry::AgentMessage { from, text } => updates.push(json!({\n                "sessionUpdate": "user_message_chunk",\n                "content": {\n                    "type": "text",\n                    "text": format!("[Message from {from}]\\n{text}"),\n                },\n            })),\n            ion_core::SessionEntry::AssistantMessage { text } => updates.push(json!({''',
+    1,
+)
+p.write_text(source)
+
+p = Path("crates/ion/src/tui/render.rs")
+source = p.read_text()
+source = source.replace(
+    '''        ion_core::SessionEntry::AssistantMessage { text } => {''',
+    '''        ion_core::SessionEntry::AgentMessage { from, text } => {\n            let rendered = format!("[Message from {from}]\\n{text}");\n            for (i, logical_line) in rendered.split('\\n').enumerate() {\n                let prefix = if i == 0 { "> " } else { "  " };\n                out.push(Line::from(format!("{prefix}{logical_line}")).style(palette.user_entry));\n            }\n        }\n        ion_core::SessionEntry::AssistantMessage { text } => {''',
+    1,
+)
+p.write_text(source)
 """
 
 p.write_text(text)
