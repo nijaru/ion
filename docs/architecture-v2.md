@@ -296,13 +296,14 @@ Completed in the current architecture workstream:
 - live session state retains those same durable entry records after reopen and after successful commit;
 - payload-only consumers explicitly project semantic entries.
 
-The busy-lane queueing migration is now the active checkpoint: `pending_next_run` owns a provisioned semantic `EntryId`, while `OperationId` is provisioned only when the lane actually accepts the run. SQLite persists the pending identity without inventing it, and no queued `Accepted` operation exists.
+Total lane state and busy-lane queueing are now complete: `pending_next_run` owns a provisioned semantic `EntryId`, while `OperationId` is provisioned only when the lane actually accepts the run. SQLite persists the pending identity without inventing it, and no queued `Accepted` operation exists.
+
+The active checkpoint is lane-addressable operation admission. The store receives the accepting lane explicitly, captures that lane's exact source leaf into immutable `operation_origins` in the same transaction, and later commits derive lane ownership from that immutable origin rather than trusting the runtime to repeat it.
 
 ## Next implementation order
 
-1. Finish and validate total lane state (`leaf`, `current_operation`, `pending_next_run`) with the provision-before-persistence identity rule above.
-2. Make operation acceptance explicitly lane-addressable over the durable lane/source-leaf origin contract.
-3. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
+1. Finish and validate lane-addressable operation acceptance over the durable lane/source-leaf origin contract.
+2. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
 4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
 5. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
 6. Add durable agent messaging/background completion through the common session-input path.

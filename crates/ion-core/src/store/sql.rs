@@ -14,6 +14,7 @@ pub(super) fn handle_command(
         }
         StoreCommand::BeginOperation {
             session_id,
+            lane_name,
             operation_id,
             root_inbox,
             checkpoint,
@@ -24,6 +25,7 @@ pub(super) fn handle_command(
                 begin_operation(
                     connection,
                     session_id,
+                    &lane_name,
                     operation_id,
                     &root_inbox,
                     &checkpoint,
@@ -40,29 +42,34 @@ pub(super) fn handle_command(
         }
         StoreCommand::AppendEntry {
             session_id,
+            lane_name,
             entry,
             reply,
         } => {
             let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
-                append_entry(connection, session_id, &entry).map_err(StoreError::from)
+                append_entry(connection, session_id, &lane_name, &entry).map_err(StoreError::from)
             }));
         }
-        StoreCommand::SetMainLaneConfig {
+        StoreCommand::SetLaneConfig {
             session_id,
+            lane_name,
             config,
             reply,
         } => {
             let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
-                set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
+                set_lane_config(connection, session_id, &lane_name, &config)
+                    .map_err(StoreError::from)
             }));
         }
-        StoreCommand::QueueMainNextRun {
+        StoreCommand::QueueNextRun {
             session_id,
+            lane_name,
             next_run,
             reply,
         } => {
             let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
-                queue_main_next_run(connection, session_id, &next_run).map_err(StoreError::from)
+                queue_next_run(connection, session_id, &lane_name, &next_run)
+                    .map_err(StoreError::from)
             }));
         }
         StoreCommand::Load { session_id, reply } => {
@@ -232,9 +239,10 @@ fn create_session(
     tx.commit()
 }
 
-fn set_main_lane_config(
+fn set_lane_config(
     connection: &mut Connection,
     session_id: SessionId,
+    lane_name: &str,
     config: &crate::session::lane::Config,
 ) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
@@ -244,17 +252,12 @@ fn set_main_lane_config(
     let changed = tx.execute(
         "UPDATE lanes SET config = ?3, updated_at = ?4
          WHERE session_id = ?1 AND name = ?2",
-        rusqlite::params![
-            session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
-            config,
-            now,
-        ],
+        rusqlite::params![session_id.as_uuid().to_string(), lane_name, config, now,],
     )?;
     if changed != 1 {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane is missing".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lane {lane_name:?} is missing"
+        )));
     }
     tx.execute(
         "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
@@ -263,9 +266,10 @@ fn set_main_lane_config(
     tx.commit()
 }
 
-fn queue_main_next_run(
+fn queue_next_run(
     connection: &mut Connection,
     session_id: SessionId,
+    lane_name: &str,
     next_run: &crate::session::lane::NextRun,
 ) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
@@ -291,16 +295,16 @@ fn queue_main_next_run(
            AND pending_entry_id IS NULL",
         rusqlite::params![
             session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
+            lane_name,
             entry_id,
             next_run.prompt,
             now,
         ],
     )?;
     if changed != 1 {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane cannot reserve another next run".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lane {lane_name:?} cannot reserve another next run"
+        )));
     }
     tx.execute(
         "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
@@ -312,10 +316,11 @@ fn queue_main_next_run(
 fn append_entry(
     connection: &mut Connection,
     session_id: SessionId,
+    lane_name: &str,
     entry: &EntryRecord,
 ) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
-    insert_entry(&tx, session_id, entry)?;
+    insert_entry(&tx, session_id, lane_name, entry)?;
     tx.execute(
         "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
         rusqlite::params![session_id.as_uuid().to_string(), now_ms()],
@@ -326,6 +331,7 @@ fn append_entry(
 fn begin_operation(
     connection: &mut Connection,
     session_id: SessionId,
+    lane_name: &str,
     operation_id: OperationId,
     root_inbox: &InboxRecord,
     checkpoint: &CheckpointRecord,
@@ -335,17 +341,21 @@ fn begin_operation(
     let session = session_id.as_uuid().to_string();
     let operation = operation_id.as_uuid().to_string();
     let entry_id = entry.id.as_uuid().to_string();
-    let (current, pending_entry, pending_prompt): (Option<String>, Option<String>, Option<String>) =
-        tx.query_row(
-            "SELECT current_operation_id, pending_entry_id, pending_prompt
+    let (source_leaf, current, pending_entry, pending_prompt): (
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = tx.query_row(
+        "SELECT leaf_id, current_operation_id, pending_entry_id, pending_prompt
          FROM lanes WHERE session_id = ?1 AND name = ?2",
-            rusqlite::params![session, crate::session::lane::MAIN],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+        rusqlite::params![session, lane_name],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
     if current.is_some() {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane already has a current operation".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lane {lane_name:?} already has a current operation"
+        )));
     }
     let user_prompt = match &entry.entry {
         SessionEntry::UserMessage { text } => text,
@@ -381,10 +391,16 @@ fn begin_operation(
          VALUES (?1, ?2, 'run', ?3, ?4)",
         rusqlite::params![operation, session, now_ms(), accepted_seq],
     )?;
+    tx.execute(
+        "INSERT INTO operation_origins
+            (operation_id, session_id, lane_name, source_leaf_id)
+         VALUES (?1, ?2, ?3, ?4)",
+        rusqlite::params![operation, session, lane_name, source_leaf],
+    )?;
     insert_inbox(&tx, session_id, operation_id, root_inbox)?;
     insert_capability_snapshot(&tx, &checkpoint.capability_snapshot)?;
     insert_checkpoint(&tx, operation_id, checkpoint)?;
-    insert_entry(&tx, session_id, entry)?;
+    insert_entry(&tx, session_id, lane_name, entry)?;
     let changed = tx.execute(
         "UPDATE lanes SET
             current_operation_id = ?3,
@@ -394,15 +410,15 @@ fn begin_operation(
          WHERE session_id = ?1 AND name = ?2 AND current_operation_id IS NULL",
         rusqlite::params![
             session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
+            lane_name,
             operation_id.as_uuid().to_string(),
             now_ms(),
         ],
     )?;
     if changed != 1 {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane lost operation admission".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lane {lane_name:?} lost operation admission"
+        )));
     }
     tx.commit()?;
     Ok(())
@@ -411,18 +427,19 @@ fn begin_operation(
 fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
     let operation_id = request.operation_id.as_uuid().to_string();
-    let current: Option<String> = tx.query_row(
-        "SELECT current_operation_id FROM lanes WHERE session_id = ?1 AND name = ?2",
-        rusqlite::params![
-            request.session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
-        ],
-        |row| row.get(0),
+    let (lane_name, current): (String, Option<String>) = tx.query_row(
+        "SELECT origin.lane_name, lane.current_operation_id
+         FROM operation_origins origin
+         JOIN lanes lane
+           ON lane.session_id = origin.session_id AND lane.name = origin.lane_name
+         WHERE origin.operation_id = ?1 AND origin.session_id = ?2",
+        rusqlite::params![operation_id, request.session_id.as_uuid().to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     if current.as_deref() != Some(operation_id.as_str()) {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "operation is not the main lane's current operation".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "operation is not lane {lane_name:?}'s current operation"
+        )));
     }
     insert_capability_snapshot(&tx, &request.checkpoint.capability_snapshot)?;
     for manifest in &request.context_manifests {
@@ -430,7 +447,7 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
     }
     insert_checkpoint(&tx, request.operation_id, &request.checkpoint)?;
     for entry in &request.entries {
-        insert_entry(&tx, request.session_id, entry)?;
+        insert_entry(&tx, request.session_id, &lane_name, entry)?;
     }
     for effect in &request.open_effects {
         tx.execute(
@@ -652,14 +669,14 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
              WHERE session_id = ?1 AND name = ?2 AND current_operation_id = ?3",
             rusqlite::params![
                 request.session_id.as_uuid().to_string(),
-                crate::session::lane::MAIN,
+                lane_name,
                 operation_id,
                 now_ms(),
             ],
         )?;
         if changed != 1 {
             return Err(rusqlite::Error::InvalidParameterName(
-                "terminal operation no longer owns the main lane".to_owned(),
+                "terminal operation no longer owns its immutable origin lane".to_owned(),
             ));
         }
     }
@@ -786,6 +803,7 @@ fn insert_checkpoint(
 fn insert_entry(
     connection: &Connection,
     session_id: SessionId,
+    lane_name: &str,
     entry: &EntryRecord,
 ) -> Result<(), rusqlite::Error> {
     let expected_seq: i64 = connection.query_row(
@@ -802,21 +820,23 @@ fn insert_entry(
 
     let (leaf_id, config): (Option<String>, String) = connection.query_row(
         "SELECT leaf_id, config FROM lanes WHERE session_id = ?1 AND name = ?2",
-        rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
+        rusqlite::params![session_id.as_uuid().to_string(), lane_name],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     let expected_parent = leaf_id
         .as_deref()
         .map(|raw| {
             crate::ids::EntryId::parse(raw).ok_or_else(|| {
-                rusqlite::Error::InvalidParameterName("main lane has invalid leaf id".to_owned())
+                rusqlite::Error::InvalidParameterName(format!(
+                    "lane {lane_name:?} has invalid leaf id"
+                ))
             })
         })
         .transpose()?;
     if entry.parent != expected_parent {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "entry parent does not match the main lane leaf".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "entry parent does not match lane {lane_name:?}'s leaf"
+        )));
     }
     let node = crate::session::tree::Entry {
         id: entry.id,
@@ -852,16 +872,16 @@ fn insert_entry(
          WHERE session_id = ?1 AND name = ?2",
         rusqlite::params![
             session_id.as_uuid().to_string(),
-            crate::session::lane::MAIN,
+            lane_name,
             node.id.as_uuid().to_string(),
             config,
             now_ms(),
         ],
     )?;
     if changed != 1 {
-        return Err(rusqlite::Error::InvalidParameterName(
-            "main lane is missing".to_owned(),
-        ));
+        return Err(rusqlite::Error::InvalidParameterName(format!(
+            "lane {lane_name:?} is missing"
+        )));
     }
     Ok(())
 }
@@ -1248,7 +1268,13 @@ mod tests {
             },
         );
         let first_expected = first_record.id;
-        append_entry(&mut connection, session_id, &first_record).expect("first entry");
+        append_entry(
+            &mut connection,
+            session_id,
+            crate::session::lane::MAIN,
+            &first_record,
+        )
+        .expect("first entry");
 
         let second_record = EntryRecord::provision(
             2,
@@ -1258,7 +1284,13 @@ mod tests {
         )
         .after(Some(first_expected));
         let second_expected = second_record.id;
-        append_entry(&mut connection, session_id, &second_record).expect("second entry");
+        append_entry(
+            &mut connection,
+            session_id,
+            crate::session::lane::MAIN,
+            &second_record,
+        )
+        .expect("second entry");
 
         let first: String = connection
             .query_row("SELECT id FROM entries WHERE seq = 1", [], |row| row.get(0))
@@ -1295,9 +1327,10 @@ mod tests {
         assert_eq!(second_parent.as_deref(), Some(first.as_str()));
         assert_eq!(leaf_before.as_deref(), Some(second.as_str()));
 
-        set_main_lane_config(
+        set_lane_config(
             &mut connection,
             session_id,
+            crate::session::lane::MAIN,
             &crate::session::lane::Config::new("model-b"),
         )
         .expect("model config");
@@ -1313,5 +1346,161 @@ mod tests {
         assert_eq!(loaded.session.initial_model_ref, "model-b");
         assert_eq!(loaded.entries.len(), 2);
         assert_eq!(leaf_after, leaf_before);
+    }
+
+    #[test]
+    fn operation_admission_uses_the_explicit_lane_and_captures_its_source_leaf() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        crate::store::schema::create_fresh(&mut connection).expect("schema");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        let session_id = SessionId::generate();
+        create_session(
+            &mut connection,
+            &SessionRecord {
+                id: session_id,
+                cwd: "/tmp".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-a".to_owned(),
+                parent_session_id: None,
+            },
+        )
+        .expect("session");
+        let config =
+            serde_json::to_string(&crate::session::lane::Config::new("model-b")).expect("config");
+        connection
+            .execute(
+                "INSERT INTO lanes
+                    (session_id, name, leaf_id, current_operation_id,
+                     pending_entry_id, pending_prompt, config, created_at, updated_at)
+                 VALUES (?1, 'worker', NULL, NULL, NULL, NULL, ?2, 0, 0)",
+                rusqlite::params![session_id.as_uuid().to_string(), config],
+            )
+            .expect("worker lane");
+
+        let operation_id = OperationId::generate();
+        let snapshot = crate::context::CapabilitySnapshot::new(Vec::new());
+        let prompt = "worker prompt".to_owned();
+        let root_inbox = InboxRecord {
+            id: InboxId::generate(),
+            kind: InboxKind::Prompt,
+            text: prompt.clone(),
+            status: InboxStatus::Applied,
+        };
+        let checkpoint = CheckpointRecord {
+            state_seq: 1,
+            payload: CheckpointPayload {
+                state: OperationState::Accepted,
+                cancel_requested: false,
+                prompt: prompt.clone(),
+                capability_snapshot_id: snapshot.id.clone(),
+                open_effect: None,
+            },
+            capability_snapshot: snapshot,
+        };
+        let entry = EntryRecord::provision(1, SessionEntry::UserMessage { text: prompt });
+        let entry_id = entry.id;
+        begin_operation(
+            &mut connection,
+            session_id,
+            "worker",
+            operation_id,
+            &root_inbox,
+            &checkpoint,
+            &entry,
+        )
+        .expect("worker admission");
+
+        let (lane_name, source_leaf): (String, Option<String>) = connection
+            .query_row(
+                "SELECT lane_name, source_leaf_id FROM operation_origins WHERE operation_id = ?1",
+                [operation_id.as_uuid().to_string()],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("origin");
+        let worker_leaf: Option<String> = connection
+            .query_row(
+                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'worker'",
+                [session_id.as_uuid().to_string()],
+                |row| row.get(0),
+            )
+            .expect("worker leaf");
+        let main_leaf: Option<String> = connection
+            .query_row(
+                "SELECT leaf_id FROM lanes WHERE session_id = ?1 AND name = 'main'",
+                [session_id.as_uuid().to_string()],
+                |row| row.get(0),
+            )
+            .expect("main leaf");
+        assert_eq!(lane_name, "worker");
+        assert!(source_leaf.is_none());
+        assert_eq!(
+            worker_leaf.as_deref(),
+            Some(entry_id.as_uuid().to_string().as_str())
+        );
+        assert!(main_leaf.is_none());
+    }
+
+    #[test]
+    fn operation_admission_to_a_missing_lane_is_atomic() {
+        let mut connection = Connection::open_in_memory().expect("database");
+        crate::store::schema::create_fresh(&mut connection).expect("schema");
+        connection
+            .pragma_update(None, "foreign_keys", "ON")
+            .expect("foreign keys");
+        let session_id = SessionId::generate();
+        create_session(
+            &mut connection,
+            &SessionRecord {
+                id: session_id,
+                cwd: "/tmp".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-a".to_owned(),
+                parent_session_id: None,
+            },
+        )
+        .expect("session");
+        let operation_id = OperationId::generate();
+        let snapshot = crate::context::CapabilitySnapshot::new(Vec::new());
+        let prompt = "missing".to_owned();
+        let root_inbox = InboxRecord {
+            id: InboxId::generate(),
+            kind: InboxKind::Prompt,
+            text: prompt.clone(),
+            status: InboxStatus::Applied,
+        };
+        let checkpoint = CheckpointRecord {
+            state_seq: 1,
+            payload: CheckpointPayload {
+                state: OperationState::Accepted,
+                cancel_requested: false,
+                prompt: prompt.clone(),
+                capability_snapshot_id: snapshot.id.clone(),
+                open_effect: None,
+            },
+            capability_snapshot: snapshot,
+        };
+        let entry = EntryRecord::provision(1, SessionEntry::UserMessage { text: prompt });
+        assert!(
+            begin_operation(
+                &mut connection,
+                session_id,
+                "missing",
+                operation_id,
+                &root_inbox,
+                &checkpoint,
+                &entry,
+            )
+            .is_err()
+        );
+        let operations: i64 = connection
+            .query_row("SELECT COUNT(*) FROM operations", [], |row| row.get(0))
+            .expect("operation count");
+        let entries: i64 = connection
+            .query_row("SELECT COUNT(*) FROM entries", [], |row| row.get(0))
+            .expect("entry count");
+        assert_eq!(operations, 0);
+        assert_eq!(entries, 0);
     }
 }

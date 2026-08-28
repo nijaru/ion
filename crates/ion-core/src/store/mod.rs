@@ -254,6 +254,7 @@ enum StoreCommand {
     },
     BeginOperation {
         session_id: SessionId,
+        lane_name: String,
         operation_id: OperationId,
         root_inbox: InboxRecord,
         checkpoint: CheckpointRecord,
@@ -266,16 +267,19 @@ enum StoreCommand {
     },
     AppendEntry {
         session_id: SessionId,
+        lane_name: String,
         entry: EntryRecord,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
-    SetMainLaneConfig {
+    SetLaneConfig {
         session_id: SessionId,
+        lane_name: String,
         config: crate::session::lane::Config,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
-    QueueMainNextRun {
+    QueueNextRun {
         session_id: SessionId,
+        lane_name: String,
         next_run: crate::session::lane::NextRun,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
@@ -428,13 +432,16 @@ impl SessionStore {
     pub async fn begin_operation(
         &self,
         session_id: SessionId,
+        lane_name: impl Into<String>,
         operation_id: OperationId,
         root_inbox: InboxRecord,
         checkpoint: CheckpointRecord,
         entry: EntryRecord,
     ) -> Result<(), StoreError> {
+        let lane_name = lane_name.into();
         self.request(|reply| StoreCommand::BeginOperation {
             session_id,
+            lane_name,
             operation_id,
             root_inbox,
             checkpoint,
@@ -453,41 +460,48 @@ impl SessionStore {
     pub async fn append_entry(
         &self,
         session_id: SessionId,
+        lane_name: impl Into<String>,
         entry: EntryRecord,
     ) -> Result<(), StoreError> {
+        let lane_name = lane_name.into();
         self.request(|reply| StoreCommand::AppendEntry {
             session_id,
+            lane_name,
             entry,
             reply,
         })
         .await
     }
 
-    /// Replace the total configuration for future work on the hidden `main`
-    /// lane. This stays crate-private until callers can address arbitrary
-    /// lanes directly.
-    pub(crate) async fn set_main_lane_config(
+    /// Replace the total configuration for future work on one durable lane.
+    pub(crate) async fn set_lane_config(
         &self,
         session_id: SessionId,
+        lane_name: impl Into<String>,
         config: crate::session::lane::Config,
     ) -> Result<(), StoreError> {
-        self.request(|reply| StoreCommand::SetMainLaneConfig {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::SetLaneConfig {
             session_id,
+            lane_name,
             config,
             reply,
         })
         .await
     }
 
-    /// Reserve the next run on the hidden `main` lane without
-    /// creating an operation or semantic entry yet.
-    pub(crate) async fn queue_main_next_run(
+    /// Reserve the next run on one durable lane without creating an operation
+    /// or semantic entry yet.
+    pub(crate) async fn queue_next_run(
         &self,
         session_id: SessionId,
+        lane_name: impl Into<String>,
         next_run: crate::session::lane::NextRun,
     ) -> Result<(), StoreError> {
-        self.request(|reply| StoreCommand::QueueMainNextRun {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::QueueNextRun {
             session_id,
+            lane_name,
             next_run,
             reply,
         })

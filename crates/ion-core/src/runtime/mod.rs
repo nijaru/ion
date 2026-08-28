@@ -1530,7 +1530,11 @@ impl<P: Provider> SessionRuntime<P> {
         let next_run = crate::session::lane::NextRun::reserve(prompt);
         let entry_id = next_run.entry_id;
         self.store
-            .queue_main_next_run(self.session_id, next_run.clone())
+            .queue_next_run(
+                self.session_id,
+                crate::session::lane::MAIN,
+                next_run.clone(),
+            )
             .await
             .map_err(persistence_command_error)?;
         self.wait_effect_boundary(EffectBoundary::PendingNextRunCommit)
@@ -1583,6 +1587,7 @@ impl<P: Provider> SessionRuntime<P> {
         self.store
             .begin_operation(
                 self.session_id,
+                crate::session::lane::MAIN,
                 operation_id,
                 root_inbox,
                 checkpoint,
@@ -1673,8 +1678,9 @@ impl<P: Provider> SessionRuntime<P> {
             return Ok(previous);
         }
         self.store
-            .set_main_lane_config(
+            .set_lane_config(
                 self.session_id,
+                crate::session::lane::MAIN,
                 crate::session::lane::Config::new(model_ref.clone()),
             )
             .await

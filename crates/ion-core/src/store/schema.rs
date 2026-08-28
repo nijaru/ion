@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 17;
+const SCHEMA_VERSION: i64 = 18;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -141,26 +141,9 @@ CREATE TABLE IF NOT EXISTS operation_origins (
     FOREIGN KEY (session_id, source_leaf_id) REFERENCES entries(session_id, id)
 );
 
--- Current runtime accepts on the hidden main lane. Capture its exact source
--- leaf in the same SQLite statement/transaction as the immutable operation row.
--- VALUES rather than INSERT...SELECT is intentional: if main is absent, the
--- origin row still attempts to reference it and the foreign key rejects the
--- operation instead of silently admitting an origin-less run.
--- Multi-lane acceptance will replace this v0 trigger with an explicit lane
--- argument without changing the operation-origin contract.
-CREATE TRIGGER IF NOT EXISTS operation_origin_on_insert
-AFTER INSERT ON operations
-BEGIN
-    INSERT INTO operation_origins (operation_id, session_id, lane_name, source_leaf_id)
-    VALUES (
-        NEW.id,
-        NEW.session_id,
-        'main',
-        (SELECT leaf_id FROM lanes
-         WHERE session_id = NEW.session_id AND name = 'main')
-    );
-END;
-
+-- Operation origin is inserted explicitly by the same store transaction that
+-- admits an operation. SQLite foreign keys validate the supplied lane and source
+-- leaf; there is no trigger that guesses either fact from a hidden default lane.
 CREATE TRIGGER IF NOT EXISTS operation_origins_no_update
 BEFORE UPDATE ON operation_origins
 BEGIN
@@ -346,6 +329,14 @@ mod tests {
             )
             .expect("operation");
         connection
+            .execute(
+                "INSERT INTO operation_origins
+                    (operation_id, session_id, lane_name, source_leaf_id)
+                 VALUES ('operation', 'session', 'main', NULL)",
+                [],
+            )
+            .expect("origin");
+        connection
     }
 
     #[test]
@@ -503,6 +494,14 @@ mod tests {
                 [],
             )
             .expect("second operation");
+        connection
+            .execute(
+                "INSERT INTO operation_origins
+                    (operation_id, session_id, lane_name, source_leaf_id)
+                 VALUES ('operation-2', 'session', 'main', 'entry-1')",
+                [],
+            )
+            .expect("second origin");
         let source: Option<String> = connection
             .query_row(
                 "SELECT source_leaf_id FROM operation_origins WHERE operation_id = 'operation-2'",
@@ -514,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn operation_acceptance_requires_main_lane() {
+    fn operation_origin_requires_an_existing_lane() {
         let mut connection = Connection::open_in_memory().expect("database");
         create_fresh(&mut connection).expect("schema");
         connection
@@ -527,14 +526,23 @@ mod tests {
                 [],
             )
             .expect("session");
+        connection
+            .execute(
+                "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+                 VALUES ('orphan-operation', 'orphan', 'run', 0, 1)",
+                [],
+            )
+            .expect("raw operation row");
         assert!(
             connection
                 .execute(
-                    "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
-                     VALUES ('orphan-operation', 'orphan', 'run', 0, 1)",
+                    "INSERT INTO operation_origins
+                        (operation_id, session_id, lane_name, source_leaf_id)
+                     VALUES ('orphan-operation', 'orphan', 'missing', NULL)",
                     [],
                 )
-                .is_err()
+                .is_err(),
+            "an immutable origin cannot name a lane that does not exist"
         );
     }
 }

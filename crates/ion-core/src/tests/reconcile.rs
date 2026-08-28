@@ -216,7 +216,14 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
         capability_snapshot: CapabilitySnapshot::new(Vec::new()),
     };
     store
-        .begin_operation(session_id, operation_id, root_inbox, checkpoint, entry)
+        .begin_operation(
+            session_id,
+            crate::session::lane::MAIN,
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+        )
         .await
         .expect("begin");
 
