@@ -110,23 +110,47 @@ CREATE TABLE IF NOT EXISTS lanes (
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
     session_id TEXT NOT NULL REFERENCES sessions(id),
-    lane_name TEXT NOT NULL,
-    source_leaf_id TEXT,
     kind TEXT NOT NULL,
     accepted_at INTEGER NOT NULL,
     accepted_seq INTEGER NOT NULL,
-    UNIQUE (session_id, accepted_seq),
+    UNIQUE (session_id, accepted_seq)
+);
+
+-- Immutable topology captured at operation acceptance. Keeping origin separate
+-- from mutable operation state makes it impossible for recovery transitions to
+-- accidentally rebind a run to another lane or history position.
+CREATE TABLE IF NOT EXISTS operation_origins (
+    operation_id TEXT PRIMARY KEY REFERENCES operations(id),
+    session_id TEXT NOT NULL,
+    lane_name TEXT NOT NULL,
+    source_leaf_id TEXT,
     FOREIGN KEY (session_id, lane_name) REFERENCES lanes(session_id, name),
     FOREIGN KEY (session_id, source_leaf_id) REFERENCES entries(session_id, id)
 );
 
--- An operation's topology is immutable acceptance data. Runtime state changes
--- belong in operation_state; rebinding an accepted run to another lane or
--- source leaf would make recovery history-dependent.
-CREATE TRIGGER IF NOT EXISTS operations_topology_immutable
-BEFORE UPDATE OF session_id, lane_name, source_leaf_id ON operations
+-- Current runtime accepts on the hidden main lane. Capture its exact source
+-- leaf in the same SQLite statement/transaction as the immutable operation row.
+-- Multi-lane acceptance will replace this v0 trigger with an explicit lane
+-- argument without changing the operation-origin contract.
+CREATE TRIGGER IF NOT EXISTS operation_origin_on_insert
+AFTER INSERT ON operations
 BEGIN
-    SELECT RAISE(ABORT, 'operation topology is immutable');
+    INSERT INTO operation_origins (operation_id, session_id, lane_name, source_leaf_id)
+    SELECT NEW.id, NEW.session_id, 'main', leaf_id
+    FROM lanes
+    WHERE session_id = NEW.session_id AND name = 'main';
+END;
+
+CREATE TRIGGER IF NOT EXISTS operation_origins_no_update
+BEFORE UPDATE ON operation_origins
+BEGIN
+    SELECT RAISE(ABORT, 'operation origin is immutable');
+END;
+
+CREATE TRIGGER IF NOT EXISTS operation_origins_no_delete
+BEFORE DELETE ON operation_origins
+BEGIN
+    SELECT RAISE(ABORT, 'operation origin is immutable');
 END;
 
 -- Direct latest-state projection used by recovery. The append-only revision
@@ -296,9 +320,8 @@ mod tests {
             .expect("lane");
         connection
             .execute(
-                "INSERT INTO operations (
-                    id, session_id, lane_name, source_leaf_id, kind, accepted_at, accepted_seq
-                 ) VALUES ('operation', 'session', 'main', NULL, 'run', 0, 1)",
+                "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
+                 VALUES ('operation', 'session', 'run', 0, 1)",
                 [],
             )
             .expect("operation");
@@ -406,12 +429,23 @@ mod tests {
     }
 
     #[test]
-    fn operation_topology_cannot_be_rebound() {
+    fn operation_origin_is_captured_and_immutable() {
         let connection = seeded_connection();
+        let (lane, source): (String, Option<String>) = connection
+            .query_row(
+                "SELECT lane_name, source_leaf_id FROM operation_origins
+                 WHERE operation_id = 'operation'",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("origin");
+        assert_eq!(lane, "main");
+        assert!(source.is_none());
         assert!(
             connection
                 .execute(
-                    "UPDATE operations SET lane_name = 'other' WHERE id = 'operation'",
+                    "UPDATE operation_origins SET lane_name = 'other'
+                     WHERE operation_id = 'operation'",
                     [],
                 )
                 .is_err()
@@ -419,7 +453,7 @@ mod tests {
         assert!(
             connection
                 .execute(
-                    "UPDATE operations SET source_leaf_id = 'entry' WHERE id = 'operation'",
+                    "DELETE FROM operation_origins WHERE operation_id = 'operation'",
                     [],
                 )
                 .is_err()
