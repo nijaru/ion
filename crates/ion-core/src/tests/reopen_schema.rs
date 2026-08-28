@@ -115,24 +115,29 @@ async fn store_close_joins_writer_and_rejects_later_requests() {
 async fn settlement_must_match_a_pending_effect_of_the_operation() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = start_runtime_with_store(
-        ScriptedProvider::echo(),
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_secs(30),
+            "late",
+        )]),
         ToolRegistry::default(),
         store.clone(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
-    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit_if_idle("go").await.expect("submit");
-    collect_until_terminal(&mut events).await.expect("collect");
-    session.close().await.expect("close");
-    runtime.join().await.expect("join");
+    let operation_id = session.submit_if_idle("go").await.expect("submit");
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::AssistantEffectPending)
+    })
+    .await;
 
-    // A settlement for an unknown or already-settled effect must be
-    // rejected, not silently succeed on zero rows. Keep the checkpoint itself
-    // valid so this test reaches the effect-settlement invariant it targets.
+    // A settlement for an unknown effect must be rejected, not silently
+    // succeed on zero rows. Keep this operation current so the request reaches
+    // the effect-settlement invariant instead of correctly failing the newer
+    // lane-ownership guard first.
     let loaded = store.load(session_id).await.expect("load");
-    let operation_id = loaded.operations[0].id;
+    assert_eq!(loaded.operations[0].id, operation_id);
     let next_state_seq = loaded.operations[0].latest.0 + 1;
+    let payload = loaded.operations[0].latest.1.clone();
     let ghost = crate::ids::EffectId::generate();
     let err = store
         .commit(CommitRequest {
@@ -140,13 +145,7 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
             operation_id,
             checkpoint: CheckpointRecord {
                 state_seq: next_state_seq,
-                payload: CheckpointPayload {
-                    state: OperationState::Finished(OperationOutcome::Completed),
-                    cancel_requested: false,
-                    prompt: String::new(),
-                    capability_snapshot_id: loaded.operations[0].capability_snapshot.id.clone(),
-                    open_effect: None,
-                },
+                payload,
                 capability_snapshot: loaded.operations[0].capability_snapshot.clone(),
             },
             entries: Vec::new(),
@@ -166,4 +165,8 @@ async fn settlement_must_match_a_pending_effect_of_the_operation() {
         .await
         .expect_err("ghost settlement must fail");
     assert!(err.to_string().contains("matched no pending effect"));
+
+    session.cancel(operation_id).await.expect("cancel");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }

@@ -47,17 +47,22 @@ Pi supplies the durable session substrate; DSH/Cordis supplies the strongest own
 
 Its real failure modes are useful design tests for Ion: completed agents must release execution permits; cancellation must cascade deliberately; `wait any` and `wait all` must not be ambiguous; spawn admission must not hang invisibly on capacity; recovered children must restore effective configuration; tool schemas must match runtime affordances; and lifecycle state must be visible through headless/event APIs.
 
-**VS Code Agent Host / Agent Host Protocol (AHP)** is the strongest current reference for the host/client boundary:
+**Zed / Agent Client Protocol (ACP)** is the strongest current interoperability signal for the client/agent boundary:
 
-- the agent host owns sessions independently of UI clients;
-- clients may disconnect while work continues;
-- multiple clients can observe/control one session;
+- ACP has real multi-editor and multi-agent adoption rather than being a single-product internal protocol;
+- its explicit session lifecycle, prompt/update/cancel flow, capability negotiation, and permission requests keep client UX concerns outside the agent reasoning loop;
+- resume can replay session updates before the response completes, which forces clients to treat session state as an ordered protocol rather than a local UI object;
+- Zed exercises this boundary with its own agent plus external agents such as Claude Agent and Codex CLI.
+
+**VS Code Agent Host / Agent Host Protocol (AHP)** is complementary evidence, not a primary agent-substrate reference. Its August 2026 host redesign is unusually strong evidence for persistent host/client semantics:
+
+- the dedicated agent host owns sessions independently of editor clients;
+- work can continue with no editor attached;
+- multiple local or remote clients can observe/control one session;
 - reconnect is state-first: snapshot plus ordered actions/deltas;
-- protocol capabilities/versioning are negotiated;
-- client-contributed tools are scoped to the connected client;
-- AHP coordinates hosted sessions above a particular harness protocol rather than replacing harness semantics.
+- the host can sit above more than one agent harness/protocol.
 
-Ion does not need to copy AHP's Redux-shaped protocol, but the ownership conclusion is important: **the TUI must be a client/projection of authoritative runtime state, not the execution owner.**
+ACP is the better signal for Ion's interoperable frontend boundary; AHP is the better corroborating signal for a durable host that outlives any one client. The shared conclusion is important: **TUI, ACP, and future remote clients are projections of authoritative runtime state, never the execution owner.**
 
 ### Tier C: strong mechanism references
 
@@ -113,7 +118,9 @@ A run acceptance transaction should conceptually:
 
 ```text
 capture lane.pending_next_run
-append resulting semantic entries at lane.leaf
+preserve its already-provisioned semantic EntryId
+provision OperationId at acceptance, never while merely queued
+append the resulting semantic entry at lane.leaf
 create immutable Operation { lane, source_leaf, accepted intent }
 write first total OperationState
 set lane.current_operation
@@ -289,20 +296,19 @@ Completed in the current architecture workstream:
 - live session state retains those same durable entry records after reopen and after successful commit;
 - payload-only consumers explicitly project semantic entries.
 
-The most important remaining substrate mismatch is now busy-lane queueing: prompts still become complete queued `Accepted` operations rather than lane-owned `pending_next_run` input.
+The busy-lane queueing migration is now the active checkpoint: `pending_next_run` owns a provisioned semantic `EntryId`, while `OperationId` is provisioned only when the lane actually accepts the run. SQLite persists the pending identity without inventing it, and no queued `Accepted` operation exists.
 
 ## Next implementation order
 
-1. Add total lane state (`leaf`, `current_operation`, `pending_next_run`) and move busy-lane queueing to provisioned lane-owned input.
-2. Remove `queued_operations`; create an operation only when the queued run is actually accepted.
-3. Make operation acceptance explicitly lane-addressable over the durable lane/source-leaf origin contract.
-4. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
-5. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
-6. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
-7. Add durable agent messaging/background completion through the common session-input path.
-8. Add scoped capability publication/teardown around agent creation/resume.
-9. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery/multi-agent invariants.
-10. Reconcile `DESIGN.md`, public API/module vocabulary, and dead compatibility scaffolding.
-11. **Only then redesign the TUI** as a client of the authoritative session/agent host contract.
+1. Finish and validate total lane state (`leaf`, `current_operation`, `pending_next_run`) with the provision-before-persistence identity rule above.
+2. Make operation acceptance explicitly lane-addressable over the durable lane/source-leaf origin contract.
+3. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
+4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
+5. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
+6. Add durable agent messaging/background completion through the common session-input path.
+7. Add scoped capability publication/teardown around agent creation/resume.
+8. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery/multi-agent invariants.
+9. Reconcile `DESIGN.md`, public API/module vocabulary, and dead compatibility scaffolding.
+10. **Only then redesign the TUI** as an ACP-capable client of the authoritative session/agent host contract.
 
 The broad agent-architecture survey is now sufficient to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.

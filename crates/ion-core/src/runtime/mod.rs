@@ -67,7 +67,7 @@ pub(crate) enum EffectBoundary {
     ModelSettlement,
     CompactionExecution,
     CancellationSignal,
-    QueuedAcceptanceCommit,
+    PendingNextRunCommit,
     ToolExecution,
     ToolSettlement,
     CloseSuspendCommit,
@@ -406,9 +406,9 @@ enum SessionCommand {
         prompt: String,
         reply: oneshot::Sender<Result<OperationId, CommandError>>,
     },
-    Enqueue {
+    NextRun {
         prompt: String,
-        reply: oneshot::Sender<Result<OperationId, CommandError>>,
+        reply: oneshot::Sender<Result<crate::ids::EntryId, CommandError>>,
     },
     Steer {
         text: String,
@@ -503,13 +503,16 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
 
-    /// Accept a prompt durably. If another operation is active, the new
-    /// operation waits in acceptance order and is promoted after the active
-    /// operation reaches a terminal outcome.
-    pub async fn enqueue(&self, prompt: impl Into<String>) -> Result<OperationId, CommandError> {
+    /// Persist the lane's next-run input. If the lane is idle, it is
+    /// accepted immediately; otherwise only its semantic entry identity is
+    /// reserved. An `OperationId` does not exist until actual acceptance.
+    pub async fn next_run(
+        &self,
+        prompt: impl Into<String>,
+    ) -> Result<crate::ids::EntryId, CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
-            .try_send(SessionCommand::Enqueue {
+            .try_send(SessionCommand::NextRun {
                 prompt: prompt.into(),
                 reply,
             })
@@ -1106,10 +1109,9 @@ struct SessionRuntime<P> {
     /// Next storage-assigned entry sequence.
     next_entry_seq: u64,
     operation: Option<ActiveOperation>,
-    /// Accepted operations waiting for the single active operation to
-    /// reach a terminal outcome. Each remains a complete durable
-    /// `Accepted` checkpoint until promotion.
-    queued_operations: Vec<ActiveOperation>,
+    /// Durable input reserved for the next run while `main` is busy.
+    /// No operation machine exists until the lane becomes idle.
+    pending_next_run: Option<crate::session::lane::NextRun>,
     /// Ephemeral draft of the in-flight model step; never durable.
     draft_text: String,
     /// Live reasoning text for the current step; cleared at settlement.
@@ -1225,7 +1227,7 @@ impl<P: Provider> SessionRuntime<P> {
             entries: Vec::new(),
             next_entry_seq: 1,
             operation: None,
-            queued_operations: Vec::new(),
+            pending_next_run: None,
             draft_text: String::new(),
             draft_thinking: String::new(),
             assistant_frame_seq: 0,
@@ -1273,7 +1275,8 @@ impl<P: Provider> SessionRuntime<P> {
                 .saturating_add(usage.cache_write)
         });
         let assistant_frames = loaded.assistant_frames;
-        self.selected_model_ref = loaded.session.initial_model_ref.clone();
+        self.selected_model_ref = loaded.lane.config.model_ref.clone();
+        self.pending_next_run = loaded.lane.state.pending_next_run.clone();
         let mut max_seq = 0;
         for record in loaded.entries {
             max_seq = max_seq.max(record.seq);
@@ -1355,15 +1358,11 @@ impl<P: Provider> SessionRuntime<P> {
                 self.draft_thinking = frame.thinking.clone();
                 self.assistant_frame_seq = frame.frame_seq;
             }
-            if matches!(payload.state, OperationState::Accepted) {
-                // Accepted-but-not-started operations are durable queued
-                // work, not competing active transition authorities.
-                self.queued_operations.push(active);
-            } else if self.operation.replace(active).is_some() {
+            if self.operation.replace(active).is_some() {
                 error!(
                     session = %self.session_id,
                     operation = %operation.id,
-                    "multiple non-queued open operations in durable state; refusing to guess"
+                    "multiple open operations in durable state; refusing to guess"
                 );
                 self.closed = true;
                 return;
@@ -1394,9 +1393,10 @@ impl<P: Provider> SessionRuntime<P> {
         if self.operation.is_some() || !self.suspended_operations.is_empty() {
             self.recover_open_operation().await;
         }
-        if self.operation.is_none()
-            && !self.queued_operations.is_empty()
-            && self.promote_next_queued()
+        if !self.closed
+            && self.operation.is_none()
+            && self.pending_next_run.is_some()
+            && self.promote_pending_next_run().await
         {
             self.advance().await;
         }
@@ -1433,8 +1433,8 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.submit_if_idle(prompt).await);
                 false
             }
-            SessionCommand::Enqueue { prompt, reply } => {
-                let _ = reply.send(self.enqueue(prompt).await);
+            SessionCommand::NextRun { prompt, reply } => {
+                let _ = reply.send(self.next_run(prompt).await);
                 false
             }
             SessionCommand::Steer { text, reply } => {
@@ -1496,27 +1496,59 @@ impl<P: Provider> SessionRuntime<P> {
                 operation_id: active.machine.operation_id(),
             });
         }
-        if let Some(queued) = self.queued_operations.first() {
-            return Err(CommandError::Busy {
-                operation_id: queued.machine.operation_id(),
+        if let Some(pending) = &self.pending_next_run {
+            return Err(CommandError::NextRunQueued {
+                entry_id: pending.entry_id,
             });
         }
-        self.accept_operation(prompt).await
+        let (active, _) = self.accept_operation_record(prompt, None).await?;
+        let operation_id = active.machine.operation_id();
+        self.start_active(active);
+        self.advance().await;
+        Ok(operation_id)
     }
 
-    /// Accept one prompt as a distinct durable operation. The operation is
-    /// started immediately when the session is idle; otherwise it remains
-    /// in `Accepted` state until the current operation settles.
-    async fn enqueue(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+    /// Persist one next-run input durably. A busy lane receives only a
+    /// provisioned semantic entry identity; operation identity is created
+    /// when the lane becomes idle and actually accepts the run.
+    async fn next_run(&mut self, prompt: String) -> Result<crate::ids::EntryId, CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
         }
-        self.accept_operation(prompt).await
+        if let Some(pending) = &self.pending_next_run {
+            return Err(CommandError::NextRunQueued {
+                entry_id: pending.entry_id,
+            });
+        }
+        if self.operation.is_none() {
+            let (active, entry_id) = self.accept_operation_record(prompt, None).await?;
+            self.start_active(active);
+            self.advance().await;
+            return Ok(entry_id);
+        }
+
+        let next_run = crate::session::lane::NextRun::reserve(prompt);
+        let entry_id = next_run.entry_id;
+        self.store
+            .queue_main_next_run(self.session_id, next_run.clone())
+            .await
+            .map_err(persistence_command_error)?;
+        self.wait_effect_boundary(EffectBoundary::PendingNextRunCommit)
+            .await;
+        self.pending_next_run = Some(next_run);
+        Ok(entry_id)
     }
 
-    async fn accept_operation(&mut self, prompt: String) -> Result<OperationId, CommandError> {
+    /// Create the durable operation only when the lane is free. A pending
+    /// next run supplies its pre-provisioned semantic entry identity but does
+    /// not pre-provision operation identity or freeze model/tool capability
+    /// state before this acceptance boundary.
+    async fn accept_operation_record(
+        &mut self,
+        prompt: String,
+        reservation: Option<crate::session::lane::NextRun>,
+    ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
         let operation_id = OperationId::generate();
-        let is_queued = self.operation.is_some() || !self.queued_operations.is_empty();
         let tool_registry = self.tools.snapshot();
         let (machine, applied) =
             OperationMachine::accept(operation_id, prompt.clone(), tool_registry.specs());
@@ -1524,10 +1556,19 @@ impl<P: Provider> SessionRuntime<P> {
         let root_inbox = InboxRecord {
             id: InboxId::generate(),
             kind: InboxKind::Prompt,
-            text: prompt.clone(),
+            text: prompt,
             status: InboxStatus::Applied,
         };
-        let entry = self.stage_entry(&applied.entries[0]);
+        let entry = match reservation.as_ref() {
+            Some(next_run) => EntryRecord {
+                id: next_run.entry_id,
+                seq: self.next_entry_seq,
+                parent: self.entries.last().map(|record| record.id),
+                entry: applied.entries[0].clone(),
+            },
+            None => self.stage_entry(&applied.entries[0]),
+        };
+        let entry_id = entry.id;
         let checkpoint = CheckpointRecord {
             state_seq: 1,
             payload: CheckpointPayload {
@@ -1539,7 +1580,6 @@ impl<P: Provider> SessionRuntime<P> {
             },
             capability_snapshot: capability_snapshot.clone(),
         };
-        // Accepted intent is durable before acknowledgment (P4, §9.1).
         self.store
             .begin_operation(
                 self.session_id,
@@ -1550,29 +1590,24 @@ impl<P: Provider> SessionRuntime<P> {
             )
             .await
             .map_err(persistence_command_error)?;
-        if is_queued {
-            self.wait_effect_boundary(EffectBoundary::QueuedAcceptanceCommit)
-                .await;
-        }
 
-        let active = ActiveOperation {
-            machine,
-            capability_snapshot,
-            tool_registry,
-            cancel: self.cancel_root.child_token(),
-            state_seq: 1,
-            open_effect: None,
-            pending_steers: Vec::new(),
-        };
         self.entries.push(entry);
         self.next_entry_seq += 1;
-        if self.operation.is_none() && self.queued_operations.is_empty() {
-            self.start_active(active);
-            self.advance().await;
-        } else {
-            self.queued_operations.push(active);
+        if reservation.is_some() {
+            self.pending_next_run = None;
         }
-        Ok(operation_id)
+        Ok((
+            ActiveOperation {
+                machine,
+                capability_snapshot,
+                tool_registry,
+                cancel: self.cancel_root.child_token(),
+                state_seq: 1,
+                open_effect: None,
+                pending_steers: Vec::new(),
+            },
+            entry_id,
+        ))
     }
 
     fn start_active(&mut self, active: ActiveOperation) {
@@ -1597,16 +1632,32 @@ impl<P: Provider> SessionRuntime<P> {
         });
     }
 
-    fn promote_next_queued(&mut self) -> bool {
+    async fn promote_pending_next_run(&mut self) -> bool {
         if self.operation.is_some() {
             return false;
         }
-        if self.queued_operations.is_empty() {
+        let Some(next_run) = self.pending_next_run.clone() else {
             return false;
+        };
+        match self
+            .accept_operation_record(next_run.prompt.clone(), Some(next_run.clone()))
+            .await
+        {
+            Ok((active, _)) => {
+                self.start_active(active);
+                true
+            }
+            Err(err) => {
+                error!(
+                    session = %self.session_id,
+                    entry = %next_run.entry_id,
+                    %err,
+                    "could not promote the durable next run; fencing until reopen"
+                );
+                self.closed = true;
+                false
+            }
         }
-        let next = self.queued_operations.remove(0);
-        self.start_active(next);
-        true
     }
 
     async fn switch_model(&mut self, model_ref: String) -> Result<String, CommandError> {
@@ -1780,7 +1831,7 @@ impl<P: Provider> SessionRuntime<P> {
             match state {
                 OperationState::Finished(_) => {
                     self.operation.take();
-                    if self.promote_next_queued() {
+                    if self.promote_pending_next_run().await {
                         continue;
                     }
                     return;

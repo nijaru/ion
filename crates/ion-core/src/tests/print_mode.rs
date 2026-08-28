@@ -104,7 +104,7 @@ async fn busy_submit_is_rejected() {
 }
 
 #[tokio::test]
-async fn enqueue_promotes_distinct_operations_in_acceptance_order() {
+async fn next_run_provisions_entry_before_later_operation_admission() {
     let runtime = start_runtime(
         ScriptedProvider::new(vec![
             ScriptedMessage::delayed(Duration::from_millis(100), "first"),
@@ -116,8 +116,7 @@ async fn enqueue_promotes_distinct_operations_in_acceptance_order() {
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
     let first = session.submit_if_idle("one").await.expect("first submit");
     sleep(STEP).await;
-    let second = session.enqueue("two").await.expect("enqueue");
-    assert_ne!(first, second);
+    let _queued_entry = session.next_run("two").await.expect("next run");
 
     let mut starts = Vec::new();
     let mut finishes = Vec::new();
@@ -132,15 +131,17 @@ async fn enqueue_promotes_distinct_operations_in_acceptance_order() {
             _ => {}
         }
     }
-    assert_eq!(starts, vec![first, second]);
-    assert_eq!(finishes, vec![first, second]);
+    assert_eq!(starts.len(), 2);
+    assert_eq!(starts[0], first);
+    assert_ne!(starts[1], first);
+    assert_eq!(finishes, starts);
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
 
 #[tokio::test]
-async fn queued_operation_survives_close_and_promotes_after_reopen() {
+async fn pending_next_run_survives_close_and_promotes_after_reopen() {
     let db = temp_db("queued-reopen");
     let store = SessionStore::open(&db).expect("open store");
     let runtime = start_runtime_with_store(
@@ -158,27 +159,37 @@ async fn queued_operation_survives_close_and_promotes_after_reopen() {
         matches!(state, OperationState::AssistantEffectPending)
     })
     .await;
-    let second = session.enqueue("queued").await.expect("enqueue");
+    let queued_entry = session.next_run("queued").await.expect("next run");
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");
     drop(session);
 
     let loaded = store.load(session_id).await.expect("load queued state");
-    assert_eq!(loaded.operations.len(), 2);
+    assert_eq!(loaded.operations.len(), 1);
     assert_eq!(loaded.operations[0].id, first);
-    assert_eq!(loaded.operations[1].id, second);
     assert_eq!(
         loaded.operations[0].latest.1.state,
         OperationState::Suspended
     );
-    assert_eq!(
-        loaded.operations[1].latest.1.state,
-        OperationState::Accepted
+    let pending = loaded
+        .lane
+        .state
+        .pending_next_run
+        .as_ref()
+        .expect("durable next run");
+    assert_eq!(pending.entry_id, queued_entry);
+    assert_eq!(pending.prompt, "queued");
+    assert!(
+        loaded.entries.iter().all(|entry| entry.id != queued_entry),
+        "pending input must not exist as a semantic entry before acceptance"
     );
 
     let runtime = Runtime::open_session(
-        ScriptedProvider::new(vec![ScriptedMessage::text("queued result")]),
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_millis(100),
+            "queued result",
+        )]),
         ToolRegistry::default(),
         store.clone(),
         session_id,
@@ -186,7 +197,12 @@ async fn queued_operation_survives_close_and_promotes_after_reopen() {
     .await
     .expect("reopen");
     let session = runtime.session();
-    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let (snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let second = match snapshot.operation {
+        OperationStatus::Active { operation_id, .. } => operation_id,
+        OperationStatus::Idle => panic!("pending next run was not promoted on reopen"),
+    };
+    assert_ne!(first, second);
     let recorded = collect_until_terminal(&mut events).await.expect("collect");
     assert!(recorded.iter().any(|event| matches!(
         event,
@@ -194,6 +210,16 @@ async fn queued_operation_survives_close_and_promotes_after_reopen() {
     )));
 
     let loaded = store.load(session_id).await.expect("load settled state");
+    assert_eq!(loaded.operations.len(), 2);
+    assert_eq!(loaded.operations[0].id, first);
+    assert_eq!(loaded.operations[1].id, second);
+    assert!(loaded.entries.iter().any(|entry| {
+        entry.id == queued_entry
+            && matches!(
+                &entry.entry,
+                SessionEntry::UserMessage { text } if text == "queued"
+            )
+    }));
     assert_eq!(
         loaded.operations[0].latest.1.state,
         OperationState::Finished(OperationOutcome::Cancelled)

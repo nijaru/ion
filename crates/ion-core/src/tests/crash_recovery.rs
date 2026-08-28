@@ -428,7 +428,7 @@ async fn effect_gate_crash_prefix_reopens_after_durable_cancellation() {
 #[tokio::test]
 async fn effect_gate_crash_prefix_reopens_with_a_durable_queued_operation() {
     let store = SessionStore::open_in_memory().expect("store");
-    let gate = EffectGate::new(EffectBoundary::QueuedAcceptanceCommit);
+    let gate = EffectGate::new(EffectBoundary::PendingNextRunCommit);
     let runtime = Runtime::start_with_effect_gate(
         SharedLogProvider {
             settle_delay: Duration::from_secs(30),
@@ -453,16 +453,26 @@ async fn effect_gate_crash_prefix_reopens_with_a_durable_queued_operation() {
     }
 
     let enqueue_session = session.clone();
-    let enqueue = tokio::spawn(async move { enqueue_session.enqueue("second").await });
+    let enqueue = tokio::spawn(async move { enqueue_session.next_run("second").await });
     timeout(Duration::from_secs(2), gate.wait_until_reached())
         .await
         .expect("queue gate reached");
     let loaded = store.load(session_id).await.expect("load");
-    assert_eq!(loaded.operations.len(), 2);
-    assert!(matches!(
-        loaded.operations[1].latest.1.state,
-        OperationState::Accepted
-    ));
+    assert_eq!(loaded.operations.len(), 1);
+    let pending = loaded
+        .lane
+        .state
+        .pending_next_run
+        .as_ref()
+        .expect("durable next run");
+    assert_eq!(pending.prompt, "second");
+    assert!(
+        loaded
+            .entries
+            .iter()
+            .all(|entry| entry.id != pending.entry_id),
+        "pending input must not exist as a semantic entry before acceptance"
+    );
 
     runtime.crash();
     gate.release();

@@ -1904,7 +1904,7 @@ async fn dispatch(
                 *state = next;
             }
         },
-        UiEffect::Enqueue { text } => match session.enqueue(text).await {
+        UiEffect::Enqueue { text } => match session.next_run(text).await {
             Ok(_) => {
                 let (next, _) = update(std::mem::take(state), UiMessage::EnqueueAccepted);
                 *state = next;

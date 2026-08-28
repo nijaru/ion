@@ -206,6 +206,7 @@ pub struct UsageRow {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedSession {
     pub session: SessionRecord,
+    pub(crate) lane: crate::session::lane::Lane,
     pub entries: Vec<EntryRecord>,
     pub operations: Vec<LoadedOperation>,
     pub pending_inbox: Vec<InboxRecord>,
@@ -271,6 +272,11 @@ enum StoreCommand {
     SetMainLaneConfig {
         session_id: SessionId,
         config: crate::session::lane::Config,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    QueueMainNextRun {
+        session_id: SessionId,
+        next_run: crate::session::lane::NextRun,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
     Load {
@@ -468,6 +474,21 @@ impl SessionStore {
         self.request(|reply| StoreCommand::SetMainLaneConfig {
             session_id,
             config,
+            reply,
+        })
+        .await
+    }
+
+    /// Reserve the next run on the hidden `main` lane without
+    /// creating an operation or semantic entry yet.
+    pub(crate) async fn queue_main_next_run(
+        &self,
+        session_id: SessionId,
+        next_run: crate::session::lane::NextRun,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::QueueMainNextRun {
+            session_id,
+            next_run,
             reply,
         })
         .await

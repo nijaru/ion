@@ -2,7 +2,7 @@
 
 use thiserror::Error;
 
-use crate::ids::OperationId;
+use crate::ids::{EntryId, OperationId};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CommandError {
@@ -14,6 +14,8 @@ pub enum CommandError {
     RuntimeDropped,
     #[error("an operation is already running")]
     Busy { operation_id: OperationId },
+    #[error("the lane already has a pending next run ({entry_id})")]
+    NextRunQueued { entry_id: EntryId },
     #[error("no active operation; the session is idle")]
     NoActiveOperation,
     #[error("operation {operation_id} is not the active operation")]

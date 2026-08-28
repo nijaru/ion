@@ -56,6 +56,15 @@ pub(super) fn handle_command(
                 set_main_lane_config(connection, session_id, &config).map_err(StoreError::from)
             }));
         }
+        StoreCommand::QueueMainNextRun {
+            session_id,
+            next_run,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                queue_main_next_run(connection, session_id, &next_run).map_err(StoreError::from)
+            }));
+        }
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
@@ -209,8 +218,10 @@ fn create_session(
     let config = serde_json::to_string(&config)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     tx.execute(
-        "INSERT INTO lanes (session_id, name, leaf_id, config, created_at, updated_at)
-         VALUES (?1, ?2, NULL, ?3, ?4, ?4)",
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_entry_id, pending_prompt, config, created_at, updated_at
+         ) VALUES (?1, ?2, NULL, NULL, NULL, NULL, ?3, ?4, ?4)",
         rusqlite::params![
             record.id.as_uuid().to_string(),
             crate::session::lane::MAIN,
@@ -252,6 +263,52 @@ fn set_main_lane_config(
     tx.commit()
 }
 
+fn queue_main_next_run(
+    connection: &mut Connection,
+    session_id: SessionId,
+    next_run: &crate::session::lane::NextRun,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let entry_id = next_run.entry_id.as_uuid().to_string();
+    let entry_exists: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM entries WHERE id = ?1)",
+        [&entry_id],
+        |row| row.get(0),
+    )?;
+    if entry_exists {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "reserved next-run entry identity already exists".to_owned(),
+        ));
+    }
+    let now = now_ms();
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            pending_entry_id = ?3,
+            pending_prompt = ?4,
+            updated_at = ?5
+         WHERE session_id = ?1 AND name = ?2
+           AND current_operation_id IS NOT NULL
+           AND pending_entry_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            entry_id,
+            next_run.prompt,
+            now,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane cannot reserve another next run".to_owned(),
+        ));
+    }
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now],
+    )?;
+    tx.commit()
+}
+
 fn append_entry(
     connection: &mut Connection,
     session_id: SessionId,
@@ -275,31 +332,98 @@ fn begin_operation(
     entry: &EntryRecord,
 ) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
+    let session = session_id.as_uuid().to_string();
+    let operation = operation_id.as_uuid().to_string();
+    let entry_id = entry.id.as_uuid().to_string();
+    let (current, pending_entry, pending_prompt): (Option<String>, Option<String>, Option<String>) =
+        tx.query_row(
+            "SELECT current_operation_id, pending_entry_id, pending_prompt
+         FROM lanes WHERE session_id = ?1 AND name = ?2",
+            rusqlite::params![session, crate::session::lane::MAIN],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    if current.is_some() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane already has a current operation".to_owned(),
+        ));
+    }
+    let user_prompt = match &entry.entry {
+        SessionEntry::UserMessage { text } => text,
+        _ => {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "operation acceptance must append its user prompt".to_owned(),
+            ));
+        }
+    };
+    if user_prompt != &checkpoint.payload.prompt || root_inbox.text.as_str() != user_prompt {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "operation prompt disagrees with its accepted entry".to_owned(),
+        ));
+    }
+    match (pending_entry, pending_prompt) {
+        (None, None) => {}
+        (Some(reserved_entry), Some(reserved_prompt))
+            if reserved_entry == entry_id && reserved_prompt.as_str() == user_prompt => {}
+        _ => {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "operation does not match the lane's reserved next run".to_owned(),
+            ));
+        }
+    }
+
     let accepted_seq: i64 = tx.query_row(
         "SELECT COALESCE(MAX(accepted_seq), 0) + 1 FROM operations WHERE session_id = ?1",
-        [session_id.as_uuid().to_string()],
+        [&session],
         |row| row.get(0),
     )?;
     tx.execute(
         "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)
          VALUES (?1, ?2, 'run', ?3, ?4)",
-        rusqlite::params![
-            operation_id.as_uuid().to_string(),
-            session_id.as_uuid().to_string(),
-            now_ms(),
-            accepted_seq,
-        ],
+        rusqlite::params![operation, session, now_ms(), accepted_seq],
     )?;
     insert_inbox(&tx, session_id, operation_id, root_inbox)?;
     insert_capability_snapshot(&tx, &checkpoint.capability_snapshot)?;
     insert_checkpoint(&tx, operation_id, checkpoint)?;
     insert_entry(&tx, session_id, entry)?;
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            current_operation_id = ?3,
+            pending_entry_id = NULL,
+            pending_prompt = NULL,
+            updated_at = ?4
+         WHERE session_id = ?1 AND name = ?2 AND current_operation_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+            operation_id.as_uuid().to_string(),
+            now_ms(),
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "main lane lost operation admission".to_owned(),
+        ));
+    }
     tx.commit()?;
     Ok(())
 }
 
 fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), rusqlite::Error> {
     let tx = connection.transaction()?;
+    let operation_id = request.operation_id.as_uuid().to_string();
+    let current: Option<String> = tx.query_row(
+        "SELECT current_operation_id FROM lanes WHERE session_id = ?1 AND name = ?2",
+        rusqlite::params![
+            request.session_id.as_uuid().to_string(),
+            crate::session::lane::MAIN,
+        ],
+        |row| row.get(0),
+    )?;
+    if current.as_deref() != Some(operation_id.as_str()) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "operation is not the main lane's current operation".to_owned(),
+        ));
+    }
     insert_capability_snapshot(&tx, &request.checkpoint.capability_snapshot)?;
     for manifest in &request.context_manifests {
         insert_context_manifest(&tx, manifest)?;
@@ -519,6 +643,26 @@ fn commit(connection: &mut Connection, request: &CommitRequest) -> Result<(), ru
             rusqlite::params![effect_id.as_uuid().to_string()],
         )?;
     }
+    if matches!(
+        &request.checkpoint.payload.state,
+        OperationState::Finished(_)
+    ) {
+        let changed = tx.execute(
+            "UPDATE lanes SET current_operation_id = NULL, updated_at = ?4
+             WHERE session_id = ?1 AND name = ?2 AND current_operation_id = ?3",
+            rusqlite::params![
+                request.session_id.as_uuid().to_string(),
+                crate::session::lane::MAIN,
+                operation_id,
+                now_ms(),
+            ],
+        )?;
+        if changed != 1 {
+            return Err(rusqlite::Error::InvalidParameterName(
+                "terminal operation no longer owns the main lane".to_owned(),
+            ));
+        }
+    }
     tx.commit()?;
     Ok(())
 }
@@ -726,23 +870,75 @@ fn load_main_lane(
     connection: &Connection,
     session_id: SessionId,
 ) -> Result<crate::session::lane::Lane, StoreError> {
-    let (name, leaf, config): (String, Option<String>, String) = connection
+    struct RawLane {
+        name: String,
+        leaf: Option<String>,
+        current_operation: Option<String>,
+        pending_entry: Option<String>,
+        pending_prompt: Option<String>,
+        config: String,
+    }
+
+    let raw = connection
         .query_row(
-            "SELECT name, leaf_id, config FROM lanes WHERE session_id = ?1 AND name = ?2",
+            "SELECT name, leaf_id, current_operation_id,
+                    pending_entry_id, pending_prompt, config
+             FROM lanes WHERE session_id = ?1 AND name = ?2",
             rusqlite::params![session_id.as_uuid().to_string(), crate::session::lane::MAIN],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok(RawLane {
+                    name: row.get(0)?,
+                    leaf: row.get(1)?,
+                    current_operation: row.get(2)?,
+                    pending_entry: row.get(3)?,
+                    pending_prompt: row.get(4)?,
+                    config: row.get(5)?,
+                })
+            },
         )
         .map_err(StoreError::from)?;
-    let leaf = leaf
+    let leaf = raw
+        .leaf
         .as_deref()
-        .map(|raw| {
-            crate::ids::EntryId::parse(raw)
+        .map(|value| {
+            crate::ids::EntryId::parse(value)
                 .ok_or_else(|| StoreError::Sqlite("corrupt lane leaf id".to_owned()))
         })
         .transpose()?;
-    let config = serde_json::from_str(&config)
+    let parse_operation = |value: &str| {
+        Uuid::parse_str(value)
+            .map(crate::ids::OperationId::from_uuid)
+            .map_err(|_| StoreError::Sqlite("corrupt current operation id".to_owned()))
+    };
+    let current_operation = raw
+        .current_operation
+        .as_deref()
+        .map(parse_operation)
+        .transpose()?;
+    let pending_next_run = match (raw.pending_entry, raw.pending_prompt) {
+        (None, None) => None,
+        (Some(entry), Some(prompt)) => Some(crate::session::lane::NextRun {
+            entry_id: crate::ids::EntryId::parse(&entry)
+                .ok_or_else(|| StoreError::Sqlite("corrupt pending entry id".to_owned()))?,
+            prompt,
+        }),
+        _ => {
+            return Err(StoreError::Sqlite(
+                "partial pending next-run state".to_owned(),
+            ));
+        }
+    };
+    let config = serde_json::from_str(&raw.config)
         .map_err(|err| StoreError::Sqlite(format!("corrupt lane config: {err}")))?;
-    Ok(crate::session::lane::Lane { name, leaf, config })
+    Ok(crate::session::lane::Lane {
+        name: raw.name,
+        state: crate::session::lane::State {
+            leaf,
+            current_operation,
+            pending_next_run,
+        },
+        config,
+    })
 }
 
 fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession, StoreError> {
@@ -820,7 +1016,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             entry: node.value,
         });
     }
-    if lane.leaf != previous {
+    if lane.state.leaf != previous {
         return Err(StoreError::Sqlite(
             "main lane leaf does not match the persisted branch".to_owned(),
         ));
@@ -891,6 +1087,28 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
             latest: (state_seq as u64, checkpoint),
             capability_snapshot,
         });
+    }
+
+    let mut open_operations = operations
+        .iter()
+        .filter(|operation| !matches!(&operation.latest.1.state, OperationState::Finished(_)));
+    let open = open_operations.next().map(|operation| operation.id);
+    if open_operations.next().is_some() {
+        return Err(StoreError::Sqlite(
+            "main lane has multiple open operations".to_owned(),
+        ));
+    }
+    if lane.state.current_operation != open {
+        return Err(StoreError::Sqlite(
+            "main lane current operation disagrees with durable operation state".to_owned(),
+        ));
+    }
+    if let Some(next_run) = &lane.state.pending_next_run
+        && entries.iter().any(|entry| entry.id == next_run.entry_id)
+    {
+        return Err(StoreError::Sqlite(
+            "pending next-run entry identity already exists".to_owned(),
+        ));
     }
 
     let mut statement = connection.prepare(
@@ -971,6 +1189,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
 
     Ok(LoadedSession {
         session,
+        lane,
         entries,
         operations,
         pending_inbox,

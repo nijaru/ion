@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 16;
+const SCHEMA_VERSION: i64 = 17;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -100,12 +100,24 @@ CREATE TABLE IF NOT EXISTS lanes (
     session_id TEXT NOT NULL REFERENCES sessions(id),
     name TEXT NOT NULL,
     leaf_id TEXT,
+    current_operation_id TEXT,
+    pending_entry_id TEXT,
+    pending_prompt TEXT,
     config TEXT NOT NULL,
     created_at INTEGER NOT NULL,
     updated_at INTEGER NOT NULL,
     PRIMARY KEY (session_id, name),
-    FOREIGN KEY (session_id, leaf_id) REFERENCES entries(session_id, id)
+    FOREIGN KEY (session_id, leaf_id) REFERENCES entries(session_id, id),
+    FOREIGN KEY (session_id, current_operation_id) REFERENCES operations(session_id, id),
+    CHECK (
+        (pending_entry_id IS NULL AND pending_prompt IS NULL)
+        OR
+        (pending_entry_id IS NOT NULL AND pending_prompt IS NOT NULL)
+    )
 );
+
+CREATE UNIQUE INDEX IF NOT EXISTS lanes_pending_entry_unique
+    ON lanes (pending_entry_id) WHERE pending_entry_id IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS operations (
     id TEXT PRIMARY KEY,
@@ -113,6 +125,7 @@ CREATE TABLE IF NOT EXISTS operations (
     kind TEXT NOT NULL,
     accepted_at INTEGER NOT NULL,
     accepted_seq INTEGER NOT NULL,
+    UNIQUE (session_id, id),
     UNIQUE (session_id, accepted_seq)
 );
 
