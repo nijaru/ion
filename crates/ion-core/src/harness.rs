@@ -2,23 +2,20 @@
 //!
 //! Harness profiles may evolve projection/tool-presentation/compaction
 //! heuristics, but never durable operation, policy, effect, or recovery
-//! semantics. v0 starts with one explicit profile rather than hidden globals.
+//! semantics. v0 starts with one explicit immutable profile id rather than
+//! hidden globals. Exact model-step inputs remain the replay authority.
 
-use sha2::{Digest, Sha256};
-
-/// Stable identity for the initial direct-tool Ion harness.
+/// Stable immutable identity for the initial direct-tool Ion harness.
+///
+/// Changing model-facing harness policy requires a new profile id. A content
+/// digest belongs here only once Ion has structured profile configuration whose
+/// canonical bytes can actually be hashed; a synthetic digest would add false
+/// precision without improving replay.
 pub const DEFAULT_HARNESS_PROFILE_ID: &str = "ion/default@1";
-
-/// Canonical material whose digest identifies the behavior of the default
-/// profile. Changing model-facing harness behavior requires a new id and/or
-/// fingerprint; it must never silently reinterpret an in-flight model step.
-const DEFAULT_HARNESS_PROFILE_MATERIAL: &str =
-    "ion/default@1;context=baseline-v1;tools=direct-v1;compaction=baseline-v1;budget=baseline-v1";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HarnessProfile {
     pub id: String,
-    pub fingerprint: String,
 }
 
 impl HarnessProfile {
@@ -26,13 +23,14 @@ impl HarnessProfile {
     pub fn default_v1() -> Self {
         Self {
             id: DEFAULT_HARNESS_PROFILE_ID.to_owned(),
-            fingerprint: hex_digest(DEFAULT_HARNESS_PROFILE_MATERIAL.as_bytes()),
         }
     }
 
+    /// v0 only knows the frozen default profile. Unknown persisted profile ids
+    /// must fail visibly rather than being interpreted with current defaults.
     #[must_use]
-    pub fn is_consistent(&self) -> bool {
-        self == &Self::default_v1()
+    pub fn is_supported(&self) -> bool {
+        self.id == DEFAULT_HARNESS_PROFILE_ID
     }
 }
 
@@ -42,23 +40,23 @@ impl Default for HarnessProfile {
     }
 }
 
-fn hex_digest(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn default_profile_identity_is_stable_and_self_consistent() {
+    fn default_profile_identity_is_stable_and_supported() {
         let profile = HarnessProfile::default_v1();
         assert_eq!(profile.id, DEFAULT_HARNESS_PROFILE_ID);
-        assert_eq!(profile.fingerprint.len(), 64);
-        assert!(profile.is_consistent());
+        assert!(profile.is_supported());
         assert_eq!(profile, HarnessProfile::default());
+    }
+
+    #[test]
+    fn unknown_profile_is_not_silently_reinterpreted() {
+        let profile = HarnessProfile {
+            id: "ion/default@2".to_owned(),
+        };
+        assert!(!profile.is_supported());
     }
 }
