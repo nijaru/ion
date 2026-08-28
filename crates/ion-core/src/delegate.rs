@@ -180,6 +180,71 @@ impl<P> ChildManager<P> {
             .map(|child| child.session.clone())
     }
 
+    /// Remove one live incarnation from the registry, then drain every owned
+    /// resource without holding the manager mutex. The durable session remains
+    /// in SQLite and is still observable/resumable by handle.
+    async fn release_live_child(&self, session_id: SessionId) -> Result<(), String> {
+        let Some(mut child) = self
+            .children
+            .lock()
+            .expect("child manager poisoned")
+            .remove(&session_id)
+        else {
+            return Ok(());
+        };
+        child.cancel.cancel();
+        let mut first_error = None;
+        if let Err(err) = child.session.close().await {
+            first_error.get_or_insert_with(|| format!("child close failed: {err}"));
+        }
+        if let Some(runtime) = child.runtime.take()
+            && let Err(err) = runtime.join().await
+        {
+            first_error.get_or_insert_with(|| format!("child join failed: {err}"));
+        }
+        if let Err(err) = child.catalog.close().await {
+            first_error.get_or_insert_with(|| format!("child catalog close failed: {err}"));
+        }
+        if let Err(err) = child.cancel_watch.await {
+            first_error.get_or_insert_with(|| format!("child cancellation watcher failed: {err}"));
+        }
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
+    /// Reclaim completed live runtimes before applying the live-child bound.
+    /// Status comes from the durable store, not from task liveness.
+    async fn reap_finished_children(&self) -> Result<(), String> {
+        let ids: Vec<SessionId> = self
+            .children
+            .lock()
+            .expect("child manager poisoned")
+            .keys()
+            .copied()
+            .collect();
+        for session_id in ids {
+            let loaded = self
+                .config
+                .store
+                .load(session_id)
+                .await
+                .map_err(|err| format!("child {session_id} unavailable while reaping: {err}"))?;
+            let finished = loaded
+                .operations
+                .iter()
+                .max_by_key(|operation| operation.accepted_seq)
+                .is_some_and(|operation| {
+                    matches!(operation.latest.1.state, OperationState::Finished(_))
+                });
+            if finished {
+                self.release_live_child(session_id).await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn spawn(
         self: &Arc<Self>,
         spec: ChildSpec,
@@ -192,6 +257,7 @@ impl<P> ChildManager<P> {
         if parent_cancel.is_cancelled() {
             return Err("cancelled".to_owned());
         }
+        self.reap_finished_children().await?;
         {
             let children = self.children.lock().expect("child manager poisoned");
             if children.len() >= self.config.max_active_children.max(1) {
@@ -339,10 +405,11 @@ impl<P> ChildManager<P> {
         progress: Option<&ToolProgressSender>,
     ) -> Result<ChildObservation, String> {
         let initial = self.observe(handle).await?;
-        if matches!(
-            initial.status,
-            ChildStatus::Finished { .. } | ChildStatus::Suspended { .. }
-        ) {
+        if matches!(initial.status, ChildStatus::Finished { .. }) {
+            self.release_live_child(handle.session_id).await?;
+            return Ok(initial);
+        }
+        if matches!(initial.status, ChildStatus::Suspended { .. }) {
             return Ok(initial);
         }
         let Some(session) = self.live_session(handle.session_id) else {
@@ -353,7 +420,11 @@ impl<P> ChildManager<P> {
             .await
             .map_err(|err| format!("child {} subscribe failed: {err}", handle.session_id))?;
         if matches!(snapshot.operation, crate::runtime::OperationStatus::Idle) {
-            return self.observe(handle).await;
+            let observation = self.observe(handle).await?;
+            if matches!(observation.status, ChildStatus::Finished { .. }) {
+                self.release_live_child(handle.session_id).await?;
+            }
+            return Ok(observation);
         }
         loop {
             tokio::select! {
@@ -365,6 +436,9 @@ impl<P> ChildManager<P> {
                     }
                     if event_is_terminal(&event) {
                         let observation = self.observe(handle).await?;
+                        if matches!(observation.status, ChildStatus::Finished { .. }) {
+                            self.release_live_child(handle.session_id).await?;
+                        }
                         report_progress(progress, format!("child {} finished", handle.session_id)).await;
                         return Ok(observation);
                     }
@@ -490,24 +564,17 @@ impl<P> ChildManager<P> {
     }
 
     pub async fn close(&self) -> Result<(), String> {
-        let children = std::mem::take(&mut *self.children.lock().expect("child manager poisoned"));
+        let ids: Vec<SessionId> = self
+            .children
+            .lock()
+            .expect("child manager poisoned")
+            .keys()
+            .copied()
+            .collect();
         let mut first_error = None;
-        for (_, mut child) in children {
-            child.cancel.cancel();
-            if let Err(err) = child.session.close().await {
-                first_error.get_or_insert_with(|| format!("child close failed: {err}"));
-            }
-            if let Some(runtime) = child.runtime.take()
-                && let Err(err) = runtime.join().await
-            {
-                first_error.get_or_insert_with(|| format!("child join failed: {err}"));
-            }
-            if let Err(err) = child.catalog.close().await {
-                first_error.get_or_insert_with(|| format!("child catalog close failed: {err}"));
-            }
-            if let Err(err) = child.cancel_watch.await {
-                first_error
-                    .get_or_insert_with(|| format!("child cancellation watcher failed: {err}"));
+        for session_id in ids {
+            if let Err(err) = self.release_live_child(session_id).await {
+                first_error.get_or_insert(err);
             }
         }
         match first_error {
