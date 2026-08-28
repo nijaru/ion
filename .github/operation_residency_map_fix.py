@@ -12,17 +12,30 @@ mechanical = """# Mechanical projection of the old singleton active slot through
 # dependent on rustfmt's current wrapping choices.
 for path in (runtime, effects, recovery):
     text = path.read_text()
-    text = re.sub(r"self\\.operation\\s*\\.as_ref\\(\\)", "self.main_active()", text)
-    text = re.sub(r"self\\.operation\\s*\\.as_mut\\(\\)", "self.main_active_mut()", text)
-    text = re.sub(r"self\\.operation\\s*\\.is_some\\(\\)", "self.main_active().is_some()", text)
-    text = re.sub(r"self\\.operation\\s*\\.is_none\\(\\)", "self.main_active().is_none()", text)
-    text = re.sub(r"self\\.operation\\s*\\.clone\\(\\)", "self.main_active().cloned()", text)
-    text = text.replace("match &self.operation", "match self.main_active()")
-    text = text.replace("let Some(active) = &self.operation else", "let Some(active) = self.main_active() else")
-    text = text.replace("if let Some(active) = &self.operation", "if let Some(active) = self.main_active()")
-    text = text.replace("if let Some(active) = &mut self.operation", "if let Some(active) = self.main_active_mut()")
-    text = text.replace("self.operation = Some(staged);", "self.install_active(staged);")
-    text = text.replace("self.operation.take();", "self.remove_main_operation();")
+    singleton = r"self\\s*\\.\\s*operation"
+    text = re.sub(singleton + r"\\s*\\.\\s*as_ref\\s*\\(\\s*\\)", "self.main_active()", text)
+    text = re.sub(singleton + r"\\s*\\.\\s*as_mut\\s*\\(\\s*\\)", "self.main_active_mut()", text)
+    text = re.sub(singleton + r"\\s*\\.\\s*is_some\\s*\\(\\s*\\)", "self.main_active().is_some()", text)
+    text = re.sub(singleton + r"\\s*\\.\\s*is_none\\s*\\(\\s*\\)", "self.main_active().is_none()", text)
+    text = re.sub(singleton + r"\\s*\\.\\s*clone\\s*\\(\\s*\\)", "self.main_active().cloned()", text)
+    text = re.sub(r"match\\s*&\\s*" + singleton, "match self.main_active()", text)
+    text = re.sub(
+        r"let\\s+Some\\(active\\)\\s*=\\s*&\\s*" + singleton + r"\\s+else",
+        "let Some(active) = self.main_active() else",
+        text,
+    )
+    text = re.sub(
+        r"if\\s+let\\s+Some\\(active\\)\\s*=\\s*&\\s*" + singleton,
+        "if let Some(active) = self.main_active()",
+        text,
+    )
+    text = re.sub(
+        r"if\\s+let\\s+Some\\(active\\)\\s*=\\s*&mut\\s*" + singleton,
+        "if let Some(active) = self.main_active_mut()",
+        text,
+    )
+    text = re.sub(singleton + r"\\s*=\\s*Some\\(staged\\)\\s*;", "self.install_active(staged);", text)
+    text = re.sub(singleton + r"\\s*\\.\\s*take\\s*\\(\\s*\\)\\s*;", "self.remove_main_operation();", text)
     path.write_text(text)
 
 """
@@ -36,7 +49,7 @@ ephemeral = """# Ephemeral state now lives beside the operation core in the same
 for path in (runtime, effects, recovery):
     text = path.read_text()
     text = re.sub(
-        r"self\\.operation_live\\s*\\.\\s*",
+        r"self\\s*\\.\\s*operation_live\\s*\\.\\s*",
         'self.main_live_mut().expect("main operation residency exists").',
         text,
     )
@@ -94,4 +107,11 @@ runtime.write_text(text)
 
 """
 text = text[:start] + start_active + text[end:]
+
+# Make the patch's final singleton check formatting-insensitive as well.
+old_check = '''for path in (runtime, effects, recovery):\n    text = path.read_text()\n    if "self.operation" in text:\n        # Remaining occurrences must be new map/helper names, not the removed\n        # singleton field. Catch accidental old syntax while allowing\n        # `self.operations`.\n        bad = [line for line in text.splitlines() if "self.operation" in line and "self.operations" not in line]\n        if bad:\n            raise SystemExit(f"{path}: leftover singleton operation syntax: {bad[:8]}")\n'''
+new_check = '''for path in (runtime, effects, recovery):\n    text = path.read_text()\n    leftover = re.search(r"self\\s*\\.\\s*operation(?!s\\b)", text)\n    if leftover:\n        excerpt = text[max(0, leftover.start() - 80):leftover.end() + 120]\n        raise SystemExit(f"{path}: leftover singleton operation syntax: {excerpt!r}")\n'''
+if old_check not in text:
+    raise SystemExit("final singleton checker mismatch")
+text = text.replace(old_check, new_check, 1)
 path.write_text(text)
