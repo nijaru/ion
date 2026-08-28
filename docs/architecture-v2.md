@@ -80,6 +80,8 @@ ACP is the better signal for Ion's interoperable frontend boundary; AHP is the b
 
 Cursor and Warp/Oz are useful evidence that users benefit from parallel sessions, worktrees, cloud/remote agents, and unified agent lists. Their closed internals are not primary substrate evidence.
 
+Factory Droid and Amp are also useful closed-source product/system references when their public documentation exposes concrete session, background, remote, or multi-agent semantics. Ion can use those observable semantics as evidence without inferring or designing around uninspectable internals.
+
 OpenCode remains low-weight because repeated rewrites weaken architectural convergence claims. Gemini CLI is not an architectural reference.
 
 ## Core corrections to the old Ion design
@@ -294,22 +296,28 @@ Completed in the current architecture workstream:
 - SQLite stores the supplied identity instead of inventing one;
 - `LoadedSession` round-trips full entry records;
 - live session state retains those same durable entry records after reopen and after successful commit;
-- payload-only consumers explicitly project semantic entries.
+- payload-only consumers explicitly project semantic entries;
+- total lane state is durable: `leaf`, `current_operation`, `pending_next_run`, and `config`;
+- busy-lane `pending_next_run` provisions only semantic `EntryId`; `OperationId` is created only at actual acceptance;
+- operation admission is lane-addressable and atomically captures immutable accepting lane plus exact source leaf;
+- later operation commits derive lane ownership from immutable origin rather than trusting repeated caller state;
+- model selection is exclusively durable lane configuration; the obsolete `ModelChanged` conversation entry has been deleted;
+- recovery loads and validates all durable lane cursors/config over the shared parent-linked conversation tree rather than treating global sequence order as a linear branch;
+- one open operation is validated per lane, and pending durable inbox is restored with operation ownership;
+- while live execution remains single-lane, reopen projects only the `main` branch from the full durable tree and fences an impossible open non-main operation instead of conflating it with `main`.
 
-Total lane state and busy-lane queueing are now complete: `pending_next_run` owns a provisioned semantic `EntryId`, while `OperationId` is provisioned only when the lane actually accepts the run. SQLite persists the pending identity without inventing it, and no queued `Accepted` operation exists.
-
-The active checkpoint is lane-addressable operation admission. The store receives the accepting lane explicitly, captures that lane's exact source leaf into immutable `operation_origins` in the same transaction, and later commits derive lane ownership from that immutable origin rather than trusting the runtime to repeat it.
+The active checkpoint is now the live multi-lane session writer. Storage and recovery can represent multiple durable lanes, but `SessionRuntime` still owns singleton active-operation/draft/effect state. The next change must make lane/operation residency explicit so multiple lanes can have concurrent slow effects while all mutation remains serialized through one session writer.
 
 ## Next implementation order
 
-1. Finish and validate lane-addressable operation acceptance over the durable lane/source-leaf origin contract.
-2. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
-4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
-5. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
-6. Add durable agent messaging/background completion through the common session-input path.
-7. Add scoped capability publication/teardown around agent creation/resume.
-8. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery/multi-agent invariants.
-9. Reconcile `DESIGN.md`, public API/module vocabulary, and dead compatibility scaffolding.
-10. **Only then redesign the TUI** as an ACP-capable client of the authoritative session/agent host contract.
+1. Generalize `SessionRuntime` from singleton `main` execution state to per-lane active execution under one writer, with operation/effect identity routing and concurrent slow effects across lanes.
+2. Add the runtime-owned lane admission surface only together with its durable store transaction; do not introduce a store-only `create_lane` API.
+3. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
+4. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
+5. Add durable agent messaging/background completion through the common session-input path.
+6. Add scoped capability publication/teardown around agent creation/resume.
+7. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery/multi-agent invariants.
+8. Reconcile `DESIGN.md`, public API/module vocabulary, and dead compatibility scaffolding.
+9. **Only then redesign the TUI** as an ACP-capable client of the authoritative session/agent host contract.
 
 The broad agent-architecture survey is now sufficient to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.
