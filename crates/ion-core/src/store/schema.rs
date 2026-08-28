@@ -139,16 +139,18 @@ CREATE TABLE IF NOT EXISTS operation_state_revisions (
 CREATE INDEX IF NOT EXISTS operation_state_revisions_latest
     ON operation_state_revisions (operation_id, state_seq DESC);
 
-CREATE TRIGGER IF NOT EXISTS operation_state_first_revision
-BEFORE INSERT ON operation_state
-WHEN NEW.state_seq != 1
-BEGIN
-    SELECT RAISE(ABORT, 'first operation state revision must be 1');
-END;
-
-CREATE TRIGGER IF NOT EXISTS operation_state_revision_step
-BEFORE UPDATE ON operation_state
-WHEN NEW.operation_id != OLD.operation_id OR NEW.state_seq != OLD.state_seq + 1
+-- The ledger, not the mutable current projection, owns revision ordering.
+-- This also works correctly with SQLite UPSERT: its BEFORE INSERT phase runs
+-- before conflict resolution, whereas the ledger append happens only after the
+-- chosen insert/update arm has produced the new current state.
+CREATE TRIGGER IF NOT EXISTS operation_state_revision_order
+BEFORE INSERT ON operation_state_revisions
+WHEN NEW.state_seq != COALESCE(
+    (SELECT MAX(state_seq) + 1
+     FROM operation_state_revisions
+     WHERE operation_id = NEW.operation_id),
+    1
+)
 BEGIN
     SELECT RAISE(ABORT, 'operation state revisions must increment by one');
 END;
@@ -339,7 +341,15 @@ mod tests {
                 |row| row.get(0),
             )
             .expect("revision count after rejection");
+        let latest_after: i64 = connection
+            .query_row(
+                "SELECT state_seq FROM operation_state WHERE operation_id = 'operation'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("latest projection after rejection");
         assert_eq!(revisions_after, 2);
+        assert_eq!(latest_after, 2);
     }
 
     #[test]
