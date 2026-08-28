@@ -173,3 +173,99 @@ impl EffectRecord {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::provider::ModelCapabilities;
+
+    fn model_invocation() -> ModelInvocation {
+        ModelInvocation {
+            step: 7,
+            model: ResolvedModel {
+                model_ref: "test/model".to_owned(),
+                context_window: Some(131_072),
+                capabilities: ModelCapabilities {
+                    reasoning: true,
+                    tool_calls: true,
+                    prompt_cache: true,
+                    streaming: true,
+                },
+            },
+            plan: ContextPlan {
+                system: "stable system".to_owned(),
+                messages: Vec::new(),
+            },
+            capability_snapshot_id: "cap-1".to_owned(),
+            context_manifest_id: "ctx-1".to_owned(),
+            prefix_fingerprint: "prefix-1".to_owned(),
+            cache_expectation: CacheExpectation::PrefixReuseExpected,
+        }
+    }
+
+    #[test]
+    fn model_effect_round_trips_exactly() {
+        let invocation = model_invocation();
+        let record = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Model(invocation.clone()),
+            RecoveryClass::ReplaySafe,
+            1,
+        );
+        assert_eq!(record.kind, "model_step");
+        assert_eq!(record.decode(), Ok(DurableEffect::Model(invocation)));
+    }
+
+    #[test]
+    fn tool_kind_must_match_payload() {
+        let invocation = ToolInvocation {
+            tool: "read".to_owned(),
+            arguments: serde_json::json!({"path": "README.md"}),
+            call_id: 4,
+            canonical: None,
+            reconciliation: None,
+        };
+        let mut record = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Tool(invocation),
+            RecoveryClass::ReplaySafe,
+            1,
+        );
+        record.kind = "tool:write".to_owned();
+        assert!(record.decode().is_err());
+    }
+
+    #[test]
+    fn recovery_supplies_operation_identity() {
+        let invocation = ToolInvocation {
+            tool: "read".to_owned(),
+            arguments: serde_json::json!({"path": "README.md"}),
+            call_id: 9,
+            canonical: Some(CanonicalTarget::Path {
+                path: std::path::PathBuf::from("/tmp/project/README.md"),
+            }),
+            reconciliation: None,
+        };
+        let operation_id = OperationId::generate();
+        let call = invocation.into_call(operation_id);
+        assert_eq!(call.operation_id, operation_id);
+        assert_eq!(call.call_id, 9);
+        assert_eq!(call.name, "read");
+    }
+
+    #[test]
+    fn replay_attempt_preserves_input_and_changes_only_attempt_identity() {
+        let record = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Model(model_invocation()),
+            RecoveryClass::ReplaySafe,
+            3,
+        );
+        let replay = record.next_attempt();
+        assert_ne!(replay.id, record.id);
+        assert_eq!(replay.attempt, 4);
+        assert_eq!(replay.kind, record.kind);
+        assert_eq!(replay.recovery_class, record.recovery_class);
+        assert_eq!(replay.effective_input, record.effective_input);
+    }
+}
