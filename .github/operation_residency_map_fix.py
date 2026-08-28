@@ -115,7 +115,7 @@ if old_check not in text:
     raise SystemExit("final singleton checker mismatch")
 text = text.replace(old_check, new_check, 1)
 
-borrow_fixes = r'''# Borrow shaping for map-backed residency. Capture stable operation facts before
+borrow_fixes = r"""# Borrow shaping for map-backed residency. Capture stable operation facts before
 # mutating live residency so no map reference survives a mutable self borrow.
 text = effects.read_text()
 fn_start = text.index("    pub(crate) async fn handle_engine(&mut self, signal: EngineSignal) {")
@@ -146,7 +146,7 @@ replacement = '''        if let Some(mut staged) = self.main_active().cloned() {
 text = text[:block_start] + replacement + text[block_end:]
 runtime.write_text(text)
 
-'''
+"""
 marker = "# A few direct singleton forms are intentionally explicit rather than hidden\n"
 if marker not in text:
     raise SystemExit("borrow-fix insertion marker missing")
