@@ -1,0 +1,47 @@
+name: Run corrected reopen entry patch
+
+on:
+  push:
+    branches:
+      - refactor/reopen-entry-ids
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: refactor/reopen-entry-ids
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply corrected embedded patch
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/patch-reopen-entry-ids.yml').read_text()
+          script = workflow.split("          python - <<'PY'\n", 1)[1].split("\n          PY", 1)[0]
+          script = textwrap.dedent(script)
+          old = "for p in Path('crates/ion-core/src/tests').glob('*.rs'):\n    text = p.read_text()"
+          new = "for p in Path('crates/ion-core/src/tests').glob('*.rs'):\n    if p.name == 'support.rs':\n        continue\n    text = p.read_text()"
+          if script.count(old) != 1:
+              raise SystemExit('generic test loop did not match exactly once')
+          exec(compile(script.replace(old, new), '<reopen-entry-patch>', 'exec'))
+          PY
+          cargo fmt
+          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+          cargo test --locked --workspace
+      - name: Commit source patch
+        run: |
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/ion-core/src crates/ion/src/acp.rs
+          git commit -m 'refactor(core): retain entry ids in live session state'
+          git push origin HEAD:refactor/reopen-entry-ids
