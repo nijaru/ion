@@ -590,13 +590,14 @@ fn insert_entry(
 ) -> Result<(), rusqlite::Error> {
     let payload = serde_json::to_string(&entry.entry)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let entry_id = crate::ids::EntryId::for_seq(session_id, entry.seq);
     connection.execute(
         "INSERT INTO entries (session_id, seq, id, kind, payload, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
         rusqlite::params![
             session_id.as_uuid().to_string(),
             entry.seq as i64,
-            Uuid::now_v7().to_string(),
+            entry_id.as_uuid().to_string(),
             entry_kind(&entry.entry),
             payload,
             now_ms(),
@@ -637,14 +638,23 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         })?;
 
     let mut statement = connection
-        .prepare("SELECT seq, payload FROM entries WHERE session_id = ?1 ORDER BY seq")?;
+        .prepare("SELECT id, seq, payload FROM entries WHERE session_id = ?1 ORDER BY seq")?;
     let mut entries = Vec::new();
     let mut rows = statement.query(rusqlite::params![id])?;
     while let Some(row) = rows.next()? {
-        let seq: i64 = row.get(0)?;
+        let stored_id: String = row.get(0)?;
+        let stored_id = crate::ids::EntryId::parse(&stored_id)
+            .ok_or_else(|| StoreError::Sqlite("corrupt entry id".to_owned()))?;
+        let seq: i64 = row.get(1)?;
         let seq = u64::try_from(seq)
             .map_err(|_| StoreError::Sqlite(format!("corrupt entry seq {seq}")))?;
-        let payload: String = row.get(1)?;
+        let expected_id = crate::ids::EntryId::for_seq(session_id, seq);
+        if stored_id != expected_id {
+            return Err(StoreError::Sqlite(format!(
+                "entry identity mismatch at sequence {seq}"
+            )));
+        }
+        let payload: String = row.get(2)?;
         entries.push((seq, decode("entry", payload)?));
     }
 

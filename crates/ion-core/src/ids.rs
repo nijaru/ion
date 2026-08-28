@@ -1,9 +1,10 @@
 //! Durable identity newtypes (DESIGN.md §11.2).
 //!
-//! Sessions, operations, effects, and entries use UUIDv7. UUID ordering
-//! is never semantic: each session has a storage-assigned monotonic
-//! integer `seq` for durable order, and live runtime events keep a
-//! separate in-memory cursor.
+//! Sessions, operations, and effects use UUIDv7. Conversation entry identity
+//! is a deterministic UUIDv5 derived from the owning session and its immutable
+//! per-session sequence: the sequence remains the durable ordering key while
+//! callers use an opaque typed id. Live runtime events keep a separate
+//! in-memory cursor.
 
 use std::fmt;
 
@@ -64,6 +65,43 @@ impl OperationId {
 impl fmt::Display for OperationId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "op-{}", self.0)
+    }
+}
+
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct EntryId(Uuid);
+
+impl EntryId {
+    /// Stable identity for a semantic entry whose per-session sequence has
+    /// already been provisioned by the single session writer.
+    #[must_use]
+    pub fn for_seq(session_id: SessionId, seq: u64) -> Self {
+        let namespace = session_id.as_uuid();
+        Self(Uuid::new_v5(&namespace, &seq.to_be_bytes()))
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    /// Parse the bare UUID form stored in SQLite (no display prefix).
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for EntryId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "entry-{}", self.0)
     }
 }
 
@@ -160,5 +198,19 @@ impl RuntimeInstanceId {
 impl fmt::Display for RuntimeInstanceId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "runtime-{}", self.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn entry_identity_is_stable_but_not_the_ordering_key() {
+        let session = SessionId::from_uuid(Uuid::nil());
+        let one = EntryId::for_seq(session, 1);
+        assert_eq!(one, EntryId::for_seq(session, 1));
+        assert_ne!(one, EntryId::for_seq(session, 2));
+        assert_eq!(EntryId::parse(&one.as_uuid().to_string()), Some(one));
     }
 }
