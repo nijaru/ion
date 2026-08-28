@@ -33,7 +33,7 @@ jobs:
         run: |
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/ion-core/src
+          git add crates/ion-core/src crates/ion/src
           git rm -f .github/agent_message_patch.py .github/agent_message_patch_fix.py .github/workflows/agent-message.yml
           git commit -m 'feat(core): add durable agent messaging'
           git push origin HEAD:refactor/reopen-entry-ids
