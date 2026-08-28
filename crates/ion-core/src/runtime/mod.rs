@@ -1452,6 +1452,16 @@ impl<P: Provider> SessionRuntime<P> {
             .map(|resident| &mut resident.live)
     }
 
+    fn operation_lane_name(&self, operation_id: OperationId) -> Option<&str> {
+        self.resident(operation_id)
+            .map(|resident| resident.lane_name.as_str())
+            .or_else(|| {
+                self.lanes.iter().find_map(|(name, lane)| {
+                    (lane.state.current_operation == Some(operation_id)).then_some(name.as_str())
+                })
+            })
+    }
+
     fn lane_resident_id(&self, lane_name: &str) -> Option<OperationId> {
         let lane = self.lanes.get(lane_name)?;
         lane.state.current_operation.or_else(|| {
@@ -2815,11 +2825,24 @@ impl<P: Provider> SessionRuntime<P> {
 
     async fn commit_transition(&mut self, mut request: CommitRequest) -> Result<(), StoreError> {
         let operation_id = request.operation_id;
+        let lane_name = self
+            .operation_lane_name(operation_id)
+            .ok_or_else(|| {
+                StoreError::Sqlite(format!(
+                    "operation {operation_id} has no live lane ownership"
+                ))
+            })?
+            .to_owned();
         let terminal = matches!(
             request.checkpoint.payload.state,
             OperationState::Finished(_)
         );
-        let mut parent = self.main_leaf();
+        let mut parent = self
+            .lanes
+            .get(&lane_name)
+            .expect("operation lane exists while session runtime is live")
+            .state
+            .leaf;
         for entry in &mut request.entries {
             entry.parent = parent;
             parent = Some(entry.id);
@@ -2828,7 +2851,10 @@ impl<P: Provider> SessionRuntime<P> {
         let new_leaf = entries.last().map(|entry| entry.id);
         self.store.commit(request).await?;
         self.install_tree_entries(entries);
-        let lane = self.main_lane_mut();
+        let lane = self
+            .lanes
+            .get_mut(&lane_name)
+            .expect("operation lane exists after durable commit");
         if let Some(new_leaf) = new_leaf {
             lane.state.leaf = Some(new_leaf);
         }
@@ -2959,18 +2985,15 @@ impl<P: Provider> SessionRuntime<P> {
             target: target.clone(),
             tool: tool.to_owned(),
         });
-        self.main_live_mut()
-            .expect("main operation residency exists")
-            .live_tools
-            .retain(|pending| pending.call_id != call_id);
-        self.main_live_mut()
-            .expect("main operation residency exists")
-            .live_tools
-            .push(PendingTool {
-                call_id,
-                tool: tool.to_owned(),
-                target,
-            });
+        let live = self
+            .live_mut(operation_id)
+            .expect("operation residency exists while starting tool effect");
+        live.live_tools.retain(|pending| pending.call_id != call_id);
+        live.live_tools.push(PendingTool {
+            call_id,
+            tool: tool.to_owned(),
+            target,
+        });
     }
 
     /// Session close (DESIGN.md §9.5, §25): stop accepting work, suspend
@@ -2983,7 +3006,11 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.closed = true;
         let close_gate = self.effect_gate.clone();
-        if let Some(mut staged) = self.main_active().cloned() {
+        let operation_ids = self.operations.keys().copied().collect::<Vec<_>>();
+        for operation_id in operation_ids {
+            let Some(mut staged) = self.active(operation_id).cloned() else {
+                continue;
+            };
             let cancel = staged.cancel.clone();
             staged
                 .machine
@@ -3003,17 +3030,19 @@ impl<P: Provider> SessionRuntime<P> {
                 Vec::new(),
                 Vec::new(),
             );
-            if let Some(gate) = close_gate {
+            if let Some(gate) = &close_gate {
                 gate.wait(EffectBoundary::CloseSuspendCommit).await;
             }
-            match self.store.commit(request).await {
+            match self.commit_transition(request).await {
                 Ok(()) => {
                     self.next_entry_seq = new_entry_seq;
+                    staged.state_seq += 1;
                     self.install_active(staged);
                 }
                 Err(err) => {
                     error!(
                         session = %self.session_id,
+                        %operation_id,
                         %err,
                         "suspend checkpoint failed; durable operation stays open"
                     );
