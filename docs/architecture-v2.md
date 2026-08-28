@@ -1,44 +1,99 @@
 # Architecture v2 migration note
 
-**Status:** rationale and migration guide for the architecture now merged to `main`.  
-**Normative design:** [`../DESIGN.md`](../DESIGN.md).
+**Status:** working migration target for the current architecture workstream.  
+**Canonicalization:** reconcile [`../DESIGN.md`](../DESIGN.md) with this note before treating the redesign as settled.
 
-This note records why the architecture changed direction and how the remaining implementation should move toward the canonical design. It is not a second contract.
+This note records the architecture Ion is migrating toward, the evidence behind it, and the order in which the remaining ownership boundaries should land. It is intentionally more specific about invariants than about public Rust names.
 
 ## Reference weighting
 
-Pi 2 is the primary practical and architectural reference for Ion's harness. The most important transferable ideas are:
+Not every agent implementation is equally useful architectural evidence.
+
+### Tier A: core architecture
+
+**Pi 2** is the strongest reference for durable harness semantics:
 
 - append-only parent-linked conversation history;
 - named lanes as active cursors into shared passive history;
 - one session writer with at most one open operation per lane;
 - parallel slow effects across lanes;
-- forks for isolation and lanes for shared-history concurrency;
-- provision-before-effect identity/durability;
-- prompt-cache-friendly tail growth;
+- forks for isolated history and lanes for shared-history concurrency;
+- provision-before-effect identity and durability;
 - explicit replay/reconciliation semantics;
-- the newer explicit-state redesign: immutable operation acceptance, total operation-state revisions, total lane state, and total lane configuration.
+- immutable operation acceptance plus latest total operation state;
+- explicit total lane state/configuration in the newer state-machine redesign.
 
-Ion follows that logical model rather than Pi's TypeScript API or JSONL physical representation.
+Ion follows the logical model, not Pi's TypeScript API or JSONL physical layout. Where Pi's older canonical note and newer explicit-state handoff differ, Ion currently favors explicit lane configuration outside semantic conversation history.
 
-DeepSeek Harness/Cordis independently supports lifecycle-owned, agent-scoped contributions over shared infrastructure. Codex independently supports family-scoped control, explicit control/history lineage, budgets, messaging, and Rust ownership boundaries. Grok Build is useful for concrete background/resume/worktree mechanics. Prime Agent is a pressure test for recursive/long-running composition.
+**DeepSeek Harness / Cordis** is the strongest complementary reference for ownership and composition:
 
-## Key corrections to the old Ion design
+- shared infrastructure with agent-scoped registration visibility;
+- lifecycle-owned tools, prompt contributions, listeners, tasks, and resources;
+- create/resume as a private setup transaction followed by one publication point;
+- rollback of private resources if admission/publication fails or loses a race;
+- one authoritative mechanism per independent fact instead of mirrored registries and readiness flags.
 
-The earlier design made several assumptions that no longer survive the evidence:
+Pi supplies the durable session substrate; DSH/Cordis supplies the strongest ownership discipline around it.
+
+### Tier B: production/system constraints
+
+**Codex** is the strongest practical constraint on multi-agent control:
+
+- one family/root-scoped agent-control authority;
+- explicit execution limits and rollout budgets;
+- control parentage separate from fork/history lineage;
+- inherited effective configuration with child-specific overrides;
+- retained agent identity separate from active execution capacity.
+
+Its real failure modes are useful design tests for Ion: completed agents must release execution permits; cancellation must cascade deliberately; `wait any` and `wait all` must not be ambiguous; spawn admission must not hang invisibly on capacity; recovered children must restore effective configuration; tool schemas must match runtime affordances; and lifecycle state must be visible through headless/event APIs.
+
+**VS Code Agent Host / Agent Host Protocol (AHP)** is the strongest current reference for the host/client boundary:
+
+- the agent host owns sessions independently of UI clients;
+- clients may disconnect while work continues;
+- multiple clients can observe/control one session;
+- reconnect is state-first: snapshot plus ordered actions/deltas;
+- protocol capabilities/versioning are negotiated;
+- client-contributed tools are scoped to the connected client;
+- AHP coordinates hosted sessions above a particular harness protocol rather than replacing harness semantics.
+
+Ion does not need to copy AHP's Redux-shaped protocol, but the ownership conclusion is important: **the TUI must be a client/projection of authoritative runtime state, not the execution owner.**
+
+### Tier C: strong mechanism references
+
+**Grok Build** is particularly valuable because it is an inspectable Rust implementation. Its useful mechanisms include independent child sessions, admission/background separation, resume, explicit capability modes, shared-vs-worktree isolation, per-agent `cwd`, transition-driven waiting rather than polling, and host-stamped authoritative subagent/session/worktree/delivery facts.
+
+**Cloudflare Agents** reinforces one important systems invariant: an agent is a durable identity, not an always-running process. Hibernation/residency can change without changing the semantic agent/session identity.
+
+### Tier D: experimental stress tests
+
+**Prime Agent** is useful for stressing the substrate with recursive children, daemon-backed continuity, direct messaging, goals, schedules, heartbeats, and a persistent model-facing control environment. Its benchmark claims are not architectural evidence, and its RLM/IPython environment is optional capability rather than core Ion machinery.
+
+**Headlong** is useful for persistent-agent semantics: external messages as observations, trajectory/history separate from context projection, continuous autonomous work, and fork/merge experimentation. Its shared-mind semantics are not an appropriate default isolation model for Ion.
+
+### Product/UX evidence only
+
+Cursor and Warp/Oz are useful evidence that users benefit from parallel sessions, worktrees, cloud/remote agents, and unified agent lists. Their closed internals are not primary substrate evidence.
+
+OpenCode remains low-weight because repeated rewrites weaken architectural convergence claims. Gemini CLI is not an architectural reference.
+
+## Core corrections to the old Ion design
 
 1. **Linear history is not the target.** Session history is an append-only parent-linked tree.
 2. **One operation per session is too restrictive.** The invariant is one open operation per lane under one session writer.
-3. **Queued prompts are not queued operations.** A busy lane has lane-owned `next_run` input; a new operation is created only when that run is actually accepted.
-4. **Execution configuration is not conversation history.** Model selection and future reasoning/tool selections belong to total lane configuration. Runtime model switching now writes lane config directly; the old `SessionEntry::ModelChanged` variant remains only as dead compatibility scaffolding pending the later code-hygiene cleanup.
-5. **Operation recovery should be direct.** Immutable acceptance plus one latest total operation-state revision must determine continuation; do not reconstruct a hidden program counter from partial records.
-6. **Child topology is not one special manager.** Lane/fork/fresh/external agents share common durable primitives, with family-scoped control above them.
-7. **Control lineage and history lineage differ.** Persist them separately.
-8. **Workspace freshness cannot be proved by a global Ion generation counter.** Bind verification to observed file/git/command evidence.
-9. **Tool recovery semantics belong to resolved invocations.** Session code must not switch on tool names or whether a tool was dynamically registered.
-10. **The current `Runtime` name must not dictate architecture.** It currently owns one loaded session. Add a process/session registry only if concrete host lifecycle requires one.
+3. **Queued prompts are not queued operations.** A busy lane has lane-owned `pending_next_run`; a new operation is created only when that run is actually accepted.
+4. **Execution configuration is not conversation history.** Model selection and future earned execution settings belong to total lane configuration.
+5. **Operation recovery should be direct.** Immutable acceptance plus latest total operation state must determine continuation without reconstructing a hidden program counter from partial records.
+6. **A child is not a special runtime species.** Shared-history lane agents, forked sessions, fresh sessions, and eventually external/remote agents are topologies over common primitives.
+7. **Control lineage and history lineage differ.** Persist and reason about them separately.
+8. **Agent identity and execution residency differ.** A durable agent/session may be loaded in a Tokio task, hosted in another process, remote, or inactive without changing identity.
+9. **History topology and workspace topology differ.** Shared history does not imply shared checkout; forked history does not require a worktree.
+10. **Foreground/background is waiting policy.** It is not an agent type or identity property.
+11. **Workspace freshness cannot be proved by a global Ion generation counter.** Verification must bind to observed file/git/command evidence.
+12. **Tool recovery semantics belong to resolved invocations.** Session code must not switch on tool names or registration origin.
+13. **The UI is not the runtime owner.** Terminal, ACP, future AHP/remote clients, and other frontends consume authoritative session state.
 
-## Durable target
+## Durable session target
 
 ```text
 Session
@@ -47,7 +102,7 @@ Session
 │   ├── State { leaf, current_operation, pending_next_run }
 │   └── Config { model, ...only earned fields }
 ├── immutable operations
-├── append-only total operation states
+├── latest total operation state (+ optional revision history)
 ├── effects
 ├── durable inputs
 ├── usage
@@ -60,32 +115,134 @@ A run acceptance transaction should conceptually:
 capture lane.pending_next_run
 append resulting semantic entries at lane.leaf
 create immutable Operation { lane, source_leaf, accepted intent }
-append first total OperationState
+write first total OperationState
 set lane.current_operation
 clear captured pending_next_run
 commit all of the above atomically
 ```
 
-A terminal operation transaction appends the terminal total state and clears `lane.current_operation` if it still points to that operation.
+A terminal operation transaction writes terminal total state and clears `lane.current_operation` if it still points to that operation.
 
 `prompt` on a busy lane rejects. `next_run` queues outside an operation. `steer` and `follow_up` belong to the active operation state.
+
+## Agent architecture target
+
+The current `ChildManager` combines several independent facts. The replacement architecture must separate them before public API naming is finalized.
+
+### Durable identity
+
+An agent address refers to durable semantic identity. It must not embed a task handle, process incarnation, terminal attachment, or execution permit.
+
+The execution host provisions authoritative identity before work begins. Child/worker code does not self-report facts the host already owns, including agent/session identity, control parentage, workspace identity, or foreground/background delivery state.
+
+### Residency
+
+Residency describes where an admitted agent is currently executable:
+
+- loaded in-process session task;
+- future local worker process;
+- future remote host;
+- inactive/hibernated but durable.
+
+Residency is runtime state, not conversation semantics and not agent identity.
+
+### Family control
+
+One root/family-scoped control authority owns:
+
+- control parentage and stable agent addresses;
+- admitted/retained descendants;
+- execution permits and rollout/resource budgets;
+- spawn, observe, wait, cancel, interrupt, resume, and messaging routing;
+- cancellation ownership;
+- deterministic recovery/reattachment;
+- background completion delivery.
+
+It is not process-global. Separate roots should not accidentally share agent namespace, budgets, or cancellation trees.
+
+Retained identity and active execution capacity are distinct. A completed child can remain observable without consuming a live execution permit.
+
+### Spawn is admission-first
+
+Creation should have one authoritative admission transaction:
+
+1. provision durable identity and requested topology;
+2. privately construct/validate scoped capabilities and resources;
+3. durably publish/admit the agent exactly once;
+4. return its handle/address promptly;
+5. start or attach execution residency;
+6. observe completion separately.
+
+If setup/admission loses a race or fails, all private resources roll back. Foreground behavior is `spawn + wait`; background behavior is `spawn` without the wait. Completion is never part of identity creation.
+
+### Orthogonal spawn dimensions
+
+History:
+
+- shared-history lane;
+- fork from a source entry;
+- fresh session;
+- future external/remote history source.
+
+Workspace:
+
+- shared workspace;
+- worktree;
+- future sandbox/remote workspace.
+
+Capabilities/configuration:
+
+- role/persona or agent definition;
+- model/reasoning configuration;
+- tool scope;
+- MCP/extensions;
+- policy/sandbox;
+- budgets.
+
+Waiting/delivery:
+
+- return after admission;
+- wait for one;
+- wait for any of a set;
+- wait for all of a set;
+- deadline/timeout;
+- background completion delivered as durable input.
+
+These axes should not be encoded as a combinatorial enum of child types.
+
+### Wait semantics
+
+Waiting must wake from authoritative state transitions rather than polling. It should distinguish one/any/all explicitly, support cancellation/deadline, and ensure dropping a waiter cannot consume completion or change durable agent state.
+
+### Messaging and autonomous input
+
+User prompts, agent-to-agent messages, background completion, schedules, heartbeats, and future external events should converge on durable session input rather than mutating another session's context directly.
+
+Delivery policy can decide whether input steers active work, becomes a follow-up, becomes the lane's next run, or is informational. The durable input identity is separate from that policy.
+
+### Client/host boundary
+
+The execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote/multi-client protocols are projections over:
+
+- an initial snapshot;
+- ordered runtime/session events or actions;
+- commands carrying stable semantic IDs.
+
+A client disconnect must not implicitly cancel durable work. This boundary should be settled before the TUI redesign so UI architecture does not leak into session ownership.
 
 ## SQLite direction
 
 Use SQLite naturally rather than emulating Pi's log format:
 
 - immutable `entries(id, parent_id, seq, payload, ...)`;
-- one directly readable lane current-state/config projection;
+- directly readable lane current-state/config projection;
 - immutable operation acceptance with lane + source-entry identity;
-- append-only total operation-state revisions;
+- latest total operation state, with revision history only where debugging/evaluation earns it;
+- durable agent/control metadata separate from execution residency;
 - effects/usage/inbox/evidence in typed supporting tables/codecs;
 - transactions and foreign keys enforcing cross-record invariants.
 
-A directly readable current-state projection is compatible with append-only revision history. The current schema retains every total operation-state revision in an immutable ledger while keeping the existing latest-state row as a cheap recovery projection.
-
-Operation topology is captured separately in immutable `operation_origins`. While the runtime still addresses only hidden `main`, accepting an operation atomically records the exact lane and pre-acceptance source leaf. Loading a session now restores that immutable origin as typed operation data. When lane-targeted runtime commands become real, the current main-lane capture path should become an explicit lane argument without changing the origin contract.
-
-Lane configuration is also now independently durable. `switch_model` replaces the hidden `main` lane's total config, does not append a conversation node, and does not move the lane leaf. The runtime installs the live model selection only after that write succeeds; reopened sessions take the selected model from the durable lane-config projection rather than scanning history.
+Totality is a **logical invariant**, not a requirement to copy Pi's append-only JSONL physical representation. Recovery must be able to read the current state directly.
 
 Ion is still pre-1.0, so schema iterations may archive older development databases rather than carrying migration machinery whose compatibility value is not yet real.
 
@@ -96,47 +253,56 @@ The architecture should become more Rust-like as it settles, not more framework-
 - `session/` owns tree/lane topology;
 - `operation/` owns the pure reducer/state machine;
 - `store/` owns persistence codecs/transactions;
-- `runtime/` remains the live owner/task while migration proceeds;
-- `agent/` appears only when family-scoped control owns production behavior;
+- `runtime/` owns live session residency/task execution;
+- `agent/` should appear only when family-scoped control owns production behavior;
+- `workspace/` should appear when shared/worktree/remote ownership becomes real;
 - modules provide naming context instead of root-level type-name prefixes;
 - private implementation types should disappear from `ion_core::*` rather than merely receive prettier names;
-- dependencies are fine when they materially improve correctness/clarity and respect the Rust 1.98.0 toolchain contract.
+- avoid ambient service locators and mirrored state authorities;
+- dependencies are fine when they materially improve correctness/clarity and respect Rust 1.98.0.
+
+Do not rename `ChildManager` into an `AgentManager` and call the migration done. The current design must first be decomposed by ownership: durable identity, family control, execution residency, history topology, workspace topology, and scoped capability publication.
 
 ## Migration checkpoint
 
-Already landed on `main`:
+Already landed on `main` before this workstream:
 
 - runtime/store/tool module normalization;
-- operation reducer moved from the misleading old session module into `operation/`;
+- operation reducer moved into `operation/`;
 - typed durable model/tool/compaction effect vocabulary;
 - replay preserving durable operation identity;
 - malformed durable-effect fencing;
 - simplified `ion/default@1` harness identity;
 - child live-slot leak fix;
-- parent-linked entry schema and a durable `main` lane;
-- entry identity decoupled from storage sequence and represented as UUIDv7;
-- append-only total operation-state revision retention plus a current-state recovery projection;
-- immutable operation-origin capture of accepting lane + exact source leaf, including typed recovery/load round-trip;
-- lane config as the authoritative durable model-selection state with no new model-change transcript entries;
-- Rust 1.98.0 as the pinned workspace/toolchain/CI contract.
+- parent-linked entry schema and durable hidden `main` lane;
+- entry identity represented as UUIDv7 rather than storage sequence;
+- total operation-state retention/current recovery projection;
+- immutable operation-origin capture of accepting lane + exact source leaf;
+- lane config as authoritative durable model selection;
+- Rust 1.98.0 workspace/toolchain/CI contract.
 
-Two architecture migrations remain especially important:
+Completed in the current architecture workstream:
 
-- entry IDs are still generated inside store insertion; the target ownership is the authoritative session transition provisioning the UUIDv7 before persistence so later lane/fork/queued-input references can name intended entries before the write starts;
-- busy-lane prompts still become complete queued `Accepted` operations in live/durable state; the target is lane-owned `pending_next_run` input with an operation created only at actual run acceptance. Those queued inputs should carry their pre-provisioned semantic entry IDs.
+- UUIDv7 entry identity is provisioned by the authoritative session transition before persistence;
+- SQLite stores the supplied identity instead of inventing one;
+- `LoadedSession` round-trips full entry records;
+- live session state retains those same durable entry records after reopen and after successful commit;
+- payload-only consumers explicitly project semantic entries.
 
-The old `SessionEntry::ModelChanged` enum case is no longer produced by model switching or consulted during runtime recovery. It can be removed exhaustively during the later API/code-hygiene pass; it is not an architectural dependency.
+The most important remaining substrate mismatch is now busy-lane queueing: prompts still become complete queued `Accepted` operations rather than lane-owned `pending_next_run` input.
 
-## Next implementation slices
+## Next implementation order
 
-1. Move UUIDv7 entry provisioning from store insertion to the authoritative session transition and round-trip entry identity through load/recovery types.
-2. Add total lane state (`leaf`, `current_operation`, `pending_next_run`) and move busy-lane queueing to provisioned lane-owned inputs.
-3. Remove `queued_operations` from the live runtime and map current `enqueue` compatibility behavior onto next-run input; create an operation only when the queued run is actually accepted.
-4. Make operation acceptance explicitly lane-addressable over the already-durable lane/source-leaf origin contract.
-5. Generalize the session owner from only `main` to multiple lanes and concurrent slow effects.
-6. Finish typed effect codecs/admission boundaries.
-7. Replace special-purpose child/delegate paths with family-scoped agent control.
-8. Reconcile the public API/module vocabulary and delete dead compatibility scaffolding after the durable ownership model is stable.
-9. Establish/expand `ion-eval` before adding higher-level orchestration policy.
+1. Add total lane state (`leaf`, `current_operation`, `pending_next_run`) and move busy-lane queueing to provisioned lane-owned input.
+2. Remove `queued_operations`; create an operation only when the queued run is actually accepted.
+3. Make operation acceptance explicitly lane-addressable over the durable lane/source-leaf origin contract.
+4. Generalize the session owner from hidden `main` to multiple lanes while retaining one writer and concurrent slow effects.
+5. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
+6. Replace `ChildManager`/child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when its owner exists.
+7. Add durable agent messaging/background completion through the common session-input path.
+8. Add scoped capability publication/teardown around agent creation/resume.
+9. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery/multi-agent invariants.
+10. Reconcile `DESIGN.md`, public API/module vocabulary, and dead compatibility scaffolding.
+11. **Only then redesign the TUI** as a client of the authoritative session/agent host contract.
 
-Broad architecture surveying is complete enough to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.
+The broad agent-architecture survey is now sufficient to proceed. Further research should answer concrete implementation questions rather than reopen the substrate without new evidence.
