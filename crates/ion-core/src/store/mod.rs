@@ -84,7 +84,7 @@ impl EntryRecord {
 /// capability snapshot, the operation prompt, and the pending effect
 /// intent, if any.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CheckpointPayload {
+pub(crate) struct CheckpointPayload {
     pub state: OperationState,
     pub cancel_requested: bool,
     pub prompt: String,
@@ -93,7 +93,7 @@ pub struct CheckpointPayload {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CheckpointRecord {
+pub(crate) struct CheckpointRecord {
     pub state_seq: u64,
     pub payload: CheckpointPayload,
     pub capability_snapshot: crate::context::CapabilitySnapshot,
@@ -102,7 +102,7 @@ pub struct CheckpointRecord {
 /// An effect intent opened before repeat-sensitive execution
 /// (DESIGN.md §12.1).
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct EffectRecord {
+pub(crate) struct EffectRecord {
     pub id: EffectId,
     pub kind: String,
     pub recovery_class: RecoveryClass,
@@ -114,7 +114,7 @@ pub struct EffectRecord {
 /// Bounded auxiliary output for an in-flight assistant effect. A frame never
 /// proves provider completion or becomes an assistant semantic entry.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AssistantFrame {
+pub(crate) struct AssistantFrame {
     pub effect_id: EffectId,
     pub session_id: SessionId,
     pub operation_id: OperationId,
@@ -126,7 +126,7 @@ pub struct AssistantFrame {
 
 /// Bounded auxiliary output for an in-flight tool effect.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ToolProgressCheckpoint {
+pub(crate) struct ToolProgressCheckpoint {
     pub effect_id: EffectId,
     pub session_id: SessionId,
     pub operation_id: OperationId,
@@ -137,14 +137,14 @@ pub struct ToolProgressCheckpoint {
 /// One settled effect: the typed outcome is stored with the effect row
 /// so recovery can classify the crash window (DESIGN.md §12.1).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SettledEffect {
+pub(crate) struct SettledEffect {
     pub id: EffectId,
     pub settlement: serde_json::Value,
 }
 
 /// One durable inbox item (DESIGN.md §6).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct InboxRecord {
+pub(crate) struct InboxRecord {
     pub id: InboxId,
     pub kind: InboxKind,
     pub text: String,
@@ -152,7 +152,7 @@ pub struct InboxRecord {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub enum InboxStatus {
+pub(crate) enum InboxStatus {
     Pending,
     Applied,
 }
@@ -160,7 +160,7 @@ pub enum InboxStatus {
 /// Everything one transition durably changes, committed as one
 /// transaction.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CommitRequest {
+pub(crate) struct CommitRequest {
     pub session_id: SessionId,
     pub operation_id: OperationId,
     pub checkpoint: CheckpointRecord,
@@ -188,7 +188,7 @@ pub struct CommitRequest {
 
 /// One persisted token-usage row (DESIGN.md §27.2).
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UsageRecord {
+pub(crate) struct UsageRecord {
     pub step: u64,
     pub input_tokens: u64,
     pub output_tokens: u64,
@@ -198,7 +198,7 @@ pub struct UsageRecord {
 
 /// One usage row as read back for reporting.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct UsageRow {
+pub(crate) struct UsageRow {
     pub operation_id: OperationId,
     pub step: u64,
     pub input_tokens: u64,
@@ -247,16 +247,16 @@ pub struct LoadedSession {
     pub(crate) lanes: Vec<crate::session::lane::Lane>,
     /// Complete immutable conversation tree in global durable sequence order.
     pub entries: Vec<EntryRecord>,
-    pub operations: Vec<LoadedOperation>,
-    pub assistant_frames: Vec<AssistantFrame>,
-    pub tool_progress: Vec<ToolProgressCheckpoint>,
+    pub(crate) operations: Vec<LoadedOperation>,
+    pub(crate) assistant_frames: Vec<AssistantFrame>,
+    pub(crate) tool_progress: Vec<ToolProgressCheckpoint>,
     /// Most recently committed model-step usage, loaded for runtime-owned
     /// frontend resynchronization without exposing the store to a frontend.
-    pub latest_usage: Option<UsageRow>,
+    pub(crate) latest_usage: Option<UsageRow>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedOperation {
+pub(crate) struct LoadedOperation {
     pub id: OperationId,
     pub accepted_seq: u64,
     /// Immutable lane on which the operation was accepted.
@@ -361,6 +361,7 @@ enum StoreCommand {
     Shutdown {
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    #[cfg(test)]
     Usage {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
@@ -685,8 +686,9 @@ impl SessionStore {
         .await
     }
 
-    /// Token usage rows recorded for one session (DESIGN.md §27.2).
-    pub async fn usage(&self, session_id: SessionId) -> Result<Vec<UsageRow>, StoreError> {
+    /// Unit-test probe for the durable usage ledger (DESIGN.md §27.2).
+    #[cfg(test)]
+    pub(crate) async fn usage(&self, session_id: SessionId) -> Result<Vec<UsageRow>, StoreError> {
         self.request(|reply| StoreCommand::Usage { session_id, reply })
             .await
     }

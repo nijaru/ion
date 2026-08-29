@@ -11,16 +11,16 @@
 /// digest belongs here only once Ion has structured profile configuration whose
 /// canonical bytes can actually be hashed; a synthetic digest would add false
 /// precision without improving replay.
-pub const DEFAULT_HARNESS_PROFILE_ID: &str = "ion/default@1";
+pub(crate) const DEFAULT_HARNESS_PROFILE_ID: &str = "ion/default@1";
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct HarnessProfile {
-    pub id: String,
+pub(crate) struct HarnessProfile {
+    pub(crate) id: String,
 }
 
 impl HarnessProfile {
     #[must_use]
-    pub fn default_v1() -> Self {
+    pub(crate) fn default_v1() -> Self {
         Self {
             id: DEFAULT_HARNESS_PROFILE_ID.to_owned(),
         }
@@ -29,7 +29,7 @@ impl HarnessProfile {
     /// v0 only knows the frozen default profile. Unknown persisted profile ids
     /// must fail visibly rather than being interpreted with current defaults.
     #[must_use]
-    pub fn is_supported(&self) -> bool {
+    pub(crate) fn is_supported(&self) -> bool {
         self.id == DEFAULT_HARNESS_PROFILE_ID
     }
 }

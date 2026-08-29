@@ -2,8 +2,8 @@
 //!
 //! Authoritative session state has one mutation owner; provider, tool, and
 //! agent effects execute concurrently outside that mutation line and become
-//! authoritative only through durable transitions. The current implementation
-//! is migrating from one linear session operation to a tree/lane substrate.
+//! authoritative only through durable transitions. Durable conversation state
+//! is a tree addressed through independent lane cursors.
 
 mod agent;
 mod agent_host;
@@ -36,12 +36,8 @@ pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest,
 };
-pub use effect::{
-    CacheExpectation, CompactionInvocation, DurableEffect, ModelStepPlan, ToolInvocation,
-};
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};
-pub use harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
@@ -57,8 +53,7 @@ pub use runtime::{
     SessionSnapshot,
 };
 pub use store::{
-    CheckpointPayload, EffectRecord, EntryRecord, LoadedOperation, LoadedSession, SessionRecord,
-    SessionStore, StoreError, default_db_path,
+    EntryRecord, LoadedSession, SessionRecord, SessionStore, StoreError, default_db_path,
 };
 pub use tool::{
     BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
