@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/family-observation-patch.py
+      - .github/family-observation-prepatch.py
       - .github/workflows/family-observation-once.yml
 
 permissions:
@@ -25,16 +26,18 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply family observation slice
-        run: python .github/family-observation-patch.py
+        run: |
+          python .github/family-observation-prepatch.py
+          python .github/family-observation-patch.py
       - run: cargo fmt
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace
       - name: Commit validated slice
         run: |
-          rm .github/family-observation-patch.py .github/workflows/family-observation-once.yml
+          rm .github/family-observation-patch.py .github/family-observation-prepatch.py .github/workflows/family-observation-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/ion-core/src/store/mod.rs crates/ion-core/src/store/sql.rs crates/ion-core/src/agent.rs crates/ion-core/src/delegate.rs crates/ion-core/src/tests/agent_family.rs .github/family-observation-patch.py .github/workflows/family-observation-once.yml
+          git add crates/ion-core/src/store/mod.rs crates/ion-core/src/store/sql.rs crates/ion-core/src/agent.rs crates/ion-core/src/delegate.rs crates/ion-core/src/tests/agent_family.rs .github/family-observation-patch.py .github/family-observation-prepatch.py .github/workflows/family-observation-once.yml
           git commit -m "refactor(agent): centralize durable observation"
           git push origin HEAD:main
