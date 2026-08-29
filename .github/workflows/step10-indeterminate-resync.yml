@@ -1,0 +1,43 @@
+name: Step 10 indeterminate resync
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply indeterminate resync fix
+        run: python .github/step10_indeterminate_resync.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Clippy gate
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test gate
+        run: cargo test --locked --workspace
+      - name: Commit validated source
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git checkout "$HEAD_REF"
+          cargo fmt --all
+          rm .github/step10_indeterminate_resync.py .github/workflows/step10-indeterminate-resync.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "fix(tui): restore indeterminate warnings after lag"
+          git push origin "HEAD:$HEAD_REF"
