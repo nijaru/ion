@@ -36,7 +36,8 @@ pub use context::{
 pub use delegate::DelegateTool;
 pub use delegate::{
     ChildContextMode, ChildHandle, ChildManager, ChildObservation, ChildSpec, ChildStatus,
-    DelegateConfig, child_budget_default, child_tools, install_child_tools,
+    DelegateConfig, agent_host_tools, child_budget_default, child_tools, install_agent_host_tools,
+    install_child_tools,
 };
 pub use effect::{
     CacheExpectation, CompactionInvocation, DurableEffect, ModelStepPlan, ToolInvocation,

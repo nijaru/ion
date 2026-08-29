@@ -669,6 +669,464 @@ pub fn install_child_tools<P: Provider + 'static>(
     manager
 }
 
+#[derive(Clone, Copy)]
+enum HostAgentToolKind {
+    Spawn,
+    Start,
+    Status,
+    Wait,
+    Cancel,
+    Resume,
+    Send,
+}
+
+struct HostAgentTool<P> {
+    family: Arc<crate::agent::Family>,
+    children: Arc<ChildManager<P>>,
+    kind: HostAgentToolKind,
+}
+
+/// Compose one model-facing agent control namespace across shared-history
+/// lane agents and the temporary separate-session fresh/fork backend.
+/// Child-only handles and tool names stay behind this migration boundary.
+pub fn agent_host_tools<P: Provider + 'static>(
+    family: Arc<crate::agent::Family>,
+    children: Arc<ChildManager<P>>,
+) -> Vec<Arc<dyn Tool>> {
+    [
+        HostAgentToolKind::Spawn,
+        HostAgentToolKind::Start,
+        HostAgentToolKind::Status,
+        HostAgentToolKind::Wait,
+        HostAgentToolKind::Cancel,
+        HostAgentToolKind::Resume,
+        HostAgentToolKind::Send,
+    ]
+    .into_iter()
+    .map(|kind| {
+        Arc::new(HostAgentTool {
+            family: Arc::clone(&family),
+            children: Arc::clone(&children),
+            kind,
+        }) as Arc<dyn Tool>
+    })
+    .collect()
+}
+
+/// Publish the unified agent namespace as structural host capabilities.
+pub fn install_agent_host_tools<P: Provider + 'static>(
+    catalog: &crate::tool::ToolCatalog,
+    family: Arc<crate::agent::Family>,
+    children: Arc<ChildManager<P>>,
+) {
+    catalog.register_structural_scope("agents", agent_host_tools(family, children));
+}
+
+impl<P: Provider + 'static> Tool for HostAgentTool<P> {
+    fn spec(&self) -> ToolSpec {
+        match self.kind {
+            HostAgentToolKind::Spawn => ToolSpec {
+                name: "spawn_agent".to_owned(),
+                description: "Admit an agent with lane, fresh, or fork topology and start it when applicable. Returns one durable agent handle.".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {
+                        "objective": {"type": "string"},
+                        "topology": {"type": "string", "enum": ["lane", "fresh", "fork"]},
+                        "context": {"type": "string", "description": "optional explicit context seed for fresh/fork agents"},
+                        "model_override": {"type": "string", "description": "optional host-resolved model for fresh/fork agents"}
+                    },
+                    "required": ["objective"]
+                }),
+            },
+            HostAgentToolKind::Start => ToolSpec {
+                name: "agent_start".to_owned(),
+                description: "Start a previously admitted idle lane agent with an objective.".to_owned(),
+                input_schema: host_agent_handle_schema(Some(("objective", "string"))),
+            },
+            HostAgentToolKind::Status => ToolSpec {
+                name: "agent_status".to_owned(),
+                description: "Inspect durable status and the latest exact result for any retained agent.".to_owned(),
+                input_schema: host_agent_handle_schema(None),
+            },
+            HostAgentToolKind::Wait => ToolSpec {
+                name: "agent_wait".to_owned(),
+                description: "Wait for an agent's current durable operation and return its exact result.".to_owned(),
+                input_schema: host_agent_handle_schema(None),
+            },
+            HostAgentToolKind::Cancel => ToolSpec {
+                name: "agent_cancel".to_owned(),
+                description: "Cancel the running operation of a retained agent.".to_owned(),
+                input_schema: host_agent_handle_schema(None),
+            },
+            HostAgentToolKind::Resume => ToolSpec {
+                name: "agent_resume".to_owned(),
+                description: "Reattach a non-terminal fresh/fork agent after process loss.".to_owned(),
+                input_schema: host_agent_handle_schema(None),
+            },
+            HostAgentToolKind::Send => ToolSpec {
+                name: "agent_send".to_owned(),
+                description: "Send durable input from the root to a retained lane agent.".to_owned(),
+                input_schema: host_agent_handle_schema(Some(("message", "string"))),
+            },
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
+        self.call_with_progress(arguments, cancel, None)
+    }
+
+    fn call_with_progress<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+        progress: Option<ToolProgressSender>,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            match self.kind {
+                HostAgentToolKind::Spawn => {
+                    let spec = match parse_agent_spawn(&arguments) {
+                        Ok(spec) => spec,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match spec.topology {
+                        AgentTopology::Lane => {
+                            if spec.context_seed.is_some() || spec.model_override.is_some() {
+                                return ToolOutcome::error(
+                                    "lane topology does not accept `context` or `model_override`",
+                                );
+                            }
+                            let agent_id = match self.family.admit_lane(self.family.root()).await {
+                                Ok(agent_id) => agent_id,
+                                Err(err) => {
+                                    return ToolOutcome::error(format!(
+                                        "agent admission failed: {err}"
+                                    ));
+                                }
+                            };
+                            match self.family.start(agent_id, spec.objective).await {
+                                Ok(operation_id) => ToolOutcome::text(format!(
+                                    "agent handle: {agent_id}\nstarted: {operation_id}"
+                                )),
+                                Err(crate::agent::Error::Capacity) => ToolOutcome::text(format!(
+                                    "agent handle: {agent_id}\nadmitted; execution capacity is exhausted; use agent_start later"
+                                )),
+                                Err(err) => ToolOutcome::error(format!(
+                                    "agent handle: {agent_id}\nadmitted, but start failed: {err}"
+                                )),
+                            }
+                        }
+                        AgentTopology::Fresh | AgentTopology::Fork => {
+                            let child_spec = ChildSpec {
+                                objective: spec.objective,
+                                context_seed: spec.context_seed,
+                                context_mode: match spec.topology {
+                                    AgentTopology::Fresh => ChildContextMode::Fresh,
+                                    AgentTopology::Fork => ChildContextMode::ForkContext,
+                                    AgentTopology::Lane => unreachable!(),
+                                },
+                                model_override: spec.model_override,
+                            };
+                            match self
+                                .children
+                                .spawn(child_spec, cancel, progress.as_ref())
+                                .await
+                            {
+                                Ok(handle) => {
+                                    let agent_id = crate::ids::AgentId::root(handle.session_id);
+                                    ToolOutcome::text(format!("agent handle: {agent_id}\nstarted"))
+                                }
+                                Err(err) => {
+                                    ToolOutcome::error(format!("agent admission failed: {err}"))
+                                }
+                            }
+                        }
+                    }
+                }
+                HostAgentToolKind::Start => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let objective = match host_string_arg(&arguments, "objective") {
+                        Ok(value) => value.to_owned(),
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.start(agent_id, objective).await {
+                        Ok(operation_id) => {
+                            ToolOutcome::text(format!("agent {agent_id} started: {operation_id}"))
+                        }
+                        Err(crate::agent::Error::UnknownAgent(_)) => ToolOutcome::error(
+                            "agent_start currently applies only to admitted lane agents; fresh/fork agents start at admission and use agent_resume after process loss",
+                        ),
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                HostAgentToolKind::Status => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.observe(agent_id).await {
+                        Ok(observation) => {
+                            ToolOutcome::text(render_family_observation(&observation))
+                        }
+                        Err(crate::agent::Error::UnknownAgent(_)) => {
+                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                            match self.children.observe(handle).await {
+                                Ok(observation) => {
+                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
+                                }
+                                Err(err) => ToolOutcome::error(err),
+                            }
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                HostAgentToolKind::Wait => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.wait_one(agent_id, cancel.clone(), None).await {
+                        Ok(status) => {
+                            let operation_id = host_status_operation_id(&status)
+                                .expect("family wait rejects admitted agents");
+                            match self.family.observe_operation(agent_id, operation_id).await {
+                                Ok(observation) => {
+                                    ToolOutcome::text(render_family_observation(&observation))
+                                }
+                                Err(err) => ToolOutcome::error(err.to_string()),
+                            }
+                        }
+                        Err(crate::agent::Error::UnknownAgent(_)) => {
+                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                            match self.children.wait(handle, cancel, progress.as_ref()).await {
+                                Ok(observation) => {
+                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
+                                }
+                                Err(err) => ToolOutcome::error(err),
+                            }
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                HostAgentToolKind::Cancel => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.cancel(agent_id).await {
+                        Ok(()) => {
+                            ToolOutcome::text(format!("cancellation accepted for agent {agent_id}"))
+                        }
+                        Err(crate::agent::Error::UnknownAgent(_)) => {
+                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                            match self.children.cancel(handle).await {
+                                Ok(()) => ToolOutcome::text(format!(
+                                    "cancellation accepted for agent {agent_id}"
+                                )),
+                                Err(err) => ToolOutcome::error(err),
+                            }
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                HostAgentToolKind::Resume => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.status(agent_id).await {
+                        Ok(_) => ToolOutcome::error(
+                            "lane agents reattach with their root session and do not require agent_resume",
+                        ),
+                        Err(crate::agent::Error::UnknownAgent(_)) => {
+                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                            match self
+                                .children
+                                .resume(handle, cancel, progress.as_ref())
+                                .await
+                            {
+                                Ok(observation) => {
+                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
+                                }
+                                Err(err) => ToolOutcome::error(err),
+                            }
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                HostAgentToolKind::Send => {
+                    let agent_id = match parse_host_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let message = match host_string_arg(&arguments, "message") {
+                        Ok(value) => value.to_owned(),
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self
+                        .family
+                        .send(self.family.root(), agent_id, message)
+                        .await
+                    {
+                        Ok(operation_id) => ToolOutcome::text(format!(
+                            "message accepted for agent {agent_id}: {operation_id}"
+                        )),
+                        Err(crate::agent::Error::UnknownAgent(_)) => ToolOutcome::error(
+                            "agent_send for fresh/fork agents awaits cross-session durable input routing",
+                        ),
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+            }
+        })
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AgentTopology {
+    Lane,
+    Fresh,
+    Fork,
+}
+
+struct AgentSpawnSpec {
+    objective: String,
+    topology: AgentTopology,
+    context_seed: Option<String>,
+    model_override: Option<String>,
+}
+
+fn parse_agent_spawn(arguments: &Value) -> Result<AgentSpawnSpec, String> {
+    let objective = host_string_arg(arguments, "objective")?.to_owned();
+    let topology = match arguments.get("topology").and_then(Value::as_str) {
+        None | Some("lane") => AgentTopology::Lane,
+        Some("fresh") => AgentTopology::Fresh,
+        Some("fork") => AgentTopology::Fork,
+        Some(other) => {
+            return Err(format!(
+                "malformed arguments: unsupported topology {other:?}"
+            ));
+        }
+    };
+    let context_seed = optional_host_string(arguments, "context")?;
+    let model_override = optional_host_string(arguments, "model_override")?;
+    Ok(AgentSpawnSpec {
+        objective,
+        topology,
+        context_seed,
+        model_override,
+    })
+}
+
+fn optional_host_string(arguments: &Value, name: &str) -> Result<Option<String>, String> {
+    match arguments.get(name) {
+        None => Ok(None),
+        Some(value) => value
+            .as_str()
+            .filter(|value| !value.trim().is_empty())
+            .map(|value| Some(value.to_owned()))
+            .ok_or_else(|| format!("malformed arguments: `{name}` must be a non-empty string")),
+    }
+}
+
+fn host_string_arg<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("malformed arguments: `{name}` must be a non-empty string"))
+}
+
+fn host_agent_handle_schema(extra: Option<(&str, &str)>) -> Value {
+    let mut properties = serde_json::Map::from_iter([(
+        "handle".to_owned(),
+        json!({"type": "string", "description": "agent-<uuid> returned by spawn_agent"}),
+    )]);
+    let mut required = vec![Value::String("handle".to_owned())];
+    if let Some((name, kind)) = extra {
+        properties.insert(name.to_owned(), json!({"type": kind}));
+        required.push(Value::String(name.to_owned()));
+    }
+    json!({"type": "object", "properties": properties, "required": required})
+}
+
+fn parse_host_agent_handle(arguments: &Value) -> Result<crate::ids::AgentId, String> {
+    let raw = host_string_arg(arguments, "handle")?;
+    let uuid = raw.strip_prefix("agent-").unwrap_or(raw);
+    crate::ids::AgentId::parse(uuid).ok_or_else(|| format!("malformed agent handle {raw:?}"))
+}
+
+fn child_handle_for(agent_id: crate::ids::AgentId, parent_id: SessionId) -> ChildHandle {
+    ChildHandle {
+        session_id: SessionId::from_uuid(agent_id.as_uuid()),
+        control_parent_session_id: parent_id,
+    }
+}
+
+fn host_status_operation_id(status: &crate::agent::Status) -> Option<OperationId> {
+    match status {
+        crate::agent::Status::Admitted => None,
+        crate::agent::Status::Active { operation_id, .. }
+        | crate::agent::Status::Suspended { operation_id }
+        | crate::agent::Status::Finished { operation_id, .. } => Some(*operation_id),
+    }
+}
+
+fn render_family_observation(observation: &crate::agent::Observation) -> String {
+    let status = match &observation.status {
+        crate::agent::Status::Admitted => "admitted".to_owned(),
+        crate::agent::Status::Active {
+            operation_id,
+            state,
+        } => {
+            format!("active ({operation_id}, {state:?})")
+        }
+        crate::agent::Status::Suspended { operation_id } => {
+            format!("suspended ({operation_id})")
+        }
+        crate::agent::Status::Finished {
+            operation_id,
+            outcome,
+        } => {
+            format!("finished ({operation_id}, {outcome:?})")
+        }
+    };
+    match &observation.result {
+        Some(result) => format!("agent {}: {status}\n\n{result}", observation.agent_id),
+        None => format!("agent {}: {status}", observation.agent_id),
+    }
+}
+
+fn render_child_as_agent(agent_id: crate::ids::AgentId, observation: &ChildObservation) -> String {
+    let status = match &observation.status {
+        ChildStatus::Starting => "starting".to_owned(),
+        ChildStatus::Active {
+            operation_id,
+            state,
+        } => {
+            format!("active ({operation_id}, {state:?})")
+        }
+        ChildStatus::Suspended { operation_id } => format!("suspended ({operation_id})"),
+        ChildStatus::Finished {
+            operation_id,
+            outcome,
+        } => {
+            format!("finished ({operation_id}, {outcome:?})")
+        }
+    };
+    match &observation.result {
+        Some(result) => format!("agent {agent_id}: {status}\n\n{result}"),
+        None => format!("agent {agent_id}: {status}"),
+    }
+}
+
 impl<P: Provider + 'static> Tool for ChildTool<P> {
     fn spec(&self) -> ToolSpec {
         match self.kind {

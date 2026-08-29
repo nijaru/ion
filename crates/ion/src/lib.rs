@@ -77,9 +77,7 @@ where
     P: ion_core::Provider + 'static,
 {
     let family = Arc::new(runtime.agent_family(max_active_agents).await?);
-    ion_core::install_agent_tools(tools, Arc::clone(&family));
-    let children = ion_core::install_child_tools(
-        tools,
+    let (children, _legacy_child_tools) = ion_core::child_tools(
         ion_core::DelegateConfig {
             store: store.clone(),
             make_provider,
@@ -91,6 +89,7 @@ where
         },
         runtime.session_id(),
     );
+    ion_core::install_agent_host_tools(tools, Arc::clone(&family), Arc::clone(&children));
     Ok(AgentHost { family, children })
 }
 

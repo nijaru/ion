@@ -522,3 +522,133 @@ async fn idle_agent_message_respects_execution_capacity() {
     runtime.session().close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namespace() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        SharedLogProvider::default(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let family = Arc::new(runtime.agent_family(2).await.expect("family"));
+    let (children, _legacy_child_tools) = crate::child_tools(
+        crate::DelegateConfig {
+            store: store.clone(),
+            make_provider: Arc::new(|| {
+                ScriptedProvider::new(vec![ScriptedMessage::text("session agent answer")])
+            }),
+            make_provider_for_model: None,
+            max_active_children: 2,
+            child_budget: crate::RuntimeBudget::unbounded(),
+            trusted_resources: Vec::new(),
+            cwd: std::env::current_dir().expect("cwd"),
+        },
+        runtime.session_id(),
+    );
+    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&children));
+    let names = tools
+        .iter()
+        .map(|tool| tool.spec().name)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        names,
+        vec![
+            "spawn_agent",
+            "agent_start",
+            "agent_status",
+            "agent_wait",
+            "agent_cancel",
+            "agent_resume",
+            "agent_send",
+        ]
+    );
+    assert!(names.iter().all(|name| !name.contains("child")));
+
+    let spawn = |arguments| {
+        let tools = &tools;
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.spec().name == "spawn_agent")
+                .expect("spawn tool")
+                .call(arguments, CancellationToken::new())
+                .await
+        }
+    };
+    let handle_from = |output: &str| {
+        output
+            .lines()
+            .find_map(|line| line.strip_prefix("agent handle: "))
+            .expect("agent handle")
+            .to_owned()
+    };
+    let wait = |handle: String| {
+        let tools = &tools;
+        async move {
+            tools
+                .iter()
+                .find(|tool| tool.spec().name == "agent_wait")
+                .expect("wait tool")
+                .call(json!({"handle": handle}), CancellationToken::new())
+                .await
+        }
+    };
+
+    let lane = spawn(json!({"objective": "lane work"})).await;
+    assert!(!lane.is_error, "lane spawn failed: {lane:?}");
+    let lane_handle = handle_from(&lane.output);
+    let lane_wait = wait(lane_handle).await;
+    assert!(!lane_wait.is_error, "lane wait failed: {lane_wait:?}");
+    assert!(lane_wait.output.contains("working"), "{lane_wait:?}");
+
+    let fresh = spawn(json!({"objective": "fresh work", "topology": "fresh"})).await;
+    assert!(!fresh.is_error, "fresh spawn failed: {fresh:?}");
+    assert!(!fresh.output.contains("child"), "{fresh:?}");
+    let fresh_handle = handle_from(&fresh.output);
+    let fresh_agent =
+        crate::AgentId::parse(fresh_handle.strip_prefix("agent-").expect("agent prefix"))
+            .expect("fresh agent id");
+    let fresh_session = crate::SessionId::from_uuid(fresh_agent.as_uuid());
+    let fresh_loaded = store.load(fresh_session).await.expect("fresh session");
+    assert_eq!(
+        fresh_loaded.session.control_parent_session_id,
+        Some(runtime.session_id())
+    );
+    assert_eq!(fresh_loaded.session.fork_source_session_id, None);
+    let fresh_wait = wait(fresh_handle).await;
+    assert!(!fresh_wait.is_error, "fresh wait failed: {fresh_wait:?}");
+    assert!(
+        fresh_wait.output.contains("session agent answer"),
+        "{fresh_wait:?}"
+    );
+    assert!(!fresh_wait.output.contains("child "), "{fresh_wait:?}");
+
+    let fork = spawn(json!({"objective": "fork work", "topology": "fork"})).await;
+    assert!(!fork.is_error, "fork spawn failed: {fork:?}");
+    let fork_handle = handle_from(&fork.output);
+    let fork_agent =
+        crate::AgentId::parse(fork_handle.strip_prefix("agent-").expect("agent prefix"))
+            .expect("fork agent id");
+    let fork_session = crate::SessionId::from_uuid(fork_agent.as_uuid());
+    let fork_loaded = store.load(fork_session).await.expect("fork session");
+    assert_eq!(
+        fork_loaded.session.control_parent_session_id,
+        Some(runtime.session_id())
+    );
+    assert_eq!(
+        fork_loaded.session.fork_source_session_id,
+        Some(runtime.session_id())
+    );
+    let fork_wait = wait(fork_handle).await;
+    assert!(!fork_wait.is_error, "fork wait failed: {fork_wait:?}");
+    assert!(
+        fork_wait.output.contains("session agent answer"),
+        "{fork_wait:?}"
+    );
+
+    children.close().await.expect("close session agents");
+    runtime.session().close().await.expect("close root");
+    runtime.join().await.expect("join root");
+    store.close().await.expect("close store");
+}
