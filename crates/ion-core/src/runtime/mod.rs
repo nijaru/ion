@@ -1363,9 +1363,11 @@ struct SessionRuntime<P> {
     events: broadcast::Sender<RuntimeEvent>,
     /// Main-lane event ring paired with the public main-lane snapshot.
     main_events: broadcast::Sender<RuntimeEvent>,
-    /// Persisted indeterminate outcomes that must remain visible to a
-    /// frontend attaching after startup recovery.
-    indeterminate_warning: Option<IndeterminateWarning>,
+    /// Main-lane indeterminate outcome that must remain visible to a
+    /// frontend attaching after startup recovery. Shared-history worker
+    /// outcomes remain observable through Family/durable operation state and
+    /// must not leak into the public main-lane snapshot.
+    main_indeterminate_warning: Option<IndeterminateWarning>,
     closed: bool,
     /// True when reopened from the store; the session row already exists.
     resumed: bool,
@@ -1450,7 +1452,7 @@ impl<P: Provider> SessionRuntime<P> {
             suspended_operations: Vec::new(),
             events,
             main_events,
-            indeterminate_warning: None,
+            main_indeterminate_warning: None,
             closed: false,
             resumed,
             loaded,
@@ -1519,11 +1521,13 @@ impl<P: Provider> SessionRuntime<P> {
 
         for operation in loaded.operations {
             let (state_seq, payload) = operation.latest;
-            if matches!(
-                payload.state,
-                OperationState::Finished(OperationOutcome::Indeterminate)
-            ) {
-                self.indeterminate_warning = Some(IndeterminateWarning {
+            if operation.lane_name == crate::session::lane::MAIN
+                && matches!(
+                    payload.state,
+                    OperationState::Finished(OperationOutcome::Indeterminate)
+                )
+            {
+                self.main_indeterminate_warning = Some(IndeterminateWarning {
                     operation_id: operation.id,
                     message: INDETERMINATE_MESSAGE.to_owned(),
                 });
@@ -3531,10 +3535,12 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
                 OperationOutcome::Indeterminate => {
-                    self.indeterminate_warning = Some(IndeterminateWarning {
-                        operation_id,
-                        message: INDETERMINATE_MESSAGE.to_owned(),
-                    });
+                    if self.operation_lane_name(operation_id) == Some(crate::session::lane::MAIN) {
+                        self.main_indeterminate_warning = Some(IndeterminateWarning {
+                            operation_id,
+                            message: INDETERMINATE_MESSAGE.to_owned(),
+                        });
+                    }
                     self.emit(RuntimeEvent::OperationIndeterminate {
                         cursor: RuntimeCursor::default(),
                         operation_id,
@@ -3567,7 +3573,7 @@ impl<P: Provider> SessionRuntime<P> {
         SessionSnapshot {
             cursor: self.cursor,
             runtime_instance_id: self.runtime_instance_id,
-            indeterminate: self.indeterminate_warning.clone(),
+            indeterminate: self.main_indeterminate_warning.clone(),
             reopen_entry_count: self.reopen_entry_count,
             operation: match self.main_active() {
                 None => OperationStatus::Idle,

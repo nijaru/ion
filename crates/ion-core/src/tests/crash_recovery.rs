@@ -899,6 +899,70 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
 }
 
 #[tokio::test]
+async fn worker_indeterminate_does_not_leak_into_main_snapshot() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "bash",
+            json!({"command":"sleep 30"}),
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    session.create_lane("worker").await.expect("worker lane");
+    let (_snapshot, mut all_events) = session.subscribe_all().await.expect("subscribe all");
+    let worker_operation = session
+        .submit_if_idle_on_lane("worker", "run")
+        .await
+        .expect("worker submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), all_events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(
+            event,
+            RuntimeEvent::ToolStarted { operation_id, .. } if operation_id == worker_operation
+        ) {
+            break;
+        }
+    }
+
+    runtime.crash();
+    drop(runtime);
+    drop(session);
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let snapshot = session.snapshot().await.expect("main snapshot");
+    assert!(snapshot.indeterminate.is_none());
+    assert_eq!(snapshot.operation, OperationStatus::Idle);
+
+    let loaded = store.load(session_id).await.expect("load");
+    let worker = loaded
+        .operations
+        .iter()
+        .find(|operation| operation.id == worker_operation)
+        .expect("worker operation");
+    assert_eq!(
+        worker.latest.1.state,
+        OperationState::Finished(OperationOutcome::Indeterminate)
+    );
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_interactive_with_effect_gate(

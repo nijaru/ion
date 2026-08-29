@@ -599,6 +599,23 @@ impl UiState {
         }
         self.break_edit_group();
     }
+
+    /// Queue the authoritative snapshot warning. Lag resynchronization rebuilds
+    /// the presentation transcript from durable entries, so this is deliberately
+    /// re-queued on every fresh snapshot rather than deduplicated against lines
+    /// that may just have been discarded with the old transcript.
+    fn surface_indeterminate_warning(&mut self, warning: Option<&ion_core::IndeterminateWarning>) {
+        if let Some(warning) = warning {
+            self.pending_scrollback.push(
+                Line::from(format!(
+                    "! indeterminate operation {}: {}",
+                    warning.operation_id, warning.message
+                ))
+                .yellow()
+                .bold(),
+            );
+        }
+    }
 }
 
 /// Pure reducer: `update(UiState, UiMessage) -> UiState` plus
@@ -1437,6 +1454,9 @@ impl UiState {
         // Restore the runtime-owned projection of the latest durable usage;
         // frontend resynchronization never reads the store directly.
         self.usage = snapshot.latest_usage;
+        // Indeterminate recovery may have completed before the frontend saw its
+        // live event. The snapshot is authoritative for this warning too.
+        self.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
         match &snapshot.live {
             // The snapshot's draft is the runtime's authoritative
             // accumulation, so reconstruction is exact (§21.4).
@@ -1634,16 +1654,7 @@ pub async fn run(
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
-    if let Some(warning) = &snapshot.indeterminate {
-        state.pending_scrollback.push(
-            Line::from(format!(
-                "! indeterminate operation {}: {}",
-                warning.operation_id, warning.message
-            ))
-            .yellow()
-            .bold(),
-        );
-    }
+    state.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
     // §21.4/§31.14: the initial snapshot is authoritative for durable
     // history. Entries settled between the resume load and this subscribe
     // are placed after the resume marker.
@@ -2307,6 +2318,36 @@ pub(crate) mod tests {
         assert_eq!(state.tool_rows.len(), 1);
         assert_eq!(state.tool_rows[0].tool, "read");
         assert_eq!(state.tool_rows[0].target.as_deref(), Some("Cargo.toml"));
+    }
+
+    #[test]
+    fn resync_after_lag_resurfaces_indeterminate_snapshot_warning() {
+        let operation_id = OperationId::generate();
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: Some(ion_core::IndeterminateWarning {
+                operation_id,
+                message: "inspect it before retrying".to_owned(),
+            }),
+            reopen_entry_count: None,
+            operation: OperationStatus::Idle,
+            entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
+            latest_usage: None,
+            live: None,
+        };
+        let mut state = UiState::new();
+        state.resync_after_lag(&snapshot);
+
+        let rendered = state
+            .pending_scrollback
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(rendered.contains(&operation_id.to_string()));
+        assert!(rendered.contains("inspect it before retrying"));
     }
 
     #[test]
