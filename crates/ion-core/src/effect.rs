@@ -18,23 +18,11 @@ use crate::tool::{CanonicalTarget, RecoveryClass, ToolCall, ToolCallId};
 /// evaluation. It is metadata, not a correctness or replay decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum CacheExpectation {
+pub(crate) enum CacheExpectation {
     Unsupported,
     ColdStart,
     PrefixReuseExpected,
     PrefixChanged,
-}
-
-impl CacheExpectation {
-    #[must_use]
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Unsupported => "unsupported",
-            Self::ColdStart => "cold_start",
-            Self::PrefixReuseExpected => "prefix_reuse_expected",
-            Self::PrefixChanged => "prefix_changed",
-        }
-    }
 }
 
 fn legacy_harness_profile() -> HarnessProfile {
@@ -48,7 +36,7 @@ fn legacy_harness_profile() -> HarnessProfile {
 /// writers include it explicitly; this is a frozen compatibility rule rather
 /// than whatever the launch default may mean in a future release.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ModelStepPlan {
+pub(crate) struct ModelStepPlan {
     pub step: u64,
     pub model: ModelConfig,
     pub plan: ContextPlan,
@@ -64,7 +52,7 @@ pub struct ModelStepPlan {
 /// Compaction remains a distinct maintenance purpose in the operation machine;
 /// it does not become a second agent loop.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct CompactionInvocation {
+pub(crate) struct CompactionInvocation {
     pub step: u64,
     pub model: ModelConfig,
     pub plan: ContextPlan,
@@ -78,7 +66,7 @@ pub struct CompactionInvocation {
 /// already owned by one operation. Recovery supplies that authoritative id
 /// when reconstructing a [`ToolCall`].
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ToolInvocation {
+pub(crate) struct ToolInvocation {
     pub tool: String,
     pub arguments: Value,
     pub call_id: ToolCallId,
@@ -88,7 +76,7 @@ pub struct ToolInvocation {
 
 impl ToolInvocation {
     #[must_use]
-    pub fn into_call(self, operation_id: OperationId) -> ToolCall {
+    pub(crate) fn into_call(self, operation_id: OperationId) -> ToolCall {
         ToolCall {
             operation_id,
             call_id: self.call_id,
@@ -101,7 +89,7 @@ impl ToolInvocation {
 /// Typed meaning of an external effect. Storage encoding is deliberately not
 /// exposed as an architectural contract.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DurableEffect {
+pub(crate) enum DurableEffect {
     ModelStep(ModelStepPlan),
     Tool(ToolInvocation),
     Compaction(CompactionInvocation),
@@ -131,7 +119,7 @@ impl EffectRecord {
     /// use this rather than assembling `kind`/JSON payloads by hand as call
     /// sites are migrated into their ownership modules.
     #[must_use]
-    pub fn new(
+    pub(crate) fn new(
         id: EffectId,
         intent: DurableEffect,
         recovery_class: RecoveryClass,
@@ -149,7 +137,7 @@ impl EffectRecord {
     /// Decode the SQLite/checkpoint representation at one boundary. A mismatch
     /// is corruption or a programmer error; callers must fence or fail visibly
     /// instead of guessing.
-    pub fn decode(&self) -> Result<DurableEffect, String> {
+    pub(crate) fn decode(&self) -> Result<DurableEffect, String> {
         match self.kind.as_str() {
             "model_step" => {
                 let plan: ModelStepPlan = serde_json::from_value(self.effective_input.clone())
@@ -198,7 +186,7 @@ impl EffectRecord {
     /// input. Recovery policy decides whether replay is allowed before calling
     /// this helper.
     #[must_use]
-    pub fn next_attempt(&self) -> Self {
+    pub(crate) fn next_attempt(&self) -> Self {
         Self {
             id: EffectId::generate(),
             kind: self.kind.clone(),

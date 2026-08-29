@@ -121,6 +121,7 @@ pub(super) fn handle_command(
         } => {
             let _ = reply.send(load_family_agent(connection, family_session_id, agent_id));
         }
+        #[cfg(test)]
         StoreCommand::Usage { session_id, reply } => {
             let _ = reply.send(usage_rows(connection, session_id));
         }
@@ -227,6 +228,7 @@ fn usage_row(row: &rusqlite::Row<'_>) -> Result<UsageRow, rusqlite::Error> {
     })
 }
 
+#[cfg(test)]
 fn usage_rows(
     connection: &mut Connection,
     session_id: SessionId,

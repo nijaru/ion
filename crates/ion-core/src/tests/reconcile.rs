@@ -263,7 +263,7 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
     let EffectIntent::Tool { call } = applied.intents[0].clone() else {
         panic!("tool intent expected");
     };
-    let effect = crate::EffectRecord {
+    let effect = crate::store::EffectRecord {
         id: EffectId::generate(),
         kind: "tool:write".to_owned(),
         recovery_class: RecoveryClass::Reconcile,

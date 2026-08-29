@@ -1,5 +1,6 @@
 use super::support::*;
-use crate::{DEFAULT_HARNESS_PROFILE_ID, DurableEffect, HarnessProfile};
+use crate::effect::DurableEffect;
+use crate::harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 
 struct AgentScopeTool {
     name: &'static str,
