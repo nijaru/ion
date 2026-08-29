@@ -12,7 +12,7 @@ start = text.find("# Resume takes semantic identity + already-resolved durable t
 end = text.find("# Remove any residual child helper/tool implementation", start)
 if start < 0 or end < 0:
     raise SystemExit("resume rewrite source range missing")
-structural = r'''# Resume takes semantic identity + already-resolved durable target session.
+structural = r"""# Resume takes semantic identity + already-resolved durable target session.
 resume_pattern = re.compile(
     r"let handle\s*=\s*child_handle_for_session\(session_id,\s*self\.hosted\.parent_id\);\s*"
     r"match self\s*\.hosted\s*\.resume\(handle,\s*cancel,\s*progress\.as_ref\(\)\)\s*"
@@ -29,6 +29,6 @@ text, resume_count = resume_pattern.subn(resume_replacement, text, count=1)
 if resume_count != 1:
     raise SystemExit(f"host resume call: expected 1 structural match, found {resume_count}")
 
-'''
+"""
 text = text[:start] + structural + text[end:]
 p.write_text(text)
