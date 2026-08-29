@@ -125,6 +125,7 @@ async fn model_facing_agent_tools_use_family_authority_and_report_exact_result()
 }
 
 ''',
+    "",
     "obsolete model-facing lane-agent test",
 )
 
