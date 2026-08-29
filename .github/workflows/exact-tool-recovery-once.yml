@@ -30,26 +30,22 @@ jobs:
       - run: cargo fmt
       - run: cargo fmt --check
       - name: Strict Clippy
-        run: |
-          set +e
-          cargo clippy --locked --workspace --all-targets --all-features -- -D warnings 2>&1 | tee .github/exact-tool-recovery-clippy.log
-          status=${PIPESTATUS[0]}
-          if [ "$status" -ne 0 ]; then
-            git config user.name github-actions[bot]
-            git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-            git add .github/exact-tool-recovery-clippy.log
-            if ! git diff --cached --quiet; then
-              git commit -m "chore: capture exact recovery clippy failure"
-              git pull --rebase origin main
-              git push origin HEAD:main
-            fi
-            exit "$status"
-          fi
-          rm -f .github/exact-tool-recovery-clippy.log
+        id: clippy
+        continue-on-error: true
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings 2>&1 | tee exact-tool-recovery-clippy.log
+      - name: Upload Clippy diagnostic
+        if: steps.clippy.outcome == 'failure'
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-tool-recovery-clippy
+          path: exact-tool-recovery-clippy.log
+      - name: Enforce Clippy result
+        if: steps.clippy.outcome == 'failure'
+        run: exit 1
       - run: cargo test --locked --workspace
       - name: Commit validated slice
         run: |
-          rm -f .github/exact-tool-recovery-clippy.log .github/exact-tool-recovery.py .github/workflows/exact-tool-recovery-once.yml
+          rm -f exact-tool-recovery-clippy.log .github/exact-tool-recovery.py .github/workflows/exact-tool-recovery-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
