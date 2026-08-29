@@ -19,5 +19,6 @@ mod regressions;
 mod reopen_schema;
 mod runtime_budgets;
 mod store;
+mod structural_scope_recovery;
 mod support;
 mod transitions;
