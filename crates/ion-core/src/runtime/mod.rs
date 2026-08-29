@@ -43,8 +43,8 @@ use crate::store::{
     StoreError, ToolProgressCheckpoint, UsageRecord,
 };
 use crate::tool::{
-    RecoveryClass, ToolCall, ToolCatalog, ToolProgress, ToolRegistry, ToolResult, ToolSelection,
-    ToolSpec,
+    PolicyRoute, RecoveryClass, ResolvedInvocation, ToolCall, ToolCatalog, ToolProgress,
+    ToolRegistry, ToolResult, ToolSelection, ToolSpec,
 };
 
 mod effects;
@@ -2912,30 +2912,17 @@ impl<P: Provider> SessionRuntime<P> {
             .active(operation_id)
             .map(|active| active.tool_registry.clone())
             .expect("admit needs the current step tool registry");
-        let canonical = if active_capability == current_capability {
-            step_tools.canonicalize(&call.name, &call.arguments)
+        let resolved = if active_capability == current_capability {
+            step_tools.resolve_invocation(&call.name, &call.arguments)
         } else {
             Err(format!("capability `{}` is no longer available", call.name))
         };
-        let decision = match &canonical {
-            // Delegation is a structural capability (§20.4): every
-            // effect a child can produce is individually gated inside the
-            // child, so spawning one needs no grant.
-            Ok(_)
-                if matches!(
-                    call.name.as_str(),
-                    "delegate"
-                        | "spawn_child"
-                        | "child_status"
-                        | "child_wait"
-                        | "child_cancel"
-                        | "child_resume"
-                ) =>
-            {
+        let decision = match &resolved {
+            Ok(invocation) if invocation.policy_route == PolicyRoute::Structural => {
                 PolicyDecision::Allow
             }
-            Ok(target) => self.policy.decide(&call.name, target),
-            // Canonicalization failure is a model-visible denial, not a
+            Ok(invocation) => self.policy.decide(&call.name, &invocation.canonical),
+            // Resolution/validation failure is model-visible denial, not a
             // harness failure: the model produced an unusable input.
             Err(message) => PolicyDecision::Deny(message.clone()),
         };
@@ -3039,24 +3026,20 @@ impl<P: Provider> SessionRuntime<P> {
             return true;
         }
 
-        let mut denial: Option<String> = match decision {
+        let mut denial = match decision {
             PolicyDecision::Deny(message) => Some(message),
-            PolicyDecision::Allow => step_tools.validate(&call.name, &call.arguments).err(),
+            PolicyDecision::Allow => None,
             PolicyDecision::ApprovalRequired => unreachable!("handled above"),
         };
-        // §12.3: file-mutating effects persist reconciliation evidence
-        // with the intent, before execution. An evidence failure means
-        // the invocation could not be classified, so it is denied
-        // model-visibly instead of admitted blind.
-        let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
-            match crate::tool::reconciliation_evidence(
-                step_tools.cwd(),
-                &call.name,
-                &call.arguments,
-            )
-            .await
+        // Reconciliation semantics are tool-owned. Runtime only asks the
+        // exact step registry to prepare whatever evidence this invocation
+        // requires before committing the effect intent.
+        let evidence = if denial.is_none() {
+            match step_tools
+                .reconciliation_for(&call.name, &call.arguments)
+                .await
             {
-                Ok(evidence) => Some(evidence),
+                Ok(evidence) => evidence,
                 Err(message) => {
                     denial = Some(message);
                     None
@@ -3069,7 +3052,7 @@ impl<P: Provider> SessionRuntime<P> {
             operation_id,
             Transition::AdmitNextTool,
             "admit next tool from ToolsPlanned",
-            canonical,
+            resolved,
             evidence,
             denial,
         )
@@ -3088,7 +3071,7 @@ impl<P: Provider> SessionRuntime<P> {
         operation_id: OperationId,
         transition: Transition,
         expect: &'static str,
-        canonical: Result<crate::tool::CanonicalTarget, String>,
+        resolved: Result<ResolvedInvocation, String>,
         evidence: Option<serde_json::Value>,
         denial: Option<String>,
     ) -> bool {
@@ -3104,18 +3087,23 @@ impl<P: Provider> SessionRuntime<P> {
         let EffectIntent::Tool { call } = applied.intents[0].clone() else {
             panic!("tool admission must yield a tool intent");
         };
-        // The exact invocation the executor will use is part of the
-        // durable intent (§17.3: never approve one string and execute
-        // a materially different one).
+        // The exact typed invocation the executor will use is part of the
+        // durable intent (§17.3: never approve one string and execute a
+        // materially different one). Denied unresolved calls never execute;
+        // NeverReplay is the conservative persisted classification for them.
+        let (canonical, recovery_class) = match resolved {
+            Ok(invocation) => (Some(invocation.canonical), invocation.recovery_class),
+            Err(_) => (None, RecoveryClass::NeverReplay),
+        };
         let effect = EffectRecord {
             id: EffectId::generate(),
             kind: format!("tool:{}", call.name),
-            recovery_class: step_tools.recovery_class(&call.name),
+            recovery_class,
             effective_input: serde_json::json!({
                 "tool": call.name,
                 "arguments": call.arguments,
                 "call_id": call.call_id,
-                "canonical": canonical.ok(),
+                "canonical": canonical,
                 "reconciliation": evidence,
             }),
             attempt: 1,
@@ -3245,17 +3233,17 @@ impl<P: Provider> SessionRuntime<P> {
             .identity(&call.name)
             .map(str::to_owned);
         let current_capability = self
-            .tools
-            .snapshot()
+            .tool_registry_for_operation(operation_id)
+            .expect("approval operation has an owning lane")
             .capability_snapshot()
             .identity(&call.name)
             .map(str::to_owned);
-        let canonical = if active_capability == current_capability {
-            step_tools.canonicalize(&call.name, &call.arguments)
+        let resolved = if active_capability == current_capability {
+            step_tools.resolve_invocation(&call.name, &call.arguments)
         } else {
             Err(format!("capability `{}` is no longer available", call.name))
         };
-        let mut denial = canonical.as_ref().err().cloned();
+        let mut denial = resolved.as_ref().err().cloned();
         if self.budget.max_tool_calls.is_some_and(|max| {
             self.live_mut(operation_id)
                 .expect("main operation residency exists")
@@ -3264,15 +3252,12 @@ impl<P: Provider> SessionRuntime<P> {
         }) {
             denial = Some("operation tool-call budget exhausted".to_owned());
         }
-        let evidence = if denial.is_none() && matches!(call.name.as_str(), "write" | "edit") {
-            match crate::tool::reconciliation_evidence(
-                step_tools.cwd(),
-                &call.name,
-                &call.arguments,
-            )
-            .await
+        let evidence = if denial.is_none() {
+            match step_tools
+                .reconciliation_for(&call.name, &call.arguments)
+                .await
             {
-                Ok(evidence) => Some(evidence),
+                Ok(evidence) => evidence,
                 Err(message) => {
                     denial = Some(message);
                     None
@@ -3287,7 +3272,7 @@ impl<P: Provider> SessionRuntime<P> {
                 operation_id,
                 Transition::ApproveCall,
                 "approve a parked call",
-                canonical,
+                resolved,
                 evidence,
                 denial,
             )

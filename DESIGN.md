@@ -256,7 +256,7 @@ The intended child identity is preallocated or deterministically derived before 
 
 ## 11. Tool boundary
 
-The session runtime must not infer semantics from public tool names such as `write`, `edit`, `bash`, or `spawn_child`.
+The session runtime must not infer semantics from public tool names such as `write`, `edit`, `bash`, or `spawn_child`. Tool-owned typed admission metadata now carries canonicalization, recovery, reconciliation, and policy-route semantics into runtime admission.
 
 The tool boundary resolves a model call into an admitted invocation:
 

@@ -384,6 +384,38 @@ struct ToolEntry {
     spec: ToolSpec,
     recovery_class: RecoveryClass,
     capability_id: String,
+    semantics: ToolSemantics,
+    policy_route: PolicyRoute,
+}
+
+/// Tool-owned invocation semantics. Public tool names are presentation/API
+/// identifiers; the runtime must never infer behavior from them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ToolSemantics {
+    RequiredPath,
+    OptionalPath,
+    ReconcileWrite,
+    ReconcileEdit,
+    Command,
+    Remote,
+}
+
+/// How an admitted tool reaches the approval policy. Structural host-control
+/// capabilities are trusted by composition; ordinary/native/remote effects
+/// are still individually gated.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyRoute {
+    Gated,
+    Structural,
+}
+
+/// Typed result of resolving one model-proposed invocation against the exact
+/// immutable registry captured for the current model step.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ResolvedInvocation {
+    pub(crate) canonical: CanonicalTarget,
+    pub(crate) recovery_class: RecoveryClass,
+    pub(crate) policy_route: PolicyRoute,
 }
 
 /// How an unresolved effect of this tool may be settled after process
@@ -413,6 +445,71 @@ pub enum CanonicalTarget {
     /// A registered non-native tool (MCP/extension): the invocation
     /// goes through its owning transport, not local I/O (§19.2).
     Remote { tool: String },
+}
+
+impl ToolSemantics {
+    fn canonicalize(
+        self,
+        cwd: &Path,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<CanonicalTarget, String> {
+        let resolve = |key: &str| -> Result<PathBuf, String> {
+            let raw = arguments
+                .get(key)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("missing string argument: {key}"))?;
+            resolve_under(cwd, raw)
+        };
+        match self {
+            Self::RequiredPath | Self::ReconcileWrite | Self::ReconcileEdit => {
+                Ok(CanonicalTarget::Path {
+                    path: resolve("path")?,
+                })
+            }
+            Self::OptionalPath => {
+                if arguments.get("path").is_some() {
+                    Ok(CanonicalTarget::Path {
+                        path: resolve("path")?,
+                    })
+                } else {
+                    Ok(CanonicalTarget::Path {
+                        path: lexically_normalize(cwd),
+                    })
+                }
+            }
+            Self::Command => {
+                let command = arguments
+                    .get("command")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing string argument: command".to_owned())?;
+                Ok(CanonicalTarget::Command {
+                    command: command.to_owned(),
+                })
+            }
+            Self::Remote => Ok(CanonicalTarget::Remote {
+                tool: name.to_owned(),
+            }),
+        }
+    }
+
+    const fn reconciliation_kind(self) -> Option<ReconciliationKind> {
+        match self {
+            Self::ReconcileWrite => Some(ReconciliationKind::Write),
+            Self::ReconcileEdit => Some(ReconciliationKind::Edit),
+            Self::RequiredPath | Self::OptionalPath | Self::Command | Self::Remote => None,
+        }
+    }
+
+    const fn accepts_artifact_root(self) -> bool {
+        matches!(self, Self::Command)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReconciliationKind {
+    Write,
+    Edit,
 }
 
 /// Registry and executor for tools. Holds an `Arc<Path>` so a tool task
@@ -457,9 +554,23 @@ fn metadata_identity(_: &std::fs::Metadata) -> Option<String> {
 /// §12.3), computed at admission before the effect intent is
 /// committed: target path, preimage existence/hash, and the intended
 /// postimage hash. Pure with respect to the file's future: only reads.
-pub async fn reconciliation_evidence(
+#[cfg(test)]
+pub(crate) async fn reconciliation_evidence(
     cwd: &Path,
     name: &str,
+    arguments: &Value,
+) -> Result<Value, String> {
+    let kind = match name {
+        "write" => ReconciliationKind::Write,
+        "edit" => ReconciliationKind::Edit,
+        other => return Err(format!("tool {other} takes no reconciliation evidence")),
+    };
+    reconciliation_evidence_for(cwd, kind, arguments).await
+}
+
+async fn reconciliation_evidence_for(
+    cwd: &Path,
+    kind: ReconciliationKind,
     arguments: &Value,
 ) -> Result<Value, String> {
     let path_arg = arguments
@@ -471,14 +582,14 @@ pub async fn reconciliation_evidence(
         Some(snapshot) => snapshot_json(&snapshot),
         None => json!({ "exists": false }),
     };
-    let postimage: Vec<u8> = match name {
-        "write" => arguments
+    let postimage: Vec<u8> = match kind {
+        ReconciliationKind::Write => arguments
             .get("contents")
             .and_then(|v| v.as_str())
             .ok_or_else(|| "missing string argument: contents".to_owned())?
             .as_bytes()
             .to_vec(),
-        "edit" => {
+        ReconciliationKind::Edit => {
             let old_str = arguments
                 .get("old_str")
                 .and_then(|v| v.as_str())
@@ -493,7 +604,6 @@ pub async fn reconciliation_evidence(
             }
             original.replacen(old_str, new_str, 1).into_bytes()
         }
-        other => return Err(format!("tool {other} takes no reconciliation evidence")),
     };
     use sha2::{Digest, Sha256};
     let postimage_hash = Sha256::digest(&postimage);
@@ -731,55 +841,47 @@ impl ToolRegistry {
             .map_or(RecoveryClass::NeverReplay, |e| e.recovery_class)
     }
 
-    /// Validate `arguments` against a tool's schema: the value must be an
-    /// object containing every name in the schema's `"required"` array.
-    /// Canonicalize one invocation's effective target (§17.3). Pure:
-    /// no filesystem access, so the decision input cannot change
-    /// between policy and executor.
+    /// Canonicalize one invocation through tool-owned semantics. The
+    /// runtime sees the resulting target, never the name-to-semantics mapping.
     pub fn canonicalize(&self, name: &str, arguments: &Value) -> Result<CanonicalTarget, String> {
-        let resolve = |key: &str| -> Result<std::path::PathBuf, String> {
-            let raw = arguments
-                .get(key)
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| format!("missing string argument: {key}"))?;
-            resolve_under(&self.cwd, raw)
-        };
-        match name {
-            "read" | "write" | "edit" => Ok(CanonicalTarget::Path {
-                path: resolve("path")?,
-            }),
-            "search" | "find" => {
-                if arguments.get("path").is_some() {
-                    Ok(CanonicalTarget::Path {
-                        path: resolve("path")?,
-                    })
-                } else {
-                    Ok(CanonicalTarget::Path {
-                        path: lexically_normalize(&self.cwd),
-                    })
-                }
-            }
-            "bash" => {
-                let command = arguments
-                    .get("command")
-                    .and_then(|v| v.as_str())
-                    .ok_or_else(|| "missing string argument: command".to_owned())?;
-                Ok(CanonicalTarget::Command {
-                    command: command.to_owned(),
-                })
-            }
-            other => {
-                // Registered non-native tools (MCP/extension scopes)
-                // canonicalize to a remote target; truly unknown names
-                // still deny model-visibly.
-                if self.entries.contains_key(other) {
-                    Ok(CanonicalTarget::Remote {
-                        tool: other.to_owned(),
-                    })
-                } else {
-                    Err(format!("unknown tool: {other}"))
-                }
-            }
+        let entry = self
+            .entries
+            .get(name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?;
+        entry.semantics.canonicalize(&self.cwd, name, arguments)
+    }
+
+    pub(crate) fn resolve_invocation(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<ResolvedInvocation, String> {
+        self.validate(name, arguments)?;
+        let entry = self
+            .entries
+            .get(name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?;
+        Ok(ResolvedInvocation {
+            canonical: entry.semantics.canonicalize(&self.cwd, name, arguments)?,
+            recovery_class: entry.recovery_class,
+            policy_route: entry.policy_route,
+        })
+    }
+
+    pub(crate) async fn reconciliation_for(
+        &self,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<Option<Value>, String> {
+        let entry = self
+            .entries
+            .get(name)
+            .ok_or_else(|| format!("unknown tool: {name}"))?;
+        match entry.semantics.reconciliation_kind() {
+            Some(kind) => reconciliation_evidence_for(&self.cwd, kind, arguments)
+                .await
+                .map(Some),
+            None => Ok(None),
         }
     }
 
@@ -854,8 +956,13 @@ impl ToolRegistry {
         cancel: CancellationToken,
         progress: Option<ToolProgressSender>,
     ) -> ToolOutcome {
-        if !matches!(name, "write" | "edit" | "bash")
-            || (reconciliation.is_none() && artifact_root.is_none())
+        let Some(entry) = self.entries.get(name) else {
+            return ToolOutcome::error(format!("unknown tool: {name}"));
+        };
+        let needs_reconciliation = entry.semantics.reconciliation_kind().is_some();
+        let accepts_artifact_root = entry.semantics.accepts_artifact_root();
+        if (!needs_reconciliation || reconciliation.is_none())
+            && (!accepts_artifact_root || artifact_root.is_none())
         {
             return self
                 .execute_with_progress(name, arguments, cancel, progress)
@@ -863,10 +970,10 @@ impl ToolRegistry {
         }
         let mut enriched = arguments.clone();
         if let Some(object) = enriched.as_object_mut() {
-            if let Some(reconciliation) = reconciliation {
+            if needs_reconciliation && let Some(reconciliation) = reconciliation {
                 object.insert("__ion_reconciliation".to_owned(), reconciliation.clone());
             }
-            if let Some(artifact_root) = artifact_root {
+            if accepts_artifact_root && let Some(artifact_root) = artifact_root {
                 object.insert(
                     "__ion_artifact_root".to_owned(),
                     Value::String(artifact_root.to_string_lossy().into_owned()),
@@ -904,24 +1011,27 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
     // reconcile because admission persists preimage/postimage evidence
     // with the intent, so recovery can classify the file state it
     // finds.
-    let tools: Vec<(Arc<dyn Tool>, RecoveryClass)> = vec![
+    let tools: Vec<(Arc<dyn Tool>, RecoveryClass, ToolSemantics)> = vec![
         (
             Arc::new(ReadTool {
                 cwd: cwd_path.clone(),
             }),
             RecoveryClass::ReplaySafe,
+            ToolSemantics::RequiredPath,
         ),
         (
             Arc::new(WriteTool {
                 cwd: cwd_path.clone(),
             }),
             RecoveryClass::Reconcile,
+            ToolSemantics::ReconcileWrite,
         ),
         (
             Arc::new(EditTool {
                 cwd: cwd_path.clone(),
             }),
             RecoveryClass::Reconcile,
+            ToolSemantics::ReconcileEdit,
         ),
         (
             Arc::new(BashTool {
@@ -929,22 +1039,25 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
                 sandbox,
             }),
             RecoveryClass::NeverReplay,
+            ToolSemantics::Command,
         ),
         (
             Arc::new(SearchTool {
                 cwd: cwd_path.clone(),
             }),
             RecoveryClass::ReplaySafe,
+            ToolSemantics::OptionalPath,
         ),
         (
             Arc::new(FindTool {
                 cwd: cwd_path.clone(),
             }),
             RecoveryClass::ReplaySafe,
+            ToolSemantics::OptionalPath,
         ),
     ];
     let mut map = HashMap::new();
-    for (tool, recovery_class) in tools {
+    for (tool, recovery_class, semantics) in tools {
         let spec = tool.spec();
         map.insert(
             spec.name.clone(),
@@ -953,6 +1066,8 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
                 tool,
                 spec,
                 recovery_class,
+                semantics,
+                policy_route: PolicyRoute::Gated,
             },
         );
     }

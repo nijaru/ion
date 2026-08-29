@@ -215,7 +215,7 @@ async fn child_uses_parent_workspace_for_relative_tools() {
         workspace_text.clone(),
     );
     let parent_id = runtime.session_id();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
             crate::DelegateConfig {
@@ -324,7 +324,7 @@ async fn two_read_only_children_run_and_report_lineage() {
     let catalog = crate::ToolCatalog::default();
     let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
     let parent_id = runtime.session_id();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![delegate_tool(
             store.clone(),
@@ -395,7 +395,7 @@ async fn fork_context_and_model_override_are_explicit() {
     let runtime = Runtime::start_with_store(parent_provider, catalog.clone(), store.clone());
     let parent_id = runtime.session_id();
     let override_script = child_script.clone();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
             crate::DelegateConfig {
@@ -474,7 +474,7 @@ async fn child_cannot_widen_capabilities() {
     // bash and the gate denies the unknown tool model-visibly.
     let child_script = vec![ScriptedMessage::ToolCall {
         name: "bash".to_owned(),
-        arguments: json!({ "command": "rm -rf /" }),
+        arguments: json!({ "command": "exit 97" }),
     }];
     let provider = ScriptedProvider::new(vec![ScriptedMessage::ToolCall {
         name: "delegate".to_owned(),
@@ -484,7 +484,7 @@ async fn child_cannot_widen_capabilities() {
     let catalog = crate::ToolCatalog::default();
     let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
     let parent_id = runtime.session_id();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![delegate_tool(
             store.clone(),
@@ -508,19 +508,35 @@ async fn child_cannot_widen_capabilities() {
     runtime.join().await.expect("join");
 
     let loaded = store.load(parent_id).await.expect("load");
-    let tool_output = loaded
+    let child_id = loaded
         .entries
         .iter()
         .find_map(|record| {
-            let entry = &record.entry;
-            serde_json::to_string(entry)
+            serde_json::to_string(&record.entry)
                 .ok()
-                .filter(|text| text.contains("child failed"))
+                .and_then(|text| child_ids(&text).into_iter().next())
         })
-        .expect("the escape attempt fails visibly");
+        .expect("child reference");
+    let child = store.load(child_id).await.expect("child session");
     assert!(
-        tool_output.contains("unknown tool") || tool_output.contains("approval"),
-        "denial is about the capability, not a crash: {tool_output}"
+        child.operations.iter().all(|operation| {
+            !operation
+                .capability_snapshot
+                .tools
+                .iter()
+                .any(|tool| tool.name == "bash")
+        }),
+        "read-only child must never advertise bash"
+    );
+    assert!(
+        child.entries.iter().any(|record| matches!(
+            &record.entry,
+            SessionEntry::ToolResult {
+                result: ToolResult::Err { error, .. },
+            } if error.contains("unknown tool") && error.contains("bash")
+        )),
+        "model-proposed bash must be rejected before execution: {:?}",
+        child.entries
     );
 }
 
@@ -551,7 +567,7 @@ async fn budget_stops_a_runaway_child() {
     let catalog = crate::ToolCatalog::default();
     let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
     let parent_id = runtime.session_id();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
             crate::DelegateConfig {
@@ -638,7 +654,7 @@ async fn parent_cancel_cancels_running_children() {
     let catalog = crate::ToolCatalog::default();
     let runtime = Runtime::start_with_store(provider, catalog.clone(), store.clone());
     let parent_id = runtime.session_id();
-    catalog.register_scope(
+    catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
             crate::DelegateConfig {

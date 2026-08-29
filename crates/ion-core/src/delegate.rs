@@ -639,6 +639,18 @@ pub fn child_tools<P: Provider + 'static>(
     (manager, tools)
 }
 
+/// Install the migration child-control surface as structural host capabilities.
+/// Extensions and MCP registrations cannot access this policy bypass.
+pub fn install_child_tools<P: Provider + 'static>(
+    catalog: &crate::tool::ToolCatalog,
+    config: DelegateConfig<P>,
+    parent_id: SessionId,
+) -> Arc<ChildManager<P>> {
+    let (manager, tools) = child_tools(config, parent_id);
+    catalog.register_structural_scope("children", tools);
+    manager
+}
+
 impl<P: Provider + 'static> Tool for ChildTool<P> {
     fn spec(&self) -> ToolSpec {
         match self.kind {

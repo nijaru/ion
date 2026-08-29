@@ -102,7 +102,12 @@ fn next_generation(generations: &std::sync::RwLock<HashMap<String, u64>>, scope:
     *generation
 }
 
-fn dynamic_entries(scope: &str, generation: u64, tools: Vec<Arc<dyn Tool>>) -> Vec<ToolEntry> {
+fn dynamic_entries(
+    scope: &str,
+    generation: u64,
+    tools: Vec<Arc<dyn Tool>>,
+    policy_route: PolicyRoute,
+) -> Vec<ToolEntry> {
     tools
         .into_iter()
         .map(|tool| {
@@ -112,6 +117,8 @@ fn dynamic_entries(scope: &str, generation: u64, tools: Vec<Arc<dyn Tool>>) -> V
                 tool,
                 spec,
                 recovery_class: RecoveryClass::NeverReplay,
+                semantics: ToolSemantics::Remote,
+                policy_route,
             }
         })
         .collect()
@@ -120,10 +127,10 @@ fn dynamic_entries(scope: &str, generation: u64, tools: Vec<Arc<dyn Tool>>) -> V
 impl CatalogService {
     pub(crate) fn register_scope(&self, scope: String, tools: Vec<Arc<dyn Tool>>) {
         let generation = next_generation(&self.generations, &scope);
-        self.dynamic
-            .write()
-            .expect("tool catalog poisoned")
-            .insert(scope.clone(), dynamic_entries(&scope, generation, tools));
+        self.dynamic.write().expect("tool catalog poisoned").insert(
+            scope.clone(),
+            dynamic_entries(&scope, generation, tools, PolicyRoute::Gated),
+        );
     }
 
     pub(crate) fn remove_scope(&self, scope: &str) -> bool {
@@ -181,10 +188,26 @@ impl ToolCatalog {
     pub fn register_scope(&self, scope: impl Into<String>, tools: Vec<Arc<dyn Tool>>) {
         let scope = scope.into();
         let generation = next_generation(&self.generations, &scope);
-        self.dynamic
-            .write()
-            .expect("tool catalog poisoned")
-            .insert(scope.clone(), dynamic_entries(&scope, generation, tools));
+        self.dynamic.write().expect("tool catalog poisoned").insert(
+            scope.clone(),
+            dynamic_entries(&scope, generation, tools, PolicyRoute::Gated),
+        );
+    }
+
+    /// Core-owned host controls may bypass per-effect approval because their
+    /// authority is structural and their spawned effects are gated separately.
+    /// This is crate-private so extensions/MCP cannot self-declare a bypass.
+    pub(crate) fn register_structural_scope(
+        &self,
+        scope: impl Into<String>,
+        tools: Vec<Arc<dyn Tool>>,
+    ) {
+        let scope = scope.into();
+        let generation = next_generation(&self.generations, &scope);
+        self.dynamic.write().expect("tool catalog poisoned").insert(
+            scope.clone(),
+            dynamic_entries(&scope, generation, tools, PolicyRoute::Structural),
+        );
     }
 
     /// Remove a scope; future snapshots no longer include its tools.
@@ -387,6 +410,25 @@ mod catalog_tests {
         assert!(catalog.remove_scope("server-a"));
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
         assert!(!catalog.remove_scope("server-a"), "double remove is false");
+    }
+
+    #[test]
+    fn structural_policy_route_is_available_only_through_core_composition() {
+        let ordinary_catalog = ToolCatalog::with_cwd("/tmp");
+        ordinary_catalog.register_scope("ordinary", vec![Arc::new(EchoTool)]);
+        let ordinary = ordinary_catalog
+            .snapshot()
+            .resolve_invocation("mcp_echo", &json!({}))
+            .expect("ordinary resolution");
+        assert_eq!(ordinary.policy_route, PolicyRoute::Gated);
+
+        let structural_catalog = ToolCatalog::with_cwd("/tmp");
+        structural_catalog.register_structural_scope("host-control", vec![Arc::new(EchoTool)]);
+        let structural = structural_catalog
+            .snapshot()
+            .resolve_invocation("mcp_echo", &json!({}))
+            .expect("structural resolution");
+        assert_eq!(structural.policy_route, PolicyRoute::Structural);
     }
 
     #[test]

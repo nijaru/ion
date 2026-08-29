@@ -123,7 +123,8 @@ pub fn enable_children_with_model_resolver<P>(
 where
     P: ion_core::Provider + 'static,
 {
-    let (manager, child_tools) = ion_core::child_tools(
+    ion_core::install_child_tools(
+        tools,
         ion_core::DelegateConfig {
             store: store.clone(),
             make_provider,
@@ -134,9 +135,7 @@ where
             cwd: tools.cwd().to_path_buf(),
         },
         parent_id,
-    );
-    tools.register_scope("children", child_tools);
-    manager
+    )
 }
 
 /// Build the scripted-provider factory used when no real model is
