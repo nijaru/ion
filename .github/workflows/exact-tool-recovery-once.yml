@@ -38,4 +38,5 @@ jobs:
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
           git commit -m "fix(runtime): preserve admitted tools on recovery"
+          git pull --rebase origin main
           git push origin HEAD:main
