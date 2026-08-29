@@ -30,78 +30,41 @@ jobs:
           import textwrap
 
           path = ".github/workflows/agent-tool-surface-once.yml"
-          previous = subprocess.check_output(
-              ["git", "show", f"HEAD^:{path}"], text=True
-          )
           marker = "      - name: Unify model-facing agent tools\n"
-          start = previous.index("        run: |\n", previous.index(marker)) + len("        run: |\n")
-          end = previous.index("\n      - run: cargo fmt", start)
-          script = textwrap.dedent(previous[start:end])
+          source = None
+          commits = subprocess.check_output(
+              ["git", "rev-list", "HEAD", "--", path], text=True
+          ).splitlines()
+          for commit in commits:
+              candidate = subprocess.check_output(
+                  ["git", "show", f"{commit}:{path}"], text=True
+              )
+              if marker in candidate:
+                  source = candidate
+                  break
+          if source is None:
+              raise SystemExit("original migration workflow not found")
 
-          old = '''    let spawn = |arguments| async {
-              tools
-                  .iter()
-                  .find(|tool| tool.spec().name == "spawn_agent")
-                  .expect("spawn tool")
-                  .call(arguments, CancellationToken::new())
-                  .await
-          };
-          let handle_from = |output: &str| {
-              output
-                  .lines()
-                  .find_map(|line| line.strip_prefix("agent handle: "))
-                  .expect("agent handle")
-                  .to_owned()
-          };
-          let wait = |handle: String| async {
-              tools
-                  .iter()
-                  .find(|tool| tool.spec().name == "agent_wait")
-                  .expect("wait tool")
-                  .call(json!({"handle": handle}), CancellationToken::new())
-                  .await
-          };
-          '''
-          new = '''    let spawn_tool = tools
-              .iter()
-              .find(|tool| tool.spec().name == "spawn_agent")
-              .expect("spawn tool")
-              .clone();
-          let wait_tool = tools
-              .iter()
-              .find(|tool| tool.spec().name == "agent_wait")
-              .expect("wait tool")
-              .clone();
-          let handle_from = |output: &str| {
-              output
-                  .lines()
-                  .find_map(|line| line.strip_prefix("agent handle: "))
-                  .expect("agent handle")
-                  .to_owned()
-          };
-          '''
-          if old not in script:
-              raise SystemExit("test helper anchor missing")
-          script = script.replace(old, new, 1)
-          replacements = {
-              'let lane = spawn(json!({"objective": "lane work"})).await;':
-                  'let lane = spawn_tool.call(json!({"objective": "lane work"}), CancellationToken::new()).await;',
-              'let lane_wait = wait(lane_handle).await;':
-                  'let lane_wait = wait_tool.call(json!({"handle": lane_handle}), CancellationToken::new()).await;',
-              'let fresh = spawn(json!({"objective": "fresh work", "topology": "fresh"})).await;':
-                  'let fresh = spawn_tool.call(json!({"objective": "fresh work", "topology": "fresh"}), CancellationToken::new()).await;',
-              'let fresh_wait = wait(fresh_handle).await;':
-                  'let fresh_wait = wait_tool.call(json!({"handle": fresh_handle}), CancellationToken::new()).await;',
-              'let fork = spawn(json!({"objective": "fork work", "topology": "fork"})).await;':
-                  'let fork = spawn_tool.call(json!({"objective": "fork work", "topology": "fork"}), CancellationToken::new()).await;',
-              'let fork_wait = wait(fork_handle).await;':
-                  'let fork_wait = wait_tool.call(json!({"handle": fork_handle}), CancellationToken::new()).await;',
-          }
-          for before, after in replacements.items():
-              if before not in script:
-                  raise SystemExit(f"missing call anchor: {before}")
-              script = script.replace(before, after, 1)
+          start = source.index("        run: |\n", source.index(marker)) + len("        run: |\n")
+          end = source.index("\n      - run: cargo fmt", start)
+          script = textwrap.dedent(source[start:end])
 
+          def own_async_argument(name, parameter):
+              global script
+              opening = f"    let {name} = |{parameter}| async {{"
+              start = script.index(opening)
+              end = script.index("\n    };", start) + len("\n    };")
+              block = script[start:end]
+              block = block.replace(
+                  opening,
+                  f"    let {name} = |{parameter}| {{\n        let tools = &tools;\n        async move {{",
+                  1,
+              )
+              block = block[:-len("\n    };")] + "\n        }\n    };"
+              script = script[:start] + block + script[end:]
+
+          own_async_argument("spawn", "arguments")
+          own_async_argument("wait", "handle: String")
           exec(compile(script, "agent-tool-migration.py", "exec"))
       - run: cargo fmt
       - run: cargo fmt --check
