@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - .github/hosted-agent-runtime-patch.py
+      - .github/hosted-agent-runtime-fix.py
       - .github/workflows/hosted-agent-runtime-once.yml
 
 permissions:
@@ -25,14 +26,16 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply hosted agent runtime cleanup
-        run: python .github/hosted-agent-runtime-patch.py
+        run: |
+          python .github/hosted-agent-runtime-fix.py
+          python .github/hosted-agent-runtime-patch.py
       - run: cargo fmt
       - run: cargo fmt --check
       - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
       - run: cargo test --locked --workspace
       - name: Commit validated slice
         run: |
-          rm .github/hosted-agent-runtime-patch.py .github/workflows/hosted-agent-runtime-once.yml
+          rm .github/hosted-agent-runtime-patch.py .github/hosted-agent-runtime-fix.py .github/workflows/hosted-agent-runtime-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add -A
