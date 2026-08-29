@@ -213,6 +213,76 @@ async fn session_agents_publish_fresh_and_fork_topology_atomically() {
 }
 
 #[tokio::test]
+async fn lane_agent_admission_rejects_structural_scope_widening() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let session_id = crate::SessionId::generate();
+    store
+        .create_session(SessionRecord {
+            id: session_id,
+            cwd: "/tmp/root".to_owned(),
+            title: String::new(),
+            initial_model_ref: "model-a".to_owned(),
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
+        })
+        .await
+        .expect("root session");
+    let root_agent = crate::AgentId::root(session_id);
+    let mut parent = crate::session::lane::Config::new("model-a");
+    parent.tools =
+        crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["read".to_owned()]));
+    parent.scopes =
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
+            "scope-a".to_owned(),
+        ]));
+    store
+        .set_lane_config(session_id, crate::session::lane::MAIN, parent.clone())
+        .await
+        .expect("parent config");
+
+    let rejected = crate::AgentId::generate();
+    let mut wider = parent.clone();
+    wider.scopes =
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
+            "scope-a".to_owned(),
+            "scope-b".to_owned(),
+        ]));
+    let err = store
+        .admit_lane_agent(session_id, rejected, root_agent, "scope-wider", None, wider)
+        .await
+        .expect_err("shared-history admission must reject wider scopes");
+    assert!(err.to_string().contains("may narrow but not escalate"));
+    let loaded = store.load(session_id).await.expect("rejected load");
+    assert!(loaded.agents.iter().all(|agent| agent.id != rejected));
+    assert!(loaded.lanes.iter().all(|lane| lane.name != "scope-wider"));
+
+    let admitted = crate::AgentId::generate();
+    let mut narrowed = parent;
+    narrowed.scopes = crate::session::lane::ScopeGrant::none();
+    store
+        .admit_lane_agent(
+            session_id,
+            admitted,
+            root_agent,
+            "scope-narrowed",
+            None,
+            narrowed.clone(),
+        )
+        .await
+        .expect("shared-history admission may narrow scopes");
+    let loaded = store.load(session_id).await.expect("admitted load");
+    let lane = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == "scope-narrowed")
+        .expect("narrowed lane");
+    assert_eq!(lane.config, narrowed);
+
+    store.close().await.expect("close store");
+}
+
+#[tokio::test]
 async fn session_agent_admission_rejects_capability_escalation() {
     let store = SessionStore::open_in_memory().expect("store");
     let root_session = crate::SessionId::generate();
@@ -232,6 +302,10 @@ async fn session_agent_admission_rejects_capability_escalation() {
     let mut parent_config = crate::session::lane::Config::new("parent-model");
     parent_config.tools =
         crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["read".to_owned()]));
+    parent_config.scopes =
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
+            "scope-a".to_owned(),
+        ]));
     store
         .set_lane_config(
             root_session,
@@ -267,9 +341,40 @@ async fn session_agent_admission_rejects_capability_escalation() {
         Err(crate::store::StoreError::NotFound(id)) if id == rejected_session
     ));
 
+    let scope_rejected_session = crate::SessionId::generate();
+    let mut wider_scopes = crate::session::lane::Config::new("child-model");
+    wider_scopes.tools = parent_config.tools.clone();
+    wider_scopes.scopes =
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
+            "scope-a".to_owned(),
+            "scope-b".to_owned(),
+        ]));
+    let err = store
+        .admit_session_agent(
+            SessionRecord {
+                id: scope_rejected_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "child-model".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
+            },
+            root_agent,
+            wider_scopes,
+        )
+        .await
+        .expect_err("hosted admission must reject wider structural scopes");
+    assert!(err.to_string().contains("may narrow but not escalate"));
+    assert!(matches!(
+        store.load(scope_rejected_session).await,
+        Err(crate::store::StoreError::NotFound(id)) if id == scope_rejected_session
+    ));
+
     let admitted_session = crate::SessionId::generate();
     let mut child_config = crate::session::lane::Config::new("child-model");
     child_config.tools = parent_config.tools.clone();
+    child_config.scopes = crate::session::lane::ScopeGrant::none();
     store
         .admit_session_agent(
             SessionRecord {
