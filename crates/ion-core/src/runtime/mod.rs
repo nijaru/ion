@@ -943,34 +943,6 @@ impl Runtime {
         composition.spawn(SessionId::generate(), None)
     }
 
-    /// Compose a bounded child with an explicitly inherited trusted-resource
-    /// snapshot and workspace identity. The child receives no broader
-    /// capability set than its host, and its durable session records the same
-    /// workspace used by its tool catalog.
-    #[must_use]
-    pub fn start_child_with_resources(
-        provider: impl Provider,
-        tools: impl Into<ToolCatalog>,
-        store: SessionStore,
-        policy: Arc<dyn PolicyEngine>,
-        budget: RuntimeBudget,
-        lineage: ChildSessionLineage,
-        trusted_resources: Vec<TrustedResource>,
-    ) -> Self {
-        let tools = tools.into();
-        let cwd = tools.cwd().to_string_lossy().into_owned();
-        let mut composition = Composition::new(provider, tools, store);
-        composition.policy = policy;
-        composition.budget = budget;
-        composition.parent = Some(lineage.control_parent);
-        composition.fork_source = lineage
-            .fork_source
-            .map(|source| (source.session_id, source.entry_id));
-        composition.trusted_resources = trusted_resources;
-        composition.cwd = Some(cwd);
-        composition.spawn(SessionId::generate(), None)
-    }
-
     /// Compose the runtime with an explicit approval policy and a
     /// runtime-enforced budget (§20.5). Used for bounded child
     /// sessions; hosts may also budget the root session.
@@ -1032,15 +1004,15 @@ impl Runtime {
         Ok(composition.spawn(session_id, Some(loaded)))
     }
 
-    /// Reopen a bounded child session with its durable lineage and budget.
-    /// The loaded session remains the source of its workspace/model state;
-    /// the host supplies only the provider and policy dependencies.
-    pub async fn open_child(
+    /// Reopen a separately hosted agent session with its durable lineage and budget.
+    /// The loaded session remains the source of workspace/model/topology state;
+    /// the host supplies only live provider, policy, and resource dependencies.
+    pub async fn open_hosted(
         provider: impl Provider,
         tools: impl Into<ToolCatalog>,
         store: SessionStore,
         session_id: SessionId,
-        config: ChildRuntimeConfig,
+        config: HostedRuntimeConfig,
     ) -> Result<Self, RuntimeError> {
         let loaded = store
             .load(session_id)
@@ -1048,7 +1020,7 @@ impl Runtime {
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
         if loaded.session.control_parent_session_id != Some(config.control_parent) {
             return Err(RuntimeError::OperationFailed(
-                "child session does not belong to the requested parent".to_owned(),
+                "hosted agent session does not belong to the requested family root".to_owned(),
             ));
         }
         let fork_source = loaded
@@ -1233,24 +1205,9 @@ pub struct RuntimeBudget {
     pub max_tool_calls: Option<u32>,
 }
 
-/// Exact semantic source of an explicitly forked separately hosted session.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SessionForkSource {
-    pub session_id: SessionId,
-    pub entry_id: Option<EntryId>,
-}
-
-/// Durable topology supplied when creating a separately hosted child session.
-/// Control ownership and history inheritance are deliberately independent.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ChildSessionLineage {
-    pub control_parent: SessionId,
-    pub fork_source: Option<SessionForkSource>,
-}
-
-/// Host dependencies needed to reopen a durable child runtime.
+/// Host dependencies needed to reopen a separately hosted agent runtime.
 #[derive(Clone)]
-pub struct ChildRuntimeConfig {
+pub struct HostedRuntimeConfig {
     pub policy: Arc<dyn PolicyEngine>,
     pub budget: RuntimeBudget,
     pub control_parent: SessionId,

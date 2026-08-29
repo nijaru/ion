@@ -5,8 +5,6 @@
 //! provider/runtime/catalog residency for agents whose history lives in a
 //! separate session. Closing residency never deletes durable agent state.
 //!
-//! A synchronous `delegate` implementation remains under `cfg(test)` solely
-//! for older budget/policy coverage while that fixture is migrated.
 
 use std::{
     collections::HashMap,
@@ -28,7 +26,7 @@ use crate::tool::{
     Tool, ToolOutcome, ToolProgress, ToolProgressSender, ToolSpec, bounded_progress_output,
 };
 
-/// Conservative default bounds for children (§20.5): exact numbers are
+/// Conservative default bounds for separately hosted agents (§20.5): exact numbers are
 /// host configuration; these exist so hosts that do not tune budgets
 /// still cannot loop forever.
 #[must_use]
@@ -39,7 +37,7 @@ pub fn hosted_agent_budget_default() -> RuntimeBudget {
     }
 }
 
-/// How a child receives parent context. `Fresh` is the safe default; the
+/// How a separately hosted agent receives parent context. `Fresh` is the safe default; the
 /// parent transcript is never copied unless the caller explicitly selects
 /// `ForkContext`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -48,34 +46,34 @@ enum HostedHistory {
     ForkContext,
 }
 
-/// One requested child in a delegation call.
+/// One requested separately hosted agent execution.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct HostedAgentSpec {
     pub objective: String,
-    /// Explicit context seed appended after the objective (§20.3):
+    /// Explicit context seed appended after the objective (§13.4):
     /// never an implicit copy of parent state.
     pub context_seed: Option<String>,
-    /// Explicit parent-context projection mode (§20.3).
+    /// Explicit parent-context projection mode (§13.4).
     pub context_mode: HostedHistory,
-    /// Optional host-resolved model for this child only.
+    /// Optional host-resolved model for this agent only.
     pub model_override: Option<String>,
 }
 
-/// Configuration and bounds for children spawned by one delegate tool.
+/// Configuration and bounds for separately hosted agents in one family.
 pub struct HostedAgentConfig<P> {
     pub store: SessionStore,
     pub make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     /// Optional resolver for explicit per-call model overrides. Unsupported
     /// overrides fail visibly instead of silently using the launch model.
     pub make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
-    /// Maximum number of live child runtimes retained by this service.
+    /// Maximum number of live hosted runtimes retained by this service.
     pub max_active: usize,
-    /// Budget applied to every child.
+    /// Budget applied to every hosted agent operation.
     pub budget: RuntimeBudget,
     /// Explicitly inherited project resources; empty when the host did not
     /// grant project trust.
     pub trusted_resources: Vec<TrustedResource>,
-    /// Host-owned workspace root used for the child catalog and durable
+    /// Host-owned workspace root used for the hosted catalog and durable
     /// session identity.
     pub cwd: PathBuf,
 }
@@ -120,7 +118,7 @@ impl<P> HostedAgentRuntimes<P> {
         debug_assert_eq!(
             SessionId::from_uuid(family.root().as_uuid()),
             self.parent_id,
-            "child runtime host must bind to its durable root family",
+            "hosted runtime service must bind to its durable root family",
         );
         *self.family.lock().expect("hosted agent runtimes poisoned") = Some(Arc::clone(&family));
         let live = self
@@ -128,7 +126,7 @@ impl<P> HostedAgentRuntimes<P> {
             .lock()
             .expect("hosted agent runtimes poisoned")
             .iter()
-            .map(|(session_id, child)| (*session_id, child.session.clone()))
+            .map(|(session_id, hosted)| (*session_id, hosted.session.clone()))
             .collect::<Vec<_>>();
         for (session_id, session) in live {
             family.register_hosted_session(session_id, session);
@@ -150,10 +148,10 @@ impl<P> HostedAgentRuntimes<P> {
     }
 
     /// Remove one live incarnation from the registry, then drain every owned
-    /// resource without holding the manager mutex. The durable session remains
-    /// in SQLite and is still observable/resumable by handle.
+    /// resource without holding the residency mutex. The durable session remains
+    /// in SQLite and stays observable/resumable by semantic agent address.
     async fn release_hosted_runtime(&self, session_id: SessionId) -> Result<(), String> {
-        let Some(mut child) = self
+        let Some(mut hosted) = self
             .runtimes
             .lock()
             .expect("hosted agent runtimes poisoned")
@@ -164,20 +162,20 @@ impl<P> HostedAgentRuntimes<P> {
         if let Some(family) = self.family() {
             family.unregister_hosted_session(session_id);
         }
-        child.cancel.cancel();
+        hosted.cancel.cancel();
         let mut first_error = None;
-        if let Err(err) = child.session.close().await {
+        if let Err(err) = hosted.session.close().await {
             first_error.get_or_insert_with(|| format!("hosted agent close failed: {err}"));
         }
-        if let Some(runtime) = child.runtime.take()
+        if let Some(runtime) = hosted.runtime.take()
             && let Err(err) = runtime.join().await
         {
             first_error.get_or_insert_with(|| format!("hosted agent join failed: {err}"));
         }
-        if let Err(err) = child.catalog.close().await {
+        if let Err(err) = hosted.catalog.close().await {
             first_error.get_or_insert_with(|| format!("hosted agent catalog close failed: {err}"));
         }
-        if let Err(err) = child.cancel_watch.await {
+        if let Err(err) = hosted.cancel_watch.await {
             first_error
                 .get_or_insert_with(|| format!("hosted agent cancellation watcher failed: {err}"));
         }
@@ -229,11 +227,11 @@ impl<P> HostedAgentRuntimes<P> {
         }
         self.reap_finished().await?;
         {
-            let children = self
+            let runtimes = self
                 .runtimes
                 .lock()
                 .expect("hosted agent runtimes poisoned");
-            if children.len() >= self.config.max_active.max(1) {
+            if runtimes.len() >= self.config.max_active.max(1) {
                 return Err(format!(
                     "hosted agent runtime limit reached (max {})",
                     self.config.max_active.max(1)
@@ -257,7 +255,7 @@ impl<P> HostedAgentRuntimes<P> {
                     .map_err(|err| format!("could not load parent context: {err}"))?,
             ),
         };
-        let prompt = compose_child_prompt(
+        let prompt = compose_hosted_prompt(
             &spec,
             fork_context
                 .as_ref()
@@ -286,12 +284,12 @@ impl<P> HostedAgentRuntimes<P> {
             )
             .await
             .map_err(|err| format!("agent admission failed: {err}"))?;
-        let runtime = match Runtime::open_child(
+        let runtime = match Runtime::open_hosted(
             provider,
             catalog.clone(),
             self.config.store.clone(),
             session_id,
-            crate::runtime::ChildRuntimeConfig {
+            crate::runtime::HostedRuntimeConfig {
                 policy: Arc::new(crate::policy::DefaultPolicy),
                 budget: self.config.budget,
                 control_parent: self.parent_id,
@@ -369,7 +367,7 @@ impl<P> HostedAgentRuntimes<P> {
             .store
             .load(session_id)
             .await
-            .map_err(|err| format!("child {} unavailable: {err}", session_id))?;
+            .map_err(|err| format!("agent {agent_id} unavailable: {err}"))?;
         let belongs_to_family = loaded.agents.iter().any(|agent| {
             agent.id == agent_id
                 && agent.family_session_id == self.parent_id
@@ -398,12 +396,12 @@ impl<P> HostedAgentRuntimes<P> {
             }
         };
         let catalog = crate::tool::ToolCatalog::read_only(&loaded.session.cwd);
-        let runtime = Runtime::open_child(
+        let runtime = Runtime::open_hosted(
             provider,
             catalog.clone(),
             self.config.store.clone(),
             session_id,
-            crate::runtime::ChildRuntimeConfig {
+            crate::runtime::HostedRuntimeConfig {
                 policy: Arc::new(crate::policy::DefaultPolicy),
                 budget: self.config.budget,
                 control_parent: self.parent_id,
@@ -480,8 +478,8 @@ struct HostAgentTool<P> {
 }
 
 /// Compose one model-facing agent control namespace across shared-history
-/// lane agents and the temporary separate-session fresh/fork backend.
-/// Child-only handles and tool names stay behind this migration boundary.
+/// lane agents and separately hosted fresh/fork runtimes. Durable control is
+/// always family-owned; this layer contributes only host residency mechanics.
 pub fn agent_host_tools<P: Provider + 'static>(
     family: Arc<crate::agent::Family>,
     hosted: Arc<HostedAgentRuntimes<P>>,
@@ -887,308 +885,6 @@ fn render_family_observation(observation: &crate::agent::Observation) -> String 
     }
 }
 
-/// Legacy synchronous delegation fixture retained only by unit tests while
-/// existing transition coverage is migrated to durable child handles.
-#[cfg(test)]
-pub struct DelegateTool<P> {
-    config: Arc<HostedAgentConfig<P>>,
-    parent_id: SessionId,
-}
-
-#[cfg(test)]
-impl<P> DelegateTool<P> {
-    #[must_use]
-    pub fn new(config: HostedAgentConfig<P>, parent_id: SessionId) -> Self {
-        Self {
-            config: Arc::new(config),
-            parent_id,
-        }
-    }
-}
-
-#[cfg(test)]
-impl<P: Provider + 'static> Tool for DelegateTool<P> {
-    fn spec(&self) -> ToolSpec {
-        ToolSpec {
-            name: "delegate".to_owned(),
-            description: "Run bounded research children with read-only tools. \
-Each child gets an explicit objective and cannot widen capabilities; \
-their results return as text. Use for parallel investigation."
-                .to_owned(),
-            input_schema: json!({
-                "type": "object",
-                "properties": {
-                    "children": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "objective": { "type": "string" },
-                                "context": {
-                                    "type": "string",
-                                    "description": "optional context seed"
-                                },
-                                "context_mode": {
-                                    "type": "string",
-                                    "enum": ["fresh", "fork_context"],
-                                    "description": "fresh by default; explicitly fork durable parent context"
-                                },
-                                "model_override": {
-                                    "type": "string",
-                                    "description": "optional host-resolved model for this child"
-                                }
-                            },
-                            "required": ["objective"]
-                        },
-                        "minItems": 1,
-                        "description": "children to run concurrently"
-                    }
-                },
-                "required": ["children"]
-            }),
-        }
-    }
-
-    fn call<'a>(
-        &'a self,
-        arguments: Value,
-        cancel: CancellationToken,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
-        self.call_with_progress(arguments, cancel, None)
-    }
-
-    fn call_with_progress<'a>(
-        &'a self,
-        arguments: Value,
-        cancel: CancellationToken,
-        progress: Option<ToolProgressSender>,
-    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
-        Box::pin(async move {
-            let children = match parse_children(&arguments) {
-                Ok(children) => children,
-                Err(message) => return ToolOutcome::error(message),
-            };
-            let semaphore = Arc::new(tokio::sync::Semaphore::new(self.config.max_active));
-            let mut handles = Vec::with_capacity(children.len());
-            for spec in children {
-                let semaphore = Arc::clone(&semaphore);
-                let config = Arc::clone(&self.config);
-                let parent_id = self.parent_id;
-                let cancel = cancel.child_token();
-                let progress = progress.clone();
-                handles.push(tokio::spawn(async move {
-                    let _permit = semaphore.acquire().await;
-                    run_child(config, parent_id, spec, cancel, progress).await
-                }));
-            }
-            // Parent cancellation cancels descendants (§20.6): the
-            // child token above fires, each child's operation cancels,
-            // and the results report it - the parent turn continues.
-            let mut output = String::new();
-            for handle in handles {
-                let result = handle
-                    .await
-                    .unwrap_or_else(|err| format!("child task failed: {err}"));
-                if !output.is_empty() {
-                    output.push_str("\n\n");
-                }
-                output.push_str(&result);
-            }
-            if cancel.is_cancelled() {
-                return ToolOutcome::error("cancelled");
-            }
-            ToolOutcome::text(output)
-        })
-    }
-}
-
-#[cfg(test)]
-fn parse_children(arguments: &Value) -> Result<Vec<HostedAgentSpec>, String> {
-    let entries = arguments
-        .get("children")
-        .and_then(Value::as_array)
-        .ok_or_else(|| {
-            "malformed arguments: `children` must be a non-empty array of objects".to_owned()
-        })?;
-    if entries.is_empty() {
-        return Err("malformed arguments: `children` cannot be empty".to_owned());
-    }
-    let mut specs = Vec::with_capacity(entries.len());
-    for entry in entries {
-        let objective = entry
-            .get("objective")
-            .and_then(Value::as_str)
-            .ok_or_else(|| "malformed child: `objective` must be a string".to_owned())?
-            .trim();
-        if objective.is_empty() {
-            return Err("malformed child: `objective` cannot be empty".to_owned());
-        }
-        let context_mode = match entry.get("context_mode").and_then(Value::as_str) {
-            None | Some("fresh") => HostedHistory::Fresh,
-            Some("fork_context") => HostedHistory::ForkContext,
-            Some(other) => {
-                return Err(format!(
-                    "malformed child: unsupported `context_mode` {other:?}"
-                ));
-            }
-        };
-        let model_override = match entry.get("model_override") {
-            None => None,
-            Some(value) => {
-                let model = value
-                    .as_str()
-                    .ok_or_else(|| "malformed child: `model_override` must be a string".to_owned())?
-                    .trim();
-                if model.is_empty() {
-                    return Err("malformed child: `model_override` cannot be empty".to_owned());
-                }
-                Some(model.to_owned())
-            }
-        };
-        specs.push(HostedAgentSpec {
-            objective: objective.to_owned(),
-            context_seed: entry
-                .get("context")
-                .and_then(|v| v.as_str())
-                .map(str::to_owned),
-            context_mode,
-            model_override,
-        });
-    }
-    Ok(specs)
-}
-
-/// Run one child to its terminal outcome and render the compact
-/// result: final assistant text plus the child session reference.
-#[cfg(test)]
-async fn run_child<P>(
-    config: Arc<HostedAgentConfig<P>>,
-    parent_id: SessionId,
-    spec: HostedAgentSpec,
-    cancel: CancellationToken,
-    progress: Option<ToolProgressSender>,
-) -> String
-where
-    P: Provider,
-{
-    let catalog = crate::tool::ToolCatalog::read_only(&config.cwd);
-    let provider = match spec.model_override.as_deref() {
-        Some(model_ref) => {
-            let Some(make_provider) = config.make_provider_for_model.as_ref() else {
-                return format!(
-                    "child failed: model override `{model_ref}` is unavailable [child parent: {parent_id}]"
-                );
-            };
-            make_provider(model_ref.to_owned())
-        }
-        None => (config.make_provider)(),
-    };
-    let fork_context_result = match spec.context_mode {
-        HostedHistory::Fresh => Ok(None),
-        HostedHistory::ForkContext => fork_context(&config.store, parent_id).await.map(Some),
-    };
-    let fork_context = match fork_context_result {
-        Ok(context) => context,
-        Err(err) => return format!("child failed: {err} [child parent: {parent_id}]"),
-    };
-    let prompt = compose_child_prompt(
-        &spec,
-        fork_context
-            .as_ref()
-            .and_then(|fork| fork.rendered.as_deref()),
-    );
-    let fork_source = fork_context
-        .as_ref()
-        .map(|fork| (parent_id, fork.source_entry_id));
-    let runtime = Runtime::start_child_with_resources(
-        provider,
-        catalog.clone(),
-        config.store.clone(),
-        Arc::new(crate::policy::DefaultPolicy),
-        config.budget,
-        crate::runtime::ChildSessionLineage {
-            control_parent: parent_id,
-            fork_source: fork_source.map(|(session_id, entry_id)| {
-                crate::runtime::SessionForkSource {
-                    session_id,
-                    entry_id,
-                }
-            }),
-        },
-        config.trusted_resources.clone(),
-    );
-    let child_id = runtime.session_id();
-    let session = runtime.session();
-    report_progress(
-        progress.as_ref(),
-        format!("child {child_id} started: {}", spec.objective),
-    )
-    .await;
-
-    // Subscribe before submit: live events predate subscribers.
-    let (_snapshot, mut events) = match session.subscribe().await {
-        Ok(subscription) => subscription,
-        Err(_) => {
-            let _ = session.close().await;
-            let _ = runtime.join().await;
-            let catalog_error = catalog.close().await.err();
-            return match catalog_error {
-                Some(err) => format!(
-                    "child failed: could not subscribe; catalog close error: {err} ({child_id})"
-                ),
-                None => format!("child failed: could not subscribe ({child_id})"),
-            };
-        }
-    };
-    let operation_id = match session.submit_if_idle(prompt).await {
-        Ok(operation_id) => operation_id,
-        Err(_) => {
-            let _ = session.close().await;
-            let _ = runtime.join().await;
-            let catalog_error = catalog.close().await.err();
-            return match catalog_error {
-                Some(err) => format!(
-                    "child failed: submit rejected; catalog close error: {err} ({child_id})"
-                ),
-                None => format!("child failed: submit rejected ({child_id})"),
-            };
-        }
-    };
-
-    let terminal = tokio::select! {
-        outcome = pump_child(&mut events, operation_id, child_id, progress.as_ref()) => outcome,
-        () = cancel.cancelled() => {
-            // §20.6: cancelling the parent cancels descendants; the
-            // child settles durably as cancelled on its own.
-            let _ = session.cancel(operation_id).await;
-            pump_child(&mut events, operation_id, child_id, progress.as_ref()).await
-        }
-    };
-
-    let close_result = session.close().await;
-    let join_result = runtime.join().await;
-    if let Err(err) = close_result {
-        return format!("child failed: close error: {err} [child session: {child_id}]");
-    }
-    if let Err(err) = join_result {
-        return format!("child failed: runtime join error: {err} [child session: {child_id}]");
-    }
-    if let Err(err) = catalog.close().await {
-        return format!("child failed: catalog close error: {err} [child session: {child_id}]");
-    }
-    match terminal {
-        ChildTerminal::Completed(text) => {
-            format!("{text}\n\n[child session: {child_id}]")
-        }
-        ChildTerminal::Failed(message) => {
-            format!("child failed: {message} [child session: {child_id}]")
-        }
-        ChildTerminal::Cancelled => {
-            format!("child cancelled [child session: {child_id}]")
-        }
-    }
-}
-
 struct ForkContext {
     rendered: Option<String>,
     source_entry_id: Option<crate::ids::EntryId>,
@@ -1237,14 +933,14 @@ async fn fork_context(store: &SessionStore, parent_id: SessionId) -> Result<Fork
     })
 }
 
-fn compose_child_prompt(spec: &HostedAgentSpec, fork: Option<&str>) -> String {
+fn compose_hosted_prompt(spec: &HostedAgentSpec, fork: Option<&str>) -> String {
     let mut prompt = spec.objective.clone();
     if let Some(fork) = fork {
         prompt.push_str("\n\n[Explicit fork of parent semantic context]\n");
         prompt.push_str(fork);
     }
     if let Some(seed) = &spec.context_seed {
-        prompt.push_str("\n\n[Explicit child context seed]\n");
+        prompt.push_str("\n\n[Explicit agent context seed]\n");
         prompt.push_str(seed);
     }
     prompt
@@ -1307,13 +1003,6 @@ fn truncate_context(text: &str, max_bytes: usize) -> String {
     format!("{}{}{}", &text[..head_end], marker, &text[tail_start..])
 }
 
-#[cfg(test)]
-enum ChildTerminal {
-    Completed(String),
-    Failed(String),
-    Cancelled,
-}
-
 async fn report_progress(progress: Option<&ToolProgressSender>, output: String) {
     if let Some(progress) = progress {
         let _ = progress
@@ -1321,100 +1010,5 @@ async fn report_progress(progress: Option<&ToolProgressSender>, output: String) 
                 output: bounded_progress_output(output),
             })
             .await;
-    }
-}
-
-/// Drain child events until the operation terminates, keeping the last
-/// assistant draft as the compact result.
-#[cfg(test)]
-async fn pump_child(
-    events: &mut crate::runtime::EventSubscription,
-    operation_id: crate::ids::OperationId,
-    child_id: SessionId,
-    progress: Option<&ToolProgressSender>,
-) -> ChildTerminal {
-    let mut draft = String::new();
-    loop {
-        let event = match events.recv().await {
-            Ok(event) => event,
-            Err(crate::RuntimeError::SubscriptionLagged) => {
-                // The compact result must not present silently
-                // incomplete deltas as the child's answer (§21.4).
-                report_progress(progress, format!("child {child_id} event stream lagged")).await;
-                return ChildTerminal::Failed("child event stream lagged".to_owned());
-            }
-            Err(_) => {
-                report_progress(progress, format!("child {child_id} event stream closed")).await;
-                return ChildTerminal::Failed("event stream closed".to_owned());
-            }
-        };
-        if event.operation_id() != Some(operation_id) {
-            continue;
-        }
-        match event {
-            crate::RuntimeEvent::AssistantTextDelta { text, .. } => {
-                draft.push_str(&text);
-            }
-            // Thinking and tool previews are parent-display-only; a
-            // child's terminal draft is its final assistant text.
-            crate::RuntimeEvent::ThinkingDelta { .. }
-            | crate::RuntimeEvent::ToolProgress { .. } => {}
-            crate::RuntimeEvent::OperationFinished { .. } => {
-                report_progress(progress, format!("child {child_id} finished")).await;
-                let result = if draft.is_empty() {
-                    "(no output)".to_owned()
-                } else {
-                    draft
-                };
-                return ChildTerminal::Completed(result);
-            }
-            crate::RuntimeEvent::OperationCancelled { .. } => {
-                report_progress(progress, format!("child {child_id} cancelled")).await;
-                return ChildTerminal::Cancelled;
-            }
-            crate::RuntimeEvent::OperationFailed { message, .. } => {
-                report_progress(progress, format!("child {child_id} failed: {message}")).await;
-                return ChildTerminal::Failed(message);
-            }
-            crate::RuntimeEvent::OperationIndeterminate { message, .. } => {
-                report_progress(
-                    progress,
-                    format!("child {child_id} indeterminate: {message}"),
-                )
-                .await;
-                return ChildTerminal::Failed(format!("indeterminate operation: {message}"));
-            }
-            crate::RuntimeEvent::OperationApprovalRequired { tool, .. } => {
-                report_progress(
-                    progress,
-                    format!("child {child_id} needs approval for `{tool}`"),
-                )
-                .await;
-                return ChildTerminal::Failed(format!(
-                    "approval required for `{tool}` (read-only child)"
-                ));
-            }
-            // Children are non-interactive and read-only: a parked
-            // approval cannot occur, so surface it as a failure if it
-            // ever does (defense, not a normal path).
-            crate::RuntimeEvent::ApprovalPending { tool, .. } => {
-                report_progress(
-                    progress,
-                    format!("child {child_id} needs approval for `{tool}`"),
-                )
-                .await;
-                return ChildTerminal::Failed(format!(
-                    "approval pending for `{tool}` (read-only child)"
-                ));
-            }
-            crate::RuntimeEvent::ToolStarted { tool, target, .. } => {
-                let target = target.map_or_else(String::new, |target| format!(" → {target}"));
-                report_progress(progress, format!("child {child_id} running {tool}{target}")).await;
-            }
-            crate::RuntimeEvent::ToolSettled { .. }
-            | crate::RuntimeEvent::UsageUpdate { .. }
-            | crate::RuntimeEvent::OperationStarted { .. }
-            | crate::RuntimeEvent::SessionClosed { .. } => {}
-        }
     }
 }

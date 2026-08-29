@@ -334,7 +334,7 @@ A root/session family owns one control authority above individual lanes/sessions
 - deterministic recovery/reattachment;
 - background completion routing.
 
-This is family-scoped, not one process-global mutable registry. Separate roots must not accidentally share namespaces, budgets, or cancellation trees. Retained identity and active execution capacity are separate: a completed agent may remain observable after releasing its execution permit. The remaining test-only synchronous delegation path is migration scaffolding rather than target architecture.
+This is family-scoped, not one process-global mutable registry. Separate roots must not accidentally share namespaces, budgets, or cancellation trees. Retained identity and active execution capacity are separate: a completed agent may remain observable after releasing its execution permit.
 
 Swarm/reviewer/supervisor strategies are ordinary compositions over this API, not privileged phases in the model loop.
 
@@ -451,7 +451,7 @@ The current workstream has already established:
 - tree-aware recovery that loads and validates every durable lane over the shared tree, with pending durable inbox restored per operation;
 - Rust 1.98.0 as the workspace/toolchain/CI contract.
 
-Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven across shared and separately hosted sessions, and agent messaging uses the durable input path. Lane/fresh/fork agents share one model-facing namespace and durable family authority; a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency. The current client snapshot still projects `main`; scoped capabilities and migration of the final test-only synchronous delegation fixture are the active boundary.
+Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven across shared and separately hosted sessions, and agent messaging uses the durable input path. Lane/fresh/fork agents share one model-facing namespace and durable family authority; a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency, with no parallel child/delegate execution architecture. The current client snapshot still projects `main`; scoped capabilities are the active boundary.
 
 ## 20. Implementation order
 

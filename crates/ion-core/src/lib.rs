@@ -28,8 +28,6 @@ pub use agent::{
     Error as AgentError, Family as AgentFamily, Observation as AgentObservation,
     Status as AgentStatus, agent_tools, install_agent_tools,
 };
-#[cfg(test)]
-pub use agent_host::DelegateTool;
 pub use agent_host::{
     HostedAgentConfig, HostedAgentRuntimes, agent_host_tools, hosted_agent_budget_default,
     hosted_agent_runtimes, install_agent_host_tools,
@@ -57,9 +55,9 @@ pub use provider::{
     ScriptedProvider, SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
-    ChildRuntimeConfig, ChildSessionLineage, EventSubscription, IndeterminateWarning,
-    LiveOperationState, OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent,
-    RuntimeHandle, SessionForkSource, SessionHandle, SessionSnapshot,
+    EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState,
+    OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
+    SessionHandle, SessionSnapshot,
 };
 pub use store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
