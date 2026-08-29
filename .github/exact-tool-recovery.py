@@ -84,6 +84,55 @@ replace_one(
     "approval recovery registry",
 )
 
+# The reconciliation fixture previously persisted an empty capability snapshot
+# while manufacturing a pending write effect. That state could never arise
+# through runtime admission and accidentally depended on recovery reacquiring
+# `write` from the live catalog. Give the fixture the real native registry
+# snapshot so it tests reconciliation rather than bypassing capability recovery.
+replace_one(
+    "crates/ion-core/src/tests/reconcile.rs",
+    '''    let operation_id = OperationId::generate();
+    let (mut machine, _) = OperationMachine::accept(operation_id, "go", Vec::new());
+''',
+    '''    let operation_id = OperationId::generate();
+    let capability_snapshot = ToolRegistry::with_cwd(cwd).capability_snapshot();
+    let (mut machine, _) = OperationMachine::accept(
+        operation_id,
+        "go",
+        capability_snapshot.tools.clone(),
+    );
+''',
+    "reconcile admitted capability fixture",
+)
+replace_one(
+    "crates/ion-core/src/tests/reconcile.rs",
+    '''            capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
+            open_effect: None,
+        },
+        capability_snapshot: CapabilitySnapshot::new(Vec::new()),
+''',
+    '''            capability_snapshot_id: capability_snapshot.id.clone(),
+            open_effect: None,
+        },
+        capability_snapshot: capability_snapshot.clone(),
+''',
+    "reconcile initial checkpoint snapshot",
+)
+replace_one(
+    "crates/ion-core/src/tests/reconcile.rs",
+    '''            capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
+            open_effect: Some(effect.clone()),
+        },
+        capability_snapshot: CapabilitySnapshot::new(Vec::new()),
+''',
+    '''            capability_snapshot_id: capability_snapshot.id.clone(),
+            open_effect: Some(effect.clone()),
+        },
+        capability_snapshot,
+''',
+    "reconcile pending checkpoint snapshot",
+)
+
 # Regression: if structural lane authority is narrowed after a crash but before
 # reopen, the persisted operation snapshot alone is not permission to reacquire
 # an executor. The reconstructed registry is snapshot identity intersected with
