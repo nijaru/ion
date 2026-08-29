@@ -64,6 +64,19 @@ text = compaction.read_text()
 assert "crate::session::SessionEntry" in text, "compaction migration path not found"
 compaction.write_text(text.replace("crate::session::SessionEntry", "crate::operation::SessionEntry"))
 
+operation = Path("crates/ion-core/src/operation/mod.rs")
+text = operation.read_text()
+old = """    /// The capability snapshot used for the current model step
+    /// (DESIGN.md §18.2).
+    #[must_use]
+    pub const fn step_tools(&self) -> &Vec<ToolSpec> {
+        &self.step_tools
+    }
+
+"""
+assert text.count(old) == 1, "step_tools accessor changed"
+operation.write_text(text.replace(old, "", 1))
+
 lib = Path("crates/ion-core/src/lib.rs")
 text = lib.read_text()
 old = """pub use operation::{
