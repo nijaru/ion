@@ -54,6 +54,11 @@ impl ExtensionService {
             let def = def.clone();
             let service = catalog.service_handle();
             let name = def.name.clone();
+            // The configured extension owns this structural identity before
+            // its first successful tools/list. Live generations may come and
+            // go without changing the lane's admitted scope.
+            let scope = format!("ext:{name}");
+            service.declare_scope(scope.clone());
             let peer_service = service.clone();
             let spawned = service.spawn(async move {
                 supervise_tool_peer(
@@ -62,7 +67,7 @@ impl ExtensionService {
                         command: def.command,
                         args: def.args,
                     },
-                    format!("ext:{name}"),
+                    scope,
                     peer_service,
                     Some(ready_tx),
                     "extension",

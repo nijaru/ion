@@ -53,6 +53,11 @@ impl McpService {
             let def = def.clone();
             let service = catalog.service_handle();
             let name = def.name.clone();
+            // Structural identity belongs to configuration, not successful
+            // discovery. A later supervisor restart republishes a generation
+            // inside the same already-admitted scope.
+            let scope = format!("mcp:{name}");
+            service.declare_scope(scope.clone());
             let peer_service = service.clone();
             let spawned = service.spawn(async move {
                 supervise_tool_peer(
@@ -62,7 +67,7 @@ impl McpService {
                         args: def.args,
                     },
                     // Namespaced scope so two servers cannot collide.
-                    format!("mcp:{name}"),
+                    scope,
                     peer_service,
                     Some(ready_tx),
                     "MCP server",

@@ -387,6 +387,66 @@ async fn admitted_scope_refreshes_without_admitting_an_unrelated_scope() {
 }
 
 #[tokio::test]
+async fn declared_scope_can_publish_after_session_start() {
+    struct LateTool;
+    impl Tool for LateTool {
+        fn spec(&self) -> ToolSpec {
+            ToolSpec {
+                name: "late".to_owned(),
+                description: "late discovered capability".to_owned(),
+                input_schema: json!({"type": "object", "required": []}),
+            }
+        }
+
+        fn call<'a>(
+            &'a self,
+            _arguments: serde_json::Value,
+            _cancel: CancellationToken,
+        ) -> std::pin::Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+            Box::pin(async { ToolOutcome::text("late") })
+        }
+    }
+
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(100),
+        ..SharedLogProvider::default()
+    };
+    let catalog = ToolCatalog::default();
+    let service = catalog.service_handle();
+    service.declare_scope("late-scope".to_owned());
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy(provider.clone(), catalog, store, permissive_policy());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("goal").await.expect("submit");
+    loop {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("event")
+            .expect("recv");
+        if matches!(event, RuntimeEvent::AssistantTextDelta { .. }) {
+            break;
+        }
+    }
+    assert!(
+        !provider.requests()[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "late")
+    );
+
+    service.register_scope("late-scope".to_owned(), vec![Arc::new(LateTool)]);
+    session.steer("continue").await.expect("steer");
+    collect_until_terminal(&mut events).await.expect("collect");
+    let requests = provider.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(requests[1].tools.iter().any(|tool| tool.name == "late"));
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn steer_projection_reaches_the_next_model_step() {
     // The steer must land while the first step is in its settle delay, so
     // it queues and applies at the next continuation boundary.

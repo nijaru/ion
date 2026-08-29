@@ -14,6 +14,9 @@ use tokio::task::JoinSet;
 #[derive(Clone)]
 pub struct ToolCatalog {
     core: ToolRegistry,
+    /// Structural scope identities owned by the host, independent of whether
+    /// a peer currently has a live tool generation published.
+    declared_scopes: Arc<std::sync::RwLock<BTreeSet<String>>>,
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
     generations: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     active_mcp_scopes: Arc<std::sync::RwLock<HashSet<String>>>,
@@ -90,6 +93,7 @@ impl Drop for CatalogLifetime {
 
 #[derive(Clone)]
 pub(crate) struct CatalogService {
+    declared_scopes: Arc<std::sync::RwLock<BTreeSet<String>>>,
     dynamic: Arc<std::sync::RwLock<HashMap<String, Vec<ToolEntry>>>>,
     generations: Arc<std::sync::RwLock<HashMap<String, u64>>>,
     lifetime: std::sync::Weak<CatalogLifetime>,
@@ -125,6 +129,16 @@ fn dynamic_entries(
 }
 
 impl CatalogService {
+    /// Declare the stable structural identity before discovery. A peer may be
+    /// temporarily unavailable without turning its later generation into a
+    /// newly ambient capability.
+    pub(crate) fn declare_scope(&self, scope: String) {
+        self.declared_scopes
+            .write()
+            .expect("tool catalog poisoned")
+            .insert(scope);
+    }
+
     pub(crate) fn register_scope(&self, scope: String, tools: Vec<Arc<dyn Tool>>) {
         let generation = next_generation(&self.generations, &scope);
         self.dynamic.write().expect("tool catalog poisoned").insert(
@@ -187,6 +201,10 @@ impl ToolCatalog {
     /// caller's contract (§19.2).
     pub fn register_scope(&self, scope: impl Into<String>, tools: Vec<Arc<dyn Tool>>) {
         let scope = scope.into();
+        self.declared_scopes
+            .write()
+            .expect("tool catalog poisoned")
+            .insert(scope.clone());
         let generation = next_generation(&self.generations, &scope);
         self.dynamic.write().expect("tool catalog poisoned").insert(
             scope.clone(),
@@ -203,6 +221,10 @@ impl ToolCatalog {
         tools: Vec<Arc<dyn Tool>>,
     ) {
         let scope = scope.into();
+        self.declared_scopes
+            .write()
+            .expect("tool catalog poisoned")
+            .insert(scope.clone());
         let generation = next_generation(&self.generations, &scope);
         self.dynamic.write().expect("tool catalog poisoned").insert(
             scope.clone(),
@@ -210,7 +232,8 @@ impl ToolCatalog {
         );
     }
 
-    /// Remove a scope; future snapshots no longer include its tools.
+    /// Unpublish a scope's current live generation. Its structural identity
+    /// remains declared: temporary peer loss must not revoke lane authority.
     /// Returns false when the scope was not registered.
     pub fn remove_scope(&self, scope: &str) -> bool {
         self.dynamic
@@ -271,6 +294,7 @@ impl ToolCatalog {
     /// with the catalog lifetime and are drained by [`Self::close`].
     pub(crate) fn service_handle(&self) -> CatalogService {
         CatalogService {
+            declared_scopes: Arc::clone(&self.declared_scopes),
             dynamic: Arc::clone(&self.dynamic),
             generations: Arc::clone(&self.generations),
             lifetime: Arc::downgrade(&self.lifetime),
@@ -306,19 +330,21 @@ impl ToolCatalog {
         }
     }
 
-    /// Dynamic scopes that are physically published to future model-step
-    /// snapshots right now. Inactive MCP scopes are deliberately excluded.
+    /// Structural identities the current host may admit to a lane. This is
+    /// deliberately independent of live discovery: a configured peer that is
+    /// temporarily unavailable keeps the same authority across restart, while
+    /// model-step snapshots still require a live generation.
     #[must_use]
-    pub(crate) fn published_scopes(&self) -> BTreeSet<String> {
+    pub(crate) fn admission_scopes(&self) -> BTreeSet<String> {
         let active_mcp_scopes = self
             .active_mcp_scopes
             .read()
             .expect("active MCP scope set poisoned")
             .clone();
-        self.dynamic
+        self.declared_scopes
             .read()
             .expect("tool catalog poisoned")
-            .keys()
+            .iter()
             .filter(|scope| {
                 !scope.starts_with("mcp:") || active_mcp_scopes.contains(scope.as_str())
             })
@@ -397,6 +423,7 @@ impl From<ToolRegistry> for ToolCatalog {
     fn from(core: ToolRegistry) -> Self {
         Self {
             core,
+            declared_scopes: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
             generations: Arc::new(std::sync::RwLock::new(HashMap::new())),
             active_mcp_scopes: Arc::new(std::sync::RwLock::new(HashSet::new())),
@@ -447,6 +474,44 @@ mod catalog_tests {
         assert!(catalog.remove_scope("server-a"));
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
         assert!(!catalog.remove_scope("server-a"), "double remove is false");
+    }
+
+    #[test]
+    fn declared_scope_survives_transient_unpublication() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        let service = catalog.service_handle();
+        service.declare_scope("server-a".to_owned());
+        let admitted = crate::session::lane::ScopeGrant::from_published(catalog.admission_scopes());
+        assert!(
+            catalog
+                .snapshot_for_scopes(&admitted)
+                .get("mcp_echo")
+                .is_none()
+        );
+
+        service.register_scope("server-a".to_owned(), vec![Arc::new(EchoTool)]);
+        assert!(
+            catalog
+                .snapshot_for_scopes(&admitted)
+                .get("mcp_echo")
+                .is_some()
+        );
+        assert!(service.remove_scope("server-a"));
+        assert!(
+            catalog
+                .snapshot_for_scopes(&admitted)
+                .get("mcp_echo")
+                .is_none()
+        );
+        assert!(catalog.admission_scopes().contains("server-a"));
+
+        service.register_scope("server-a".to_owned(), vec![Arc::new(EchoTool)]);
+        assert!(
+            catalog
+                .snapshot_for_scopes(&admitted)
+                .get("mcp_echo")
+                .is_some()
+        );
     }
 
     #[test]
