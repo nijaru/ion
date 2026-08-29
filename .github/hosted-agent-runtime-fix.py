@@ -30,5 +30,8 @@ if resume_count != 1:
     raise SystemExit(f"host resume call: expected 1 structural match, found {resume_count}")
 
 """
+# `structural` is itself source for a Python raw regex; collapse the doubled
+# escapes introduced by this helper so the generated matcher sees regex tokens.
+structural = structural.replace("\\\\", "\\")
 text = text[:start] + structural + text[end:]
 p.write_text(text)
