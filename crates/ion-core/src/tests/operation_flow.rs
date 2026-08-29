@@ -301,12 +301,12 @@ async fn model_step_request_carries_step_tool_specs() {
 }
 
 #[tokio::test]
-async fn capability_snapshot_refreshes_at_each_model_step() {
-    struct DynamicTool;
+async fn admitted_scope_refreshes_without_admitting_an_unrelated_scope() {
+    struct DynamicTool(&'static str);
     impl Tool for DynamicTool {
         fn spec(&self) -> ToolSpec {
             ToolSpec {
-                name: "dynamic".to_owned(),
+                name: self.0.to_owned(),
                 description: "dynamic test capability".to_owned(),
                 input_schema: json!({"type": "object", "required": []}),
             }
@@ -326,6 +326,7 @@ async fn capability_snapshot_refreshes_at_each_model_step() {
         ..SharedLogProvider::default()
     };
     let catalog = ToolCatalog::default();
+    catalog.register_scope("dynamic", vec![Arc::new(DynamicTool("dynamic-v1"))]);
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_with_policy(
         provider.clone(),
@@ -345,13 +346,42 @@ async fn capability_snapshot_refreshes_at_each_model_step() {
             break;
         }
     }
-    catalog.register_scope("dynamic", vec![Arc::new(DynamicTool)]);
+    catalog.register_scope("dynamic", vec![Arc::new(DynamicTool("dynamic-v2"))]);
+    catalog.register_scope("unrelated", vec![Arc::new(DynamicTool("unrelated"))]);
     session.steer("continue").await.expect("steer");
     collect_until_terminal(&mut events).await.expect("collect");
     let requests = provider.requests();
     assert_eq!(requests.len(), 2);
-    assert!(!requests[0].tools.iter().any(|tool| tool.name == "dynamic"));
-    assert!(requests[1].tools.iter().any(|tool| tool.name == "dynamic"));
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "dynamic-v1")
+    );
+    assert!(
+        !requests[0]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "dynamic-v2")
+    );
+    assert!(
+        requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "dynamic-v2")
+    );
+    assert!(
+        !requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "dynamic-v1")
+    );
+    assert!(
+        !requests[1]
+            .tools
+            .iter()
+            .any(|tool| tool.name == "unrelated")
+    );
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }

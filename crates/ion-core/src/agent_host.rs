@@ -536,13 +536,18 @@ pub fn agent_host_tools<P: Provider + 'static>(
     .collect()
 }
 
+const AGENT_SCOPE: &str = "agents";
+
 /// Publish the unified agent namespace as structural host capabilities.
-pub fn install_agent_host_tools<P: Provider + 'static>(
+pub async fn install_agent_host_tools<P: Provider + 'static>(
     catalog: &crate::tool::ToolCatalog,
+    runtime: &Runtime,
     family: Arc<crate::agent::Family>,
     hosted: Arc<HostedAgentRuntimes<P>>,
-) {
-    catalog.register_structural_scope("agents", agent_host_tools(family, hosted));
+) -> Result<(), crate::agent::Error> {
+    catalog.register_structural_scope(AGENT_SCOPE, agent_host_tools(family, hosted));
+    runtime.admit_structural_scope(AGENT_SCOPE).await?;
+    Ok(())
 }
 
 impl<P: Provider + 'static> Tool for HostAgentTool<P> {
