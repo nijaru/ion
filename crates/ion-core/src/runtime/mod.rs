@@ -33,13 +33,13 @@ use crate::harness::HarnessProfile;
 use crate::ids::{
     AgentId, EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,
 };
+use crate::operation::{
+    EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
+    SessionEntry, Transition,
+};
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
 use crate::provider::{
     EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, TokenUsage,
-};
-use crate::session::{
-    EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome, OperationState,
-    SessionEntry, Transition,
 };
 use crate::store::{
     AssistantFrame, CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord,

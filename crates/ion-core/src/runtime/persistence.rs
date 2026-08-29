@@ -1,5 +1,5 @@
 use crate::ids::{EffectId, InboxId, SessionId};
-use crate::session::SessionEntry;
+use crate::operation::SessionEntry;
 use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
     SettledEffect, UsageRecord,

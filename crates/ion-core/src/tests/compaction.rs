@@ -310,7 +310,7 @@ async fn context_overflow_compacts_once_and_retries() {
     assert!(
         loaded.entries.iter().any(|record| matches!(
             &record.entry,
-            crate::session::SessionEntry::Compaction { .. }
+            crate::operation::SessionEntry::Compaction { .. }
         )),
         "the overflow compaction must be durable"
     );

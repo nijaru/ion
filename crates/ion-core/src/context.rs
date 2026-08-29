@@ -10,7 +10,7 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
-use crate::session::SessionEntry;
+use crate::operation::SessionEntry;
 use crate::tool::{ToolCall, ToolSpec};
 
 /// The small, stable system section every model step sees (DESIGN.md

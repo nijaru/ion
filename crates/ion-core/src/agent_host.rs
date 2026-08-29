@@ -18,9 +18,9 @@ use tokio_util::sync::CancellationToken;
 
 use crate::context::{ContextMessage, ContextPlan, TrustedResource, project};
 use crate::ids::{AgentId, OperationId, SessionId};
+use crate::operation::OperationState;
 use crate::provider::Provider;
 use crate::runtime::{Runtime, RuntimeBudget};
-use crate::session::OperationState;
 use crate::store::SessionStore;
 use crate::tool::{
     Tool, ToolOutcome, ToolProgress, ToolProgressSender, ToolSpec, bounded_progress_output,
