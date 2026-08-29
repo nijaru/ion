@@ -1,4 +1,5 @@
 use super::support::*;
+use crate::{DEFAULT_HARNESS_PROFILE_ID, DurableEffect, HarnessProfile};
 
 struct AgentScopeTool {
     name: &'static str,
@@ -56,6 +57,24 @@ async fn resumed_interactive_recovery_uses_frozen_agents_scope_snapshot() {
         "the initial provider must not start before the crash boundary"
     );
     let loaded = store.load(session_id).await.expect("load");
+    let open = loaded.operations[0]
+        .latest
+        .1
+        .open_effect
+        .as_ref()
+        .expect("pending model effect");
+    let DurableEffect::ModelStep(model_step) = open.decode().expect("typed model effect") else {
+        panic!("expected model-step effect");
+    };
+    assert_eq!(model_step.harness_profile, HarnessProfile::default_v1());
+    assert_eq!(
+        open.effective_input
+            .get("harness_profile")
+            .and_then(|profile| profile.get("id"))
+            .and_then(serde_json::Value::as_str),
+        Some(DEFAULT_HARNESS_PROFILE_ID),
+        "new runtime writers persist the harness profile explicitly"
+    );
     let frozen = &loaded.operations[0].capability_snapshot;
     assert!(
         frozen

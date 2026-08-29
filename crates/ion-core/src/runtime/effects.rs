@@ -408,17 +408,21 @@ impl<P: Provider> SessionRuntime<P> {
             })
             .into_iter()
             .collect();
-        let effect = EffectRecord {
-            id: EffectId::generate(),
-            kind: "compaction".to_owned(),
-            recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({
-                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
-                "model": model,
-                "plan": plan
+        let effect = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Compaction(CompactionInvocation {
+                step: self
+                    .live_mut(operation_id)
+                    .expect("main operation residency exists")
+                    .model_step
+                    + 1,
+                model: model.clone(),
+                plan: plan.clone(),
+                harness_profile: HarnessProfile::default_v1(),
             }),
-            attempt: 1,
-        };
+            RecoveryClass::ReplaySafe,
+            1,
+        );
         staged.open_effect = Some(effect.clone());
         let (mut request, new_entry_seq) = build_commit_request(
             self.session_id,
