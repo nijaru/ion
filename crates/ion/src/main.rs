@@ -198,6 +198,17 @@ async fn build_catalog(
 }
 
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
+    // Validate pure UI configuration before acquiring terminal, store, runtime,
+    // or agent-host ownership. A malformed binding must not create durable
+    // session state merely because interactive startup was attempted.
+    let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
+        Ok(keymap) => keymap,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "settings: {err}");
+            return ExitCode::from(2);
+        }
+    };
+
     // The runtime owns model selection: /model <id> commits a durable
     // change through SessionHandle::switch_model and applies at the
     // next step boundary. The host only composes the resolver factory
@@ -382,19 +393,6 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             }
             let _ = store.close().await;
             return ExitCode::FAILURE;
-        }
-    };
-    let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
-        Ok(keymap) => keymap,
-        Err(err) => {
-            let _ = writeln!(io::stderr(), "settings: {err}");
-            if let Err(agent_err) = agent_host.close().await {
-                tracing::error!(error = %agent_err, "failed to close agent host");
-            }
-            if let Err(close_err) = tools.close().await {
-                tracing::error!(error = %close_err, "failed to close the tool catalog");
-            }
-            return ExitCode::from(2);
         }
     };
     let session = runtime.session();
