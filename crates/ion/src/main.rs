@@ -197,6 +197,14 @@ async fn build_catalog(
     Ok(tools)
 }
 
+fn restore_tui_startup_terminal(mut terminal: ion_terminal::TerminalSession) {
+    let restore_error = terminal.restore().err();
+    drop(terminal);
+    if let Some(err) = restore_error {
+        let _ = writeln!(io::stderr(), "terminal restore failed: {err}");
+    }
+}
+
 async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     // Validate pure UI configuration before acquiring terminal, store, runtime,
     // or agent-host ownership. A malformed binding must not create durable
@@ -295,6 +303,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let store = match SessionStore::open(default_db_path()) {
         Ok(store) => Arc::new(store),
         Err(err) => {
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "store: {err}");
             return ExitCode::FAILURE;
         }
@@ -305,11 +314,19 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         match store.latest_session().await {
             Ok(Some(id)) => Some(id),
             Ok(None) => {
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "no persisted session to resume");
+                if let Err(close_err) = store.close().await {
+                    tracing::error!(error = %close_err, "failed to close the session store");
+                }
                 return ExitCode::from(2);
             }
             Err(err) => {
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "store: {err}");
+                if let Err(close_err) = store.close().await {
+                    tracing::error!(error = %close_err, "failed to close the session store");
+                }
                 return ExitCode::FAILURE;
             }
         }
@@ -319,23 +336,35 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
         Err(err) => {
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "cwd: {err}");
+            if let Err(close_err) = store.close().await {
+                tracing::error!(error = %close_err, "failed to close the session store");
+            }
             return ExitCode::FAILURE;
         }
     };
     let tools = match build_catalog(settings, cli).await {
         Ok(tools) => tools,
         Err(err) => {
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "cwd: {err}");
+            if let Err(close_err) = store.close().await {
+                tracing::error!(error = %close_err, "failed to close the session store");
+            }
             return ExitCode::FAILURE;
         }
     };
     let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {
         Ok(resources) => resources,
         Err(err) => {
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "trusted resources: {err}");
             if let Err(close_err) = tools.close().await {
                 tracing::error!(error = %close_err, "failed to close the tool catalog");
+            }
+            if let Err(close_err) = store.close().await {
+                tracing::error!(error = %close_err, "failed to close the session store");
             }
             return ExitCode::FAILURE;
         }
@@ -356,9 +385,13 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         {
             Ok(runtime) => runtime,
             Err(err) => {
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "resume: {err}");
                 if let Err(close_err) = tools.close().await {
                     tracing::error!(error = %close_err, "failed to close the tool catalog");
+                }
+                if let Err(close_err) = store.close().await {
+                    tracing::error!(error = %close_err, "failed to close the session store");
                 }
                 return ExitCode::FAILURE;
             }
@@ -385,13 +418,20 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     {
         Ok(host) => host,
         Err(err) => {
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "agents: {err}");
-            let _ = runtime.session().close().await;
-            let _ = runtime.join().await;
+            if let Err(close_err) = runtime.session().close().await {
+                tracing::error!(error = %close_err, "failed to close session after agent-host startup failure");
+            }
+            if let Err(join_err) = runtime.join().await {
+                tracing::error!(error = %join_err, "runtime join failed after agent-host startup failure");
+            }
             if let Err(close_err) = tools.close().await {
                 tracing::error!(error = %close_err, "failed to close the tool catalog");
             }
-            let _ = store.close().await;
+            if let Err(close_err) = store.close().await {
+                tracing::error!(error = %close_err, "failed to close the session store");
+            }
             return ExitCode::FAILURE;
         }
     };
