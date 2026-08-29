@@ -240,3 +240,5 @@ replace_one(
     '''Shared-history and separately hosted admission both publish durable lane capability selections that may narrow but never exceed the control parent. Recovery reconstructs an operation registry by intersecting its immutable capability snapshot with the lane's current structural selection; it never reacquires an executor from a later live catalog snapshot.''',
     "design exact recovery checkpoint",
 )
+
+# Trigger this one-shot only after the baseline test fixture is known-good.
