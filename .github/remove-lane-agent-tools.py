@@ -86,6 +86,48 @@ replace_one(
     "lane read-only test setup",
 )
 
+# The old wrapper-specific spawn/wait test is subsumed by the immediately
+# following unified-host test, which exercises the same lane spawn/wait result
+# path plus fresh/fork routing through the sole production namespace.
+replace_one(
+    "crates/ion-core/src/tests/agent_family.rs",
+    '''#[tokio::test]
+async fn model_facing_agent_tools_use_family_authority_and_report_exact_result() {
+    let provider = SharedLogProvider::default();
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
+    let tools = crate::agent_tools(Arc::clone(&family));
+
+    let spawn = tools[0]
+        .call(
+            json!({"objective": "inspect the shared branch"}),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!spawn.is_error, "spawn failed: {spawn:?}");
+    let handle = spawn
+        .output
+        .lines()
+        .find_map(|line| line.strip_prefix("agent handle: "))
+        .expect("durable agent handle")
+        .to_owned();
+
+    let waited = tools[3]
+        .call(json!({"handle": handle}), CancellationToken::new())
+        .await;
+    assert!(!waited.is_error, "wait failed: {waited:?}");
+    assert!(waited.output.contains("finished"), "{waited:?}");
+    assert!(waited.output.contains("working"), "{waited:?}");
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+''',
+    "obsolete model-facing lane-agent test",
+)
+
 replace_one(
     "DESIGN.md",
     '''Lane/fresh/fork agents share one model-facing namespace and durable family authority; a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency, with no parallel child/delegate execution architecture. Shared-history and separately hosted admission both publish durable lane capability selections that may narrow but never exceed the control parent, and recovery re-applies that stored selection to the available executor catalog. The current client snapshot still projects `main`; scoped capability lifecycle beyond this admission boundary remains active work.
