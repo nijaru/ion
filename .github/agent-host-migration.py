@@ -11,7 +11,8 @@ def splice(text: str, start_marker: str, end_marker: str, replacement: str, labe
 
 
 # Application-level host ownership: one object retains the durable
-# same-session family plus the temporary fresh/fork runtime manager.
+# same-session family plus the temporary fresh/fork runtime manager. Preserve
+# the host's concrete provider enum/impl between the two legacy helper blocks.
 p = Path("crates/ion/src/lib.rs")
 text = p.read_text()
 replacement = '''/// Process-owned agent service for one root runtime. Same-session lane agents
@@ -94,9 +95,16 @@ where
 text = splice(
     text,
     "/// Attach the durable shared-history agent family",
-    "/// Build the scripted-provider factory",
+    "/// The host's provider choice",
     replacement,
-    "ion lib agent helpers",
+    "ion lib family helper",
+)
+text = splice(
+    text,
+    "/// Register the bounded-child delegation surface",
+    "/// Build the scripted-provider factory",
+    "",
+    "ion lib child helpers",
 )
 p.write_text(text)
 
@@ -189,6 +197,15 @@ text = text.replace(
     "/// Attach shared-history family controls plus the separate-session\n/// fresh/fork child migration surface, then wrap the runtime in ACP state.",
     "/// Attach the root runtime's single agent host, then wrap it in ACP state.",
     1,
+)
+text = text.replace(
+    "    session_id: ion_core::SessionId,\n",
+    "",
+    1,
+)
+text = text.replace(
+    "attach_session(config, &catalog, runtime, session_id, trusted_resources)",
+    "attach_session(config, &catalog, runtime, trusted_resources)",
 )
 acp_attach = '''    let agent_host = match crate::enable_agent_host(
         catalog,
