@@ -151,12 +151,32 @@ impl EffectRecord {
     /// instead of guessing.
     pub fn decode(&self) -> Result<DurableEffect, String> {
         match self.kind.as_str() {
-            "model_step" => serde_json::from_value(self.effective_input.clone())
-                .map(DurableEffect::ModelStep)
-                .map_err(|err| format!("invalid durable model-step effect {}: {err}", self.id)),
-            "compaction" => serde_json::from_value(self.effective_input.clone())
-                .map(DurableEffect::Compaction)
-                .map_err(|err| format!("invalid durable compaction effect {}: {err}", self.id)),
+            "model_step" => {
+                let plan: ModelStepPlan = serde_json::from_value(self.effective_input.clone())
+                    .map_err(|err| {
+                        format!("invalid durable model-step effect {}: {err}", self.id)
+                    })?;
+                if !plan.harness_profile.is_supported() {
+                    return Err(format!(
+                        "unsupported durable model-step harness profile `{}` in effect {}",
+                        plan.harness_profile.id, self.id
+                    ));
+                }
+                Ok(DurableEffect::ModelStep(plan))
+            }
+            "compaction" => {
+                let invocation: CompactionInvocation =
+                    serde_json::from_value(self.effective_input.clone()).map_err(|err| {
+                        format!("invalid durable compaction effect {}: {err}", self.id)
+                    })?;
+                if !invocation.harness_profile.is_supported() {
+                    return Err(format!(
+                        "unsupported durable compaction harness profile `{}` in effect {}",
+                        invocation.harness_profile.id, self.id
+                    ));
+                }
+                Ok(DurableEffect::Compaction(invocation))
+            }
             kind if kind.starts_with("tool:") => {
                 let invocation: ToolInvocation =
                     serde_json::from_value(self.effective_input.clone())
@@ -273,6 +293,36 @@ mod tests {
             panic!("expected compaction");
         };
         assert_eq!(decoded.harness_profile, HarnessProfile::default_v1());
+    }
+
+    #[test]
+    fn unsupported_harness_profiles_fail_at_the_typed_decode_boundary() {
+        let mut model_step = model_step_plan();
+        model_step.harness_profile = HarnessProfile {
+            id: "ion/default@2".to_owned(),
+        };
+        let model_record = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::ModelStep(model_step),
+            RecoveryClass::ReplaySafe,
+            1,
+        );
+        assert!(model_record.decode().is_err());
+
+        let compaction_record = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Compaction(CompactionInvocation {
+                step: 3,
+                model: model_step_plan().model,
+                plan: model_step_plan().plan,
+                harness_profile: HarnessProfile {
+                    id: "ion/default@2".to_owned(),
+                },
+            }),
+            RecoveryClass::ReplaySafe,
+            1,
+        );
+        assert!(compaction_record.decode().is_err());
     }
 
     #[test]

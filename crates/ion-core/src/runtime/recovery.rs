@@ -70,20 +70,25 @@ impl<P: Provider> SessionRuntime<P> {
                         self.closed = true;
                         return;
                     };
-                    let Some((
-                        step,
-                        model,
-                        plan,
-                        persisted_snapshot_id,
-                        persisted_manifest_id,
-                        persisted_prefix_fingerprint,
-                        persisted_cache_expectation,
-                    )) = model_step_from_input(&open.effective_input)
-                    else {
-                        error!(session = %self.session_id, "pending model step lacks an exact model snapshot; fencing");
-                        self.closed = true;
-                        return;
+                    let model_step = match open.decode() {
+                        Ok(DurableEffect::ModelStep(plan)) => plan,
+                        Ok(other) => {
+                            error!(session = %self.session_id, effect = %open.id, ?other, "pending model-step state has the wrong durable effect kind; fencing");
+                            self.closed = true;
+                            return;
+                        }
+                        Err(err) => {
+                            error!(session = %self.session_id, effect = %open.id, %err, "pending model step has an invalid durable effect; fencing");
+                            self.closed = true;
+                            return;
+                        }
                     };
+                    let step = model_step.step;
+                    let model = model_step.model;
+                    let plan = model_step.plan;
+                    let persisted_snapshot_id = model_step.capability_snapshot_id;
+                    let persisted_manifest_id = model_step.context_manifest_id;
+                    let persisted_prefix_fingerprint = model_step.prefix_fingerprint;
                     let mut staged = self
                         .active(operation_id)
                         .cloned()
@@ -92,7 +97,6 @@ impl<P: Provider> SessionRuntime<P> {
                     if snapshot_id != persisted_snapshot_id
                         || persisted_manifest_id.is_empty()
                         || persisted_prefix_fingerprint.is_empty()
-                        || persisted_cache_expectation.is_empty()
                     {
                         error!(session = %self.session_id, "pending model step capability snapshot disagrees with checkpoint; fencing");
                         self.closed = true;
@@ -168,12 +172,22 @@ impl<P: Provider> SessionRuntime<P> {
                         self.closed = true;
                         return;
                     };
-                    let Some((step, model, plan)) = compaction_from_input(&open.effective_input)
-                    else {
-                        error!(session = %self.session_id, "pending compaction lacks an exact model snapshot; fencing");
-                        self.closed = true;
-                        return;
+                    let compaction = match open.decode() {
+                        Ok(DurableEffect::Compaction(invocation)) => invocation,
+                        Ok(other) => {
+                            error!(session = %self.session_id, effect = %open.id, ?other, "pending compaction state has the wrong durable effect kind; fencing");
+                            self.closed = true;
+                            return;
+                        }
+                        Err(err) => {
+                            error!(session = %self.session_id, effect = %open.id, %err, "pending compaction has an invalid durable effect; fencing");
+                            self.closed = true;
+                            return;
+                        }
                     };
+                    let step = compaction.step;
+                    let model = compaction.model;
+                    let plan = compaction.plan;
                     let mut staged = self
                         .active(operation_id)
                         .cloned()
@@ -226,6 +240,19 @@ impl<P: Provider> SessionRuntime<P> {
                         self.closed = true;
                         return;
                     };
+                    let invocation = match open.decode() {
+                        Ok(DurableEffect::Tool(invocation)) => invocation,
+                        Ok(other) => {
+                            error!(session = %self.session_id, effect = %open.id, ?other, "pending tool state has the wrong durable effect kind; fencing");
+                            self.closed = true;
+                            return;
+                        }
+                        Err(err) => {
+                            error!(session = %self.session_id, effect = %open.id, %err, "pending tool has an invalid durable effect; fencing");
+                            self.closed = true;
+                            return;
+                        }
+                    };
                     match open.recovery_class {
                         RecoveryClass::ReplaySafe => {
                             let operation_id = self
@@ -233,13 +260,7 @@ impl<P: Provider> SessionRuntime<P> {
                                 .expect("operation present")
                                 .machine
                                 .operation_id();
-                            let Some((call, _invocation)) =
-                                tool_call_from_input(operation_id, &open.effective_input)
-                            else {
-                                error!(session = %self.session_id, effect = %open.id, "pending replay-safe tool has an invalid durable invocation; fencing");
-                                self.closed = true;
-                                return;
-                            };
+                            let call = invocation.clone().into_call(operation_id);
                             let mut staged = self
                                 .active(operation_id)
                                 .cloned()
@@ -338,17 +359,11 @@ impl<P: Provider> SessionRuntime<P> {
                                 .expect("operation present")
                                 .machine
                                 .operation_id();
-                            let Some((call, invocation)) =
-                                tool_call_from_input(operation_id, &open.effective_input)
-                            else {
-                                error!(session = %self.session_id, effect = %open.id, "pending reconcilable tool has an invalid durable invocation; fencing");
-                                self.closed = true;
-                                return;
-                            };
                             let evidence = invocation
                                 .reconciliation
                                 .clone()
                                 .unwrap_or(serde_json::Value::Null);
+                            let call = invocation.clone().into_call(operation_id);
                             let verdict = match &evidence {
                                 serde_json::Value::Null => crate::tool::ReconcileVerdict::Unknown,
                                 evidence => match evidence.get("path").and_then(|v| v.as_str()) {

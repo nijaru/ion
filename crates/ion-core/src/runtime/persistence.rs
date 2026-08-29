@@ -1,67 +1,11 @@
-use crate::effect::{CompactionInvocation, ModelStepPlan, ToolInvocation};
-use crate::ids::{EffectId, InboxId, OperationId, SessionId};
-use crate::provider::ModelConfig;
+use crate::ids::{EffectId, InboxId, SessionId};
 use crate::session::SessionEntry;
 use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,
     SettledEffect, UsageRecord,
 };
-use crate::tool::ToolCall;
 
 use super::ActiveOperation;
-
-/// Decode one persisted model-step plan through the typed durable boundary.
-/// The owner module still consumes the historical tuple shape; JSON field
-/// knowledge and harness-profile validation stay here.
-pub(super) fn model_step_from_input(
-    input: &serde_json::Value,
-) -> Option<(
-    u64,
-    ModelConfig,
-    crate::context::ContextPlan,
-    String,
-    String,
-    String,
-    String,
-)> {
-    let model_step: ModelStepPlan = serde_json::from_value(input.clone()).ok()?;
-    if !model_step.harness_profile.is_supported() {
-        return None;
-    }
-    Some((
-        model_step.step,
-        model_step.model,
-        model_step.plan,
-        model_step.capability_snapshot_id,
-        model_step.context_manifest_id,
-        model_step.prefix_fingerprint,
-        model_step.cache_expectation.as_str().to_owned(),
-    ))
-}
-
-/// Decode one persisted harness-owned compaction invocation.
-pub(super) fn compaction_from_input(
-    input: &serde_json::Value,
-) -> Option<(u64, ModelConfig, crate::context::ContextPlan)> {
-    let invocation: CompactionInvocation = serde_json::from_value(input.clone()).ok()?;
-    if !invocation.harness_profile.is_supported() {
-        return None;
-    }
-    Some((invocation.step, invocation.model, invocation.plan))
-}
-
-/// Decode one persisted tool invocation. The operation id is authoritative on
-/// the owning durable operation and is intentionally not reconstructed from
-/// effect payload bytes. Return the typed invocation too so recovery never
-/// reaches back into raw effect JSON for reconciliation or call identity.
-pub(super) fn tool_call_from_input(
-    operation_id: OperationId,
-    input: &serde_json::Value,
-) -> Option<(ToolCall, ToolInvocation)> {
-    let invocation: ToolInvocation = serde_json::from_value(input.clone()).ok()?;
-    let call = invocation.clone().into_call(operation_id);
-    Some((call, invocation))
-}
 
 /// Build the durable record of one staged transition. Semantic entry identity
 /// is provisioned here, before the request crosses into the store; sequences
