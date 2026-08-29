@@ -9,12 +9,12 @@ if old not in text:
 p.write_text(text.replace(old, new, 1))
 
 # The session-agent transaction must now have a production owner, not only
-# store tests. Assert both fresh and fork child backends load with the family
-# topology that ChildManager just admitted.
+# store tests. The existing fork test already proves the exact source boundary;
+# add the family-scoped durable address assertions at that same boundary.
 p = Path("crates/ion-core/src/tests/budget_children.rs")
 text = p.read_text()
-old = '''    let child = store.load(child_id).await.expect("child session");\n    assert_eq!(child.session.initial_model_ref, "child-model");\n'''
-new = '''    let child = store.load(child_id).await.expect("child session");\n    assert_eq!(child.session.initial_model_ref, "child-model");\n    assert_eq!(child.agents.len(), 1);\n    assert_eq!(child.agents[0].id, crate::AgentId::root(child_id));\n    assert_eq!(child.agents[0].family_session_id, parent_id);\n    assert_eq!(\n        child.agents[0].control_parent_id,\n        Some(crate::AgentId::root(parent_id))\n    );\n    assert!(matches!(\n        child.agents[0].history,\n        crate::store::AgentHistory::Fork {\n            source_session_id,\n            source_entry_id: Some(_),\n        } if source_session_id == parent_id\n    ));\n'''
+old = '''    assert_eq!(child.session.control_parent_session_id, Some(parent_id));\n    assert_eq!(child.session.fork_source_session_id, Some(parent_id));\n    assert_eq!(child.session.initial_model_ref, "child-model");\n'''
+new = '''    assert_eq!(child.session.control_parent_session_id, Some(parent_id));\n    assert_eq!(child.session.fork_source_session_id, Some(parent_id));\n    assert_eq!(child.session.initial_model_ref, "child-model");\n    assert_eq!(child.agents.len(), 1);\n    assert_eq!(child.agents[0].id, crate::AgentId::root(child_id));\n    assert_eq!(child.agents[0].family_session_id, parent_id);\n    assert_eq!(\n        child.agents[0].control_parent_id,\n        Some(crate::AgentId::root(parent_id))\n    );\n    assert!(matches!(\n        child.agents[0].history,\n        crate::store::AgentHistory::Fork {\n            source_session_id,\n            source_entry_id: Some(entry_id),\n        } if source_session_id == parent_id && entry_id == fork_entry_id\n    ));\n'''
 if old not in text:
     raise SystemExit("fork child topology assertion anchor missing")
 p.write_text(text.replace(old, new, 1))
