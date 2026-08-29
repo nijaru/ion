@@ -116,7 +116,17 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
 #[tokio::test]
 async fn durable_child_handles_support_spawn_status_wait_and_cancel() {
     let store = SessionStore::open_in_memory().expect("store");
-    let parent = crate::SessionId::generate();
+    let parent_runtime = Runtime::start_with_store(
+        ScriptedProvider::new(Vec::new()),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let parent = parent_runtime.session_id();
+    parent_runtime
+        .session()
+        .snapshot()
+        .await
+        .expect("persist parent session");
     let (manager, tools) = crate::child_tools(
         crate::DelegateConfig {
             store: store.clone(),
@@ -159,6 +169,12 @@ async fn durable_child_handles_support_spawn_status_wait_and_cancel() {
     assert!(waited.output.contains("child answer"), "{waited:?}");
 
     manager.close().await.expect("close children");
+    parent_runtime
+        .session()
+        .close()
+        .await
+        .expect("close parent");
+    parent_runtime.join().await.expect("join parent");
 }
 
 fn delegate_tool(
@@ -263,10 +279,21 @@ async fn child_uses_parent_workspace_for_relative_tools() {
 #[tokio::test]
 async fn delegate_reports_child_lifecycle_progress() {
     let store = SessionStore::open_in_memory().expect("store");
+    let parent_runtime = Runtime::start_with_store(
+        ScriptedProvider::new(Vec::new()),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let parent_id = parent_runtime.session_id();
+    parent_runtime
+        .session()
+        .snapshot()
+        .await
+        .expect("persist parent session");
     let tool = delegate_tool(
         store,
         vec![ScriptedMessage::text("child answer")],
-        crate::SessionId::generate(),
+        parent_id,
         crate::RuntimeBudget::unbounded(),
     );
     let (progress_tx, mut progress_rx) = mpsc::channel(8);
@@ -291,6 +318,12 @@ async fn delegate_reports_child_lifecycle_progress() {
         updates.iter().any(|update| update.contains("finished")),
         "missing child-finish progress: {updates:?}"
     );
+    parent_runtime
+        .session()
+        .close()
+        .await
+        .expect("close parent");
+    parent_runtime.join().await.expect("join parent");
 }
 
 /// Extract `session-<uuid>` references from a delegate result.
@@ -366,7 +399,12 @@ async fn two_read_only_children_run_and_report_lineage() {
     assert_eq!(ids.len(), 2, "{tool_output}");
     for child in ids {
         let child_loaded = store.load(child).await.expect("child session");
-        assert_eq!(child_loaded.session.parent_session_id, Some(parent_id));
+        assert_eq!(
+            child_loaded.session.control_parent_session_id,
+            Some(parent_id)
+        );
+        assert_eq!(child_loaded.session.fork_source_session_id, None);
+        assert_eq!(child_loaded.session.fork_source_entry_id, None);
     }
 }
 
@@ -453,6 +491,46 @@ async fn fork_context_and_model_override_are_explicit() {
         })
         .expect("fork child reference");
     let child = store.load(child_id).await.expect("child session");
+    let fork_entry_id = child
+        .session
+        .fork_source_entry_id
+        .expect("fork source entry");
+    let fork_entry = parent
+        .entries
+        .iter()
+        .find(|record| record.id == fork_entry_id)
+        .expect("fork source belongs to parent history");
+    assert!(matches!(
+        &fork_entry.entry,
+        crate::SessionEntry::ToolCall { call } if call.name == "delegate"
+    ));
+    let final_main_leaf = parent
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("parent main lane")
+        .state
+        .leaf;
+    let mut cursor = final_main_leaf;
+    let mut source_is_ancestor = false;
+    while let Some(entry_id) = cursor {
+        if entry_id == fork_entry_id {
+            source_is_ancestor = true;
+            break;
+        }
+        cursor = parent
+            .entries
+            .iter()
+            .find(|record| record.id == entry_id)
+            .expect("main ancestry is complete")
+            .parent;
+    }
+    assert!(
+        source_is_ancestor,
+        "fork source must remain on final main ancestry"
+    );
+    assert_eq!(child.session.control_parent_session_id, Some(parent_id));
+    assert_eq!(child.session.fork_source_session_id, Some(parent_id));
     assert_eq!(child.session.initial_model_ref, "child-model");
     let prompt = child
         .entries

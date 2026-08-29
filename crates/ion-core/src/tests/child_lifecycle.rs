@@ -12,7 +12,17 @@ fn child_handle(output: &str) -> String {
 #[tokio::test]
 async fn completed_children_release_live_child_slots() {
     let store = SessionStore::open_in_memory().expect("store");
-    let parent = crate::SessionId::generate();
+    let parent_runtime = Runtime::start_with_store(
+        ScriptedProvider::new(Vec::new()),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let parent = parent_runtime.session_id();
+    parent_runtime
+        .session()
+        .snapshot()
+        .await
+        .expect("persist parent session");
     let (manager, tools) = crate::child_tools(
         crate::DelegateConfig {
             store: store.clone(),
@@ -59,5 +69,11 @@ async fn completed_children_release_live_child_slots() {
     assert!(!waited.is_error, "second wait failed: {waited:?}");
 
     manager.close().await.expect("close children");
+    parent_runtime
+        .session()
+        .close()
+        .await
+        .expect("close parent");
+    parent_runtime.join().await.expect("join parent");
     store.close().await.expect("close store");
 }

@@ -10,7 +10,9 @@ async fn lane_agent_identity_and_lane_are_published_atomically() {
             cwd: "/tmp".to_owned(),
             title: String::new(),
             initial_model_ref: "model-a".to_owned(),
-            parent_session_id: None,
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
         })
         .await
         .expect("session");

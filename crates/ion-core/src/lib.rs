@@ -57,9 +57,9 @@ pub use provider::{
     ScriptedProvider, SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
-    ChildRuntimeConfig, EventSubscription, IndeterminateWarning, LiveOperationState,
-    OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, RuntimeHandle,
-    SessionHandle, SessionSnapshot,
+    ChildRuntimeConfig, ChildSessionLineage, EventSubscription, IndeterminateWarning,
+    LiveOperationState, OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent,
+    RuntimeHandle, SessionForkSource, SessionHandle, SessionSnapshot,
 };
 pub use store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord,

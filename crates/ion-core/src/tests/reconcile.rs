@@ -186,7 +186,9 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
             cwd: cwd.to_string_lossy().into_owned(),
             title: "reconcile".to_owned(),
             initial_model_ref: "test-model".to_owned(),
-            parent_session_id: None,
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
         })
         .await
         .expect("create session");

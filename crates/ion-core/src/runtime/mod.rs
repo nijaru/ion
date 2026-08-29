@@ -750,6 +750,7 @@ struct Composition<P> {
     interactive_approvals: bool,
     budget: RuntimeBudget,
     parent: Option<SessionId>,
+    fork_source: Option<(SessionId, Option<EntryId>)>,
     trusted_resources: Vec<TrustedResource>,
     effect_gate: Option<Arc<EffectGate>>,
     /// Host-selected workspace identity. A reopened session uses the
@@ -767,6 +768,7 @@ impl<P: Provider> Composition<P> {
             interactive_approvals: false,
             budget: RuntimeBudget::unbounded(),
             parent: None,
+            fork_source: None,
             trusted_resources: Vec::new(),
             effect_gate: None,
             cwd: None,
@@ -811,6 +813,7 @@ impl<P: Provider> Composition<P> {
                     interactive_approvals: self.interactive_approvals,
                     budget: self.budget,
                     parent: self.parent,
+                    fork_source: self.fork_source,
                 },
                 rx,
                 loaded,
@@ -951,7 +954,7 @@ impl Runtime {
         store: SessionStore,
         policy: Arc<dyn PolicyEngine>,
         budget: RuntimeBudget,
-        parent: SessionId,
+        lineage: ChildSessionLineage,
         trusted_resources: Vec<TrustedResource>,
     ) -> Self {
         let tools = tools.into();
@@ -959,7 +962,10 @@ impl Runtime {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.budget = budget;
-        composition.parent = Some(parent);
+        composition.parent = Some(lineage.control_parent);
+        composition.fork_source = lineage
+            .fork_source
+            .map(|source| (source.session_id, source.entry_id));
         composition.trusted_resources = trusted_resources;
         composition.cwd = Some(cwd);
         composition.spawn(SessionId::generate(), None)
@@ -1040,15 +1046,20 @@ impl Runtime {
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-        if loaded.session.parent_session_id != Some(config.parent) {
+        if loaded.session.control_parent_session_id != Some(config.control_parent) {
             return Err(RuntimeError::OperationFailed(
                 "child session does not belong to the requested parent".to_owned(),
             ));
         }
+        let fork_source = loaded
+            .session
+            .fork_source_session_id
+            .map(|source| (source, loaded.session.fork_source_entry_id));
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = config.policy;
         composition.budget = config.budget;
-        composition.parent = Some(config.parent);
+        composition.parent = Some(config.control_parent);
+        composition.fork_source = fork_source;
         composition.trusted_resources = config.trusted_resources;
         Ok(composition.spawn(session_id, Some(loaded)))
     }
@@ -1222,12 +1233,27 @@ pub struct RuntimeBudget {
     pub max_tool_calls: Option<u32>,
 }
 
+/// Exact semantic source of an explicitly forked separately hosted session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SessionForkSource {
+    pub session_id: SessionId,
+    pub entry_id: Option<EntryId>,
+}
+
+/// Durable topology supplied when creating a separately hosted child session.
+/// Control ownership and history inheritance are deliberately independent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChildSessionLineage {
+    pub control_parent: SessionId,
+    pub fork_source: Option<SessionForkSource>,
+}
+
 /// Host dependencies needed to reopen a durable child runtime.
 #[derive(Clone)]
 pub struct ChildRuntimeConfig {
     pub policy: Arc<dyn PolicyEngine>,
     pub budget: RuntimeBudget,
-    pub parent: SessionId,
+    pub control_parent: SessionId,
     pub trusted_resources: Vec<TrustedResource>,
 }
 
@@ -1255,8 +1281,10 @@ struct SessionDeps<P> {
     /// terminating it (DESIGN.md §17.4).
     interactive_approvals: bool,
     budget: RuntimeBudget,
-    /// Durable lineage for bounded child sessions (§20.3).
+    /// Durable control lineage for separately hosted descendants.
     parent: Option<SessionId>,
+    /// Explicit history lineage; independent from control parentage.
+    fork_source: Option<(SessionId, Option<EntryId>)>,
 }
 
 struct SessionRuntime<P> {
@@ -1273,7 +1301,9 @@ struct SessionRuntime<P> {
     /// This host can grant approvals interactively (§17.4).
     interactive_approvals: bool,
     budget: RuntimeBudget,
-    parent_session_id: Option<SessionId>,
+    control_parent_session_id: Option<SessionId>,
+    fork_source_session_id: Option<SessionId>,
+    fork_source_entry_id: Option<EntryId>,
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
@@ -1337,6 +1367,7 @@ impl<P: Provider> SessionRuntime<P> {
             interactive_approvals,
             budget,
             parent,
+            fork_source,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -1367,7 +1398,9 @@ impl<P: Provider> SessionRuntime<P> {
             policy,
             interactive_approvals,
             budget,
-            parent_session_id: parent,
+            control_parent_session_id: parent,
+            fork_source_session_id: fork_source.map(|(session, _)| session),
+            fork_source_entry_id: fork_source.and_then(|(_, entry)| entry),
             commands,
             engine_tx,
             engine_rx,
@@ -1720,7 +1753,9 @@ impl<P: Provider> SessionRuntime<P> {
                 cwd: self.cwd.clone(),
                 title: String::new(),
                 initial_model_ref: self.main_model_ref().to_owned(),
-                parent_session_id: self.parent_session_id,
+                control_parent_session_id: self.control_parent_session_id,
+                fork_source_session_id: self.fork_source_session_id,
+                fork_source_entry_id: self.fork_source_entry_id,
             };
             if let Err(err) = self.store.create_session(record).await {
                 error!(

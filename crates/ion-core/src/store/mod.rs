@@ -39,9 +39,14 @@ pub struct SessionRecord {
     /// configuration. Later model changes update that lane configuration
     /// directly rather than becoming conversation entries.
     pub initial_model_ref: String,
-    /// Present for bounded child sessions (§20.3): lineage is durable
-    /// before the child runs.
-    pub parent_session_id: Option<SessionId>,
+    /// Control parent for a separately hosted descendant session. This is
+    /// cancellation/ownership lineage, not conversation-history inheritance.
+    pub control_parent_session_id: Option<SessionId>,
+    /// Explicit history source for a separately hosted fork. `Some(session)`
+    /// with no entry records a fork of an empty source session. Fresh children
+    /// keep both fork fields `None`.
+    pub fork_source_session_id: Option<SessionId>,
+    pub fork_source_entry_id: Option<EntryId>,
 }
 
 /// One semantic entry provisioned by the session transition before the store

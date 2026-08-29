@@ -92,7 +92,7 @@ pub struct DelegateConfig<P> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct ChildHandle {
     pub session_id: SessionId,
-    pub parent_session_id: SessionId,
+    pub control_parent_session_id: SessionId,
 }
 
 impl fmt::Display for ChildHandle {
@@ -276,11 +276,21 @@ impl<P> ChildManager<P> {
         };
         let fork_context = match spec.context_mode {
             ChildContextMode::Fresh => None,
-            ChildContextMode::ForkContext => fork_context(&self.config.store, self.parent_id)
-                .await
-                .map_err(|err| format!("could not load parent context: {err}"))?,
+            ChildContextMode::ForkContext => Some(
+                fork_context(&self.config.store, self.parent_id)
+                    .await
+                    .map_err(|err| format!("could not load parent context: {err}"))?,
+            ),
         };
-        let prompt = compose_child_prompt(&spec, fork_context.as_deref());
+        let prompt = compose_child_prompt(
+            &spec,
+            fork_context
+                .as_ref()
+                .and_then(|fork| fork.rendered.as_deref()),
+        );
+        let fork_source = fork_context
+            .as_ref()
+            .map(|fork| (self.parent_id, fork.source_entry_id));
         let catalog = crate::tool::ToolCatalog::read_only(&self.config.cwd);
         let runtime = Runtime::start_child_with_resources(
             provider,
@@ -288,7 +298,15 @@ impl<P> ChildManager<P> {
             self.config.store.clone(),
             Arc::new(crate::policy::DefaultPolicy),
             self.config.child_budget,
-            self.parent_id,
+            crate::runtime::ChildSessionLineage {
+                control_parent: self.parent_id,
+                fork_source: fork_source.map(|(session_id, entry_id)| {
+                    crate::runtime::SessionForkSource {
+                        session_id,
+                        entry_id,
+                    }
+                }),
+            },
             self.config.trusted_resources.clone(),
         );
         let session_id = runtime.session_id();
@@ -304,7 +322,7 @@ impl<P> ChildManager<P> {
         };
         let handle = ChildHandle {
             session_id,
-            parent_session_id: self.parent_id,
+            control_parent_session_id: self.parent_id,
         };
         let cancel = parent_cancel.child_token();
         let cancel_for_watch = cancel.clone();
@@ -340,8 +358,8 @@ impl<P> ChildManager<P> {
             .load(handle.session_id)
             .await
             .map_err(|err| format!("child {} unavailable: {err}", handle.session_id))?;
-        if loaded.session.parent_session_id != Some(self.parent_id)
-            || handle.parent_session_id != self.parent_id
+        if loaded.session.control_parent_session_id != Some(self.parent_id)
+            || handle.control_parent_session_id != self.parent_id
         {
             return Err(format!(
                 "child {} is not owned by this parent",
@@ -463,8 +481,8 @@ impl<P> ChildManager<P> {
             .load(handle.session_id)
             .await
             .map_err(|err| format!("child {} unavailable: {err}", handle.session_id))?;
-        if loaded.session.parent_session_id != Some(self.parent_id)
-            || handle.parent_session_id != self.parent_id
+        if loaded.session.control_parent_session_id != Some(self.parent_id)
+            || handle.control_parent_session_id != self.parent_id
         {
             return Err(format!(
                 "child {} is not owned by this parent",
@@ -500,7 +518,7 @@ impl<P> ChildManager<P> {
             crate::runtime::ChildRuntimeConfig {
                 policy: Arc::new(crate::policy::DefaultPolicy),
                 budget: self.config.child_budget,
-                parent: self.parent_id,
+                control_parent: self.parent_id,
                 trusted_resources: self.config.trusted_resources.clone(),
             },
         )
@@ -751,7 +769,7 @@ impl<P: Provider + 'static> Tool for ChildTool<P> {
                     };
                     let handle = ChildHandle {
                         session_id,
-                        parent_session_id: self.manager.parent_id,
+                        control_parent_session_id: self.manager.parent_id,
                     };
                     match self.kind {
                         ChildToolKind::Status => match self.manager.observe(handle).await {
@@ -992,20 +1010,36 @@ where
     };
     let fork_context_result = match spec.context_mode {
         ChildContextMode::Fresh => Ok(None),
-        ChildContextMode::ForkContext => fork_context(&config.store, parent_id).await,
+        ChildContextMode::ForkContext => fork_context(&config.store, parent_id).await.map(Some),
     };
     let fork_context = match fork_context_result {
         Ok(context) => context,
         Err(err) => return format!("child failed: {err} [child parent: {parent_id}]"),
     };
-    let prompt = compose_child_prompt(&spec, fork_context.as_deref());
+    let prompt = compose_child_prompt(
+        &spec,
+        fork_context
+            .as_ref()
+            .and_then(|fork| fork.rendered.as_deref()),
+    );
+    let fork_source = fork_context
+        .as_ref()
+        .map(|fork| (parent_id, fork.source_entry_id));
     let runtime = Runtime::start_child_with_resources(
         provider,
         catalog.clone(),
         config.store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         config.child_budget,
-        parent_id,
+        crate::runtime::ChildSessionLineage {
+            control_parent: parent_id,
+            fork_source: fork_source.map(|(session_id, entry_id)| {
+                crate::runtime::SessionForkSource {
+                    session_id,
+                    entry_id,
+                }
+            }),
+        },
         config.trusted_resources.clone(),
     );
     let child_id = runtime.session_id();
@@ -1080,20 +1114,52 @@ where
     }
 }
 
-async fn fork_context(
-    store: &SessionStore,
-    parent_id: SessionId,
-) -> Result<Option<String>, String> {
+struct ForkContext {
+    rendered: Option<String>,
+    source_entry_id: Option<crate::ids::EntryId>,
+}
+
+async fn fork_context(store: &SessionStore, parent_id: SessionId) -> Result<ForkContext, String> {
     let loaded = store
         .load(parent_id)
         .await
         .map_err(|err| format!("could not load parent context: {err}"))?;
-    if loaded.entries.is_empty() {
-        return Ok(None);
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .ok_or_else(|| "parent session has no main lane".to_owned())?;
+    let source_entry_id = main.state.leaf;
+    let Some(mut cursor) = source_entry_id else {
+        return Ok(ForkContext {
+            rendered: None,
+            source_entry_id: None,
+        });
+    };
+    let index = loaded
+        .entries
+        .iter()
+        .map(|record| (record.id, record))
+        .collect::<HashMap<_, _>>();
+    let mut branch = Vec::new();
+    loop {
+        let record = index
+            .get(&cursor)
+            .copied()
+            .ok_or_else(|| format!("parent main branch references missing entry {cursor}"))?;
+        branch.push(record);
+        let Some(parent) = record.parent else {
+            break;
+        };
+        cursor = parent;
     }
-    let first_seq = loaded.entries.first().map_or(1, |record| record.seq);
-    let plan = project(loaded.entries.iter().map(|record| &record.entry), first_seq);
-    Ok(Some(render_fork_context(&plan)))
+    branch.reverse();
+    let first_seq = branch.first().map_or(1, |record| record.seq);
+    let plan = project(branch.iter().map(|record| &record.entry), first_seq);
+    Ok(ForkContext {
+        rendered: Some(render_fork_context(&plan)),
+        source_entry_id,
+    })
 }
 
 fn compose_child_prompt(spec: &ChildSpec, fork: Option<&str>) -> String {

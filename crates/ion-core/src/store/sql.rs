@@ -232,14 +232,24 @@ fn create_session(
     let tx = connection.transaction()?;
     let now = now_ms();
     tx.execute(
-        "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
-         VALUES (?1, ?2, ?2, ?3, ?4, ?5)",
+        "INSERT INTO sessions (
+            id, created_at, updated_at, cwd, title, control_parent_session_id,
+            fork_source_session_id, fork_source_entry_id
+         ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7)",
         rusqlite::params![
             record.id.as_uuid().to_string(),
             now,
             record.cwd,
             record.title,
-            record.parent_session_id.map(|id| id.as_uuid().to_string()),
+            record
+                .control_parent_session_id
+                .map(|id| id.as_uuid().to_string()),
+            record
+                .fork_source_session_id
+                .map(|id| id.as_uuid().to_string()),
+            record
+                .fork_source_entry_id
+                .map(|id| id.as_uuid().to_string()),
         ],
     )?;
     let config = crate::session::lane::Config::new(record.initial_model_ref.clone());
@@ -1276,16 +1286,53 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
     }
 
     let id = session_id.as_uuid().to_string();
-    let (cwd, title, parent_session_id): (String, String, Option<String>) = connection
+    let (cwd, title, raw_control_parent, raw_fork_session, raw_fork_entry): (
+        String,
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    ) = connection
         .query_row(
-            "SELECT cwd, title, parent_session_id FROM sessions WHERE id = ?1",
+            "SELECT cwd, title, control_parent_session_id, fork_source_session_id,
+                    fork_source_entry_id
+             FROM sessions WHERE id = ?1",
             rusqlite::params![id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
         )
         .map_err(|err| match err {
             rusqlite::Error::QueryReturnedNoRows => StoreError::NotFound(session_id),
             other => StoreError::from(other),
         })?;
+    let parse_session_lineage = |raw: Option<String>, label: &str| {
+        raw.map(|value| {
+            SessionId::parse(&value)
+                .ok_or_else(|| StoreError::Sqlite(format!("session has corrupt {label} id")))
+        })
+        .transpose()
+    };
+    let control_parent_session_id = parse_session_lineage(raw_control_parent, "control parent")?;
+    let fork_source_session_id = parse_session_lineage(raw_fork_session, "fork source session")?;
+    let fork_source_entry_id = raw_fork_entry
+        .map(|value| {
+            EntryId::parse(&value).ok_or_else(|| {
+                StoreError::Sqlite("session has corrupt fork source entry id".to_owned())
+            })
+        })
+        .transpose()?;
+    if fork_source_entry_id.is_some() && fork_source_session_id.is_none() {
+        return Err(StoreError::Sqlite(
+            "session fork source entry has no source session".to_owned(),
+        ));
+    }
     let lanes = load_lanes(connection, session_id)?;
     let main_lane = lanes
         .iter()
@@ -1295,7 +1342,9 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         id: session_id,
         cwd,
         title,
-        parent_session_id: parent_session_id.and_then(|text| SessionId::parse(&text)),
+        control_parent_session_id,
+        fork_source_session_id,
+        fork_source_entry_id,
         // Compatibility projection while launch defaults still live on the
         // session record. Durable model authority is the main lane config.
         initial_model_ref: main_lane.config.model_ref.clone(),
@@ -1611,7 +1660,9 @@ mod tests {
                 cwd: "/tmp".to_owned(),
                 title: String::new(),
                 initial_model_ref: "model-a".to_owned(),
-                parent_session_id: None,
+                control_parent_session_id: None,
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
             },
         )
         .expect("session");
@@ -1718,7 +1769,9 @@ mod tests {
                 cwd: "/tmp".to_owned(),
                 title: String::new(),
                 initial_model_ref: "model-a".to_owned(),
-                parent_session_id: None,
+                control_parent_session_id: None,
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
             },
         )
         .expect("session");
@@ -1812,7 +1865,9 @@ mod tests {
                 cwd: "/tmp".to_owned(),
                 title: String::new(),
                 initial_model_ref: "model-a".to_owned(),
-                parent_session_id: None,
+                control_parent_session_id: None,
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
             },
         )
         .expect("session");
@@ -1906,7 +1961,9 @@ mod tests {
                 cwd: "/tmp".to_owned(),
                 title: String::new(),
                 initial_model_ref: "model-a".to_owned(),
-                parent_session_id: None,
+                control_parent_session_id: None,
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
             },
         )
         .expect("session");

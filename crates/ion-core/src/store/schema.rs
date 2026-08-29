@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 20;
+const SCHEMA_VERSION: i64 = 21;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -80,7 +80,12 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at INTEGER NOT NULL,
     cwd TEXT NOT NULL,
     title TEXT NOT NULL,
-    parent_session_id TEXT
+    control_parent_session_id TEXT REFERENCES sessions(id),
+    fork_source_session_id TEXT REFERENCES sessions(id),
+    fork_source_entry_id TEXT,
+    FOREIGN KEY (fork_source_session_id, fork_source_entry_id)
+        REFERENCES entries(session_id, id),
+    CHECK (fork_source_entry_id IS NULL OR fork_source_session_id IS NOT NULL)
 );
 
 CREATE TABLE IF NOT EXISTS entries (
@@ -349,7 +354,7 @@ mod tests {
             .expect("foreign keys");
         connection
             .execute(
-                "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
+                "INSERT INTO sessions (id, created_at, updated_at, cwd, title, control_parent_session_id)
                  VALUES ('session', 0, 0, '/tmp', '', NULL)",
                 [],
             )
@@ -561,7 +566,7 @@ mod tests {
             .expect("foreign keys");
         connection
             .execute(
-                "INSERT INTO sessions (id, created_at, updated_at, cwd, title, parent_session_id)
+                "INSERT INTO sessions (id, created_at, updated_at, cwd, title, control_parent_session_id)
                  VALUES ('orphan', 0, 0, '/tmp', '', NULL)",
                 [],
             )
