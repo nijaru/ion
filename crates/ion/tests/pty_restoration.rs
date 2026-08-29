@@ -66,6 +66,10 @@ fn scripted_settings() -> tempfile::NamedTempFile {
 }
 
 fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
+    spawn_ion_with_args(&[], envs)
+}
+
+fn spawn_ion_with_args(args: &[&str], envs: &[(&str, &str)]) -> PtySession {
     // A zero winsize would give the TUI an empty area to draw in.
     let size = nix::pty::Winsize {
         ws_row: 30,
@@ -88,6 +92,7 @@ fn spawn_ion(envs: &[(&str, &str)]) -> PtySession {
     let settings = scripted_settings();
     let data_root = tempfile::tempdir().expect("temp data root");
     let mut command = Command::new(env!("CARGO_BIN_EXE_ion"));
+    command.args(args);
     command.env("ION_SETTINGS", settings.path());
     // Isolate the session store: the schema version gate must never
     // see (or refuse) the developer's real database.
@@ -385,6 +390,37 @@ fn panic_restores_the_terminal() {
         session.wait_for_raw("\x1b[<1u", std::time::Duration::from_secs(2)),
         "keyboard enhancement was not restored on panic"
     );
+    session.assert_cooked();
+}
+
+#[test]
+fn startup_error_restores_terminal_before_diagnostic() {
+    let mut session = spawn_ion_with_args(&["--resume"], &[]);
+    let status = session
+        .wait_exit(std::time::Duration::from_secs(15))
+        .expect("resume-without-session must exit");
+    assert_eq!(status.code(), Some(2));
+    assert!(
+        session.wait_for_output(
+            "no persisted session to resume",
+            std::time::Duration::from_secs(2)
+        ),
+        "expected resume diagnostic"
+    );
+
+    let output = session.output.lock().expect("output lock");
+    let text = String::from_utf8_lossy(&output);
+    let restored = text
+        .find("\x1b[?2004l")
+        .expect("bracketed paste disable before startup diagnostic");
+    let diagnostic = text
+        .find("no persisted session to resume")
+        .expect("resume diagnostic");
+    assert!(
+        restored < diagnostic,
+        "startup diagnostic was emitted before terminal restoration: {text:?}"
+    );
+    drop(output);
     session.assert_cooked();
 }
 
