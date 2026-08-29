@@ -46,6 +46,13 @@ text = text.replace("impl RuntimeHandle {\n    fn fill_queue", "impl SessionHand
 assert "RuntimeHandle" not in text, "RuntimeHandle remains in runtime module"
 runtime.write_text(text)
 
+print_mode = Path("crates/ion-core/src/tests/print_mode.rs")
+text = print_mode.read_text()
+old = '    let err = saturated.handle().shutdown().await.expect_err("saturated");\n'
+new = '    let err = saturated.handle().close().await.expect_err("saturated");\n'
+assert text.count(old) == 1, "saturation assertion changed"
+print_mode.write_text(text.replace(old, new, 1))
+
 lib = Path("crates/ion-core/src/lib.rs")
 text = lib.read_text()
 old_runtime_export = """pub use runtime::{
