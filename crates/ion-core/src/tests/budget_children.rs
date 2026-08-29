@@ -111,71 +111,7 @@ async fn tool_call_budget_denies_further_tools_model_visibly() {
     assert_eq!(tool_intents, 1, "second call denied, first admitted");
 }
 
-// ---- Bounded child delegation (§20, Step 7) ----
-
-#[tokio::test]
-async fn durable_child_handles_support_spawn_status_wait_and_cancel() {
-    let store = SessionStore::open_in_memory().expect("store");
-    let parent_runtime = Runtime::start_with_store(
-        ScriptedProvider::new(Vec::new()),
-        ToolRegistry::default(),
-        store.clone(),
-    );
-    let parent = parent_runtime.session_id();
-    parent_runtime
-        .session()
-        .snapshot()
-        .await
-        .expect("persist parent session");
-    let (manager, tools) = crate::child_tools(
-        crate::DelegateConfig {
-            store: store.clone(),
-            make_provider: Arc::new(|| {
-                ScriptedProvider::new(vec![ScriptedMessage::text("child answer")])
-            }),
-            make_provider_for_model: None,
-            max_active_children: 4,
-            child_budget: crate::RuntimeBudget::unbounded(),
-            trusted_resources: Vec::new(),
-            cwd: std::env::current_dir().expect("cwd"),
-        },
-        parent,
-    );
-
-    let spawn = tools[0]
-        .call(
-            json!({"children": [{"objective": "research the task"}]}),
-            CancellationToken::new(),
-        )
-        .await;
-    assert!(!spawn.is_error, "spawn failed: {spawn:?}");
-    let handle = spawn
-        .output
-        .strip_prefix("child handle: ")
-        .expect("durable handle")
-        .to_owned();
-
-    let status = tools[1]
-        .call(json!({"handle": handle}), CancellationToken::new())
-        .await;
-    assert!(!status.is_error, "status failed: {status:?}");
-    assert!(status.output.contains("child session-"), "{status:?}");
-
-    let waited = tools[2]
-        .call(json!({"handle": handle}), CancellationToken::new())
-        .await;
-    assert!(!waited.is_error, "wait failed: {waited:?}");
-    assert!(waited.output.contains("finished"), "{waited:?}");
-    assert!(waited.output.contains("child answer"), "{waited:?}");
-
-    manager.close().await.expect("close children");
-    parent_runtime
-        .session()
-        .close()
-        .await
-        .expect("close parent");
-    parent_runtime.join().await.expect("join parent");
-}
+// ---- Test-only synchronous delegation budget fixture ----
 
 fn delegate_tool(
     store: SessionStore,
@@ -184,12 +120,12 @@ fn delegate_tool(
     budget: crate::RuntimeBudget,
 ) -> Arc<dyn crate::tool::Tool> {
     Arc::new(crate::DelegateTool::new(
-        crate::DelegateConfig {
+        crate::HostedAgentConfig {
             store,
             make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
             make_provider_for_model: None,
-            max_active_children: 4,
-            child_budget: budget,
+            max_active: 4,
+            budget,
             trusted_resources: Vec::new(),
             cwd: std::env::current_dir().expect("cwd"),
         },
@@ -234,12 +170,12 @@ async fn child_uses_parent_workspace_for_relative_tools() {
     catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
-            crate::DelegateConfig {
+            crate::HostedAgentConfig {
                 store: store.clone(),
                 make_provider: Arc::new(move || ScriptedProvider::new(child_script.clone())),
                 make_provider_for_model: None,
-                max_active_children: 1,
-                child_budget: crate::RuntimeBudget::unbounded(),
+                max_active: 1,
+                budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),
                 cwd: workspace.path().to_path_buf(),
             },
@@ -436,7 +372,7 @@ async fn fork_context_and_model_override_are_explicit() {
     catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
-            crate::DelegateConfig {
+            crate::HostedAgentConfig {
                 store: store.clone(),
                 make_provider: Arc::new(move || {
                     crate::SwitchingProvider::new(
@@ -450,8 +386,8 @@ async fn fork_context_and_model_override_are_explicit() {
                         ScriptedProvider::new(override_script.clone()),
                     )
                 })),
-                max_active_children: 4,
-                child_budget: crate::RuntimeBudget::unbounded(),
+                max_active: 4,
+                budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),
                 cwd: std::env::current_dir().expect("cwd"),
             },
@@ -648,12 +584,12 @@ async fn budget_stops_a_runaway_child() {
     catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
-            crate::DelegateConfig {
+            crate::HostedAgentConfig {
                 store: store.clone(),
                 make_provider: Arc::new(looping_child),
                 make_provider_for_model: None,
-                max_active_children: 4,
-                child_budget: crate::RuntimeBudget {
+                max_active: 4,
+                budget: crate::RuntimeBudget {
                     max_model_steps: Some(1),
                     max_tool_calls: None,
                 },
@@ -735,14 +671,14 @@ async fn parent_cancel_cancels_running_children() {
     catalog.register_structural_scope(
         "delegate",
         vec![Arc::new(crate::DelegateTool::new(
-            crate::DelegateConfig {
+            crate::HostedAgentConfig {
                 store: store.clone(),
                 make_provider: Arc::new(move || HangingProvider {
                     tokens: Arc::clone(&spy_tokens),
                 }),
                 make_provider_for_model: None,
-                max_active_children: 4,
-                child_budget: crate::RuntimeBudget::unbounded(),
+                max_active: 4,
+                budget: crate::RuntimeBudget::unbounded(),
                 trusted_resources: Vec::new(),
                 cwd: std::env::current_dir().expect("cwd"),
             },

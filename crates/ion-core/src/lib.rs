@@ -6,8 +6,8 @@
 //! is migrating from one linear session operation to a tree/lane substrate.
 
 mod agent;
+mod agent_host;
 mod context;
-mod delegate;
 mod effect;
 mod error;
 mod extensions;
@@ -28,16 +28,15 @@ pub use agent::{
     Error as AgentError, Family as AgentFamily, Observation as AgentObservation,
     Status as AgentStatus, agent_tools, install_agent_tools,
 };
+#[cfg(test)]
+pub use agent_host::DelegateTool;
+pub use agent_host::{
+    HostedAgentConfig, HostedAgentRuntimes, agent_host_tools, hosted_agent_budget_default,
+    hosted_agent_runtimes, install_agent_host_tools,
+};
 pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest,
-};
-#[cfg(test)]
-pub use delegate::DelegateTool;
-pub use delegate::{
-    ChildContextMode, ChildHandle, ChildManager, ChildObservation, ChildSpec, ChildStatus,
-    DelegateConfig, agent_host_tools, child_budget_default, child_tools, install_agent_host_tools,
-    install_child_tools,
 };
 pub use effect::{
     CacheExpectation, CompactionInvocation, DurableEffect, ModelStepPlan, ToolInvocation,

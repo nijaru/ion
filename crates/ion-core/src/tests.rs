@@ -3,10 +3,10 @@
 mod agent_family;
 mod agent_store;
 mod budget_children;
-mod child_lifecycle;
 mod compaction;
 mod context_usage;
 mod crash_recovery;
+mod hosted_agent_lifecycle;
 mod mcp;
 mod multi_lane;
 mod native_tools;

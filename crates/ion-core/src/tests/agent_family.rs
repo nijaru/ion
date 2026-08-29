@@ -532,21 +532,21 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         store.clone(),
     );
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
-    let (children, _legacy_child_tools) = crate::child_tools(
-        crate::DelegateConfig {
+    let hosted = crate::hosted_agent_runtimes(
+        crate::HostedAgentConfig {
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![ScriptedMessage::text("session agent answer")])
             }),
             make_provider_for_model: None,
-            max_active_children: 2,
-            child_budget: crate::RuntimeBudget::unbounded(),
+            max_active: 2,
+            budget: crate::RuntimeBudget::unbounded(),
             trusted_resources: Vec::new(),
             cwd: std::env::current_dir().expect("cwd"),
         },
         runtime.session_id(),
     );
-    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&children));
+    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&hosted));
     let names = tools
         .iter()
         .map(|tool| tool.spec().name)
@@ -727,7 +727,7 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         Some("session agent answer")
     );
 
-    children.close().await.expect("close session agents");
+    hosted.close().await.expect("close session agents");
     runtime.session().close().await.expect("close root");
     runtime.join().await.expect("join root");
     store.close().await.expect("close store");
@@ -747,19 +747,19 @@ async fn family_wait_routes_to_live_separate_session_by_agent_address() {
         ..SharedLogProvider::default()
     };
     let child_provider_factory = child_provider.clone();
-    let (children, _legacy_child_tools) = crate::child_tools(
-        crate::DelegateConfig {
+    let hosted = crate::hosted_agent_runtimes(
+        crate::HostedAgentConfig {
             store: store.clone(),
             make_provider: Arc::new(move || child_provider_factory.clone()),
             make_provider_for_model: None,
-            max_active_children: 1,
-            child_budget: crate::RuntimeBudget::unbounded(),
+            max_active: 1,
+            budget: crate::RuntimeBudget::unbounded(),
             trusted_resources: Vec::new(),
             cwd: std::env::current_dir().expect("cwd"),
         },
         runtime.session_id(),
     );
-    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&children));
+    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&hosted));
     let spawn = tools
         .iter()
         .find(|tool| tool.spec().name == "spawn_agent")
@@ -811,7 +811,7 @@ async fn family_wait_routes_to_live_separate_session_by_agent_address() {
         .expect("hosted observation");
     assert_eq!(observation.result.as_deref(), Some("working"));
 
-    children.close().await.expect("close hosted runtimes");
+    hosted.close().await.expect("close hosted runtimes");
     runtime.session().close().await.expect("close root");
     runtime.join().await.expect("join root");
     store.close().await.expect("close store");

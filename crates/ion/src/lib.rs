@@ -19,11 +19,11 @@ pub use acp::AcpConfig;
 pub use settings::Settings;
 
 /// Process-owned agent service for one root runtime. Same-session lane agents
-/// and separately hosted fresh/fork descendants share one host lifetime even while
-/// the latter still use the migration child runtime internally.
+/// and separately hosted fresh/fork descendants share one host lifetime. The latter
+/// retain only process-local provider/runtime residency outside `Family`.
 pub struct AgentHost<P> {
     family: Arc<ion_core::AgentFamily>,
-    children: Arc<ion_core::ChildManager<P>>,
+    hosted: Arc<ion_core::HostedAgentRuntimes<P>>,
 }
 
 impl<P> AgentHost<P> {
@@ -33,7 +33,7 @@ impl<P> AgentHost<P> {
     }
 
     pub async fn close(&self) -> Result<(), String> {
-        self.children.close().await
+        self.hosted.close().await
     }
 }
 
@@ -77,20 +77,20 @@ where
     P: ion_core::Provider + 'static,
 {
     let family = Arc::new(runtime.agent_family(max_active_agents).await?);
-    let (children, _legacy_child_tools) = ion_core::child_tools(
-        ion_core::DelegateConfig {
+    let hosted = ion_core::hosted_agent_runtimes(
+        ion_core::HostedAgentConfig {
             store: store.clone(),
             make_provider,
             make_provider_for_model,
-            max_active_children: 4,
-            child_budget: ion_core::child_budget_default(),
+            max_active: 4,
+            budget: ion_core::hosted_agent_budget_default(),
             trusted_resources,
             cwd: tools.cwd().to_path_buf(),
         },
         runtime.session_id(),
     );
-    ion_core::install_agent_host_tools(tools, Arc::clone(&family), Arc::clone(&children));
-    Ok(AgentHost { family, children })
+    ion_core::install_agent_host_tools(tools, Arc::clone(&family), Arc::clone(&hosted));
+    Ok(AgentHost { family, hosted })
 }
 
 /// The host's provider choice for one invocation. `Provider` is not

@@ -250,13 +250,13 @@ A model step freezes the exact effective input needed for recovery and evaluatio
 
 The current `ion/default@1` profile ID is enough until structured profile behavior actually exists. Do not invent precision by hashing a hard-coded label.
 
-### 10.2 Child/agent creation
+### 10.2 Agent creation
 
 The intended child identity is preallocated or deterministically derived before creation executes and is stored in the parent invocation. Recovery reattaches/reconciles instead of spawning a duplicate.
 
 ## 11. Tool boundary
 
-The session runtime must not infer semantics from public tool names such as `write`, `edit`, `bash`, or `spawn_child`. Tool-owned typed admission metadata now carries canonicalization, recovery, reconciliation, and policy-route semantics into runtime admission.
+The session runtime must not infer semantics from public tool names such as `write`, `edit`, `bash`, or `spawn_agent`. Tool-owned typed admission metadata now carries canonicalization, recovery, reconciliation, and policy-route semantics into runtime admission.
 
 The tool boundary resolves a model call into an admitted invocation:
 
@@ -318,7 +318,7 @@ fork_source_session_id: Option<SessionId>
 fork_source_entry_id: Option<EntryId>
 ```
 
-A fresh child may have control lineage without history lineage. A user fork may have history lineage without a control parent. A fork-context child may have both.
+A fresh agent may have control lineage without history lineage. A user fork may have history lineage without a control parent. A forked agent may have both.
 
 ### 13.3 Family-scoped control
 
@@ -334,7 +334,7 @@ A root/session family owns one control authority above individual lanes/sessions
 - deterministic recovery/reattachment;
 - background completion routing.
 
-This is family-scoped, not one process-global mutable registry. Separate roots must not accidentally share namespaces, budgets, or cancellation trees. Retained identity and active execution capacity are separate: a completed agent may remain observable after releasing its execution permit. `ChildManager` and the test-only delegation path are migration scaffolding rather than target architecture.
+This is family-scoped, not one process-global mutable registry. Separate roots must not accidentally share namespaces, budgets, or cancellation trees. Retained identity and active execution capacity are separate: a completed agent may remain observable after releasing its execution permit. The remaining test-only synchronous delegation path is migration scaffolding rather than target architecture.
 
 Swarm/reviewer/supervisor strategies are ordinary compositions over this API, not privileged phases in the model loop.
 
@@ -451,7 +451,7 @@ The current workstream has already established:
 - tree-aware recovery that loads and validates every durable lane over the shared tree, with pending durable inbox restored per operation;
 - Rust 1.98.0 as the workspace/toolchain/CI contract.
 
-Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven, and agent messaging uses the durable input path. The current client snapshot still projects `main`; scoped capabilities and replacement of the remaining child-only scaffolding are the active boundary.
+Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven across shared and separately hosted sessions, and agent messaging uses the durable input path. Lane/fresh/fork agents share one model-facing namespace and durable family authority; a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency. The current client snapshot still projects `main`; scoped capabilities and migration of the final test-only synchronous delegation fixture are the active boundary.
 
 ## 20. Implementation order
 
