@@ -24,7 +24,10 @@ mod session;
 mod store;
 mod tool;
 
-pub use agent::{Error as AgentError, Family as AgentFamily, Status as AgentStatus};
+pub use agent::{
+    Error as AgentError, Family as AgentFamily, Observation as AgentObservation,
+    Status as AgentStatus, agent_tools, install_agent_tools,
+};
 pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest,

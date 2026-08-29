@@ -3,6 +3,7 @@ use std::future::pending;
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
+use serde_json::{Value, json};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 
@@ -11,6 +12,7 @@ use crate::ids::{AgentId, OperationId, SessionId};
 use crate::operation::{OperationOutcome, OperationState};
 use crate::runtime::{RuntimeEvent, SessionHandle};
 use crate::store::{AgentRecord, LoadedSession, SessionStore, StoreError};
+use crate::tool::{Tool, ToolCatalog, ToolOutcome, ToolSpec};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -58,6 +60,40 @@ pub enum Status {
         operation_id: OperationId,
         outcome: OperationOutcome,
     },
+}
+
+/// Store-derived view of one retained agent. Result text is resolved for the
+/// exact observed operation boundary, never copied into family residency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Observation {
+    pub agent_id: AgentId,
+    pub status: Status,
+    pub result: Option<String>,
+}
+
+impl Observation {
+    fn render(&self) -> String {
+        let status = match &self.status {
+            Status::Admitted => "admitted".to_owned(),
+            Status::Active {
+                operation_id,
+                state,
+            } => {
+                format!("active ({operation_id}, {state:?})")
+            }
+            Status::Suspended { operation_id } => format!("suspended ({operation_id})"),
+            Status::Finished {
+                operation_id,
+                outcome,
+            } => {
+                format!("finished ({operation_id}, {outcome:?})")
+            }
+        };
+        match &self.result {
+            Some(result) => format!("agent {}: {status}\n\n{result}", self.agent_id),
+            None => format!("agent {}: {status}", self.agent_id),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -266,10 +302,37 @@ impl Family {
                 .map(|agent| agent.lane_name.clone())
                 .ok_or(Error::UnknownAgent(to))?
         };
-        Ok(self
+        let needs_permit = !matches!(self.status(to).await?, Status::Active { .. });
+        let permit = if needs_permit {
+            Some(
+                Arc::clone(&self.permits)
+                    .try_acquire_owned()
+                    .map_err(|_| Error::Capacity)?,
+            )
+        } else {
+            None
+        };
+        let operation_id = self
             .session
             .send_agent_message(from, lane_name, text)
-            .await?)
+            .await?;
+        if let Some(permit) = permit {
+            let mut executions = self.executions.lock().expect("agent family poisoned");
+            if let Some(existing) = executions.get(&to) {
+                if existing.operation_id != operation_id {
+                    return Err(Error::Inconsistent(to));
+                }
+            } else {
+                executions.insert(
+                    to,
+                    Execution {
+                        operation_id,
+                        _permit: permit,
+                    },
+                );
+            }
+        }
+        Ok(operation_id)
     }
 
     /// Observe authoritative durable operation state for one retained agent.
@@ -287,6 +350,48 @@ impl Family {
         let loaded = self.store.load(self.session_id).await?;
         self.release_nonexecuting(&loaded);
         status_from_loaded(&loaded, agent_id)
+    }
+
+    /// Observe the latest durable execution and its exact semantic result.
+    pub async fn observe(&self, agent_id: AgentId) -> Result<Observation, Error> {
+        if !self
+            .retained
+            .lock()
+            .expect("agent family poisoned")
+            .contains_key(&agent_id)
+        {
+            return Err(Error::UnknownAgent(agent_id));
+        }
+        let loaded = self.store.load(self.session_id).await?;
+        self.release_nonexecuting(&loaded);
+        let status = status_from_loaded(&loaded, agent_id)?;
+        let result = match status_operation_id(&status) {
+            Some(operation_id) => operation_result(&loaded, agent_id, operation_id)?,
+            None => None,
+        };
+        Ok(Observation {
+            agent_id,
+            status,
+            result,
+        })
+    }
+
+    /// Observe one captured operation even if the agent has since started a
+    /// later run. This is the wait/result boundary used by model-facing tools.
+    pub async fn observe_operation(
+        &self,
+        agent_id: AgentId,
+        operation_id: OperationId,
+    ) -> Result<Observation, Error> {
+        let loaded = self.store.load(self.session_id).await?;
+        self.release_nonexecuting(&loaded);
+        let status = status_for_operation(&loaded, agent_id, operation_id)?;
+        let result = operation_result(&loaded, agent_id, operation_id)?;
+        Ok(Observation {
+            agent_id,
+            status,
+            result,
+        })
     }
 
     /// Wait for the execution that is current at this call's subscription
@@ -628,4 +733,286 @@ async fn wait_until(deadline: Option<Instant>) {
         Some(deadline) => tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await,
         None => pending::<()>().await,
     }
+}
+
+fn status_operation_id(status: &Status) -> Option<OperationId> {
+    match status {
+        Status::Admitted => None,
+        Status::Active { operation_id, .. }
+        | Status::Suspended { operation_id }
+        | Status::Finished { operation_id, .. } => Some(*operation_id),
+    }
+}
+
+fn operation_result(
+    loaded: &LoadedSession,
+    agent_id: AgentId,
+    operation_id: OperationId,
+) -> Result<Option<String>, Error> {
+    let agent = loaded
+        .agents
+        .iter()
+        .find(|agent| agent.id == agent_id)
+        .ok_or(Error::UnknownAgent(agent_id))?;
+    let lane = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == agent.lane_name)
+        .ok_or(Error::Inconsistent(agent_id))?;
+    let operation = loaded
+        .operations
+        .iter()
+        .find(|operation| operation.id == operation_id && operation.lane_name == lane.name)
+        .ok_or(Error::Inconsistent(agent_id))?;
+    let end_leaf = loaded
+        .operations
+        .iter()
+        .filter(|candidate| {
+            candidate.lane_name == lane.name && candidate.accepted_seq > operation.accepted_seq
+        })
+        .min_by_key(|candidate| candidate.accepted_seq)
+        .and_then(|candidate| candidate.source_leaf)
+        .or(lane.state.leaf);
+
+    let mut cursor = end_leaf;
+    let mut result = None;
+    while cursor != operation.source_leaf {
+        let Some(entry_id) = cursor else {
+            return Err(Error::Inconsistent(agent_id));
+        };
+        let record = loaded
+            .entries
+            .iter()
+            .find(|record| record.id == entry_id)
+            .ok_or(Error::Inconsistent(agent_id))?;
+        if result.is_none()
+            && let crate::operation::SessionEntry::AssistantMessage { text } = &record.entry
+        {
+            result = Some(text.clone());
+        }
+        cursor = record.parent;
+    }
+    Ok(result)
+}
+
+#[derive(Clone, Copy)]
+enum AgentToolKind {
+    Spawn,
+    Start,
+    Status,
+    Wait,
+    Cancel,
+    Send,
+}
+
+struct AgentTool {
+    family: Arc<Family>,
+    kind: AgentToolKind,
+}
+
+/// Compose model-facing shared-history agent controls over the durable family
+/// authority. These tools do not own agent state; they only call [`Family`].
+pub fn agent_tools(family: Arc<Family>) -> Vec<Arc<dyn Tool>> {
+    [
+        AgentToolKind::Spawn,
+        AgentToolKind::Start,
+        AgentToolKind::Status,
+        AgentToolKind::Wait,
+        AgentToolKind::Cancel,
+        AgentToolKind::Send,
+    ]
+    .into_iter()
+    .map(|kind| {
+        Arc::new(AgentTool {
+            family: Arc::clone(&family),
+            kind,
+        }) as Arc<dyn Tool>
+    })
+    .collect()
+}
+
+/// Publish shared-history agent control as a structural host capability. MCP
+/// and extensions cannot self-declare this approval bypass.
+pub fn install_agent_tools(catalog: &ToolCatalog, family: Arc<Family>) {
+    catalog.register_structural_scope("agents", agent_tools(family));
+}
+
+impl Tool for AgentTool {
+    fn spec(&self) -> ToolSpec {
+        match self.kind {
+            AgentToolKind::Spawn => ToolSpec {
+                name: "spawn_agent".to_owned(),
+                description: "Admit a read-only shared-history agent and start it when execution capacity is available. Returns a durable agent handle even when start is capacity-blocked.".to_owned(),
+                input_schema: json!({
+                    "type": "object",
+                    "properties": {"objective": {"type": "string"}},
+                    "required": ["objective"]
+                }),
+            },
+            AgentToolKind::Start => ToolSpec {
+                name: "agent_start".to_owned(),
+                description: "Start a previously admitted idle agent with an objective.".to_owned(),
+                input_schema: agent_handle_schema(Some(("objective", "string"))),
+            },
+            AgentToolKind::Status => ToolSpec {
+                name: "agent_status".to_owned(),
+                description: "Inspect durable agent status and its latest exact operation result without waiting.".to_owned(),
+                input_schema: agent_handle_schema(None),
+            },
+            AgentToolKind::Wait => ToolSpec {
+                name: "agent_wait".to_owned(),
+                description: "Wait for the agent's current durable operation and return its exact result.".to_owned(),
+                input_schema: agent_handle_schema(None),
+            },
+            AgentToolKind::Cancel => ToolSpec {
+                name: "agent_cancel".to_owned(),
+                description: "Cancel the running operation of a retained agent.".to_owned(),
+                input_schema: agent_handle_schema(None),
+            },
+            AgentToolKind::Send => ToolSpec {
+                name: "agent_send".to_owned(),
+                description: "Send durable input from the root agent to a retained agent. Active work receives continuation input; idle delivery starts a capacity-accounted run.".to_owned(),
+                input_schema: agent_handle_schema(Some(("message", "string"))),
+            },
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn std::future::Future<Output = ToolOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            match self.kind {
+                AgentToolKind::Spawn => {
+                    let objective = match string_arg(&arguments, "objective") {
+                        Ok(value) => value.to_owned(),
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let agent_id = match self.family.admit_lane(self.family.root()).await {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => {
+                            return ToolOutcome::error(format!("agent admission failed: {err}"));
+                        }
+                    };
+                    match self.family.start(agent_id, objective).await {
+                        Ok(operation_id) => ToolOutcome::text(format!(
+                            "agent handle: {agent_id}\nstarted: {operation_id}"
+                        )),
+                        Err(Error::Capacity) => ToolOutcome::text(format!(
+                            "agent handle: {agent_id}\nadmitted; execution capacity is exhausted; use agent_start later"
+                        )),
+                        Err(err) => ToolOutcome::error(format!(
+                            "agent handle: {agent_id}\nadmitted, but start failed: {err}"
+                        )),
+                    }
+                }
+                AgentToolKind::Start => {
+                    let agent_id = match parse_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let objective = match string_arg(&arguments, "objective") {
+                        Ok(value) => value.to_owned(),
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.start(agent_id, objective).await {
+                        Ok(operation_id) => {
+                            ToolOutcome::text(format!("agent {agent_id} started: {operation_id}"))
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                AgentToolKind::Status => {
+                    let agent_id = match parse_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.observe(agent_id).await {
+                        Ok(observation) => ToolOutcome::text(observation.render()),
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                AgentToolKind::Wait => {
+                    let agent_id = match parse_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let status = match self.family.wait_one(agent_id, cancel, None).await {
+                        Ok(status) => status,
+                        Err(err) => return ToolOutcome::error(err.to_string()),
+                    };
+                    let operation_id = status_operation_id(&status)
+                        .expect("wait rejects admitted agents without an operation");
+                    match self.family.observe_operation(agent_id, operation_id).await {
+                        Ok(observation) => ToolOutcome::text(observation.render()),
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                AgentToolKind::Cancel => {
+                    let agent_id = match parse_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self.family.cancel(agent_id).await {
+                        Ok(()) => {
+                            ToolOutcome::text(format!("cancellation accepted for agent {agent_id}"))
+                        }
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+                AgentToolKind::Send => {
+                    let agent_id = match parse_agent_handle(&arguments) {
+                        Ok(agent_id) => agent_id,
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    let message = match string_arg(&arguments, "message") {
+                        Ok(value) => value.to_owned(),
+                        Err(err) => return ToolOutcome::error(err),
+                    };
+                    match self
+                        .family
+                        .send(self.family.root(), agent_id, message)
+                        .await
+                    {
+                        Ok(operation_id) => ToolOutcome::text(format!(
+                            "message accepted for agent {agent_id}: {operation_id}"
+                        )),
+                        Err(err) => ToolOutcome::error(err.to_string()),
+                    }
+                }
+            }
+        })
+    }
+}
+
+fn agent_handle_schema(extra: Option<(&str, &str)>) -> Value {
+    let mut properties = serde_json::Map::from_iter([(
+        "handle".to_owned(),
+        json!({"type": "string", "description": "agent-<uuid> returned by spawn_agent"}),
+    )]);
+    let mut required = vec![Value::String("handle".to_owned())];
+    if let Some((name, kind)) = extra {
+        properties.insert(name.to_owned(), json!({"type": kind}));
+        required.push(Value::String(name.to_owned()));
+    }
+    json!({
+        "type": "object",
+        "properties": properties,
+        "required": required,
+    })
+}
+
+fn string_arg<'a>(arguments: &'a Value, name: &str) -> Result<&'a str, String> {
+    arguments
+        .get(name)
+        .and_then(Value::as_str)
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| format!("malformed arguments: `{name}` must be a non-empty string"))
+}
+
+fn parse_agent_handle(arguments: &Value) -> Result<AgentId, String> {
+    let raw = string_arg(arguments, "handle")?;
+    let uuid = raw.strip_prefix("agent-").unwrap_or(raw);
+    AgentId::parse(uuid).ok_or_else(|| format!("malformed agent handle {raw:?}"))
 }

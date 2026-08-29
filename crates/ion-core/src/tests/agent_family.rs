@@ -454,3 +454,66 @@ async fn agent_messages_use_durable_inbox_and_preserve_sender_provenance() {
     runtime.session().close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn model_facing_agent_tools_use_family_authority_and_report_exact_result() {
+    let provider = SharedLogProvider::default();
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
+    let tools = crate::agent_tools(Arc::clone(&family));
+
+    let spawn = tools[0]
+        .call(
+            json!({"objective": "inspect the shared branch"}),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!spawn.is_error, "spawn failed: {spawn:?}");
+    let handle = spawn
+        .output
+        .lines()
+        .find_map(|line| line.strip_prefix("agent handle: "))
+        .expect("durable agent handle")
+        .to_owned();
+
+    let waited = tools[3]
+        .call(json!({"handle": handle}), CancellationToken::new())
+        .await;
+    assert!(!waited.is_error, "wait failed: {waited:?}");
+    assert!(waited.output.contains("finished"), "{waited:?}");
+    assert!(waited.output.contains("working"), "{waited:?}");
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn idle_agent_message_respects_execution_capacity() {
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(500),
+        ..SharedLogProvider::default()
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let family = runtime.agent_family(1).await.expect("family");
+    let root = family.root();
+    let first = family.admit_lane(root).await.expect("first agent");
+    let second = family.admit_lane(root).await.expect("second agent");
+
+    family
+        .send(root, first, "start from a message")
+        .await
+        .expect("first message starts execution");
+    assert!(matches!(
+        family.send(root, second, "must remain blocked").await,
+        Err(crate::AgentError::Capacity)
+    ));
+    assert_eq!(
+        family.status(second).await.expect("second status"),
+        crate::AgentStatus::Admitted
+    );
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
