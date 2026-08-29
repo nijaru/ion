@@ -35,6 +35,8 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Commit validated slice
         run: |
+          # No branch writes occur after this workflow is triggered, so this
+          # validated source commit can fast-forward main directly.
           rm .github/family-observation-patch.py .github/family-observation-prepatch.py .github/workflows/family-observation-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
