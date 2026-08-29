@@ -36,6 +36,32 @@ text = replace_once(
 )
 text = replace_once(
     text,
+    """            if matches!(
+                payload.state,
+                OperationState::Finished(OperationOutcome::Indeterminate)
+            ) {
+                self.indeterminate_warning = Some(IndeterminateWarning {
+                    operation_id: operation.id,
+                    message: INDETERMINATE_MESSAGE.to_owned(),
+                });
+            }
+""",
+    """            if operation.lane_name == crate::session::lane::MAIN
+                && matches!(
+                    payload.state,
+                    OperationState::Finished(OperationOutcome::Indeterminate)
+                )
+            {
+                self.main_indeterminate_warning = Some(IndeterminateWarning {
+                    operation_id: operation.id,
+                    message: INDETERMINATE_MESSAGE.to_owned(),
+                });
+            }
+""",
+    "loaded indeterminate warning",
+)
+text = replace_once(
+    text,
     """                OperationOutcome::Indeterminate => {
                     self.indeterminate_warning = Some(IndeterminateWarning {
                         operation_id,
