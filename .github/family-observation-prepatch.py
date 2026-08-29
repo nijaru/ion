@@ -1,7 +1,8 @@
 from pathlib import Path
 
 # Normalize only formatting introduced by rustfmt so the semantic patch can
-# keep exact, reviewable anchors against the previously validated source.
+# keep exact, reviewable anchors against the previously validated source. This
+# file exists only to stage the one-shot validated migration.
 p = Path("crates/ion-core/src/delegate.rs")
 text = p.read_text()
 old = '''                            let handle =
