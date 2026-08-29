@@ -19,7 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
 use crate::ids::{AgentId, EffectId, EntryId, InboxId, OperationId, SessionId};
-use crate::session::{InboxKind, OperationState, SessionEntry};
+use crate::operation::{InboxKind, OperationState, SessionEntry};
 use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;

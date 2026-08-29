@@ -384,13 +384,6 @@ impl OperationMachine {
         }
     }
 
-    /// The capability snapshot used for the current model step
-    /// (DESIGN.md §18.2).
-    #[must_use]
-    pub const fn step_tools(&self) -> &Vec<ToolSpec> {
-        &self.step_tools
-    }
-
     /// Replace the capability snapshot at a model-step boundary. A staged
     /// machine is updated before its transition is committed, so a failed
     /// persistence write leaves the live snapshot unchanged.

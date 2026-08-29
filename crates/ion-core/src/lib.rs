@@ -44,10 +44,7 @@ pub use extensions::{ExtensionDef, ExtensionService};
 pub use harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
-pub use operation::{
-    Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
-    OperationState, SessionEntry, Transition, TransitionError,
-};
+pub use operation::{InboxKind, OperationOutcome, OperationState, SessionEntry};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
