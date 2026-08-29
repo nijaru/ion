@@ -277,10 +277,7 @@ impl ToolCatalog {
         }
     }
 
-    /// The merged immutable snapshot: core plus every live scope. Name
-    /// collisions resolve in favor of core tools.
-    #[must_use]
-    pub fn snapshot(&self) -> ToolRegistry {
+    fn snapshot_matching(&self, allows_scope: impl Fn(&str) -> bool) -> ToolRegistry {
         let mut entries: HashMap<String, ToolEntry> = self.core.entries.as_ref().clone();
         let active_mcp_scopes = self
             .active_mcp_scopes
@@ -294,6 +291,9 @@ impl ToolCatalog {
             if scope.starts_with("mcp:") && !active_mcp_scopes.contains(scope) {
                 continue;
             }
+            if !allows_scope(scope) {
+                continue;
+            }
             for entry in scoped {
                 entries
                     .entry(entry.spec.name.clone())
@@ -304,6 +304,43 @@ impl ToolCatalog {
             cwd: Arc::from(self.core.cwd()),
             entries: Arc::new(entries),
         }
+    }
+
+    /// Dynamic scopes that are physically published to future model-step
+    /// snapshots right now. Inactive MCP scopes are deliberately excluded.
+    #[must_use]
+    pub(crate) fn published_scopes(&self) -> BTreeSet<String> {
+        let active_mcp_scopes = self
+            .active_mcp_scopes
+            .read()
+            .expect("active MCP scope set poisoned")
+            .clone();
+        self.dynamic
+            .read()
+            .expect("tool catalog poisoned")
+            .keys()
+            .filter(|scope| {
+                !scope.starts_with("mcp:") || active_mcp_scopes.contains(scope.as_str())
+            })
+            .cloned()
+            .collect()
+    }
+
+    /// Snapshot core tools plus only dynamic scopes structurally admitted to
+    /// the addressed lane. Tool-name narrowing is applied afterward.
+    #[must_use]
+    pub(crate) fn snapshot_for_scopes(
+        &self,
+        scopes: &crate::session::lane::ScopeGrant,
+    ) -> ToolRegistry {
+        self.snapshot_matching(|scope| scopes.allows(scope))
+    }
+
+    /// The merged immutable snapshot: core plus every currently published
+    /// scope. Name collisions resolve in favor of core tools.
+    #[must_use]
+    pub fn snapshot(&self) -> ToolRegistry {
+        self.snapshot_matching(|_| true)
     }
 
     /// All registered tool specs in the current snapshot, ordered by
@@ -471,6 +508,55 @@ mod catalog_tests {
 
         assert!(recovered.get("mcp_echo").is_none());
         assert!(recovered.get("read").is_some());
+    }
+
+    #[test]
+    fn scoped_snapshot_requires_structural_grant() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let none = crate::session::lane::ScopeGrant::none();
+        let absent = catalog.snapshot_for_scopes(&none);
+        assert!(absent.get("mcp_echo").is_none());
+        assert!(absent.get("read").is_some());
+
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+            "server-a".to_owned(),
+        ]));
+        assert!(
+            catalog
+                .snapshot_for_scopes(&admitted)
+                .get("mcp_echo")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn unrelated_scope_registered_later_is_not_in_admitted_snapshot() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+            "server-a".to_owned(),
+        ]));
+        let before = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
+
+        catalog.register_scope("server-b", vec![Arc::new(EchoTool)]);
+        let after = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
+        assert_eq!(before.id, after.id);
+        assert_eq!(before.identities, after.identities);
+    }
+
+    #[test]
+    fn admitted_scope_refreshes_to_a_new_generation() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+            "server-a".to_owned(),
+        ]));
+        let first = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let second = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
+        assert_ne!(first.id, second.id);
+        assert_ne!(first.identities, second.identities);
     }
 
     #[test]

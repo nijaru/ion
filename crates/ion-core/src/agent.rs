@@ -133,9 +133,31 @@ impl Family {
         store: SessionStore,
         max_active: usize,
     ) -> Result<Self, Error> {
-        // A command round-trip establishes that a newly spawned session has
-        // committed its root record before we read family topology.
-        let _ = session.snapshot().await?;
+        Self::attach_inner(session_id, session, store, max_active, true).await
+    }
+
+    pub(crate) async fn attach_durable(
+        session_id: SessionId,
+        session: SessionHandle,
+        store: SessionStore,
+        max_active: usize,
+    ) -> Result<Self, Error> {
+        Self::attach_inner(session_id, session, store, max_active, false).await
+    }
+
+    async fn attach_inner(
+        session_id: SessionId,
+        session: SessionHandle,
+        store: SessionStore,
+        max_active: usize,
+        await_session_start: bool,
+    ) -> Result<Self, Error> {
+        // New sessions need a command round-trip so the root row is durable. A
+        // resumed interactive runtime already has that row and may deliberately
+        // be waiting for host scope reattachment before recovery starts.
+        if await_session_start {
+            let _ = session.snapshot().await?;
+        }
         let loaded = store.load(session_id).await?;
         let family_agents = store.load_agent_family(session_id).await?;
         let root = AgentId::root(session_id);

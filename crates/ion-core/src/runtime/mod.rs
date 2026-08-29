@@ -418,6 +418,10 @@ enum SessionCommand {
         source_lane_name: String,
         reply: oneshot::Sender<Result<String, CommandError>>,
     },
+    AdmitStructuralScope {
+        scope: String,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    },
     SubmitIfIdle {
         lane_name: String,
         prompt: String,
@@ -538,6 +542,20 @@ impl SessionHandle {
                 agent_id,
                 control_parent_id,
                 source_lane_name: source_lane_name.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    pub(crate) async fn admit_structural_scope(
+        &self,
+        scope: impl Into<String>,
+    ) -> Result<(), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::AdmitStructuralScope {
+                scope: scope.into(),
                 reply,
             })
             .map_err(command_send_error)?;
@@ -756,6 +774,7 @@ struct Composition<P> {
     /// Host-selected workspace identity. A reopened session uses the
     /// persisted value instead, so process cwd cannot silently change it.
     cwd: Option<String>,
+    defer_loaded_start: bool,
 }
 
 impl<P: Provider> Composition<P> {
@@ -772,15 +791,18 @@ impl<P: Provider> Composition<P> {
             trusted_resources: Vec::new(),
             effect_gate: None,
             cwd: None,
+            defer_loaded_start: false,
         }
     }
 
     fn spawn(mut self, session_id: SessionId, loaded: Option<LoadedSession>) -> Runtime {
         let initial_model_ref = self.provider.initial_model_ref();
+        let deferred_loaded_start = self.defer_loaded_start && loaded.is_some();
         let runtime_instance_id = RuntimeInstanceId::generate();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
         let session = SessionHandle { tx };
         let provider = Arc::new(self.provider);
+        let runtime_tools = self.tools.clone();
         let tools = Arc::new(self.tools);
         let runtime_store = self.store.clone();
         let artifact_root = self.store.artifact_root();
@@ -814,6 +836,7 @@ impl<P: Provider> Composition<P> {
                     budget: self.budget,
                     parent: self.parent,
                     fork_source: self.fork_source,
+                    defer_loaded_start: deferred_loaded_start,
                 },
                 rx,
                 loaded,
@@ -825,6 +848,8 @@ impl<P: Provider> Composition<P> {
             session,
             session_id,
             store: runtime_store,
+            tools: runtime_tools,
+            deferred_loaded_start,
             join,
         }
     }
@@ -836,6 +861,8 @@ pub struct Runtime {
     session: SessionHandle,
     session_id: SessionId,
     store: SessionStore,
+    tools: ToolCatalog,
+    deferred_loaded_start: bool,
     join: JoinHandle<()>,
 }
 
@@ -1055,6 +1082,7 @@ impl Runtime {
         composition.policy = policy;
         composition.interactive_approvals = true;
         composition.trusted_resources = trusted_resources;
+        composition.defer_loaded_start = true;
         Ok(composition.spawn(session_id, Some(loaded)))
     }
 
@@ -1076,13 +1104,49 @@ impl Runtime {
         &self,
         max_active: usize,
     ) -> Result<crate::agent::Family, crate::agent::Error> {
-        crate::agent::Family::attach(
-            self.session_id,
-            self.session.clone(),
-            self.store.clone(),
-            max_active,
-        )
-        .await
+        if self.deferred_loaded_start {
+            crate::agent::Family::attach_durable(
+                self.session_id,
+                self.session.clone(),
+                self.store.clone(),
+                max_active,
+            )
+            .await
+        } else {
+            crate::agent::Family::attach(
+                self.session_id,
+                self.session.clone(),
+                self.store.clone(),
+                max_active,
+            )
+            .await
+        }
+    }
+
+    pub(crate) async fn admit_structural_scope(
+        &self,
+        scope: &str,
+    ) -> Result<(), crate::agent::Error> {
+        if self.deferred_loaded_start {
+            // The session task has not restored its loaded copy yet. Update the
+            // durable lanes directly; its first command reloads this state before
+            // recovery, so no stale in-memory grant can win.
+            let mut loaded = self.store.load(self.session_id).await?;
+            let published = self.tools.published_scopes();
+            for lane in &mut loaded.lanes {
+                let materialized = lane.config.scopes.materialize(&published);
+                let inserted = lane.name == crate::session::lane::MAIN
+                    && lane.config.scopes.insert(scope.to_owned());
+                if materialized || inserted {
+                    self.store
+                        .set_lane_config(self.session_id, &lane.name, lane.config.clone())
+                        .await?;
+                }
+            }
+            return Ok(());
+        }
+        self.session.admit_structural_scope(scope).await?;
+        Ok(())
     }
 
     pub async fn join(self) -> Result<(), RuntimeError> {
@@ -1242,6 +1306,7 @@ struct SessionDeps<P> {
     parent: Option<SessionId>,
     /// Explicit history lineage; independent from control parentage.
     fork_source: Option<(SessionId, Option<EntryId>)>,
+    defer_loaded_start: bool,
 }
 
 struct SessionRuntime<P> {
@@ -1298,6 +1363,8 @@ struct SessionRuntime<P> {
     closed: bool,
     /// True when reopened from the store; the session row already exists.
     resumed: bool,
+    loaded: Option<LoadedSession>,
+    defer_loaded_start: bool,
     /// Durable entry count at the reopen boundary for frontend resume
     /// markers. This is presentation metadata, not session authority.
     reopen_entry_count: Option<usize>,
@@ -1325,6 +1392,7 @@ impl<P: Provider> SessionRuntime<P> {
             budget,
             parent,
             fork_source,
+            defer_loaded_start,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -1342,7 +1410,8 @@ impl<P: Provider> SessionRuntime<P> {
                 config: crate::session::lane::Config::new(initial_model_ref),
             }),
         );
-        let mut runtime = Self {
+        let resumed = loaded.is_some();
+        Self {
             session_id,
             runtime_instance_id,
             cwd,
@@ -1375,14 +1444,11 @@ impl<P: Provider> SessionRuntime<P> {
             events,
             indeterminate_warning: None,
             closed: false,
-            resumed: false,
+            resumed,
+            loaded,
+            defer_loaded_start,
             reopen_entry_count: None,
-        };
-        if let Some(loaded) = loaded {
-            runtime.resumed = true;
-            runtime.restore_from(loaded);
         }
-        runtime
     }
 
     /// Rebuild live state from a loaded session: transcript, entry
@@ -1549,8 +1615,12 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     fn tool_registry_for_lane(&self, lane_name: &str) -> Option<ToolRegistry> {
-        let selection = &self.lane(lane_name)?.config.tools;
-        Some(self.tools.snapshot().selected(selection))
+        let config = &self.lane(lane_name)?.config;
+        Some(
+            self.tools
+                .snapshot_for_scopes(&config.scopes)
+                .selected(&config.tools),
+        )
     }
 
     fn tool_registry_for_operation(&self, operation_id: OperationId) -> Option<ToolRegistry> {
@@ -1703,7 +1773,54 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
+    async fn materialize_loaded_scope_grants(
+        &self,
+        loaded: &mut LoadedSession,
+    ) -> Result<(), StoreError> {
+        let published = self.tools.published_scopes();
+        for lane in &mut loaded.lanes {
+            if lane.config.scopes.materialize(&published) {
+                self.store
+                    .set_lane_config(self.session_id, &lane.name, lane.config.clone())
+                    .await?;
+            }
+        }
+        Ok(())
+    }
+
     async fn run(mut self) {
+        let mut startup_command = None;
+        if self.resumed {
+            if self.defer_loaded_start {
+                startup_command = self.commands.recv().await;
+                if startup_command.is_none() {
+                    return;
+                }
+                match self.store.load(self.session_id).await {
+                    Ok(loaded) => self.loaded = Some(loaded),
+                    Err(err) => {
+                        error!(session = %self.session_id, %err, "could not reload deferred session");
+                        return;
+                    }
+                }
+            }
+            let Some(mut loaded) = self.loaded.take() else {
+                error!(session = %self.session_id, "resumed runtime has no loaded state");
+                return;
+            };
+            if let Err(err) = self.materialize_loaded_scope_grants(&mut loaded).await {
+                error!(session = %self.session_id, %err, "could not materialize structural scope grants");
+                return;
+            }
+            self.restore_from(loaded);
+        } else {
+            let published = self.tools.published_scopes();
+            self.lane_mut(crate::session::lane::MAIN)
+                .expect("new runtime has a main lane")
+                .config
+                .scopes = crate::session::lane::ScopeGrant::from_published(published);
+        }
+
         if !self.resumed && !self.closed {
             let record = SessionRecord {
                 id: self.session_id,
@@ -1720,6 +1837,16 @@ impl<P: Provider> SessionRuntime<P> {
                     %err,
                     "session row not durable; session will not start"
                 );
+                self.closed = true;
+                return;
+            }
+            let config = self.main_lane().config.clone();
+            if let Err(err) = self
+                .store
+                .set_lane_config(self.session_id, crate::session::lane::MAIN, config)
+                .await
+            {
+                error!(session = %self.session_id, %err, "initial scope grant not durable");
                 self.closed = true;
                 return;
             }
@@ -1746,6 +1873,11 @@ impl<P: Provider> SessionRuntime<P> {
                     break;
                 }
             }
+        }
+        if let Some(command) = startup_command
+            && self.handle_command(command).await
+        {
+            return;
         }
         loop {
             tokio::select! {
@@ -1790,6 +1922,10 @@ impl<P: Provider> SessionRuntime<P> {
                     self.admit_agent_lane(agent_id, control_parent_id, source_lane_name)
                         .await,
                 );
+                false
+            }
+            SessionCommand::AdmitStructuralScope { scope, reply } => {
+                let _ = reply.send(self.admit_structural_scope(scope).await);
                 false
             }
             SessionCommand::SubmitIfIdle {
@@ -1955,6 +2091,29 @@ impl<P: Provider> SessionRuntime<P> {
         );
         debug_assert!(previous.is_none(), "agent lane identity is unique");
         Ok(lane_name)
+    }
+
+    async fn admit_structural_scope(&mut self, scope: String) -> Result<(), CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let lane_name = crate::session::lane::MAIN;
+        let mut config = self
+            .lane(lane_name)
+            .expect("root structural scope admission requires the main lane")
+            .config
+            .clone();
+        if !config.scopes.insert(scope) {
+            return Ok(());
+        }
+        self.store
+            .set_lane_config(self.session_id, lane_name, config.clone())
+            .await
+            .map_err(persistence_command_error)?;
+        self.lane_mut(lane_name)
+            .expect("persisted main lane remains resident")
+            .config = config;
+        Ok(())
     }
 
     async fn submit_if_idle_on_lane(
@@ -2564,10 +2723,16 @@ impl<P: Provider> SessionRuntime<P> {
         }
     }
 
-    fn current_context_manifest(&self) -> (CapabilitySnapshot, ContextManifest) {
-        let snapshot = self.tools.snapshot().capability_snapshot();
+    fn current_context_manifest(
+        &self,
+        operation_id: OperationId,
+    ) -> (ToolRegistry, CapabilitySnapshot, ContextManifest) {
+        let registry = self
+            .tool_registry_for_operation(operation_id)
+            .expect("context manifest operation has an owning lane");
+        let snapshot = registry.capability_snapshot();
         let manifest = ContextManifest::new(&snapshot, self.trusted_resources.clone());
-        (snapshot, manifest)
+        (registry, snapshot, manifest)
     }
 
     fn cache_expectation(
@@ -2655,7 +2820,7 @@ impl<P: Provider> SessionRuntime<P> {
         instructions: Option<String>,
     ) -> bool {
         let model = self.current_model_config(operation_id).await;
-        let (_, manifest) = self.current_context_manifest();
+        let (_, _, manifest) = self.current_context_manifest(operation_id);
         let branch = self
             .operation_branch_records(operation_id)
             .expect("resident operation lane branch is complete");
@@ -2789,7 +2954,8 @@ impl<P: Provider> SessionRuntime<P> {
             self.fail_budgeted(operation_id, "model steps").await;
             return false;
         }
-        let (_, planning_manifest) = self.current_context_manifest();
+        let (step_registry, capability_snapshot, planning_manifest) =
+            self.current_context_manifest(operation_id);
         let plan = self
             .project_model_step_plan(operation_id, &planning_manifest)
             .await;
@@ -2798,10 +2964,6 @@ impl<P: Provider> SessionRuntime<P> {
             .active(operation_id)
             .cloned()
             .expect("step needs an operation");
-        let step_registry = self
-            .tool_registry_for_operation(operation_id)
-            .expect("model step operation has an owning lane");
-        let capability_snapshot = step_registry.capability_snapshot();
         staged
             .machine
             .set_step_tools(capability_snapshot.tools.clone());

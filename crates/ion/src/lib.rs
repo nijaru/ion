@@ -89,7 +89,8 @@ where
         },
         runtime.session_id(),
     );
-    ion_core::install_agent_host_tools(tools, Arc::clone(&family), Arc::clone(&hosted));
+    ion_core::install_agent_host_tools(tools, runtime, Arc::clone(&family), Arc::clone(&hosted))
+        .await?;
     Ok(AgentHost { family, hosted })
 }
 

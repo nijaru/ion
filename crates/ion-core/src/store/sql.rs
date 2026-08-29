@@ -389,6 +389,7 @@ fn admit_lane_agent(
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     if lane.config.model_ref != parent_config.model_ref
         || !lane.config.tools.is_subset_of(&parent_config.tools)
+        || !lane.config.scopes.is_subset_of(&parent_config.scopes)
     {
         return Err(rusqlite::Error::InvalidParameterName(
             "agent lane configuration may narrow but not escalate its control parent".to_owned(),
@@ -475,7 +476,9 @@ fn admit_session_agent(
             "hosted agent lane model must match its admitted session model".to_owned(),
         ));
     }
-    if !config.tools.is_subset_of(&parent_config.tools) {
+    if !config.tools.is_subset_of(&parent_config.tools)
+        || !config.scopes.is_subset_of(&parent_config.scopes)
+    {
         return Err(rusqlite::Error::InvalidParameterName(
             "hosted agent capabilities may narrow but not escalate its control parent".to_owned(),
         ));

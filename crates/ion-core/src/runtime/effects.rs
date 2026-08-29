@@ -378,7 +378,7 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("settle needs an operation");
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
         let model = self.current_model_config(operation_id).await;
-        let (_, manifest) = self.current_context_manifest();
+        let (_, _, manifest) = self.current_context_manifest(operation_id);
         let branch = self
             .operation_branch_records(operation_id)
             .expect("resident operation lane branch is complete");
