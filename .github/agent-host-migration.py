@@ -1,0 +1,222 @@
+from pathlib import Path
+
+
+def splice(text: str, start_marker: str, end_marker: str, replacement: str, label: str) -> str:
+    try:
+        start = text.index(start_marker)
+        end = text.index(end_marker, start)
+    except ValueError as err:
+        raise SystemExit(f"{label} anchor missing") from err
+    return text[:start] + replacement + text[end:]
+
+
+# Application-level host ownership: one object retains the durable
+# same-session family plus the temporary fresh/fork runtime manager.
+p = Path("crates/ion/src/lib.rs")
+text = p.read_text()
+replacement = '''/// Process-owned agent service for one root runtime. Same-session lane agents
+/// and separately hosted fresh/fork descendants share one host lifetime even while
+/// the latter still use the migration child runtime internally.
+pub struct AgentHost<P> {
+    family: Arc<ion_core::AgentFamily>,
+    children: Arc<ion_core::ChildManager<P>>,
+}
+
+impl<P> AgentHost<P> {
+    #[must_use]
+    pub fn family(&self) -> &Arc<ion_core::AgentFamily> {
+        &self.family
+    }
+
+    pub async fn close(&self) -> Result<(), String> {
+        self.children.close().await
+    }
+}
+
+/// Attach the complete agent service using the launch-provider factory for
+/// separately hosted descendants.
+pub async fn enable_agent_host<P>(
+    tools: &ion_core::ToolCatalog,
+    runtime: &ion_core::Runtime,
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+    max_active_agents: usize,
+) -> Result<AgentHost<P>, ion_core::AgentError>
+where
+    P: ion_core::Provider + 'static,
+{
+    enable_agent_host_with_model_resolver(
+        tools,
+        runtime,
+        store,
+        make_provider,
+        None,
+        trusted_resources,
+        max_active_agents,
+    )
+    .await
+}
+
+/// Attach the complete agent service with an optional provider resolver for
+/// explicit model overrides on separately hosted descendants.
+pub async fn enable_agent_host_with_model_resolver<P>(
+    tools: &ion_core::ToolCatalog,
+    runtime: &ion_core::Runtime,
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+    max_active_agents: usize,
+) -> Result<AgentHost<P>, ion_core::AgentError>
+where
+    P: ion_core::Provider + 'static,
+{
+    let family = Arc::new(runtime.agent_family(max_active_agents).await?);
+    ion_core::install_agent_tools(tools, Arc::clone(&family));
+    let children = ion_core::install_child_tools(
+        tools,
+        ion_core::DelegateConfig {
+            store: store.clone(),
+            make_provider,
+            make_provider_for_model,
+            max_active_children: 4,
+            child_budget: ion_core::child_budget_default(),
+            trusted_resources,
+            cwd: tools.cwd().to_path_buf(),
+        },
+        runtime.session_id(),
+    );
+    Ok(AgentHost { family, children })
+}
+
+'''
+text = splice(
+    text,
+    "/// Attach the durable shared-history agent family",
+    "/// Build the scripted-provider factory",
+    replacement,
+    "ion lib agent helpers",
+)
+p.write_text(text)
+
+# TUI and print mode now attach one host service instead of composing family
+# and child authorities independently.
+p = Path("crates/ion/src/main.rs")
+text = p.read_text()
+tui_attach = '''    let agent_host = match ion::enable_agent_host_with_model_resolver(
+        &tools,
+        &runtime,
+        &store,
+        Arc::clone(&make_provider),
+        make_provider_for_model,
+        trusted_resources.clone(),
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "agents: {err}");
+            let _ = runtime.session().close().await;
+            let _ = runtime.join().await;
+            if let Err(close_err) = tools.close().await {
+                tracing::error!(error = %close_err, "failed to close the tool catalog");
+            }
+            let _ = store.close().await;
+            return ExitCode::FAILURE;
+        }
+    };
+'''
+text = splice(
+    text,
+    "    let _agent_family = match ion::enable_agents",
+    "    let keymap = match",
+    tui_attach,
+    "TUI agent attach",
+)
+
+print_attach = '''    let agent_host = match ion::enable_agent_host(
+        &tools,
+        &runtime,
+        &store,
+        Arc::clone(&make_provider),
+        trusted_resources.clone(),
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
+        Err(err) => {
+            let session = runtime.session();
+            let _ = session.close().await;
+            let _ = runtime.join().await;
+            let _ = tools.close().await;
+            let _ = store.close().await;
+            return Err(RuntimeError::OperationFailed(format!(
+                "attach agent host: {err}"
+            )));
+        }
+    };
+'''
+text = splice(
+    text,
+    "    let child_manager = ion::enable_children(",
+    "    let session = runtime.session();",
+    print_attach,
+    "print agent attach",
+)
+text = text.replace("child_manager.close()", "agent_host.close()")
+text = text.replace("child_close", "agent_close")
+text = text.replace("child_err", "agent_err")
+text = text.replace("failed to close child runtimes", "failed to close agent host")
+p.write_text(text)
+
+# ACP retains the same single host object per loaded runtime.
+p = Path("crates/ion/src/acp.rs")
+text = p.read_text()
+if "child_manager: Arc<ion_core::ChildManager<P>>" not in text:
+    raise SystemExit("ACP session field anchor missing")
+text = text.replace(
+    "child_manager: Arc<ion_core::ChildManager<P>>",
+    "agent_host: crate::AgentHost<P>",
+    1,
+)
+text = text.replace("session.child_manager.close()", "session.agent_host.close()", 1)
+text = text.replace("failed to close ACP child runtimes", "failed to close ACP agent host", 1)
+text = text.replace("ACP child close failed", "ACP agent close failed", 1)
+text = text.replace(
+    "/// Attach shared-history family controls plus the separate-session\n/// fresh/fork child migration surface, then wrap the runtime in ACP state.",
+    "/// Attach the root runtime's single agent host, then wrap it in ACP state.",
+    1,
+)
+acp_attach = '''    let agent_host = match crate::enable_agent_host(
+        catalog,
+        &runtime,
+        &config.store,
+        Arc::clone(&config.make_provider),
+        trusted_resources,
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
+        Err(err) => {
+            let handle = runtime.session();
+            let _ = handle.close().await;
+            let _ = runtime.join().await;
+            return Err(format!("attach agent host: {err}"));
+        }
+    };
+'''
+text = splice(
+    text,
+    "    let _agent_family = match crate::enable_agents",
+    "    Ok(AcpSession {",
+    acp_attach,
+    "ACP agent attach",
+)
+if "        child_manager," not in text:
+    raise SystemExit("ACP initializer anchor missing")
+text = text.replace("        child_manager,", "        agent_host,", 1)
+p.write_text(text)
