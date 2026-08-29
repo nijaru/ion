@@ -44,7 +44,7 @@ async fn lane_agent_identity_and_lane_are_published_atomically() {
             root_agent,
             "agent-worker",
             Some(root_entry),
-            "model-a",
+            crate::session::lane::Config::new("model-a"),
         )
         .await
         .expect("agent admission");
@@ -83,7 +83,7 @@ async fn lane_agent_identity_and_lane_are_published_atomically() {
                 root_agent,
                 "must-not-survive",
                 Some(root_entry),
-                "model-a",
+                crate::session::lane::Config::new("model-a"),
             )
             .await
             .is_err()

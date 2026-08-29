@@ -7,8 +7,7 @@
 //! Execution happens in a spawned tool task: the controller never awaits
 //! tool I/O on its loop.
 
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::future::Future;
 use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
@@ -89,6 +88,58 @@ pub struct ToolSpec {
     pub name: String,
     pub description: String,
     pub input_schema: Value,
+}
+
+/// Durable structural selection applied to a lane's future tool snapshots.
+/// Tool-name semantics live at the tool boundary; runtime/store code only
+/// composes and validates selections.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub(crate) enum ToolSelection {
+    All,
+    Only(BTreeSet<String>),
+}
+
+impl ToolSelection {
+    #[must_use]
+    pub(crate) const fn all() -> Self {
+        Self::All
+    }
+
+    #[must_use]
+    pub(crate) fn read_only() -> Self {
+        Self::Only(BTreeSet::from([
+            "find".to_owned(),
+            "read".to_owned(),
+            "search".to_owned(),
+        ]))
+    }
+
+    #[must_use]
+    pub(crate) fn narrowed_by(&self, limit: &Self) -> Self {
+        match (self, limit) {
+            (Self::All, other) => other.clone(),
+            (other, Self::All) => other.clone(),
+            (Self::Only(current), Self::Only(limit)) => {
+                Self::Only(current.intersection(limit).cloned().collect())
+            }
+        }
+    }
+
+    #[must_use]
+    pub(crate) fn is_subset_of(&self, parent: &Self) -> bool {
+        match (self, parent) {
+            (_, Self::All) => true,
+            (Self::All, Self::Only(_)) => false,
+            (Self::Only(child), Self::Only(parent)) => child.is_subset(parent),
+        }
+    }
+
+    fn allows(&self, name: &str) -> bool {
+        match self {
+            Self::All => true,
+            Self::Only(names) => names.contains(name),
+        }
+    }
 }
 
 /// A complete tool call requested by a provider, admitted through the
@@ -600,6 +651,46 @@ impl ToolRegistry {
     #[must_use]
     pub fn cwd(&self) -> &Path {
         &self.cwd
+    }
+
+    /// Structurally narrow this immutable registry. Missing tools stay absent;
+    /// selection never manufactures an executor.
+    #[must_use]
+    pub(crate) fn selected(&self, selection: &ToolSelection) -> Self {
+        let mut entries = self.entries.as_ref().clone();
+        entries.retain(|name, _| selection.allows(name));
+        Self {
+            cwd: Arc::clone(&self.cwd),
+            entries: Arc::new(entries),
+        }
+    }
+
+    /// Reconstruct only executors that exactly match a persisted capability
+    /// snapshot. A same-name replacement with a new spec/generation is absent
+    /// rather than silently retargeting recovered work.
+    #[must_use]
+    pub(crate) fn available_for_snapshot(
+        &self,
+        snapshot: &crate::context::CapabilitySnapshot,
+    ) -> Self {
+        let mut entries = self.entries.as_ref().clone();
+        entries.retain(|name, entry| {
+            snapshot
+                .tools
+                .iter()
+                .position(|tool| tool.name == *name)
+                .is_some_and(|index| {
+                    snapshot.tools[index] == entry.spec
+                        && snapshot
+                            .identities
+                            .get(index)
+                            .is_some_and(|identity| identity == &entry.capability_id)
+                })
+        });
+        Self {
+            cwd: Arc::clone(&self.cwd),
+            entries: Arc::new(entries),
+        }
     }
 
     /// Build the durable capability snapshot for this immutable registry.

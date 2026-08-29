@@ -451,7 +451,7 @@ The current workstream has already established:
 - tree-aware recovery that loads and validates every durable lane over the shared tree, with pending durable inbox restored per operation;
 - Rust 1.98.0 as the workspace/toolchain/CI contract.
 
-Storage and recovery can now represent multiple lanes. Live execution still projects `main` and owns singleton active-operation/draft/effect state; that is the active boundary.
+Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven, and agent messaging uses the durable input path. The current client snapshot still projects `main`; scoped capabilities and replacement of the remaining child-only scaffolding are the active boundary.
 
 ## 20. Implementation order
 
@@ -461,7 +461,7 @@ Storage and recovery can now represent multiple lanes. Live execution still proj
 4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
 5. Replace child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when a concrete owner exists.
 6. Add durable agent messaging/background completion through the common session-input path.
-7. Add scoped capability publication/teardown around agent creation/resume.
+7. Make scoped capability publication/teardown structural at lane/agent admission and exact on recovery; capability narrowing must never be reset by unrelated lane configuration changes.
 8. Finish typed tool/effect admission boundaries and expand `ion-eval` around recovery and multi-agent invariants.
 9. Shrink/rename public Rust API and remove dead migration scaffolding once ownership is stable.
 10. Redesign the TUI only after the authoritative session/agent host contract is coherent, with ACP as a first-class client boundary.

@@ -1,6 +1,63 @@
 use super::support::*;
 
 #[tokio::test]
+async fn lane_agents_are_structurally_read_only() {
+    let provider = SharedLogProvider::default();
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime =
+        start_runtime_with_store(provider.clone(), ToolRegistry::default(), store.clone());
+    let family = runtime.agent_family(1).await.expect("family");
+    let agent = family
+        .admit_lane(family.root())
+        .await
+        .expect("agent admission");
+    family
+        .start(agent, "inspect only")
+        .await
+        .expect("agent start");
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if !provider.requests().is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("provider request");
+
+    let requests = provider.requests();
+    let names = requests[0]
+        .tools
+        .iter()
+        .map(|tool| tool.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec!["find", "read", "search"]);
+    assert!(
+        !names
+            .iter()
+            .any(|name| matches!(*name, "write" | "edit" | "bash"))
+    );
+
+    let loaded = store.load(runtime.session_id()).await.expect("load");
+    let record = loaded
+        .agents
+        .iter()
+        .find(|record| record.id == agent)
+        .expect("agent record");
+    let lane = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == record.lane_name)
+        .expect("agent lane");
+    assert_eq!(lane.config.tools, crate::tool::ToolSelection::read_only());
+
+    runtime.session().close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn retained_agent_identity_is_separate_from_execution_capacity() {
     let provider = SharedLogProvider {
         settle_delay: Duration::from_millis(500),

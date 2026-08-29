@@ -332,19 +332,32 @@ fn admit_lane_agent(
     let tx = connection.transaction()?;
     let session = session_id.as_uuid().to_string();
     let parent = control_parent_id.as_uuid().to_string();
-    let (parent_family, parent_session, parent_leaf): (String, String, Option<String>) = tx
-        .query_row(
-            "SELECT a.family_session_id, a.session_id, lane.leaf_id
-             FROM agents a
-             JOIN lanes lane ON lane.session_id = a.session_id AND lane.name = a.lane_name
-             WHERE a.id = ?1",
-            [&parent],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-        )?;
+    let (parent_family, parent_session, parent_leaf, parent_config): (
+        String,
+        String,
+        Option<String>,
+        String,
+    ) = tx.query_row(
+        "SELECT a.family_session_id, a.session_id, lane.leaf_id, lane.config
+         FROM agents a
+         JOIN lanes lane ON lane.session_id = a.session_id AND lane.name = a.lane_name
+         WHERE a.id = ?1",
+        [&parent],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
     let source_leaf = lane.state.leaf.map(|id| id.as_uuid().to_string());
     if parent_family != session || parent_session != session || parent_leaf != source_leaf {
         return Err(rusqlite::Error::InvalidParameterName(
             "agent lane must anchor at its control parent's current lane leaf".to_owned(),
+        ));
+    }
+    let parent_config: crate::session::lane::Config = serde_json::from_str(&parent_config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    if lane.config.model_ref != parent_config.model_ref
+        || !lane.config.tools.is_subset_of(&parent_config.tools)
+    {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "agent lane configuration may narrow but not escalate its control parent".to_owned(),
         ));
     }
     let config = serde_json::to_string(&lane.config)
@@ -1417,9 +1430,11 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         )?;
         let capability_snapshot: crate::context::CapabilitySnapshot =
             decode("capability snapshot", snapshot_payload)?;
-        if capability_snapshot.id != checkpoint.capability_snapshot_id {
+        if capability_snapshot.id != checkpoint.capability_snapshot_id
+            || !capability_snapshot.is_consistent()
+        {
             return Err(StoreError::Sqlite(
-                "checkpoint capability snapshot id mismatch".to_owned(),
+                "checkpoint capability snapshot is inconsistent".to_owned(),
             ));
         }
         let uuid = Uuid::parse_str(&op_id)

@@ -1,4 +1,5 @@
 use crate::ids::{EntryId, OperationId};
+use crate::tool::ToolSelection;
 
 pub(crate) const MAIN: &str = "main";
 
@@ -9,12 +10,14 @@ pub(crate) const MAIN: &str = "main";
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Config {
     pub(crate) model_ref: String,
+    pub(crate) tools: ToolSelection,
 }
 
 impl Config {
     pub(crate) fn new(model_ref: impl Into<String>) -> Self {
         Self {
             model_ref: model_ref.into(),
+            tools: ToolSelection::all(),
         }
     }
 }

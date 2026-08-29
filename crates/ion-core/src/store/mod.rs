@@ -476,6 +476,22 @@ impl SessionStore {
         source_leaf: Option<EntryId>,
         model_ref: impl Into<String>,
     ) -> Result<(), StoreError> {
+        self.create_lane_with_config(
+            session_id,
+            lane_name,
+            source_leaf,
+            crate::session::lane::Config::new(model_ref),
+        )
+        .await
+    }
+
+    pub(crate) async fn create_lane_with_config(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        source_leaf: Option<EntryId>,
+        config: crate::session::lane::Config,
+    ) -> Result<(), StoreError> {
         let lane = crate::session::lane::Lane {
             name: lane_name.into(),
             state: crate::session::lane::State {
@@ -483,7 +499,7 @@ impl SessionStore {
                 current_operation: None,
                 pending_next_run: None,
             },
-            config: crate::session::lane::Config::new(model_ref),
+            config,
         };
         self.request(|reply| StoreCommand::CreateLane {
             session_id,
@@ -502,7 +518,7 @@ impl SessionStore {
         control_parent_id: AgentId,
         lane_name: impl Into<String>,
         source_leaf: Option<EntryId>,
-        model_ref: impl Into<String>,
+        config: crate::session::lane::Config,
     ) -> Result<(), StoreError> {
         let lane = crate::session::lane::Lane {
             name: lane_name.into(),
@@ -511,7 +527,7 @@ impl SessionStore {
                 current_operation: None,
                 pending_next_run: None,
             },
-            config: crate::session::lane::Config::new(model_ref),
+            config,
         };
         self.request(|reply| StoreCommand::AdmitLaneAgent {
             session_id,

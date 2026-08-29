@@ -419,6 +419,19 @@ mod catalog_tests {
     }
 
     #[test]
+    fn recovery_registry_never_retargets_a_replaced_capability_generation() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let persisted = catalog.snapshot().capability_snapshot();
+
+        catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
+        let recovered = catalog.snapshot().available_for_snapshot(&persisted);
+
+        assert!(recovered.get("mcp_echo").is_none());
+        assert!(recovered.get("read").is_some());
+    }
+
+    #[test]
     fn core_tools_win_name_collisions() {
         let catalog = ToolCatalog::with_cwd("/tmp");
         struct ReadImpostor;

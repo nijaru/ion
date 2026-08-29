@@ -43,7 +43,8 @@ use crate::store::{
     StoreError, ToolProgressCheckpoint, UsageRecord,
 };
 use crate::tool::{
-    RecoveryClass, ToolCall, ToolCatalog, ToolProgress, ToolRegistry, ToolResult, ToolSpec,
+    RecoveryClass, ToolCall, ToolCatalog, ToolProgress, ToolRegistry, ToolResult, ToolSelection,
+    ToolSpec,
 };
 
 mod effects;
@@ -1480,10 +1481,10 @@ impl<P: Provider> SessionRuntime<P> {
                 ));
                 continue;
             }
-            let steers: Vec<InboxItem> = operation
+            let pending_inputs: Vec<InboxItem> = operation
                 .pending_inbox
                 .iter()
-                .filter(|item| item.kind == InboxKind::Steer)
+                .filter(|item| !matches!(&item.kind, InboxKind::Prompt))
                 .map(|item| InboxItem {
                     kind: item.kind.clone(),
                     text: item.text.clone(),
@@ -1495,7 +1496,7 @@ impl<P: Provider> SessionRuntime<P> {
                 operation.capability_snapshot.tools.clone(),
                 payload.state.clone(),
                 payload.cancel_requested,
-                steers,
+                pending_inputs,
             );
             info!(
                 session = %self.session_id,
@@ -1503,10 +1504,14 @@ impl<P: Provider> SessionRuntime<P> {
                 state = ?payload.state,
                 "reopened an open operation; recovery is Step 3 work"
             );
+            let tool_registry = self
+                .tool_registry_for_lane(&operation.lane_name)
+                .expect("loaded operation origin lane exists")
+                .available_for_snapshot(&operation.capability_snapshot);
             let active = ActiveOperation {
                 machine,
                 capability_snapshot: operation.capability_snapshot.clone(),
-                tool_registry: self.tools.snapshot(),
+                tool_registry,
                 cancel: self.cancel_root.child_token(),
                 state_seq,
                 open_effect: payload.open_effect.clone(),
@@ -1551,6 +1556,16 @@ impl<P: Provider> SessionRuntime<P> {
     fn main_lane(&self) -> &crate::session::lane::Lane {
         self.lane(crate::session::lane::MAIN)
             .expect("main lane exists while session runtime is live")
+    }
+
+    fn tool_registry_for_lane(&self, lane_name: &str) -> Option<ToolRegistry> {
+        let selection = &self.lane(lane_name)?.config.tools;
+        Some(self.tools.snapshot().selected(selection))
+    }
+
+    fn tool_registry_for_operation(&self, operation_id: OperationId) -> Option<ToolRegistry> {
+        let lane_name = self.operation_lane_name(operation_id)?;
+        self.tool_registry_for_lane(lane_name)
     }
 
     fn lane_live(&self, lane_name: &str) -> Option<&LaneResidency> {
@@ -1878,13 +1893,13 @@ impl<P: Provider> SessionRuntime<P> {
             return Err(CommandError::LaneExists(lane_name));
         }
         let source_leaf = self.main_lane().state.leaf;
-        let model_ref = self.main_model_ref().to_owned();
+        let config = self.main_lane().config.clone();
         self.store
-            .create_lane(
+            .create_lane_with_config(
                 self.session_id,
                 lane_name.clone(),
                 source_leaf,
-                model_ref.clone(),
+                config.clone(),
             )
             .await
             .map_err(persistence_command_error)?;
@@ -1897,7 +1912,7 @@ impl<P: Provider> SessionRuntime<P> {
                     current_operation: None,
                     pending_next_run: None,
                 },
-                config: crate::session::lane::Config::new(model_ref),
+                config,
             }),
         );
         debug_assert!(previous.is_none(), "lane topology identity is unique");
@@ -1917,7 +1932,8 @@ impl<P: Provider> SessionRuntime<P> {
             .lane(&source_lane_name)
             .ok_or_else(|| CommandError::LaneNotFound(source_lane_name.clone()))?;
         let source_leaf = source.state.leaf;
-        let model_ref = source.config.model_ref.clone();
+        let mut config = source.config.clone();
+        config.tools = config.tools.narrowed_by(&ToolSelection::read_only());
         let lane_name = agent_id.to_string();
         if self.lanes.contains_key(&lane_name) {
             return Err(CommandError::LaneExists(lane_name));
@@ -1929,7 +1945,7 @@ impl<P: Provider> SessionRuntime<P> {
                 control_parent_id,
                 lane_name.clone(),
                 source_leaf,
-                model_ref.clone(),
+                config.clone(),
             )
             .await
             .map_err(persistence_command_error)?;
@@ -1942,7 +1958,7 @@ impl<P: Provider> SessionRuntime<P> {
                     current_operation: None,
                     pending_next_run: None,
                 },
-                config: crate::session::lane::Config::new(model_ref),
+                config,
             }),
         );
         debug_assert!(previous.is_none(), "agent lane identity is unique");
@@ -2049,7 +2065,9 @@ impl<P: Provider> SessionRuntime<P> {
         reservation: Option<crate::session::lane::NextRun>,
     ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
         let operation_id = OperationId::generate();
-        let tool_registry = self.tools.snapshot();
+        let tool_registry = self
+            .tool_registry_for_lane(lane_name)
+            .expect("operation acceptance lane exists");
         let (machine, applied) = match &input.kind {
             InboxKind::Prompt => {
                 OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())
@@ -2194,18 +2212,15 @@ impl<P: Provider> SessionRuntime<P> {
         if model_ref == previous {
             return Ok(previous);
         }
+        let mut config = self.lane(&lane_name).expect("checked lane").config.clone();
+        config.model_ref = model_ref;
         self.store
-            .set_lane_config(
-                self.session_id,
-                &lane_name,
-                crate::session::lane::Config::new(model_ref.clone()),
-            )
+            .set_lane_config(self.session_id, &lane_name, config.clone())
             .await
             .map_err(persistence_command_error)?;
         self.lane_mut(&lane_name)
             .expect("configured lane remains resident")
-            .config
-            .model_ref = model_ref;
+            .config = config;
         let live = self
             .lane_live_mut(&lane_name)
             .expect("configured lane residency remains live");
@@ -2734,9 +2749,9 @@ impl<P: Provider> SessionRuntime<P> {
         let message = format!("operation budget exceeded: {dimension}");
         warn!(session = %self.session_id, %message, "budget exhausted");
         let mut staged = self
-            .main_active()
+            .active(operation_id)
             .cloned()
-            .expect("budget fail needs an operation");
+            .expect("budget fail needs the addressed operation");
         let applied = staged
             .machine
             .apply(Transition::FailOperation {
@@ -2791,7 +2806,9 @@ impl<P: Provider> SessionRuntime<P> {
             .active(operation_id)
             .cloned()
             .expect("step needs an operation");
-        let step_registry = self.tools.snapshot();
+        let step_registry = self
+            .tool_registry_for_operation(operation_id)
+            .expect("model step operation has an owning lane");
         let capability_snapshot = step_registry.capability_snapshot();
         staged
             .machine
@@ -2886,8 +2903,8 @@ impl<P: Provider> SessionRuntime<P> {
             .and_then(|active| active.capability_snapshot.identity(&call.name))
             .map(str::to_owned);
         let current_capability = self
-            .tools
-            .snapshot()
+            .tool_registry_for_operation(operation_id)
+            .expect("tool admission operation has an owning lane")
             .capability_snapshot()
             .identity(&call.name)
             .map(str::to_owned);
