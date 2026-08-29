@@ -114,7 +114,7 @@ replace_one(
     '''            capability_snapshot_id: capability_snapshot.id.clone(),
             open_effect: None,
         },
-        capability_snapshot: capability_snapshot.clone(),
+        capability_snapshot,
 ''',
     "reconcile initial checkpoint snapshot",
 )
