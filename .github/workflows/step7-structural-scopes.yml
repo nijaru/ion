@@ -27,6 +27,8 @@ jobs:
         run: python .github/step7_structural_scopes.py
       - name: Apply overflow manifest fix
         run: python .github/step7_fix1.py
+      - name: Preserve child scope narrowing
+        run: python .github/step7_fix2.py
       - name: Format
         run: cargo fmt --all
       - name: Format gate
@@ -39,7 +41,7 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           git checkout "$GITHUB_HEAD_REF"
-          rm .github/step7_structural_scopes.py .github/step7_fix1.py .github/workflows/step7-structural-scopes.yml
+          rm .github/step7_structural_scopes.py .github/step7_fix1.py .github/step7_fix2.py .github/workflows/step7-structural-scopes.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
