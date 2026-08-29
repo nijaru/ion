@@ -14,11 +14,7 @@ def insert_before(path: str, anchor: str, addition: str, label: str) -> None:
     replace_one(path, anchor, addition + anchor, label)
 
 
-# ---------------------------------------------------------------------------
-# Store: separately hosted admission publishes its exact initial lane config
-# atomically and independently validates that tools cannot exceed the control
-# parent's current durable selection. Model override remains orthogonal.
-# ---------------------------------------------------------------------------
+# Store command/API carries the exact initial lane configuration.
 replace_one(
     "crates/ion-core/src/store/mod.rs",
     '''    AdmitSessionAgent {
@@ -134,11 +130,24 @@ replace_one(
 ''',
     "load hosted control-parent config",
 )
-insert_before(
+replace_one(
     "crates/ion-core/src/store/sql.rs",
-    '''    let now = now_ms();
+    '''    let target_session = record.id.as_uuid().to_string();
+    if target_session == family_session {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a fresh/fork agent must target a distinct durable session".to_owned(),
+        ));
+    }
+
+    let now = now_ms();
 ''',
-    '''    let parent_config: crate::session::lane::Config = serde_json::from_str(&parent_config)
+    '''    let target_session = record.id.as_uuid().to_string();
+    if target_session == family_session {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a fresh/fork agent must target a distinct durable session".to_owned(),
+        ));
+    }
+    let parent_config: crate::session::lane::Config = serde_json::from_str(&parent_config)
         .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     if config.model_ref.as_str() != record.initial_model_ref.as_str() {
         return Err(rusqlite::Error::InvalidParameterName(
@@ -151,6 +160,7 @@ insert_before(
         ));
     }
 
+    let now = now_ms();
 ''',
     "hosted capability validation",
 )
@@ -167,12 +177,9 @@ replace_one(
     "persist admitted hosted config",
 )
 
-# ---------------------------------------------------------------------------
-# Hosted residency: derive the requested initial lane config from the root
-# agent's durable lane, change only the explicit model choice, then intersect
-# its tools with the hosted read-only ceiling. The store re-validates the
-# subset atomically in case the parent narrows between read and admission.
-# ---------------------------------------------------------------------------
+# Hosted residency derives initial tools from the durable root lane, then applies
+# the hosted read-only ceiling. The SQL transaction independently checks the
+# subset against the current parent config to fence a concurrent narrowing.
 insert_before(
     "crates/ion-core/src/agent_host.rs",
     '''    async fn spawn(
@@ -237,10 +244,7 @@ replace_one(
     "publish hosted config",
 )
 
-# ---------------------------------------------------------------------------
-# Store coverage: default hosted topology records read-only selection, and the
-# admission transaction rejects a child that would widen a stricter parent.
-# ---------------------------------------------------------------------------
+# Store tests pass explicit configs and cover store-side escalation rejection.
 insert_before(
     "crates/ion-core/src/tests/agent_store.rs",
     '''#[tokio::test]
@@ -370,7 +374,10 @@ async fn session_agent_admission_rejects_capability_escalation() {
         )
         .await
         .expect_err("hosted admission must not widen parent tools");
-    assert!(err.to_string().contains("may narrow but not escalate"), "got: {err}");
+    assert!(
+        err.to_string().contains("may narrow but not escalate"),
+        "got: {err}"
+    );
     assert!(matches!(
         store.load(rejected_session).await,
         Err(crate::store::StoreError::NotFound(id)) if id == rejected_session
@@ -411,8 +418,7 @@ async fn session_agent_admission_rejects_capability_escalation() {
     "session-agent escalation coverage",
 )
 
-# Production unified-host coverage: the stored lane now describes the same
-# structural read-only ceiling as the hosted executor catalog.
+# Unified-host coverage asserts durable config and executor scope agree.
 replace_one(
     "crates/ion-core/src/tests/hosted_agent_invariants.rs",
     '''    assert_eq!(loaded.session.cwd, workspace_text);
@@ -430,8 +436,8 @@ replace_one(
     "hosted durable capability assertion",
 )
 
-# Current checkpoint text records the now-concrete admission/recovery boundary;
-# the normative implementation-order requirement is unchanged.
+# Record the concrete boundary in the current checkpoint; implementation order
+# remains normative and unchanged.
 replace_one(
     "DESIGN.md",
     '''Lane/fresh/fork agents share one model-facing namespace and durable family authority; a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency, with no parallel child/delegate execution architecture. The current client snapshot still projects `main`; scoped capabilities are the active boundary.
