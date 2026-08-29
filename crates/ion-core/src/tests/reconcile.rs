@@ -200,7 +200,7 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
         id: InboxId::generate(),
         kind: InboxKind::Prompt,
         text: "go".to_owned(),
-        status: crate::InboxStatus::Applied,
+        status: crate::store::InboxStatus::Applied,
     };
     let entry = EntryRecord::provision(
         1,

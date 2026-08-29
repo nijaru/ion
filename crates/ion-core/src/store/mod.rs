@@ -323,6 +323,7 @@ enum StoreCommand {
         request: CommitRequest,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    #[cfg(test)]
     AppendEntry {
         session_id: SessionId,
         lane_name: String,
@@ -385,6 +386,7 @@ pub struct SessionStore {
     /// One-time notice for frontends (e.g. archived old-schema store).
     startup_notice: Option<String>,
     /// Test hook: fail the next mutating command (DESIGN.md §30.5).
+    #[cfg(test)]
     fail_next_write: Arc<AtomicBool>,
     join: Arc<Mutex<Option<JoinHandle<()>>>>,
     closed: Arc<AtomicBool>,
@@ -476,6 +478,7 @@ impl SessionStore {
             tx,
             artifact_root,
             startup_notice,
+            #[cfg(test)]
             fail_next_write,
             join: Arc::new(Mutex::new(Some(join))),
             closed: Arc::new(AtomicBool::new(false)),
@@ -488,28 +491,9 @@ impl SessionStore {
         self.artifact_root.as_deref().map(Path::to_path_buf)
     }
 
-    pub async fn create_session(&self, record: SessionRecord) -> Result<(), StoreError> {
+    pub(crate) async fn create_session(&self, record: SessionRecord) -> Result<(), StoreError> {
         self.request(|reply| StoreCommand::CreateSession { record, reply })
             .await
-    }
-
-    /// Create one durable lane anchored at an existing conversation leaf.
-    /// The lane must be idle at creation; operations and pending input are
-    /// admitted by their own transactions after topology exists.
-    pub async fn create_lane(
-        &self,
-        session_id: SessionId,
-        lane_name: impl Into<String>,
-        source_leaf: Option<EntryId>,
-        model_ref: impl Into<String>,
-    ) -> Result<(), StoreError> {
-        self.create_lane_with_config(
-            session_id,
-            lane_name,
-            source_leaf,
-            crate::session::lane::Config::new(model_ref),
-        )
-        .await
     }
 
     pub(crate) async fn create_lane_with_config(
@@ -587,7 +571,7 @@ impl SessionStore {
     /// Durably accept an operation: the operation row, its root inbox
     /// item, the initial total state, and the user entry commit as one
     /// transaction before the caller is acknowledged (DESIGN.md §9.1).
-    pub async fn begin_operation(
+    pub(crate) async fn begin_operation(
         &self,
         session_id: SessionId,
         lane_name: impl Into<String>,
@@ -609,13 +593,14 @@ impl SessionStore {
         .await
     }
 
-    pub async fn commit(&self, request: CommitRequest) -> Result<(), StoreError> {
+    pub(crate) async fn commit(&self, request: CommitRequest) -> Result<(), StoreError> {
         self.request(|reply| StoreCommand::Commit { request, reply })
             .await
     }
 
-    /// Append one semantic conversation entry. The session runtime assigns seq.
-    pub async fn append_entry(
+    /// Test helper for seeding semantic history without a live runtime.
+    #[cfg(test)]
+    pub(crate) async fn append_entry(
         &self,
         session_id: SessionId,
         lane_name: impl Into<String>,
@@ -713,12 +698,15 @@ impl SessionStore {
     }
 
     /// Persist the newest bounded frame for an in-flight assistant effect.
-    pub async fn upsert_assistant_frame(&self, frame: AssistantFrame) -> Result<(), StoreError> {
+    pub(crate) async fn upsert_assistant_frame(
+        &self,
+        frame: AssistantFrame,
+    ) -> Result<(), StoreError> {
         self.request(|reply| StoreCommand::UpsertAssistantFrame { frame, reply })
             .await
     }
 
-    pub async fn upsert_tool_progress(
+    pub(crate) async fn upsert_tool_progress(
         &self,
         progress: ToolProgressCheckpoint,
     ) -> Result<(), StoreError> {
@@ -752,7 +740,8 @@ impl SessionStore {
 
     /// Test hook (DESIGN.md §30.5): the next mutating command fails
     /// visibly and nothing is written.
-    pub fn fail_next_write(&self) {
+    #[cfg(test)]
+    pub(crate) fn fail_next_write(&self) {
         self.fail_next_write.store(true, Ordering::SeqCst);
     }
 
