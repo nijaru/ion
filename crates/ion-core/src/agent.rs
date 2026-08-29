@@ -508,7 +508,7 @@ impl Family {
         // Subscribe before the second durable read. A completion racing the
         // first read is therefore either present in the store or retained in
         // this subscriber's event ring.
-        let (_snapshot, mut events) = session.subscribe().await?;
+        let (_snapshot, mut events) = session.subscribe_all().await?;
         let status = self.observe_operation(agent_id, operation_id).await?.status;
         if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
             return Ok(status);
@@ -537,7 +537,7 @@ impl Family {
                             }
                         }
                         Err(RuntimeError::SubscriptionLagged) => {
-                            let (_snapshot, replacement) = session.subscribe().await?;
+                            let (_snapshot, replacement) = session.subscribe_all().await?;
                             events = replacement;
                             let status = self.observe_operation(agent_id, operation_id).await?.status;
                             if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
@@ -599,7 +599,7 @@ impl Family {
         // Subscribe first, then read durable state. A transition before the
         // subscription is visible in the load; a transition after it emits an
         // event. This closes the classic status-then-subscribe lost-wakeup gap.
-        let (_snapshot, mut events) = self.session.subscribe().await?;
+        let (_snapshot, mut events) = self.session.subscribe_all().await?;
         let mut targets = self.load_wait_targets(agent_ids).await?;
         if let Some(done) = wait_results(&targets, mode) {
             return Ok(done);
@@ -640,7 +640,7 @@ impl Family {
                         Err(RuntimeError::SubscriptionLagged) => {
                             // Resubscribe before the durable read to close the
                             // same lost-wakeup gap while resynchronizing.
-                            let (_snapshot, replacement) = self.session.subscribe().await?;
+                            let (_snapshot, replacement) = self.session.subscribe_all().await?;
                             events = replacement;
                             self.refresh_wait_targets(&mut targets).await?;
                             if let Some(done) = wait_results(&targets, mode) {

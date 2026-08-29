@@ -11,7 +11,7 @@ async fn two_lanes_run_slow_provider_effects_concurrently_under_one_writer() {
         start_runtime_with_store(provider.clone(), ToolRegistry::default(), store.clone());
     let session_id = runtime.session_id();
     let session = runtime.session();
-    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let (_snapshot, mut events) = session.subscribe_all().await.expect("subscribe all");
 
     let main_operation = session
         .submit_if_idle("main prompt")
@@ -108,6 +108,61 @@ async fn two_lanes_run_slow_provider_effects_concurrently_under_one_writer() {
     assert!(main.state.current_operation.is_none());
     assert!(worker.state.current_operation.is_none());
     assert_ne!(main.state.leaf, worker.state.leaf);
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn frontend_subscription_projects_only_the_main_lane() {
+    let provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(250),
+        ..SharedLogProvider::default()
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
+    let session = runtime.session();
+
+    session.create_lane("worker").await.expect("worker lane");
+    let (snapshot, mut frontend_events) = session.subscribe().await.expect("frontend subscribe");
+    assert!(matches!(snapshot.operation, OperationStatus::Idle));
+    let (_snapshot, mut all_events) = session.subscribe_all().await.expect("family subscribe");
+
+    let worker_operation = session
+        .submit_if_idle_on_lane("worker", "worker prompt")
+        .await
+        .expect("worker operation");
+    let observed_worker = timeout(Duration::from_secs(1), async {
+        loop {
+            if let RuntimeEvent::OperationStarted { operation_id, .. } =
+                all_events.recv().await.expect("all-lane event")
+            {
+                break operation_id;
+            }
+        }
+    })
+    .await
+    .expect("family observer sees worker start");
+    assert_eq!(observed_worker, worker_operation);
+
+    let snapshot = session.snapshot().await.expect("main snapshot");
+    assert!(matches!(snapshot.operation, OperationStatus::Idle));
+    let main_operation = session
+        .submit_if_idle("main prompt")
+        .await
+        .expect("main operation");
+    let observed_main = timeout(Duration::from_secs(1), async {
+        loop {
+            if let RuntimeEvent::OperationStarted { operation_id, .. } =
+                frontend_events.recv().await.expect("frontend event")
+            {
+                break operation_id;
+            }
+        }
+    })
+    .await
+    .expect("frontend observer sees main start");
+    assert_eq!(observed_main, main_operation);
 
     session.close().await.expect("close");
     runtime.join().await.expect("join");
