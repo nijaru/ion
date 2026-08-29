@@ -38,6 +38,6 @@ jobs:
           rm .github/session-agent-admission.py .github/session-agent-admission-owner.py .github/workflows/session-agent-admission-once.yml
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
-          git add crates/ion-core/src/store/schema.rs crates/ion-core/src/store/mod.rs crates/ion-core/src/store/sql.rs crates/ion-core/src/delegate.rs crates/ion-core/src/tests/agent_store.rs crates/ion-core/src/tests/budget_children.rs .github/session-agent-admission.py .github/session-agent-admission-owner.py .github/workflows/session-agent-admission-once.yml
+          git add crates/ion-core/src/store/schema.rs crates/ion-core/src/store/mod.rs crates/ion-core/src/store/sql.rs crates/ion-core/src/delegate.rs crates/ion-core/src/tests/agent_store.rs crates/ion-core/src/tests/agent_family.rs .github/session-agent-admission.py .github/session-agent-admission-owner.py .github/workflows/session-agent-admission-once.yml
           git commit -m "refactor(agent): admit separate sessions atomically"
           git push origin HEAD:main
