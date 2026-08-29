@@ -31,10 +31,7 @@ pub(super) use crate::tool::{
 };
 pub(super) use crate::{ModelConfig, ModelKind, TokenUsage};
 
-pub(super) fn start_runtime(
-    provider: impl Provider,
-    tools: impl Into<ToolCatalog>,
-) -> Runtime {
+pub(super) fn start_runtime(provider: impl Provider, tools: impl Into<ToolCatalog>) -> Runtime {
     Runtime::start_with_store(
         provider,
         tools,
@@ -118,9 +115,7 @@ impl Provider for SharedLogProvider {
                 let _ = tx.send(EngineSignal::Failed("cancelled".to_owned())).await;
                 return;
             }
-            let _ = tx
-                .send(EngineSignal::TextDelta("working".to_owned()))
-                .await;
+            let _ = tx.send(EngineSignal::TextDelta("working".to_owned())).await;
             let _ = tx
                 .send(EngineSignal::Completed {
                     usage: TokenUsage::default(),
