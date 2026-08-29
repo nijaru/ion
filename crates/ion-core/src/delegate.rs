@@ -161,6 +161,7 @@ pub struct ChildManager<P> {
     config: Arc<DelegateConfig<P>>,
     parent_id: SessionId,
     children: Mutex<HashMap<SessionId, ManagedChild>>,
+    family: Mutex<Option<Arc<crate::agent::Family>>>,
 }
 
 impl<P> ChildManager<P> {
@@ -169,7 +170,31 @@ impl<P> ChildManager<P> {
             config,
             parent_id,
             children: Mutex::new(HashMap::new()),
+            family: Mutex::new(None),
         })
+    }
+
+    fn bind_family(&self, family: Arc<crate::agent::Family>) {
+        debug_assert_eq!(
+            SessionId::from_uuid(family.root().as_uuid()),
+            self.parent_id,
+            "child runtime host must bind to its durable root family",
+        );
+        *self.family.lock().expect("child manager poisoned") = Some(Arc::clone(&family));
+        let live = self
+            .children
+            .lock()
+            .expect("child manager poisoned")
+            .iter()
+            .map(|(session_id, child)| (*session_id, child.session.clone()))
+            .collect::<Vec<_>>();
+        for (session_id, session) in live {
+            family.register_hosted_session(session_id, session);
+        }
+    }
+
+    fn family(&self) -> Option<Arc<crate::agent::Family>> {
+        self.family.lock().expect("child manager poisoned").clone()
     }
 
     fn live_session(&self, session_id: SessionId) -> Option<crate::runtime::SessionHandle> {
@@ -192,6 +217,9 @@ impl<P> ChildManager<P> {
         else {
             return Ok(());
         };
+        if let Some(family) = self.family() {
+            family.unregister_hosted_session(session_id);
+        }
         child.cancel.cancel();
         let mut first_error = None;
         if let Err(err) = child.session.close().await {
@@ -334,9 +362,15 @@ impl<P> ChildManager<P> {
             }
         };
         let session = runtime.session();
+        if let Some(family) = self.family() {
+            family.register_hosted_session(session_id, session.clone());
+        }
         let operation_id = match session.submit_if_idle(prompt).await {
             Ok(operation_id) => operation_id,
             Err(err) => {
+                if let Some(family) = self.family() {
+                    family.unregister_hosted_session(session_id);
+                }
                 let _ = session.close().await;
                 let _ = runtime.join().await;
                 let _ = catalog.close().await;
@@ -550,6 +584,9 @@ impl<P> ChildManager<P> {
         .await
         .map_err(|err| format!("child {} resume failed: {err}", handle.session_id))?;
         let session = runtime.session();
+        if let Some(family) = self.family() {
+            family.register_hosted_session(handle.session_id, session.clone());
+        }
         let cancel = parent_cancel.child_token();
         let cancel_for_watch = cancel.clone();
         let session_for_watch = session.clone();
@@ -718,6 +755,7 @@ pub fn agent_host_tools<P: Provider + 'static>(
     family: Arc<crate::agent::Family>,
     children: Arc<ChildManager<P>>,
 ) -> Vec<Arc<dyn Tool>> {
+    children.bind_family(Arc::clone(&family));
     [
         HostAgentToolKind::Spawn,
         HostAgentToolKind::Start,
@@ -915,70 +953,40 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.target(agent_id).await {
-                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
-                            let status = match self.family.wait_one(agent_id, cancel, None).await {
-                                Ok(status) => status,
-                                Err(err) => return ToolOutcome::error(err.to_string()),
-                            };
-                            let operation_id = host_status_operation_id(&status)
-                                .expect("family wait rejects admitted agents");
-                            match self.family.observe_operation(agent_id, operation_id).await {
-                                Ok(observation) => {
-                                    ToolOutcome::text(render_family_observation(&observation))
-                                }
-                                Err(err) => ToolOutcome::error(err.to_string()),
-                            }
+                    let target = match self.family.target(agent_id).await {
+                        Ok(target) => target,
+                        Err(err) => return ToolOutcome::error(err.to_string()),
+                    };
+                    let status = match self.family.wait_one(agent_id, cancel, None).await {
+                        Ok(status) => status,
+                        Err(err) => return ToolOutcome::error(err.to_string()),
+                    };
+                    let operation_id = host_status_operation_id(&status)
+                        .expect("family wait rejects admitted agents");
+                    let observation =
+                        match self.family.observe_operation(agent_id, operation_id).await {
+                            Ok(observation) => observation,
+                            Err(err) => return ToolOutcome::error(err.to_string()),
+                        };
+                    if let crate::agent::AgentTarget::SeparateSession { session_id } = target
+                        && matches!(status, crate::agent::Status::Finished { .. })
+                    {
+                        if let Err(err) = self.children.release_live_child(session_id).await {
+                            return ToolOutcome::error(err);
                         }
-                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
-                            let handle =
-                                child_handle_for_session(session_id, self.children.parent_id);
-                            match self.children.wait(handle, cancel, progress.as_ref()).await {
-                                Ok(observation) => match observation.operation_id() {
-                                    Some(operation_id) => match self
-                                        .family
-                                        .observe_operation(agent_id, operation_id)
-                                        .await
-                                    {
-                                        Ok(observation) => ToolOutcome::text(
-                                            render_family_observation(&observation),
-                                        ),
-                                        Err(err) => ToolOutcome::error(err.to_string()),
-                                    },
-                                    None => ToolOutcome::text(render_child_as_agent(
-                                        agent_id,
-                                        &observation,
-                                    )),
-                                },
-                                Err(err) => ToolOutcome::error(err),
-                            }
-                        }
-                        Err(err) => ToolOutcome::error(err.to_string()),
+                        report_progress(progress.as_ref(), format!("agent {agent_id} finished"))
+                            .await;
                     }
+                    ToolOutcome::text(render_family_observation(&observation))
                 }
                 HostAgentToolKind::Cancel => {
                     let agent_id = match parse_host_agent_handle(&arguments) {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.target(agent_id).await {
-                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
-                            match self.family.cancel(agent_id).await {
-                                Ok(()) => ToolOutcome::text(format!(
-                                    "cancellation accepted for agent {agent_id}"
-                                )),
-                                Err(err) => ToolOutcome::error(err.to_string()),
-                            }
-                        }
-                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
-                            let handle =
-                                child_handle_for_session(session_id, self.children.parent_id);
-                            match self.children.cancel(handle).await {
-                                Ok(()) => ToolOutcome::text(format!(
-                                    "cancellation accepted for agent {agent_id}"
-                                )),
-                                Err(err) => ToolOutcome::error(err),
-                            }
+                    match self.family.cancel(agent_id).await {
+                        Ok(()) => {
+                            ToolOutcome::text(format!("cancellation accepted for agent {agent_id}"))
                         }
                         Err(err) => ToolOutcome::error(err.to_string()),
                     }
@@ -1157,29 +1165,6 @@ fn render_family_observation(observation: &crate::agent::Observation) -> String 
     match &observation.result {
         Some(result) => format!("agent {}: {status}\n\n{result}", observation.agent_id),
         None => format!("agent {}: {status}", observation.agent_id),
-    }
-}
-
-fn render_child_as_agent(agent_id: crate::ids::AgentId, observation: &ChildObservation) -> String {
-    let status = match &observation.status {
-        ChildStatus::Starting => "starting".to_owned(),
-        ChildStatus::Active {
-            operation_id,
-            state,
-        } => {
-            format!("active ({operation_id}, {state:?})")
-        }
-        ChildStatus::Suspended { operation_id } => format!("suspended ({operation_id})"),
-        ChildStatus::Finished {
-            operation_id,
-            outcome,
-        } => {
-            format!("finished ({operation_id}, {outcome:?})")
-        }
-    };
-    match &observation.result {
-        Some(result) => format!("agent {agent_id}: {status}\n\n{result}"),
-        None => format!("agent {agent_id}: {status}"),
     }
 }
 

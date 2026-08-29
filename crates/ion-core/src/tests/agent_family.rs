@@ -732,3 +732,87 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
     runtime.join().await.expect("join root");
     store.close().await.expect("close store");
 }
+
+#[tokio::test]
+async fn family_wait_routes_to_live_separate_session_by_agent_address() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        SharedLogProvider::default(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
+    let child_provider = SharedLogProvider {
+        settle_delay: Duration::from_millis(250),
+        ..SharedLogProvider::default()
+    };
+    let child_provider_factory = child_provider.clone();
+    let (children, _legacy_child_tools) = crate::child_tools(
+        crate::DelegateConfig {
+            store: store.clone(),
+            make_provider: Arc::new(move || child_provider_factory.clone()),
+            make_provider_for_model: None,
+            max_active_children: 1,
+            child_budget: crate::RuntimeBudget::unbounded(),
+            trusted_resources: Vec::new(),
+            cwd: std::env::current_dir().expect("cwd"),
+        },
+        runtime.session_id(),
+    );
+    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&children));
+    let spawn = tools
+        .iter()
+        .find(|tool| tool.spec().name == "spawn_agent")
+        .expect("spawn tool");
+    let spawned = spawn
+        .call(
+            json!({"objective": "hosted wait", "topology": "fresh"}),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!spawned.is_error, "fresh spawn failed: {spawned:?}");
+    let raw = spawned
+        .output
+        .lines()
+        .find_map(|line| line.strip_prefix("agent handle: "))
+        .expect("agent handle");
+    let agent_id =
+        crate::AgentId::parse(raw.strip_prefix("agent-").expect("agent prefix")).expect("agent id");
+
+    timeout(Duration::from_secs(2), async {
+        loop {
+            if !child_provider.requests().is_empty() {
+                break;
+            }
+            sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("hosted provider started");
+    assert!(matches!(
+        family.status(agent_id).await.expect("active hosted status"),
+        crate::AgentStatus::Active { .. }
+    ));
+
+    let status = timeout(
+        Duration::from_secs(2),
+        family.wait_one(agent_id, CancellationToken::new(), None),
+    )
+    .await
+    .expect("family hosted wait timed out")
+    .expect("family hosted wait");
+    let operation_id = match status {
+        crate::AgentStatus::Finished { operation_id, .. } => operation_id,
+        other => panic!("expected hosted completion, got {other:?}"),
+    };
+    let observation = family
+        .observe_operation(agent_id, operation_id)
+        .await
+        .expect("hosted observation");
+    assert_eq!(observation.result.as_deref(), Some("working"));
+
+    children.close().await.expect("close hosted runtimes");
+    runtime.session().close().await.expect("close root");
+    runtime.join().await.expect("join root");
+    store.close().await.expect("close store");
+}

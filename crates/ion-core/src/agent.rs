@@ -34,6 +34,8 @@ pub enum Error {
     CapacityBelowActive { capacity: usize, active: usize },
     #[error("agent {0} has no running operation")]
     NotRunning(AgentId),
+    #[error("agent {0} has no live hosted-session residency")]
+    NotResident(AgentId),
     #[error("agent wait set cannot be empty")]
     EmptyWaitSet,
     #[error("agent {0} appears more than once in the wait set")]
@@ -138,6 +140,7 @@ pub struct Family {
     store: SessionStore,
     retained: Mutex<HashMap<AgentId, RetainedAgent>>,
     executions: Mutex<HashMap<AgentId, Execution>>,
+    hosted_sessions: Mutex<HashMap<SessionId, SessionHandle>>,
     permits: Arc<Semaphore>,
 }
 
@@ -211,6 +214,7 @@ impl Family {
             store,
             retained: Mutex::new(retained),
             executions: Mutex::new(executions),
+            hosted_sessions: Mutex::new(HashMap::new()),
             permits,
         })
     }
@@ -247,6 +251,33 @@ impl Family {
             }
             _ => Err(Error::Inconsistent(agent_id)),
         }
+    }
+
+    /// Register one process-local runtime incarnation for a separately hosted
+    /// family session. Durable identity/topology remains store-owned; this map
+    /// exists only so family control can route live wait/cancel operations.
+    pub(crate) fn register_hosted_session(&self, session_id: SessionId, session: SessionHandle) {
+        self.hosted_sessions
+            .lock()
+            .expect("agent family poisoned")
+            .insert(session_id, session);
+    }
+
+    /// Forget one hosted runtime incarnation without changing durable agent
+    /// identity or completion state.
+    pub(crate) fn unregister_hosted_session(&self, session_id: SessionId) {
+        self.hosted_sessions
+            .lock()
+            .expect("agent family poisoned")
+            .remove(&session_id);
+    }
+
+    fn hosted_session(&self, session_id: SessionId) -> Option<SessionHandle> {
+        self.hosted_sessions
+            .lock()
+            .expect("agent family poisoned")
+            .get(&session_id)
+            .cloned()
     }
 
     /// Admit a retained shared-history agent from the control parent's current
@@ -438,13 +469,98 @@ impl Family {
         cancel: CancellationToken,
         deadline: Option<Instant>,
     ) -> Result<Status, Error> {
-        let mut completed = self
-            .wait_set(&[agent_id], WaitMode::All, cancel, deadline)
-            .await?;
-        Ok(completed
-            .pop()
-            .expect("one-agent wait returns exactly one result")
-            .1)
+        match self.target(agent_id).await? {
+            AgentTarget::SharedHistory { .. } => {
+                let mut completed = self
+                    .wait_set(&[agent_id], WaitMode::All, cancel, deadline)
+                    .await?;
+                Ok(completed
+                    .pop()
+                    .expect("one-agent wait returns exactly one result")
+                    .1)
+            }
+            AgentTarget::SeparateSession { session_id } => {
+                self.wait_hosted_one(agent_id, session_id, cancel, deadline)
+                    .await
+            }
+        }
+    }
+
+    async fn wait_hosted_one(
+        &self,
+        agent_id: AgentId,
+        session_id: SessionId,
+        cancel: CancellationToken,
+        deadline: Option<Instant>,
+    ) -> Result<Status, Error> {
+        let initial = self.status(agent_id).await?;
+        let operation_id = match initial {
+            Status::Admitted => return Err(Error::NotRunning(agent_id)),
+            Status::Active { operation_id, .. } => operation_id,
+            terminal @ (Status::Suspended { .. } | Status::Finished { .. }) => {
+                return Ok(terminal);
+            }
+        };
+
+        let Some(session) = self.hosted_session(session_id) else {
+            let status = self.observe_operation(agent_id, operation_id).await?.status;
+            if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+                return Ok(status);
+            }
+            return Err(Error::NotResident(agent_id));
+        };
+
+        // Subscribe before the second durable read. A completion racing the
+        // first read is therefore either present in the store or retained in
+        // this subscriber's event ring.
+        let (_snapshot, mut events) = session.subscribe().await?;
+        let status = self.observe_operation(agent_id, operation_id).await?.status;
+        if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+            return Ok(status);
+        }
+
+        loop {
+            tokio::select! {
+                () = cancel.cancelled() => return Err(Error::WaitCancelled),
+                () = wait_until(deadline) => return Err(Error::WaitDeadlineElapsed),
+                event = events.recv() => {
+                    match event {
+                        Ok(event) => {
+                            if matches!(event, RuntimeEvent::SessionClosed { .. }) {
+                                let status = self.observe_operation(agent_id, operation_id).await?.status;
+                                if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+                                    return Ok(status);
+                                }
+                                return Err(RuntimeError::SubscriptionClosed.into());
+                            }
+                            if event.operation_id() != Some(operation_id) || !event_is_terminal(&event) {
+                                continue;
+                            }
+                            let status = self.observe_operation(agent_id, operation_id).await?.status;
+                            if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+                                return Ok(status);
+                            }
+                        }
+                        Err(RuntimeError::SubscriptionLagged) => {
+                            let (_snapshot, replacement) = session.subscribe().await?;
+                            events = replacement;
+                            let status = self.observe_operation(agent_id, operation_id).await?.status;
+                            if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+                                return Ok(status);
+                            }
+                        }
+                        Err(RuntimeError::SubscriptionClosed) => {
+                            let status = self.observe_operation(agent_id, operation_id).await?.status;
+                            if matches!(status, Status::Suspended { .. } | Status::Finished { .. }) {
+                                return Ok(status);
+                            }
+                            return Err(RuntimeError::SubscriptionClosed.into());
+                        }
+                        Err(other) => return Err(other.into()),
+                    }
+                }
+            }
+        }
     }
 
     /// Return when any execution in `agent_ids` reaches a durable terminal or
@@ -606,12 +722,7 @@ impl Family {
     }
 
     pub async fn cancel(&self, agent_id: AgentId) -> Result<(), Error> {
-        if !matches!(
-            self.target(agent_id).await?,
-            AgentTarget::SharedHistory { .. }
-        ) {
-            return Err(Error::UnknownAgent(agent_id));
-        }
+        let target = self.target(agent_id).await?;
         let status = self.status(agent_id).await?;
         let operation_id = match status {
             Status::Active { operation_id, .. } => operation_id,
@@ -619,7 +730,20 @@ impl Family {
                 return Err(Error::NotRunning(agent_id));
             }
         };
-        self.session.cancel(operation_id).await?;
+        let session = match target {
+            AgentTarget::SharedHistory { .. } => self.session.clone(),
+            AgentTarget::SeparateSession { session_id } => {
+                let Some(session) = self.hosted_session(session_id) else {
+                    let latest = self.observe_operation(agent_id, operation_id).await?.status;
+                    if !matches!(latest, Status::Active { .. }) {
+                        return Err(Error::NotRunning(agent_id));
+                    }
+                    return Err(Error::NotResident(agent_id));
+                };
+                session
+            }
+        };
+        session.cancel(operation_id).await?;
         Ok(())
     }
 
