@@ -18,17 +18,80 @@ use openrouter::OpenRouterProvider;
 pub use acp::AcpConfig;
 pub use settings::Settings;
 
-/// Attach the durable shared-history agent family to one runtime and publish
-/// its model-facing structural controls into `tools`. Identity remains durable
-/// even when execution capacity is exhausted.
-pub async fn enable_agents(
+/// Process-owned agent service for one root runtime. Same-session lane agents
+/// and separately hosted fresh/fork descendants share one host lifetime even while
+/// the latter still use the migration child runtime internally.
+pub struct AgentHost<P> {
+    family: Arc<ion_core::AgentFamily>,
+    children: Arc<ion_core::ChildManager<P>>,
+}
+
+impl<P> AgentHost<P> {
+    #[must_use]
+    pub fn family(&self) -> &Arc<ion_core::AgentFamily> {
+        &self.family
+    }
+
+    pub async fn close(&self) -> Result<(), String> {
+        self.children.close().await
+    }
+}
+
+/// Attach the complete agent service using the launch-provider factory for
+/// separately hosted descendants.
+pub async fn enable_agent_host<P>(
     tools: &ion_core::ToolCatalog,
     runtime: &ion_core::Runtime,
-    max_active: usize,
-) -> Result<Arc<ion_core::AgentFamily>, ion_core::AgentError> {
-    let family = Arc::new(runtime.agent_family(max_active).await?);
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+    max_active_agents: usize,
+) -> Result<AgentHost<P>, ion_core::AgentError>
+where
+    P: ion_core::Provider + 'static,
+{
+    enable_agent_host_with_model_resolver(
+        tools,
+        runtime,
+        store,
+        make_provider,
+        None,
+        trusted_resources,
+        max_active_agents,
+    )
+    .await
+}
+
+/// Attach the complete agent service with an optional provider resolver for
+/// explicit model overrides on separately hosted descendants.
+pub async fn enable_agent_host_with_model_resolver<P>(
+    tools: &ion_core::ToolCatalog,
+    runtime: &ion_core::Runtime,
+    store: &ion_core::SessionStore,
+    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
+    make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
+    trusted_resources: Vec<ion_core::TrustedResource>,
+    max_active_agents: usize,
+) -> Result<AgentHost<P>, ion_core::AgentError>
+where
+    P: ion_core::Provider + 'static,
+{
+    let family = Arc::new(runtime.agent_family(max_active_agents).await?);
     ion_core::install_agent_tools(tools, Arc::clone(&family));
-    Ok(family)
+    let children = ion_core::install_child_tools(
+        tools,
+        ion_core::DelegateConfig {
+            store: store.clone(),
+            make_provider,
+            make_provider_for_model,
+            max_active_children: 4,
+            child_budget: ion_core::child_budget_default(),
+            trusted_resources,
+            cwd: tools.cwd().to_path_buf(),
+        },
+        runtime.session_id(),
+    );
+    Ok(AgentHost { family, children })
 }
 
 /// The host's provider choice for one invocation. `Provider` is not
@@ -97,58 +160,6 @@ impl Provider for CliProvider {
             },
         }
     }
-}
-
-/// Register the bounded-child delegation surface (§20) on a started
-/// runtime: the delegate tool needs the parent session id, which only
-/// exists once the runtime is composed. Call before the first submit.
-pub fn enable_children<P>(
-    tools: &ion_core::ToolCatalog,
-    store: &ion_core::SessionStore,
-    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
-    parent_id: ion_core::SessionId,
-    trusted_resources: Vec<ion_core::TrustedResource>,
-) -> Arc<ion_core::ChildManager<P>>
-where
-    P: ion_core::Provider + 'static,
-{
-    enable_children_with_model_resolver(
-        tools,
-        store,
-        make_provider,
-        None,
-        parent_id,
-        trusted_resources,
-    )
-}
-
-/// Register durable child control tools with an optional host model resolver.
-/// The returned manager owns live child runtime incarnations and must be
-/// closed before the host drops the tool catalog.
-pub fn enable_children_with_model_resolver<P>(
-    tools: &ion_core::ToolCatalog,
-    store: &ion_core::SessionStore,
-    make_provider: Arc<dyn Fn() -> P + Send + Sync>,
-    make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
-    parent_id: ion_core::SessionId,
-    trusted_resources: Vec<ion_core::TrustedResource>,
-) -> Arc<ion_core::ChildManager<P>>
-where
-    P: ion_core::Provider + 'static,
-{
-    ion_core::install_child_tools(
-        tools,
-        ion_core::DelegateConfig {
-            store: store.clone(),
-            make_provider,
-            make_provider_for_model,
-            max_active_children: 4,
-            child_budget: ion_core::child_budget_default(),
-            trusted_resources,
-            cwd: tools.cwd().to_path_buf(),
-        },
-        parent_id,
-    )
 }
 
 /// Build the scripted-provider factory used when no real model is

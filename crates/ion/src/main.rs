@@ -361,8 +361,18 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             trusted_resources.clone(),
         )
     };
-    let _agent_family = match ion::enable_agents(&tools, &runtime, 4).await {
-        Ok(family) => family,
+    let agent_host = match ion::enable_agent_host_with_model_resolver(
+        &tools,
+        &runtime,
+        &store,
+        Arc::clone(&make_provider),
+        make_provider_for_model,
+        trusted_resources.clone(),
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
         Err(err) => {
             let _ = writeln!(io::stderr(), "agents: {err}");
             let _ = runtime.session().close().await;
@@ -374,20 +384,12 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let child_manager = ion::enable_children_with_model_resolver(
-        &tools,
-        &store,
-        Arc::clone(&make_provider),
-        make_provider_for_model,
-        runtime.session_id(),
-        trusted_resources.clone(),
-    );
     let keymap = match tui::KeyMap::from_settings(&settings.keybindings) {
         Ok(keymap) => keymap,
         Err(err) => {
             let _ = writeln!(io::stderr(), "settings: {err}");
-            if let Err(child_err) = child_manager.close().await {
-                tracing::error!(error = %child_err, "failed to close child runtimes");
+            if let Err(agent_err) = agent_host.close().await {
+                tracing::error!(error = %agent_err, "failed to close agent host");
             }
             if let Err(close_err) = tools.close().await {
                 tracing::error!(error = %close_err, "failed to close the tool catalog");
@@ -425,13 +427,13 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     // A successful UI run is successful only when all three cleanup steps
     // complete; an already-failed UI still reports each cleanup failure.
     let join = runtime.join().await;
-    let child_close = child_manager.close().await;
+    let agent_close = agent_host.close().await;
     let catalog_close = tools.close().await;
     let store_close = store.close().await;
     let mut cleanup_failed = false;
-    if let Err(err) = child_close {
+    if let Err(err) = agent_close {
         cleanup_failed = true;
-        tracing::error!(error = %err, "failed to close child runtimes");
+        tracing::error!(error = %err, "failed to close agent host");
     }
     if let Err(err) = catalog_close {
         cleanup_failed = true;
@@ -635,24 +637,39 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         policy,
         trusted_resources.clone(),
     );
-    let child_manager = ion::enable_children(
+    let agent_host = match ion::enable_agent_host(
         &tools,
+        &runtime,
         &store,
         Arc::clone(&make_provider),
-        runtime.session_id(),
         trusted_resources.clone(),
-    );
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
+        Err(err) => {
+            let session = runtime.session();
+            let _ = session.close().await;
+            let _ = runtime.join().await;
+            let _ = tools.close().await;
+            let _ = store.close().await;
+            return Err(RuntimeError::OperationFailed(format!(
+                "attach agent host: {err}"
+            )));
+        }
+    };
     let session = runtime.session();
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;
     let join = runtime.join().await;
-    let child_close = child_manager.close().await;
+    let agent_close = agent_host.close().await;
     let catalog_close = tools.close().await;
     let store_close = store.close().await;
     result?;
     shutdown?;
     join?;
-    child_close.map_err(RuntimeError::OperationFailed)?;
+    agent_close.map_err(RuntimeError::OperationFailed)?;
     catalog_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     store_close.map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     Ok(())

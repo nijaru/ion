@@ -43,7 +43,7 @@ struct AcpSession<P> {
     handle: ion_core::SessionHandle,
     runtime: Runtime,
     catalog: ToolCatalog,
-    child_manager: Arc<ion_core::ChildManager<P>>,
+    agent_host: crate::AgentHost<P>,
     /// The in-flight prompt turn, if any: (JSON-RPC id, operation id).
     active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 }
@@ -231,9 +231,9 @@ where
 
     let mut shutdown_error = None;
     for (_, session) in sessions.drain() {
-        if let Err(err) = session.child_manager.close().await {
-            tracing::error!(error = %err, "failed to close ACP child runtimes");
-            shutdown_error.get_or_insert_with(|| format!("ACP child close failed: {err}"));
+        if let Err(err) = session.agent_host.close().await {
+            tracing::error!(error = %err, "failed to close ACP agent host");
+            shutdown_error.get_or_insert_with(|| format!("ACP agent close failed: {err}"));
         }
         if let Err(err) = session.handle.close().await {
             tracing::error!(error = %err, "failed to close an ACP session at shutdown");
@@ -428,7 +428,7 @@ where
         cwd,
     );
     let session_id = runtime.session_id();
-    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources).await?;
+    let session = attach_session(config, &catalog, runtime, trusted_resources).await?;
     Ok((session_id.to_string(), session))
 }
 
@@ -462,39 +462,39 @@ where
     Ok((cwd, catalog, trusted_resources))
 }
 
-/// Attach shared-history family controls plus the separate-session
-/// fresh/fork child migration surface, then wrap the runtime in ACP state.
+/// Attach the root runtime's single agent host, then wrap it in ACP state.
 async fn attach_session<P>(
     config: &AcpConfig<P>,
     catalog: &ToolCatalog,
     runtime: Runtime,
-    session_id: ion_core::SessionId,
     trusted_resources: Vec<ion_core::TrustedResource>,
 ) -> Result<AcpSession<P>, String>
 where
     P: Provider + 'static,
 {
-    let _agent_family = match crate::enable_agents(catalog, &runtime, 4).await {
-        Ok(family) => family,
+    let agent_host = match crate::enable_agent_host(
+        catalog,
+        &runtime,
+        &config.store,
+        Arc::clone(&config.make_provider),
+        trusted_resources,
+        4,
+    )
+    .await
+    {
+        Ok(host) => host,
         Err(err) => {
             let handle = runtime.session();
             let _ = handle.close().await;
             let _ = runtime.join().await;
-            return Err(format!("attach agent family: {err}"));
+            return Err(format!("attach agent host: {err}"));
         }
     };
-    let child_manager = crate::enable_children(
-        catalog,
-        &config.store,
-        Arc::clone(&config.make_provider),
-        session_id,
-        trusted_resources,
-    );
     Ok(AcpSession {
         handle: runtime.session(),
         runtime,
         catalog: catalog.clone(),
-        child_manager,
+        agent_host,
         active_prompt: Arc::new(Mutex::new(None)),
     })
 }
@@ -537,7 +537,7 @@ where
     .await
     .map_err(|err| format!("open session: {err}"))?;
     let history = replay_history(&loaded.entries);
-    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources).await?;
+    let session = attach_session(config, &catalog, runtime, trusted_resources).await?;
     Ok((session_id_text.to_owned(), session, history))
 }
 
