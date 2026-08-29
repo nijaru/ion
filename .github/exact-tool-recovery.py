@@ -114,7 +114,7 @@ replace_one(
     '''            capability_snapshot_id: capability_snapshot.id.clone(),
             open_effect: None,
         },
-        capability_snapshot,
+        capability_snapshot: capability_snapshot.clone(),
 ''',
     "reconcile initial checkpoint snapshot",
 )
@@ -131,6 +131,16 @@ replace_one(
         capability_snapshot,
 ''',
     "reconcile pending checkpoint snapshot",
+)
+replace_one(
+    "crates/ion-core/src/tests/support.rs",
+    '''pub(super) use crate::context::{
+    CapabilitySnapshot, ContextMessage, ContextPlan, load_trusted_resources,
+};
+''',
+    '''pub(super) use crate::context::{ContextMessage, ContextPlan, load_trusted_resources};
+''',
+    "remove consumed capability snapshot re-export",
 )
 
 # Regression: if structural lane authority is narrowed after a crash but before
@@ -240,5 +250,3 @@ replace_one(
     '''Shared-history and separately hosted admission both publish durable lane capability selections that may narrow but never exceed the control parent. Recovery reconstructs an operation registry by intersecting its immutable capability snapshot with the lane's current structural selection; it never reacquires an executor from a later live catalog snapshot.''',
     "design exact recovery checkpoint",
 )
-
-# Trigger this one-shot only after the baseline test fixture is known-good.
