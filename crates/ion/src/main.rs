@@ -361,6 +361,19 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             trusted_resources.clone(),
         )
     };
+    let _agent_family = match ion::enable_agents(&tools, &runtime, 4).await {
+        Ok(family) => family,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "agents: {err}");
+            let _ = runtime.session().close().await;
+            let _ = runtime.join().await;
+            if let Err(close_err) = tools.close().await {
+                tracing::error!(error = %close_err, "failed to close the tool catalog");
+            }
+            let _ = store.close().await;
+            return ExitCode::FAILURE;
+        }
+    };
     let child_manager = ion::enable_children_with_model_resolver(
         &tools,
         &store,

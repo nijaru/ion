@@ -4,9 +4,15 @@ use super::support::*;
 async fn lane_agents_are_structurally_read_only() {
     let provider = SharedLogProvider::default();
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime =
-        start_runtime_with_store(provider.clone(), ToolRegistry::default(), store.clone());
-    let family = runtime.agent_family(1).await.expect("family");
+    let catalog = ToolCatalog::default();
+    let runtime = Runtime::start_with_policy(
+        provider.clone(),
+        catalog.clone(),
+        store.clone(),
+        permissive_policy(),
+    );
+    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
+    crate::install_agent_tools(&catalog, Arc::clone(&family));
     let agent = family
         .admit_lane(family.root())
         .await
@@ -34,11 +40,10 @@ async fn lane_agents_are_structurally_read_only() {
         .map(|tool| tool.name.as_str())
         .collect::<Vec<_>>();
     assert_eq!(names, vec!["find", "read", "search"]);
-    assert!(
-        !names
-            .iter()
-            .any(|name| matches!(*name, "write" | "edit" | "bash"))
-    );
+    assert!(!names.iter().any(|name| matches!(
+        *name,
+        "write" | "edit" | "bash" | "spawn_agent" | "agent_start" | "agent_send"
+    )));
 
     let loaded = store.load(runtime.session_id()).await.expect("load");
     let record = loaded

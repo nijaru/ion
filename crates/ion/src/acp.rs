@@ -428,7 +428,7 @@ where
         cwd,
     );
     let session_id = runtime.session_id();
-    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources);
+    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources).await?;
     Ok((session_id.to_string(), session))
 }
 
@@ -462,18 +462,27 @@ where
     Ok((cwd, catalog, trusted_resources))
 }
 
-/// Attach bounded read-only child delegation (§20) to the catalog and wrap
-/// the runtime in the per-connection ACP state.
-fn attach_session<P>(
+/// Attach shared-history family controls plus the separate-session
+/// fresh/fork child migration surface, then wrap the runtime in ACP state.
+async fn attach_session<P>(
     config: &AcpConfig<P>,
     catalog: &ToolCatalog,
     runtime: Runtime,
     session_id: ion_core::SessionId,
     trusted_resources: Vec<ion_core::TrustedResource>,
-) -> AcpSession<P>
+) -> Result<AcpSession<P>, String>
 where
     P: Provider + 'static,
 {
+    let _agent_family = match crate::enable_agents(catalog, &runtime, 4).await {
+        Ok(family) => family,
+        Err(err) => {
+            let handle = runtime.session();
+            let _ = handle.close().await;
+            let _ = runtime.join().await;
+            return Err(format!("attach agent family: {err}"));
+        }
+    };
     let child_manager = crate::enable_children(
         catalog,
         &config.store,
@@ -481,13 +490,13 @@ where
         session_id,
         trusted_resources,
     );
-    AcpSession {
+    Ok(AcpSession {
         handle: runtime.session(),
         runtime,
         catalog: catalog.clone(),
         child_manager,
         active_prompt: Arc::new(Mutex::new(None)),
-    }
+    })
 }
 
 /// Load one durable Ion session and return the semantic history that ACP
@@ -528,7 +537,7 @@ where
     .await
     .map_err(|err| format!("open session: {err}"))?;
     let history = replay_history(&loaded.entries);
-    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources);
+    let session = attach_session(config, &catalog, runtime, session_id, trusted_resources).await?;
     Ok((session_id_text.to_owned(), session, history))
 }
 

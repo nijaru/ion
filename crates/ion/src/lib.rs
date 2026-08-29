@@ -18,6 +18,19 @@ use openrouter::OpenRouterProvider;
 pub use acp::AcpConfig;
 pub use settings::Settings;
 
+/// Attach the durable shared-history agent family to one runtime and publish
+/// its model-facing structural controls into `tools`. Identity remains durable
+/// even when execution capacity is exhausted.
+pub async fn enable_agents(
+    tools: &ion_core::ToolCatalog,
+    runtime: &ion_core::Runtime,
+    max_active: usize,
+) -> Result<Arc<ion_core::AgentFamily>, ion_core::AgentError> {
+    let family = Arc::new(runtime.agent_family(max_active).await?);
+    ion_core::install_agent_tools(tools, Arc::clone(&family));
+    Ok(family)
+}
+
 /// The host's provider choice for one invocation. `Provider` is not
 /// dyn-compatible by design; the host composes concretely.
 pub enum CliProvider {
