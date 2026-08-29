@@ -34,7 +34,6 @@ jobs:
           HEAD_REF: ${{ github.head_ref }}
         run: |
           git checkout "$HEAD_REF"
-          python .github/step9_final_api_boundary.py
           cargo fmt --all
           rm .github/step9_final_api_boundary.py .github/workflows/step9-final-api-boundary.yml
           git config user.name github-actions[bot]
