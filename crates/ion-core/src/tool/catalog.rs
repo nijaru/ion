@@ -243,21 +243,10 @@ impl ToolCatalog {
             .is_some()
     }
 
-    /// Activate one configured MCP server for future model-step snapshots.
-    /// Server lifecycle and discovery remain owned by [`crate::McpService`].
-    /// An unknown name is harmless: a later discovery can publish the scope.
-    pub fn activate_mcp_server(&self, name: impl AsRef<str>) {
-        let name = name.as_ref().trim();
-        if !name.is_empty() {
-            self.active_mcp_scopes
-                .write()
-                .expect("active MCP scope set poisoned")
-                .insert(format!("mcp:{name}"));
-        }
-    }
-
-    /// Replace the active MCP server set used by future model-step snapshots.
-    /// The set is intentionally explicit and may be empty.
+    /// Set the host-selected MCP server set used by future model-step
+    /// snapshots. Current composition calls this before session admission;
+    /// durable lane authority remains the structural grant, not this live
+    /// publication filter. The set is intentionally explicit and may be empty.
     pub fn set_active_mcp_servers<I, S>(&self, names: I)
     where
         I: IntoIterator<Item = S>,
@@ -273,19 +262,6 @@ impl ToolCatalog {
             .active_mcp_scopes
             .write()
             .expect("active MCP scope set poisoned") = scopes;
-    }
-
-    /// Deactivate one MCP server. Its live process may remain supervised, but
-    /// its tools disappear from future model-step snapshots.
-    pub fn deactivate_mcp_server(&self, name: impl AsRef<str>) -> bool {
-        let name = name.as_ref().trim();
-        if name.is_empty() {
-            return false;
-        }
-        self.active_mcp_scopes
-            .write()
-            .expect("active MCP scope set poisoned")
-            .remove(&format!("mcp:{name}"))
     }
 
     /// A detached capability-registration handle for service supervisors.
@@ -539,16 +515,16 @@ mod catalog_tests {
         catalog.register_scope("mcp:docs", vec![Arc::new(EchoTool)]);
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
 
-        catalog.activate_mcp_server("docs");
+        catalog.set_active_mcp_servers(["docs"]);
         assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
 
-        assert!(catalog.deactivate_mcp_server("docs"));
+        catalog.set_active_mcp_servers(std::iter::empty::<&str>());
         assert!(!catalog.specs().iter().any(|s| s.name == "mcp_echo"));
 
         catalog.set_active_mcp_servers(["docs", "unknown", " "]);
         assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
-        assert!(catalog.deactivate_mcp_server("unknown"));
-        assert!(!catalog.deactivate_mcp_server("unknown"));
+        assert!(catalog.admission_scopes().contains("mcp:docs"));
+        assert!(!catalog.admission_scopes().contains("mcp:unknown"));
     }
 
     #[test]
