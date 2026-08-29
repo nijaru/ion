@@ -7,9 +7,7 @@ pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::time::{sleep, timeout};
 pub(super) use tokio_util::sync::CancellationToken;
 
-pub(super) use crate::context::{
-    CapabilitySnapshot, ContextMessage, ContextPlan, load_trusted_resources,
-};
+pub(super) use crate::context::{ContextMessage, ContextPlan, load_trusted_resources};
 pub(super) use crate::error::{CommandError, RuntimeError};
 pub(super) use crate::ids::{EffectId, InboxId, OperationId};
 pub(super) use crate::operation::{
@@ -29,144 +27,63 @@ pub(super) use crate::store::{
     SessionStore,
 };
 pub(super) use crate::tool::{
-    RecoveryClass, Tool, ToolCall, ToolCatalog, ToolOutcome, ToolRegistry, ToolResult, ToolSpec,
+    Tool, ToolCatalog, ToolOutcome, ToolRegistry, ToolSpec, registry_with_policy_route,
 };
+pub(super) use crate::{ModelConfig, ModelKind, TokenUsage};
 
-pub(super) const STEP: Duration = Duration::from_millis(50);
+pub(super) fn start_runtime(
+    provider: impl Provider,
+    tools: impl Into<ToolCatalog>,
+) -> Runtime {
+    Runtime::start_with_store(
+        provider,
+        tools,
+        SessionStore::open_in_memory().expect("store"),
+    )
+}
 
-/// Model snapshot used by transition tests.
-pub(super) fn step_model() -> crate::provider::ModelConfig {
-    crate::provider::ModelConfig {
+pub(super) fn start_runtime_with_store(
+    provider: impl Provider,
+    tools: impl Into<ToolCatalog>,
+    store: SessionStore,
+) -> Runtime {
+    Runtime::start_with_store(provider, tools, store)
+}
+
+pub(super) fn permissive_policy() -> Arc<dyn PolicyEngine> {
+    Arc::new(AllowlistPolicy::new([
+        "bash", "write", "edit", "read", "search", "find", "agents",
+    ]))
+}
+
+pub(super) fn step_model() -> ModelConfig {
+    ModelConfig {
         model_ref: "test-model".to_owned(),
         context_window: None,
-        capabilities: crate::provider::ModelCapabilities::default(),
+        capabilities: crate::ModelCapabilities::default(),
     }
 }
 
 pub(super) async fn collect_until_terminal(
-    events: &mut crate::EventSubscription,
-) -> Result<Vec<RuntimeEvent>, RuntimeError> {
-    let mut out = Vec::new();
+    events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>,
+) -> Result<Vec<RuntimeEvent>, String> {
+    let mut recorded = Vec::new();
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
-            .expect("event recv timed out")?;
-        let done = matches!(
+            .map_err(|_| "timed out waiting for terminal event".to_owned())?
+            .map_err(|err| err.to_string())?;
+        let terminal = matches!(
             event,
-            RuntimeEvent::OperationFinished { .. }
-                | RuntimeEvent::OperationCancelled { .. }
-                | RuntimeEvent::OperationFailed { .. }
-                | RuntimeEvent::OperationIndeterminate { .. }
-                | RuntimeEvent::OperationApprovalRequired { .. }
-                | RuntimeEvent::SessionClosed { .. }
+            RuntimeEvent::OperationFinished { .. } | RuntimeEvent::OperationFailed { .. }
         );
-        out.push(event);
-        if done {
-            return Ok(out);
+        recorded.push(event);
+        if terminal {
+            return Ok(recorded);
         }
     }
 }
 
-/// Wait for the next ApprovalPending event, skipping non-park events.
-pub(super) async fn wait_for_park(events: &mut crate::EventSubscription) -> RuntimeEvent {
-    loop {
-        let event = timeout(Duration::from_secs(2), events.recv())
-            .await
-            .expect("event recv timed out")
-            .expect("event stream closed");
-        match &event {
-            RuntimeEvent::ApprovalPending { .. } => return event,
-            RuntimeEvent::SessionClosed { .. } => panic!("stream closed before parking"),
-            _ => {}
-        }
-    }
-}
-
-pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
-    events
-        .iter()
-        .map(|event| match event {
-            RuntimeEvent::OperationStarted { .. } => "operation_started",
-            RuntimeEvent::AssistantTextDelta { .. } => "assistant_text_delta",
-            RuntimeEvent::ThinkingDelta { .. } => "thinking_delta",
-            RuntimeEvent::ToolStarted { .. } => "tool_started",
-            RuntimeEvent::ToolProgress { .. } => "tool_progress",
-            RuntimeEvent::ToolSettled { .. } => "tool_settled",
-            RuntimeEvent::UsageUpdate { .. } => "usage_update",
-            RuntimeEvent::OperationFinished { .. } => "operation_finished",
-            RuntimeEvent::OperationFailed { .. } => "operation_failed",
-            RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",
-            RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
-            RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
-            RuntimeEvent::ApprovalPending { .. } => "approval_pending",
-            RuntimeEvent::SessionClosed { .. } => "session_closed",
-        })
-        .collect()
-}
-
-pub(super) fn texts(events: &[RuntimeEvent]) -> Vec<String> {
-    events
-        .iter()
-        .filter_map(|event| match event {
-            RuntimeEvent::AssistantTextDelta { text, .. } => Some(text.clone()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// Tests that exercise mechanics rather than policy run with every
-/// core tool granted; the policy-gate tests construct their own.
-pub(super) fn permissive_policy() -> Arc<dyn PolicyEngine> {
-    Arc::new(AllowlistPolicy::new([
-        "read", "write", "edit", "bash", "search", "find",
-    ]))
-}
-
-/// Runtime over an in-memory store; file-backed stores are exercised by
-/// the dedicated store tests below.
-pub(super) fn start_runtime(provider: impl crate::Provider, tools: ToolRegistry) -> Runtime {
-    let store = SessionStore::open_in_memory().expect("in-memory store");
-    start_runtime_with_store(provider, tools, store)
-}
-
-pub(super) fn start_runtime_with_store(
-    provider: impl crate::Provider,
-    tools: ToolRegistry,
-    store: SessionStore,
-) -> Runtime {
-    Runtime::start_with_policy(provider, tools, store, permissive_policy())
-}
-
-pub(super) fn tool_runtime() -> Runtime {
-    start_runtime(ScriptedProvider::echo(), ToolRegistry::default())
-}
-
-pub(super) fn machine_with_tools(
-    prompt: &str,
-    tools: Vec<ToolSpec>,
-) -> (OperationMachine, Applied) {
-    OperationMachine::accept(OperationId::from_uuid(uuid::Uuid::nil()), prompt, tools)
-}
-
-pub(super) fn spec(name: &str) -> ToolSpec {
-    ToolSpec {
-        name: name.to_owned(),
-        description: "d".to_owned(),
-        input_schema: json!({"type": "object"}),
-    }
-}
-
-pub(super) fn call(id: u64, name: &str) -> crate::tool::ToolCall {
-    crate::tool::ToolCall {
-        operation_id: OperationId::from_uuid(uuid::Uuid::nil()),
-        call_id: id,
-        name: name.to_owned(),
-        arguments: json!({}),
-    }
-}
-
-/// A provider that records every model-step request it receives, so
-/// tests can assert what the runtime projected into each step.
 #[derive(Clone, Default)]
 pub(super) struct SharedLogProvider {
     pub(super) log: Arc<Mutex<Vec<ProviderRequest>>>,
@@ -175,155 +92,172 @@ pub(super) struct SharedLogProvider {
 
 impl SharedLogProvider {
     pub(super) fn requests(&self) -> Vec<ProviderRequest> {
-        self.log.lock().expect("log poisoned").clone()
+        self.log.lock().expect("log").clone()
     }
 }
 
 impl Provider for SharedLogProvider {
-    fn run(
-        &self,
+    fn complete_stream<'a>(
+        &'a self,
         request: ProviderRequest,
-        _cancel: CancellationToken,
-        out: mpsc::Sender<EngineSignal>,
-    ) -> impl Future<Output = ()> + Send {
-        let operation_id = request.operation_id;
-        let step = request.step;
-        let delay = self.settle_delay;
-        async move {
-            self.log.lock().expect("log poisoned").push(request);
-            if out
-                .send(EngineSignal::TextDelta {
-                    operation_id,
-                    step,
-                    text: "working".to_owned(),
-                })
-                .await
-                .is_err()
-            {
+        tx: mpsc::Sender<EngineSignal>,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.log.lock().expect("log").push(request);
+            if self.settle_delay > Duration::ZERO {
+                tokio::select! {
+                    () = sleep(self.settle_delay) => {}
+                    () = cancel.cancelled() => {
+                        let _ = tx.send(EngineSignal::Failed("cancelled".to_owned())).await;
+                        return;
+                    }
+                }
+            }
+            if cancel.is_cancelled() {
+                let _ = tx.send(EngineSignal::Failed("cancelled".to_owned())).await;
                 return;
             }
-            sleep(delay).await;
-            let _ = out
-                .send(EngineSignal::Completed { operation_id, step })
+            let _ = tx
+                .send(EngineSignal::TextDelta("working".to_owned()))
                 .await;
-        }
-    }
-}
-
-pub(super) fn temp_db(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("ion-store-test-{}-{name}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).expect("temp dir");
-    dir.join("sessions.db")
-}
-
-pub(super) fn entry_kinds<'a>(
-    entries: impl IntoIterator<Item = &'a crate::SessionEntry>,
-) -> Vec<&'static str> {
-    entries
-        .into_iter()
-        .map(|entry| match entry {
-            crate::SessionEntry::UserMessage { .. } => "user_message",
-            crate::SessionEntry::AgentMessage { .. } => "agent_message",
-            crate::SessionEntry::AssistantMessage { .. } => "assistant_message",
-            crate::SessionEntry::ToolCall { .. } => "tool_call",
-            crate::SessionEntry::ToolResult { .. } => "tool_result",
-            crate::SessionEntry::Compaction { .. } => "compaction",
+            let _ = tx
+                .send(EngineSignal::Completed {
+                    usage: TokenUsage::default(),
+                })
+                .await;
         })
-        .collect()
+    }
 }
 
-pub(super) async fn wait_for_state(
-    session: &SessionHandle,
-    predicate: impl Fn(&OperationState) -> bool,
-) {
-    for _ in 0..50 {
-        let snapshot = session.snapshot().await.expect("snapshot");
-        if matches!(
-            snapshot.operation,
-            OperationStatus::Active { ref state, .. } if predicate(state)
-        ) {
-            return;
-        }
-        sleep(Duration::from_millis(20)).await;
+#[derive(Clone, Default)]
+pub(super) struct RecordingPolicy {
+    calls: Arc<Mutex<Vec<(String, serde_json::Value)>>>,
+}
+
+impl RecordingPolicy {
+    pub(super) fn calls(&self) -> Vec<(String, serde_json::Value)> {
+        self.calls.lock().expect("calls").clone()
     }
-    panic!("operation never reached the expected state");
+}
+
+impl PolicyEngine for RecordingPolicy {
+    fn decide(&self, tool: &str, arguments: &serde_json::Value) -> crate::PolicyDecision {
+        self.calls
+            .lock()
+            .expect("calls")
+            .push((tool.to_owned(), arguments.clone()));
+        crate::PolicyDecision::Allow
+    }
+}
+
+#[derive(Clone)]
+pub(super) struct WindowProvider {
+    pub(super) window: u64,
+    pub(super) responses: Arc<Mutex<Vec<ScriptedMessage>>>,
+    pub(super) requests: Arc<Mutex<Vec<ProviderRequest>>>,
+}
+
+impl WindowProvider {
+    pub(super) fn new(window: u64, responses: Vec<ScriptedMessage>) -> Self {
+        Self {
+            window,
+            responses: Arc::new(Mutex::new(responses)),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+}
+
+impl Provider for WindowProvider {
+    fn complete_stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        tx: mpsc::Sender<EngineSignal>,
+        _cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        Box::pin(async move {
+            self.requests.lock().expect("requests").push(request);
+            let message = {
+                let mut responses = self.responses.lock().expect("responses");
+                if responses.is_empty() {
+                    ScriptedMessage::text("done")
+                } else {
+                    responses.remove(0)
+                }
+            };
+            match message {
+                ScriptedMessage::Text(text) => {
+                    let _ = tx.send(EngineSignal::TextDelta(text)).await;
+                    let _ = tx
+                        .send(EngineSignal::Completed {
+                            usage: TokenUsage::default(),
+                        })
+                        .await;
+                }
+                ScriptedMessage::Tool { name, arguments } => {
+                    let _ = tx
+                        .send(EngineSignal::ToolCallDelta {
+                            index: 0,
+                            call_id: "test-call".to_owned(),
+                            name: Some(name),
+                            arguments: Some(arguments.to_string()),
+                        })
+                        .await;
+                    let _ = tx
+                        .send(EngineSignal::Completed {
+                            usage: TokenUsage::default(),
+                        })
+                        .await;
+                }
+                ScriptedMessage::Failure(message) => {
+                    let _ = tx.send(EngineSignal::Failed(message)).await;
+                }
+            }
+        })
+    }
+
+    fn context_window_for<'a>(
+        &'a self,
+        _model_ref: &'a str,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Option<u64>> + Send + 'a>> {
+        Box::pin(async move { Some(self.window) })
+    }
 }
 
 #[derive(Clone)]
 pub(super) struct CompactionProbe {
-    pub(super) log: Arc<Mutex<Vec<ProviderRequest>>>,
-    pub(super) context_window: Option<u64>,
+    inner: WindowProvider,
 }
 
 impl CompactionProbe {
-    pub(super) fn with_window(tokens: u64) -> Self {
+    pub(super) fn with_window(window: u64) -> Self {
         Self {
-            log: Arc::new(Mutex::new(Vec::new())),
-            context_window: Some(tokens),
+            inner: WindowProvider::new(
+                window,
+                vec![
+                    ScriptedMessage::text("first"),
+                    ScriptedMessage::text("summary"),
+                    ScriptedMessage::text("final"),
+                ],
+            ),
         }
-    }
-}
-
-impl CompactionProbe {
-    pub(super) fn requests(&self) -> Vec<ProviderRequest> {
-        self.log.lock().expect("log poisoned").clone()
     }
 }
 
 impl Provider for CompactionProbe {
-    async fn context_window(&self) -> Option<u64> {
-        self.context_window
+    fn complete_stream<'a>(
+        &'a self,
+        request: ProviderRequest,
+        tx: mpsc::Sender<EngineSignal>,
+        cancel: CancellationToken,
+    ) -> std::pin::Pin<Box<dyn Future<Output = ()> + Send + 'a>> {
+        self.inner.complete_stream(request, tx, cancel)
     }
 
-    fn run(
-        &self,
-        request: ProviderRequest,
-        _cancel: CancellationToken,
-        out: mpsc::Sender<EngineSignal>,
-    ) -> impl Future<Output = ()> + Send {
-        let operation_id = request.operation_id;
-        let step = request.step;
-        let is_compaction = request.plan.messages.iter().any(|message| {
-            matches!(message, crate::context::ContextMessage::User { content }
-                if content.contains("Summarize the conversation"))
-        });
-        self.log.lock().expect("log poisoned").push(request);
-        async move {
-            if step == 1 {
-                let _ = out
-                    .send(EngineSignal::UsageUpdate {
-                        operation_id,
-                        step,
-                        usage: crate::provider::TokenUsage {
-                            input: 200_000,
-                            output: 10,
-                            cache_read: 0,
-                            cache_write: 0,
-                        },
-                    })
-                    .await;
-            }
-            let text = if is_compaction {
-                "compact-summary: user asked X; answered; next: Y"
-            } else {
-                "answer"
-            };
-            let _ = out
-                .send(EngineSignal::TextDelta {
-                    operation_id,
-                    step,
-                    text: text.to_owned(),
-                })
-                .await;
-            // Hold step 1 open so the test's steer lands mid-flight,
-            // after the delta the test waits for.
-            if step == 1 {
-                sleep(Duration::from_millis(300)).await;
-            }
-            let _ = out
-                .send(EngineSignal::Completed { operation_id, step })
-                .await;
-        }
+    fn context_window_for<'a>(
+        &'a self,
+        model_ref: &'a str,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Option<u64>> + Send + 'a>> {
+        self.inner.context_window_for(model_ref)
     }
 }
