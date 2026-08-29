@@ -8,13 +8,18 @@ if old not in text:
     raise SystemExit("ChildManager spawn runtime-construction anchor missing")
 p.write_text(text.replace(old, new, 1))
 
-# The session-agent transaction must now have a production owner, not only
-# store tests. The existing fork test already proves the exact source boundary;
-# add the family-scoped durable address assertions at that same boundary.
-p = Path("crates/ion-core/src/tests/budget_children.rs")
+# Assert the production unified fresh/fork path uses the new family-scoped
+# durable identity. The legacy `delegate` helper intentionally remains a
+# separate migration surface for now.
+p = Path("crates/ion-core/src/tests/agent_family.rs")
 text = p.read_text()
-old = '''    assert_eq!(child.session.control_parent_session_id, Some(parent_id));\n    assert_eq!(child.session.fork_source_session_id, Some(parent_id));\n    assert_eq!(child.session.initial_model_ref, "child-model");\n'''
-new = '''    assert_eq!(child.session.control_parent_session_id, Some(parent_id));\n    assert_eq!(child.session.fork_source_session_id, Some(parent_id));\n    assert_eq!(child.session.initial_model_ref, "child-model");\n    assert_eq!(child.agents.len(), 1);\n    assert_eq!(child.agents[0].id, crate::AgentId::root(child_id));\n    assert_eq!(child.agents[0].family_session_id, parent_id);\n    assert_eq!(\n        child.agents[0].control_parent_id,\n        Some(crate::AgentId::root(parent_id))\n    );\n    assert!(matches!(\n        child.agents[0].history,\n        crate::store::AgentHistory::Fork {\n            source_session_id,\n            source_entry_id: Some(entry_id),\n        } if source_session_id == parent_id && entry_id == fork_entry_id\n    ));\n'''
+old = '''    assert_eq!(fresh_loaded.session.fork_source_session_id, None);\n    let fresh_wait = wait(fresh_handle).await;\n'''
+new = '''    assert_eq!(fresh_loaded.session.fork_source_session_id, None);\n    assert_eq!(fresh_loaded.agents.len(), 1);\n    assert_eq!(fresh_loaded.agents[0].id, fresh_agent);\n    assert_eq!(fresh_loaded.agents[0].family_session_id, runtime.session_id());\n    assert_eq!(\n        fresh_loaded.agents[0].control_parent_id,\n        Some(crate::AgentId::root(runtime.session_id()))\n    );\n    assert!(matches!(\n        fresh_loaded.agents[0].history,\n        crate::store::AgentHistory::Fresh\n    ));\n    let fresh_wait = wait(fresh_handle).await;\n'''
 if old not in text:
-    raise SystemExit("fork child topology assertion anchor missing")
+    raise SystemExit("unified fresh topology anchor missing")
+text = text.replace(old, new, 1)
+old = '''    assert_eq!(\n        fork_loaded.session.fork_source_session_id,\n        Some(runtime.session_id())\n    );\n    let fork_wait = wait(fork_handle).await;\n'''
+new = '''    assert_eq!(\n        fork_loaded.session.fork_source_session_id,\n        Some(runtime.session_id())\n    );\n    let fork_source_entry = fork_loaded\n        .session\n        .fork_source_entry_id\n        .expect("fork source entry");\n    assert_eq!(fork_loaded.agents.len(), 1);\n    assert_eq!(fork_loaded.agents[0].id, fork_agent);\n    assert_eq!(fork_loaded.agents[0].family_session_id, runtime.session_id());\n    assert_eq!(\n        fork_loaded.agents[0].control_parent_id,\n        Some(crate::AgentId::root(runtime.session_id()))\n    );\n    assert!(matches!(\n        fork_loaded.agents[0].history,\n        crate::store::AgentHistory::Fork {\n            source_session_id,\n            source_entry_id: Some(entry_id),\n        } if source_session_id == runtime.session_id() && entry_id == fork_source_entry\n    ));\n    let fork_wait = wait(fork_handle).await;\n'''
+if old not in text:
+    raise SystemExit("unified fork topology anchor missing")
 p.write_text(text.replace(old, new, 1))
