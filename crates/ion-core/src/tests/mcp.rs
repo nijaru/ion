@@ -31,7 +31,7 @@ fn restarting_mcp_server(marker: &std::path::Path) -> crate::ServerDef {
 #[tokio::test]
 async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
     let catalog = crate::ToolCatalog::default();
-    catalog.activate_mcp_server("fake");
+    catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
         .await;
@@ -74,7 +74,7 @@ async fn mcp_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
     let temp = tempfile::tempdir().expect("tempdir");
     let marker = temp.path().join("restarted");
     let catalog = crate::ToolCatalog::default();
-    catalog.activate_mcp_server("restarting");
+    catalog.set_active_mcp_servers(["restarting"]);
     crate::McpService::new()
         .start_into(&[restarting_mcp_server(&marker)], &catalog)
         .await;
@@ -104,7 +104,7 @@ async fn mcp_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
 #[tokio::test]
 async fn broken_mcp_server_never_blocks_startup() {
     let catalog = crate::ToolCatalog::default();
-    catalog.activate_mcp_server("fake");
+    catalog.set_active_mcp_servers(["fake"]);
     let mut defs = vec![fake_mcp_server()];
     defs.push(crate::ServerDef {
         name: "missing".to_owned(),
@@ -122,7 +122,7 @@ async fn broken_mcp_server_never_blocks_startup() {
 async fn mcp_tool_flows_through_the_normal_operation_path() {
     // Catalog with the fake server's tool published.
     let catalog = crate::ToolCatalog::default();
-    catalog.activate_mcp_server("fake");
+    catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
         .await;
@@ -170,7 +170,7 @@ async fn mcp_tool_flows_through_the_normal_operation_path() {
 #[tokio::test]
 async fn default_policy_requires_approval_for_mcp_tools() {
     let catalog = crate::ToolCatalog::default();
-    catalog.activate_mcp_server("fake");
+    catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
         .await;
