@@ -26,7 +26,7 @@ mod tool;
 
 pub use agent::{
     Error as AgentError, Family as AgentFamily, Observation as AgentObservation,
-    Status as AgentStatus, agent_tools, install_agent_tools,
+    Status as AgentStatus,
 };
 pub use agent_host::{
     HostedAgentConfig, HostedAgentRuntimes, agent_host_tools, hosted_agent_budget_default,

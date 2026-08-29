@@ -11,8 +11,7 @@ async fn lane_agents_are_structurally_read_only() {
         store.clone(),
         permissive_policy(),
     );
-    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
-    crate::install_agent_tools(&catalog, Arc::clone(&family));
+    let family = runtime.agent_family(1).await.expect("family");
     let agent = family
         .admit_lane(family.root())
         .await
@@ -455,39 +454,6 @@ async fn agent_messages_use_durable_inbox_and_preserve_sender_provenance() {
             (sender, "start from this handoff".to_owned()),
         ]
     );
-
-    runtime.session().close().await.expect("close");
-    runtime.join().await.expect("join");
-}
-
-#[tokio::test]
-async fn model_facing_agent_tools_use_family_authority_and_report_exact_result() {
-    let provider = SharedLogProvider::default();
-    let store = SessionStore::open_in_memory().expect("store");
-    let runtime = start_runtime_with_store(provider, ToolRegistry::default(), store);
-    let family = Arc::new(runtime.agent_family(1).await.expect("family"));
-    let tools = crate::agent_tools(Arc::clone(&family));
-
-    let spawn = tools[0]
-        .call(
-            json!({"objective": "inspect the shared branch"}),
-            CancellationToken::new(),
-        )
-        .await;
-    assert!(!spawn.is_error, "spawn failed: {spawn:?}");
-    let handle = spawn
-        .output
-        .lines()
-        .find_map(|line| line.strip_prefix("agent handle: "))
-        .expect("durable agent handle")
-        .to_owned();
-
-    let waited = tools[3]
-        .call(json!({"handle": handle}), CancellationToken::new())
-        .await;
-    assert!(!waited.is_error, "wait failed: {waited:?}");
-    assert!(waited.output.contains("finished"), "{waited:?}");
-    assert!(waited.output.contains("working"), "{waited:?}");
 
     runtime.session().close().await.expect("close");
     runtime.join().await.expect("join");
