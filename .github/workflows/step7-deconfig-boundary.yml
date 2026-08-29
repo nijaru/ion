@@ -1,0 +1,42 @@
+name: Step 7 deconfiguration boundary
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply Step 7 boundary cleanup
+        run: python .github/step7_deconfig_boundary.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Clippy gate
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test gate
+        run: cargo test --locked --workspace
+      - name: Commit validated source
+        run: |
+          git checkout "$GITHUB_HEAD_REF"
+          rm .github/step7_deconfig_boundary.py .github/workflows/step7-deconfig-boundary.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "refactor(tool): close unsupported live MCP toggle surface"
+          git push origin HEAD:"$GITHUB_HEAD_REF"
