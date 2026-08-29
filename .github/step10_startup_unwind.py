@@ -2,6 +2,20 @@ from pathlib import Path
 
 main = Path("crates/ion/src/main.rs")
 text = main.read_text()
+helper_anchor = """async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
+"""
+helper = """fn restore_tui_startup_terminal(mut terminal: ion_terminal::TerminalSession) {
+    let restore_error = terminal.restore().err();
+    drop(terminal);
+    if let Some(err) = restore_error {
+        let _ = writeln!(io::stderr(), "terminal restore failed: {err}");
+    }
+}
+
+async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
+"""
+assert text.count(helper_anchor) == 1, "run_tui anchor changed"
+text = text.replace(helper_anchor, helper, 1)
 replacements = [
 (
 """        Err(err) => {
@@ -12,7 +26,7 @@ replacements = [
     // The startup notice is rendered inside the transcript (HostConfig):
 """,
 """        Err(err) => {
-            drop(guard);
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "store: {err}");
             return ExitCode::FAILURE;
         }
@@ -31,7 +45,7 @@ replacements = [
             }
 """,
 """            Ok(None) => {
-                drop(guard);
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "no persisted session to resume");
                 if let Err(close_err) = store.close().await {
                     tracing::error!(error = %close_err, "failed to close the session store");
@@ -39,7 +53,7 @@ replacements = [
                 return ExitCode::from(2);
             }
             Err(err) => {
-                drop(guard);
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "store: {err}");
                 if let Err(close_err) = store.close().await {
                     tracing::error!(error = %close_err, "failed to close the session store");
@@ -57,7 +71,7 @@ replacements = [
     let tools = match build_catalog(settings, cli).await {
 """,
 """        Err(err) => {
-            drop(guard);
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "cwd: {err}");
             if let Err(close_err) = store.close().await {
                 tracing::error!(error = %close_err, "failed to close the session store");
@@ -77,7 +91,7 @@ replacements = [
     let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {
 """,
 """        Err(err) => {
-            drop(guard);
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "cwd: {err}");
             if let Err(close_err) = store.close().await {
                 tracing::error!(error = %close_err, "failed to close the session store");
@@ -98,7 +112,7 @@ replacements = [
         }
 """,
 """        Err(err) => {
-            drop(guard);
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "trusted resources: {err}");
             if let Err(close_err) = tools.close().await {
                 tracing::error!(error = %close_err, "failed to close the tool catalog");
@@ -120,7 +134,7 @@ replacements = [
             }
 """,
 """            Err(err) => {
-                drop(guard);
+                restore_tui_startup_terminal(guard);
                 let _ = writeln!(io::stderr(), "resume: {err}");
                 if let Err(close_err) = tools.close().await {
                     tracing::error!(error = %close_err, "failed to close the tool catalog");
@@ -145,7 +159,7 @@ replacements = [
         }
 """,
 """        Err(err) => {
-            drop(guard);
+            restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "agents: {err}");
             if let Err(close_err) = runtime.session().close().await {
                 tracing::error!(error = %close_err, "failed to close session after agent-host startup failure");
@@ -234,6 +248,6 @@ pty.write_text(text)
 design = Path("DESIGN.md")
 text = design.read_text()
 old = "10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition, keep `SessionHandle` as the only runtime mutation path, and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework."
-new = "10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition; after terminal acquisition, restore the terminal before startup diagnostics and explicitly unwind acquired store/catalog/runtime ownership on failure. Keep `SessionHandle` as the only runtime mutation path and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework."
+new = "10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition; after terminal acquisition, explicitly restore the terminal before startup diagnostics and unwind acquired store/catalog/runtime ownership on failure. Keep `SessionHandle` as the only runtime mutation path and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework."
 assert text.count(old) == 1, "Step 10 design text changed"
 design.write_text(text.replace(old, new, 1))
