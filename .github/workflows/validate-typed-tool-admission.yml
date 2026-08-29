@@ -21,7 +21,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply typed tool-admission patch
-        run: python .github/typed_tool_admission_patch.py
+        run: |
+          python .github/typed_tool_admission_patch.py
+          python .github/typed_tool_admission_fix.py
       - name: Validate Rust 1.98
         run: |
           cargo fmt
@@ -32,6 +34,6 @@ jobs:
           git config user.name github-actions[bot]
           git config user.email 41898282+github-actions[bot]@users.noreply.github.com
           git add DESIGN.md crates/ion-core/src crates/ion/src
-          git rm -f .github/typed_tool_admission_patch.py .github/workflows/validate-typed-tool-admission.yml
+          git rm -f .github/typed_tool_admission_patch.py .github/typed_tool_admission_fix.py .github/workflows/validate-typed-tool-admission.yml
           git commit -m 'refactor(core): type tool admission semantics'
           git push origin HEAD:main
