@@ -1132,7 +1132,7 @@ impl Runtime {
             // durable lanes directly; its first command reloads this state before
             // recovery, so no stale in-memory grant can win.
             let mut loaded = self.store.load(self.session_id).await?;
-            let published = self.tools.published_scopes();
+            let published = self.tools.admission_scopes();
             for lane in &mut loaded.lanes {
                 let materialized = lane.config.scopes.materialize(&published);
                 let inserted = lane.name == crate::session::lane::MAIN
@@ -1777,7 +1777,7 @@ impl<P: Provider> SessionRuntime<P> {
         &self,
         loaded: &mut LoadedSession,
     ) -> Result<(), StoreError> {
-        let published = self.tools.published_scopes();
+        let published = self.tools.admission_scopes();
         for lane in &mut loaded.lanes {
             if lane.config.scopes.materialize(&published) {
                 self.store
@@ -1814,7 +1814,7 @@ impl<P: Provider> SessionRuntime<P> {
             }
             self.restore_from(loaded);
         } else {
-            let published = self.tools.published_scopes();
+            let published = self.tools.admission_scopes();
             self.lane_mut(crate::session::lane::MAIN)
                 .expect("new runtime has a main lane")
                 .config
