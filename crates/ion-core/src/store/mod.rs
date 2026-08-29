@@ -307,6 +307,7 @@ enum StoreCommand {
     AdmitSessionAgent {
         record: SessionRecord,
         control_parent_id: AgentId,
+        config: crate::session::lane::Config,
         reply: oneshot::Sender<Result<AgentId, StoreError>>,
     },
     BeginOperation {
@@ -572,10 +573,12 @@ impl SessionStore {
         &self,
         record: SessionRecord,
         control_parent_id: AgentId,
+        config: crate::session::lane::Config,
     ) -> Result<AgentId, StoreError> {
         self.request(|reply| StoreCommand::AdmitSessionAgent {
             record,
             control_parent_id,
+            config,
             reply,
         })
         .await

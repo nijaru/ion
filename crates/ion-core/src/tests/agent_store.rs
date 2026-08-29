@@ -1,5 +1,11 @@
 use super::support::*;
 
+fn read_only_config(model_ref: &str) -> crate::session::lane::Config {
+    let mut config = crate::session::lane::Config::new(model_ref);
+    config.tools = crate::tool::ToolSelection::read_only();
+    config
+}
+
 #[tokio::test]
 async fn lane_agent_identity_and_lane_are_published_atomically() {
     let store = SessionStore::open_in_memory().expect("store");
@@ -142,6 +148,7 @@ async fn session_agents_publish_fresh_and_fork_topology_atomically() {
                 fork_source_entry_id: None,
             },
             root_agent,
+            read_only_config("model-b"),
         )
         .await
         .expect("fresh admission");
@@ -169,6 +176,7 @@ async fn session_agents_publish_fresh_and_fork_topology_atomically() {
                 fork_source_entry_id: Some(source_entry),
             },
             root_agent,
+            read_only_config("model-c"),
         )
         .await
         .expect("fork admission");
@@ -200,6 +208,92 @@ async fn session_agents_publish_fresh_and_fork_topology_atomically() {
     assert!(family.iter().any(|agent| agent.id == root_agent));
     assert!(family.iter().any(|agent| agent.id == fresh_agent));
     assert!(family.iter().any(|agent| agent.id == fork_agent));
+
+    store.close().await.expect("close store");
+}
+
+#[tokio::test]
+async fn session_agent_admission_rejects_capability_escalation() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let root_session = crate::SessionId::generate();
+    store
+        .create_session(SessionRecord {
+            id: root_session,
+            cwd: "/tmp/root".to_owned(),
+            title: String::new(),
+            initial_model_ref: "parent-model".to_owned(),
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
+        })
+        .await
+        .expect("root session");
+    let root_agent = crate::AgentId::root(root_session);
+    let mut parent_config = crate::session::lane::Config::new("parent-model");
+    parent_config.tools =
+        crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["read".to_owned()]));
+    store
+        .set_lane_config(
+            root_session,
+            crate::session::lane::MAIN,
+            parent_config.clone(),
+        )
+        .await
+        .expect("narrow root tools");
+
+    let rejected_session = crate::SessionId::generate();
+    let err = store
+        .admit_session_agent(
+            SessionRecord {
+                id: rejected_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "child-model".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
+            },
+            root_agent,
+            read_only_config("child-model"),
+        )
+        .await
+        .expect_err("hosted admission must not widen parent tools");
+    assert!(
+        err.to_string().contains("may narrow but not escalate"),
+        "got: {err}"
+    );
+    assert!(matches!(
+        store.load(rejected_session).await,
+        Err(crate::store::StoreError::NotFound(id)) if id == rejected_session
+    ));
+
+    let admitted_session = crate::SessionId::generate();
+    let mut child_config = crate::session::lane::Config::new("child-model");
+    child_config.tools = parent_config.tools.clone();
+    store
+        .admit_session_agent(
+            SessionRecord {
+                id: admitted_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "child-model".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
+            },
+            root_agent,
+            child_config.clone(),
+        )
+        .await
+        .expect("narrow hosted admission");
+    let loaded = store.load(admitted_session).await.expect("hosted load");
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("hosted main lane");
+    assert_eq!(main.config, child_config);
+    assert_eq!(loaded.session.initial_model_ref, "child-model");
 
     store.close().await.expect("close store");
 }
@@ -247,6 +341,7 @@ async fn session_agent_admission_rolls_back_session_and_lane_on_late_identity_fa
                 fork_source_entry_id: None,
             },
             root_agent,
+            crate::session::lane::Config::new("model-a"),
         )
         .await
         .expect_err("agent identity collision must reject admission");

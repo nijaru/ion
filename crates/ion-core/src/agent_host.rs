@@ -213,6 +213,35 @@ impl<P> HostedAgentRuntimes<P> {
         Ok(())
     }
 
+    async fn initial_lane_config(
+        &self,
+        model_ref: &str,
+    ) -> Result<crate::session::lane::Config, String> {
+        let loaded = self
+            .config
+            .store
+            .load(self.parent_id)
+            .await
+            .map_err(|err| format!("agent family configuration unavailable: {err}"))?;
+        let root = AgentId::root(self.parent_id);
+        let parent = loaded
+            .agents
+            .iter()
+            .find(|agent| agent.id == root)
+            .ok_or_else(|| "agent family root is missing".to_owned())?;
+        let lane = loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == parent.lane_name)
+            .ok_or_else(|| "agent family root lane is missing".to_owned())?;
+        let mut config = lane.config.clone();
+        config.model_ref = model_ref.to_owned();
+        config.tools = config
+            .tools
+            .narrowed_by(&crate::tool::ToolSelection::read_only());
+        Ok(config)
+    }
+
     async fn spawn(
         self: &Arc<Self>,
         spec: HostedAgentSpec,
@@ -268,6 +297,7 @@ impl<P> HostedAgentRuntimes<P> {
         let session_id = SessionId::generate();
         let agent_id = crate::ids::AgentId::root(session_id);
         let initial_model_ref = provider.initial_model_ref();
+        let lane_config = self.initial_lane_config(&initial_model_ref).await?;
         self.config
             .store
             .admit_session_agent(
@@ -281,6 +311,7 @@ impl<P> HostedAgentRuntimes<P> {
                     fork_source_entry_id: fork_source.and_then(|(_, entry_id)| entry_id),
                 },
                 crate::ids::AgentId::root(self.parent_id),
+                lane_config,
             )
             .await
             .map_err(|err| format!("agent admission failed: {err}"))?;

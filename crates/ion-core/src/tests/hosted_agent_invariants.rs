@@ -97,6 +97,12 @@ async fn hosted_agent_uses_parent_workspace_for_relative_tools() {
         .await
         .expect("hosted session");
     assert_eq!(loaded.session.cwd, workspace_text);
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("hosted main lane");
+    assert_eq!(main.config.tools, crate::tool::ToolSelection::read_only());
     assert!(loaded.entries.iter().any(|record| {
         serde_json::to_string(&record.entry)
             .map(|text| text.contains("from parent workspace"))

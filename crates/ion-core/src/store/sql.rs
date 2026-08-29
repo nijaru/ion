@@ -36,10 +36,11 @@ pub(super) fn handle_command(
         StoreCommand::AdmitSessionAgent {
             record,
             control_parent_id,
+            config,
             reply,
         } => {
             let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
-                admit_session_agent(connection, &record, control_parent_id)
+                admit_session_agent(connection, &record, control_parent_id, &config)
                     .map_err(StoreError::from)
             }));
         }
@@ -433,6 +434,7 @@ fn admit_session_agent(
     connection: &mut Connection,
     record: &SessionRecord,
     control_parent_id: AgentId,
+    config: &crate::session::lane::Config,
 ) -> Result<AgentId, rusqlite::Error> {
     let expected_parent_session = record.control_parent_session_id.ok_or_else(|| {
         rusqlite::Error::InvalidParameterName(
@@ -447,10 +449,13 @@ fn admit_session_agent(
 
     let tx = connection.transaction()?;
     let parent = control_parent_id.as_uuid().to_string();
-    let (family_session, parent_session): (String, String) = tx.query_row(
-        "SELECT family_session_id, session_id FROM agents WHERE id = ?1",
+    let (family_session, parent_session, parent_config): (String, String, String) = tx.query_row(
+        "SELECT a.family_session_id, a.session_id, lane.config
+             FROM agents a
+             JOIN lanes lane ON lane.session_id = a.session_id AND lane.name = a.lane_name
+             WHERE a.id = ?1",
         [&parent],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
     if parent_session != expected_parent_session.as_uuid().to_string() {
         return Err(rusqlite::Error::InvalidParameterName(
@@ -461,6 +466,18 @@ fn admit_session_agent(
     if target_session == family_session {
         return Err(rusqlite::Error::InvalidParameterName(
             "a fresh/fork agent must target a distinct durable session".to_owned(),
+        ));
+    }
+    let parent_config: crate::session::lane::Config = serde_json::from_str(&parent_config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    if config.model_ref.as_str() != record.initial_model_ref.as_str() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "hosted agent lane model must match its admitted session model".to_owned(),
+        ));
+    }
+    if !config.tools.is_subset_of(&parent_config.tools) {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "hosted agent capabilities may narrow but not escalate its control parent".to_owned(),
         ));
     }
 
@@ -484,10 +501,8 @@ fn admit_session_agent(
                 .map(|id| id.as_uuid().to_string()),
         ],
     )?;
-    let config = serde_json::to_string(&crate::session::lane::Config::new(
-        record.initial_model_ref.clone(),
-    ))
-    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    let config = serde_json::to_string(config)
+        .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
     tx.execute(
         "INSERT INTO lanes (
             session_id, name, leaf_id, current_operation_id,
