@@ -252,7 +252,7 @@ async fn steer_requires_an_active_operation() {
 #[tokio::test]
 async fn saturated_queue_returns_error() {
     let saturated = SaturatedHandle::new();
-    let err = saturated.handle().shutdown().await.expect_err("saturated");
+    let err = saturated.handle().close().await.expect_err("saturated");
     assert_eq!(err, CommandError::QueueSaturated);
 }
 
