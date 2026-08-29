@@ -616,6 +616,20 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         Some(runtime.session_id())
     );
     assert_eq!(fresh_loaded.session.fork_source_session_id, None);
+    assert_eq!(fresh_loaded.agents.len(), 1);
+    assert_eq!(fresh_loaded.agents[0].id, fresh_agent);
+    assert_eq!(
+        fresh_loaded.agents[0].family_session_id,
+        runtime.session_id()
+    );
+    assert_eq!(
+        fresh_loaded.agents[0].control_parent_id,
+        Some(crate::AgentId::root(runtime.session_id()))
+    );
+    assert!(matches!(
+        fresh_loaded.agents[0].history,
+        crate::store::AgentHistory::Fresh
+    ));
     let fresh_wait = wait(fresh_handle).await;
     assert!(!fresh_wait.is_error, "fresh wait failed: {fresh_wait:?}");
     assert!(
@@ -640,6 +654,24 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         fork_loaded.session.fork_source_session_id,
         Some(runtime.session_id())
     );
+    let fork_source_entry = fork_loaded.session.fork_source_entry_id;
+    assert_eq!(fork_loaded.agents.len(), 1);
+    assert_eq!(fork_loaded.agents[0].id, fork_agent);
+    assert_eq!(
+        fork_loaded.agents[0].family_session_id,
+        runtime.session_id()
+    );
+    assert_eq!(
+        fork_loaded.agents[0].control_parent_id,
+        Some(crate::AgentId::root(runtime.session_id()))
+    );
+    assert!(matches!(
+        fork_loaded.agents[0].history,
+        crate::store::AgentHistory::Fork {
+            source_session_id,
+            source_entry_id,
+        } if source_session_id == runtime.session_id() && source_entry_id == fork_source_entry
+    ));
     let fork_wait = wait(fork_handle).await;
     assert!(!fork_wait.is_error, "fork wait failed: {fork_wait:?}");
     assert!(

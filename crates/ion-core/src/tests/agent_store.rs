@@ -99,3 +99,154 @@ async fn lane_agent_identity_and_lane_are_published_atomically() {
             .all(|lane| lane.name != "must-not-survive")
     );
 }
+
+#[tokio::test]
+async fn session_agents_publish_fresh_and_fork_topology_atomically() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let root_session = crate::SessionId::generate();
+    store
+        .create_session(SessionRecord {
+            id: root_session,
+            cwd: "/tmp/root".to_owned(),
+            title: String::new(),
+            initial_model_ref: "model-a".to_owned(),
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
+        })
+        .await
+        .expect("root session");
+    let root_agent = crate::AgentId::root(root_session);
+    let source = EntryRecord::provision(
+        1,
+        crate::SessionEntry::UserMessage {
+            text: "fork boundary".to_owned(),
+        },
+    );
+    let source_entry = source.id;
+    store
+        .append_entry(root_session, crate::session::lane::MAIN, source)
+        .await
+        .expect("source entry");
+
+    let fresh_session = crate::SessionId::generate();
+    let fresh_agent = store
+        .admit_session_agent(
+            SessionRecord {
+                id: fresh_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-b".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
+            },
+            root_agent,
+        )
+        .await
+        .expect("fresh admission");
+    assert_eq!(fresh_agent, crate::AgentId::root(fresh_session));
+    let fresh = store.load(fresh_session).await.expect("fresh load");
+    assert_eq!(fresh.agents.len(), 1);
+    assert_eq!(fresh.agents[0].id, fresh_agent);
+    assert_eq!(fresh.agents[0].family_session_id, root_session);
+    assert_eq!(fresh.agents[0].control_parent_id, Some(root_agent));
+    assert!(matches!(
+        fresh.agents[0].history,
+        crate::store::AgentHistory::Fresh
+    ));
+
+    let fork_session = crate::SessionId::generate();
+    let fork_agent = store
+        .admit_session_agent(
+            SessionRecord {
+                id: fork_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-c".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: Some(root_session),
+                fork_source_entry_id: Some(source_entry),
+            },
+            root_agent,
+        )
+        .await
+        .expect("fork admission");
+    let fork = store.load(fork_session).await.expect("fork load");
+    assert_eq!(fork.agents.len(), 1);
+    assert_eq!(fork.agents[0].id, fork_agent);
+    assert_eq!(fork.agents[0].family_session_id, root_session);
+    assert!(matches!(
+        fork.agents[0].history,
+        crate::store::AgentHistory::Fork {
+            source_session_id,
+            source_entry_id: Some(entry),
+        } if source_session_id == root_session && entry == source_entry
+    ));
+
+    // Loading the root session remains session-local even though its family now
+    // owns two separately hosted descendants.
+    let root = store.load(root_session).await.expect("root reload");
+    assert_eq!(root.agents.len(), 1);
+    assert!(matches!(
+        root.agents[0].history,
+        crate::store::AgentHistory::Root
+    ));
+
+    store.close().await.expect("close store");
+}
+
+#[tokio::test]
+async fn session_agent_admission_rolls_back_session_and_lane_on_late_identity_failure() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let root_session = crate::SessionId::generate();
+    store
+        .create_session(SessionRecord {
+            id: root_session,
+            cwd: "/tmp/root".to_owned(),
+            title: String::new(),
+            initial_model_ref: "model-a".to_owned(),
+            control_parent_session_id: None,
+            fork_source_session_id: None,
+            fork_source_entry_id: None,
+        })
+        .await
+        .expect("root session");
+    let root_agent = crate::AgentId::root(root_session);
+
+    let collision = crate::AgentId::generate();
+    store
+        .admit_lane_agent(
+            root_session,
+            collision,
+            root_agent,
+            "collision-lane",
+            None,
+            crate::session::lane::Config::new("model-a"),
+        )
+        .await
+        .expect("collision lane agent");
+    let target_session = crate::SessionId::from_uuid(collision.as_uuid());
+    let err = store
+        .admit_session_agent(
+            SessionRecord {
+                id: target_session,
+                cwd: "/tmp/root".to_owned(),
+                title: String::new(),
+                initial_model_ref: "model-a".to_owned(),
+                control_parent_session_id: Some(root_session),
+                fork_source_session_id: None,
+                fork_source_entry_id: None,
+            },
+            root_agent,
+        )
+        .await
+        .expect_err("agent identity collision must reject admission");
+    assert!(err.to_string().contains("UNIQUE"), "got: {err}");
+    assert!(matches!(
+        store.load(target_session).await,
+        Err(crate::store::StoreError::NotFound(id)) if id == target_session
+    ));
+
+    store.close().await.expect("close store");
+}

@@ -292,24 +292,47 @@ impl<P> ChildManager<P> {
             .as_ref()
             .map(|fork| (self.parent_id, fork.source_entry_id));
         let catalog = crate::tool::ToolCatalog::read_only(&self.config.cwd);
-        let runtime = Runtime::start_child_with_resources(
+        let session_id = SessionId::generate();
+        let agent_id = crate::ids::AgentId::root(session_id);
+        let initial_model_ref = provider.initial_model_ref();
+        self.config
+            .store
+            .admit_session_agent(
+                crate::store::SessionRecord {
+                    id: session_id,
+                    cwd: self.config.cwd.to_string_lossy().into_owned(),
+                    title: String::new(),
+                    initial_model_ref,
+                    control_parent_session_id: Some(self.parent_id),
+                    fork_source_session_id: fork_source.map(|(session_id, _)| session_id),
+                    fork_source_entry_id: fork_source.and_then(|(_, entry_id)| entry_id),
+                },
+                crate::ids::AgentId::root(self.parent_id),
+            )
+            .await
+            .map_err(|err| format!("child agent admission failed: {err}"))?;
+        let runtime = match Runtime::open_child(
             provider,
             catalog.clone(),
             self.config.store.clone(),
-            Arc::new(crate::policy::DefaultPolicy),
-            self.config.child_budget,
-            crate::runtime::ChildSessionLineage {
+            session_id,
+            crate::runtime::ChildRuntimeConfig {
+                policy: Arc::new(crate::policy::DefaultPolicy),
+                budget: self.config.child_budget,
                 control_parent: self.parent_id,
-                fork_source: fork_source.map(|(session_id, entry_id)| {
-                    crate::runtime::SessionForkSource {
-                        session_id,
-                        entry_id,
-                    }
-                }),
+                trusted_resources: self.config.trusted_resources.clone(),
             },
-            self.config.trusted_resources.clone(),
-        );
-        let session_id = runtime.session_id();
+        )
+        .await
+        {
+            Ok(runtime) => runtime,
+            Err(err) => {
+                let _ = catalog.close().await;
+                return Err(format!(
+                    "child agent {agent_id} was admitted, but runtime open failed: {err}"
+                ));
+            }
+        };
         let session = runtime.session();
         let operation_id = match session.submit_if_idle(prompt).await {
             Ok(operation_id) => operation_id,
@@ -317,7 +340,9 @@ impl<P> ChildManager<P> {
                 let _ = session.close().await;
                 let _ = runtime.join().await;
                 let _ = catalog.close().await;
-                return Err(format!("child submit failed: {err}"));
+                return Err(format!(
+                    "child agent {agent_id} was admitted, but start failed: {err}"
+                ));
             }
         };
         let handle = ChildHandle {

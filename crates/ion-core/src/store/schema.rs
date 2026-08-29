@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 21;
+const SCHEMA_VERSION: i64 = 22;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -148,6 +148,22 @@ CREATE TABLE IF NOT EXISTS agents (
         OR
         (history_kind = 'lane'
          AND control_parent_id IS NOT NULL
+         AND session_id = family_session_id
+         AND source_session_id = family_session_id)
+        OR
+        (history_kind = 'fresh'
+         AND control_parent_id IS NOT NULL
+         AND id = session_id
+         AND session_id != family_session_id
+         AND lane_name = 'main'
+         AND source_session_id IS NULL
+         AND source_entry_id IS NULL)
+        OR
+        (history_kind = 'fork'
+         AND control_parent_id IS NOT NULL
+         AND id = session_id
+         AND session_id != family_session_id
+         AND lane_name = 'main'
          AND source_session_id IS NOT NULL)
     )
 );

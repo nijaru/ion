@@ -33,6 +33,16 @@ pub(super) fn handle_command(
                     .map_err(StoreError::from)
             }));
         }
+        StoreCommand::AdmitSessionAgent {
+            record,
+            control_parent_id,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                admit_session_agent(connection, &record, control_parent_id)
+                    .map_err(StoreError::from)
+            }));
+        }
         StoreCommand::BeginOperation {
             session_id,
             lane_name,
@@ -404,6 +414,107 @@ fn admit_lane_agent(
         ));
     }
     tx.commit()
+}
+
+fn admit_session_agent(
+    connection: &mut Connection,
+    record: &SessionRecord,
+    control_parent_id: AgentId,
+) -> Result<AgentId, rusqlite::Error> {
+    let expected_parent_session = record.control_parent_session_id.ok_or_else(|| {
+        rusqlite::Error::InvalidParameterName(
+            "a separately hosted agent session requires a control parent session".to_owned(),
+        )
+    })?;
+    if record.fork_source_entry_id.is_some() && record.fork_source_session_id.is_none() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a fork source entry requires a fork source session".to_owned(),
+        ));
+    }
+
+    let tx = connection.transaction()?;
+    let parent = control_parent_id.as_uuid().to_string();
+    let (family_session, parent_session): (String, String) = tx.query_row(
+        "SELECT family_session_id, session_id FROM agents WHERE id = ?1",
+        [&parent],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if parent_session != expected_parent_session.as_uuid().to_string() {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "session control lineage does not match the exact parent agent".to_owned(),
+        ));
+    }
+    let target_session = record.id.as_uuid().to_string();
+    if target_session == family_session {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "a fresh/fork agent must target a distinct durable session".to_owned(),
+        ));
+    }
+
+    let now = now_ms();
+    tx.execute(
+        "INSERT INTO sessions (
+            id, created_at, updated_at, cwd, title, control_parent_session_id,
+            fork_source_session_id, fork_source_entry_id
+         ) VALUES (?1, ?2, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            target_session,
+            now,
+            record.cwd,
+            record.title,
+            expected_parent_session.as_uuid().to_string(),
+            record
+                .fork_source_session_id
+                .map(|id| id.as_uuid().to_string()),
+            record
+                .fork_source_entry_id
+                .map(|id| id.as_uuid().to_string()),
+        ],
+    )?;
+    let config = serde_json::to_string(&crate::session::lane::Config::new(
+        record.initial_model_ref.clone(),
+    ))
+    .map_err(|err| rusqlite::Error::ToSqlConversionFailure(err.into()))?;
+    tx.execute(
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_entry_id, pending_prompt, config, created_at, updated_at
+         ) VALUES (?1, 'main', NULL, NULL, NULL, NULL, ?2, ?3, ?3)",
+        rusqlite::params![target_session, config, now],
+    )?;
+
+    let agent_id = AgentId::root(record.id);
+    let history_kind = if record.fork_source_session_id.is_some() {
+        "fork"
+    } else {
+        "fresh"
+    };
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, ?3, ?4, 'main', ?5, ?6, ?7, ?8)",
+        rusqlite::params![
+            agent_id.as_uuid().to_string(),
+            family_session,
+            parent,
+            target_session,
+            history_kind,
+            record
+                .fork_source_session_id
+                .map(|id| id.as_uuid().to_string()),
+            record
+                .fork_source_entry_id
+                .map(|id| id.as_uuid().to_string()),
+            now,
+        ],
+    )?;
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![family_session, now],
+    )?;
+    tx.commit()?;
+    Ok(agent_id)
 }
 
 fn set_lane_config(
@@ -1158,7 +1269,7 @@ fn load_agents(
     let mut statement = connection.prepare(
         "SELECT id, family_session_id, control_parent_id, session_id, lane_name,
                 history_kind, source_session_id, source_entry_id
-         FROM agents WHERE family_session_id = ?1 ORDER BY created_at, id",
+         FROM agents WHERE session_id = ?1 ORDER BY created_at, id",
     )?;
     let mut rows = statement.query([session_id.as_uuid().to_string()])?;
     let mut agents = Vec::new();
@@ -1185,9 +1296,9 @@ fn load_agents(
             .transpose()?;
         let target_session_id = SessionId::parse(&raw_session)
             .ok_or_else(|| StoreError::Sqlite(format!("agent {id} has corrupt target session")))?;
-        if family_session_id != session_id || target_session_id != session_id {
+        if target_session_id != session_id {
             return Err(StoreError::Sqlite(format!(
-                "agent {id} is outside the loaded session family"
+                "agent {id} does not address the loaded session"
             )));
         }
         if !lane_names.contains(&lane_name) {
@@ -1197,7 +1308,8 @@ fn load_agents(
         }
         let history = match history_kind.as_str() {
             "root" => {
-                if id != AgentId::root(session_id)
+                if family_session_id != session_id
+                    || id != AgentId::root(session_id)
                     || control_parent_id.is_some()
                     || lane_name != crate::session::lane::MAIN
                     || raw_source_session.is_some()
@@ -1216,7 +1328,10 @@ fn load_agents(
                     .ok_or_else(|| {
                         StoreError::Sqlite(format!("agent {id} has corrupt history session"))
                     })?;
-                if source_session_id != session_id || control_parent_id.is_none() {
+                if family_session_id != session_id
+                    || source_session_id != session_id
+                    || control_parent_id.is_none()
+                {
                     return Err(StoreError::Sqlite(format!(
                         "lane agent {id} has inconsistent family topology"
                     )));
@@ -1239,6 +1354,49 @@ fn load_agents(
                     source_entry_id,
                 }
             }
+            "fresh" => {
+                if family_session_id == session_id
+                    || id != AgentId::root(session_id)
+                    || control_parent_id.is_none()
+                    || lane_name != crate::session::lane::MAIN
+                    || raw_source_session.is_some()
+                    || raw_source_entry.is_some()
+                {
+                    return Err(StoreError::Sqlite(format!(
+                        "fresh agent {id} has inconsistent topology"
+                    )));
+                }
+                AgentHistory::Fresh
+            }
+            "fork" => {
+                let source_session_id = raw_source_session
+                    .as_deref()
+                    .and_then(SessionId::parse)
+                    .ok_or_else(|| {
+                        StoreError::Sqlite(format!("agent {id} has corrupt fork source session"))
+                    })?;
+                let source_entry_id = raw_source_entry
+                    .as_deref()
+                    .map(|raw| {
+                        EntryId::parse(raw).ok_or_else(|| {
+                            StoreError::Sqlite(format!("agent {id} has corrupt fork source entry"))
+                        })
+                    })
+                    .transpose()?;
+                if family_session_id == session_id
+                    || id != AgentId::root(session_id)
+                    || control_parent_id.is_none()
+                    || lane_name != crate::session::lane::MAIN
+                {
+                    return Err(StoreError::Sqlite(format!(
+                        "fork agent {id} has inconsistent topology"
+                    )));
+                }
+                AgentHistory::Fork {
+                    source_session_id,
+                    source_entry_id,
+                }
+            }
             other => {
                 return Err(StoreError::Sqlite(format!(
                     "agent {id} has unknown history kind {other:?}"
@@ -1254,23 +1412,106 @@ fn load_agents(
             history,
         });
     }
+
     let ids = agents
         .iter()
         .map(|agent| agent.id)
         .collect::<std::collections::HashSet<_>>();
-    if !ids.contains(&AgentId::root(session_id)) {
+    let has_local_root = ids.contains(&AgentId::root(session_id))
+        && agents
+            .iter()
+            .any(|agent| matches!(agent.history, AgentHistory::Root));
+    let hosted_agent = agents.iter().find(|agent| {
+        matches!(
+            agent.history,
+            AgentHistory::Fresh | AgentHistory::Fork { .. }
+        )
+    });
+    if !has_local_root && hosted_agent.is_none() {
         return Err(StoreError::Sqlite(
-            "session family has no root agent".to_owned(),
+            "session has no durable agent address".to_owned(),
         ));
     }
+
     for agent in &agents {
-        if let Some(parent) = agent.control_parent_id
-            && !ids.contains(&parent)
-        {
-            return Err(StoreError::Sqlite(format!(
-                "agent {} names a missing control parent {parent}",
-                agent.id
-            )));
+        match &agent.history {
+            AgentHistory::Root => {}
+            AgentHistory::SharedLane { .. } => {
+                let parent = agent
+                    .control_parent_id
+                    .expect("lane topology checked above");
+                if !ids.contains(&parent) {
+                    return Err(StoreError::Sqlite(format!(
+                        "agent {} names a missing local control parent {parent}",
+                        agent.id
+                    )));
+                }
+            }
+            AgentHistory::Fresh | AgentHistory::Fork { .. } => {
+                let parent = agent
+                    .control_parent_id
+                    .expect("hosted topology checked above")
+                    .as_uuid()
+                    .to_string();
+                let (parent_family, parent_session): (String, String) = connection
+                    .query_row(
+                        "SELECT family_session_id, session_id FROM agents WHERE id = ?1",
+                        [&parent],
+                        |row| Ok((row.get(0)?, row.get(1)?)),
+                    )
+                    .map_err(StoreError::from)?;
+                if parent_family != agent.family_session_id.as_uuid().to_string() {
+                    return Err(StoreError::Sqlite(format!(
+                        "agent {} crosses family control lineage",
+                        agent.id
+                    )));
+                }
+                let (raw_control_session, raw_fork_session, raw_fork_entry): (
+                    Option<String>,
+                    Option<String>,
+                    Option<String>,
+                ) = connection.query_row(
+                    "SELECT control_parent_session_id, fork_source_session_id,
+                            fork_source_entry_id
+                     FROM sessions WHERE id = ?1",
+                    [session_id.as_uuid().to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+                )?;
+                if raw_control_session.as_deref() != Some(parent_session.as_str()) {
+                    return Err(StoreError::Sqlite(format!(
+                        "agent {} control lineage disagrees with its session",
+                        agent.id
+                    )));
+                }
+                match &agent.history {
+                    AgentHistory::Fresh => {
+                        if raw_fork_session.is_some() || raw_fork_entry.is_some() {
+                            return Err(StoreError::Sqlite(format!(
+                                "fresh agent {} has fork session lineage",
+                                agent.id
+                            )));
+                        }
+                    }
+                    AgentHistory::Fork {
+                        source_session_id,
+                        source_entry_id,
+                    } => {
+                        if raw_fork_session.as_deref()
+                            != Some(source_session_id.as_uuid().to_string().as_str())
+                            || raw_fork_entry.as_deref()
+                                != source_entry_id
+                                    .map(|entry| entry.as_uuid().to_string())
+                                    .as_deref()
+                        {
+                            return Err(StoreError::Sqlite(format!(
+                                "fork agent {} history disagrees with its session",
+                                agent.id
+                            )));
+                        }
+                    }
+                    AgentHistory::Root | AgentHistory::SharedLane { .. } => unreachable!(),
+                }
+            }
         }
     }
     Ok(agents)

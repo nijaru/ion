@@ -216,6 +216,11 @@ pub(crate) enum AgentHistory {
         source_session_id: SessionId,
         source_entry_id: Option<EntryId>,
     },
+    Fresh,
+    Fork {
+        source_session_id: SessionId,
+        source_entry_id: Option<EntryId>,
+    },
 }
 
 /// Durable semantic agent identity and control/history topology. This record
@@ -234,7 +239,9 @@ pub(crate) struct AgentRecord {
 #[derive(Debug, Clone, PartialEq)]
 pub struct LoadedSession {
     pub session: SessionRecord,
-    /// Durable semantic identities retained by this session family.
+    /// Durable semantic identities that directly address lanes in this
+    /// session. Family-wide topology may also contain agents whose target is a
+    /// different durable session.
     pub(crate) agents: Vec<AgentRecord>,
     /// Complete durable lane state over the shared conversation tree.
     pub(crate) lanes: Vec<crate::session::lane::Lane>,
@@ -296,6 +303,11 @@ enum StoreCommand {
         control_parent_id: AgentId,
         lane: crate::session::lane::Lane,
         reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    AdmitSessionAgent {
+        record: SessionRecord,
+        control_parent_id: AgentId,
+        reply: oneshot::Sender<Result<AgentId, StoreError>>,
     },
     BeginOperation {
         session_id: SessionId,
@@ -539,6 +551,22 @@ impl SessionStore {
             agent_id,
             control_parent_id,
             lane,
+            reply,
+        })
+        .await
+    }
+
+    /// Atomically publish a separately hosted fresh/fork session and its
+    /// family-scoped agent identity. The session, main lane, and immutable
+    /// topology either all become visible or none do.
+    pub(crate) async fn admit_session_agent(
+        &self,
+        record: SessionRecord,
+        control_parent_id: AgentId,
+    ) -> Result<AgentId, StoreError> {
+        self.request(|reply| StoreCommand::AdmitSessionAgent {
+            record,
+            control_parent_id,
             reply,
         })
         .await
