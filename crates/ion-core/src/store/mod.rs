@@ -348,6 +348,11 @@ enum StoreCommand {
         family_session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<AgentRecord>, StoreError>>,
     },
+    LoadFamilyAgent {
+        family_session_id: SessionId,
+        agent_id: AgentId,
+        reply: oneshot::Sender<Result<Option<AgentRecord>, StoreError>>,
+    },
     LatestSession {
         reply: oneshot::Sender<Result<Option<SessionId>, StoreError>>,
     },
@@ -672,6 +677,21 @@ impl SessionStore {
     ) -> Result<Vec<AgentRecord>, StoreError> {
         self.request(|reply| StoreCommand::LoadAgentFamily {
             family_session_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Resolve one semantic address inside a family and validate the session
+    /// it targets. `None` means the identity is not a member of this family.
+    pub(crate) async fn load_family_agent(
+        &self,
+        family_session_id: SessionId,
+        agent_id: AgentId,
+    ) -> Result<Option<AgentRecord>, StoreError> {
+        self.request(|reply| StoreCommand::LoadFamilyAgent {
+            family_session_id,
+            agent_id,
             reply,
         })
         .await

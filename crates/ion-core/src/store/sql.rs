@@ -112,6 +112,13 @@ pub(super) fn handle_command(
         } => {
             let _ = reply.send(load_agent_family(connection, family_session_id));
         }
+        StoreCommand::LoadFamilyAgent {
+            family_session_id,
+            agent_id,
+            reply,
+        } => {
+            let _ = reply.send(load_family_agent(connection, family_session_id, agent_id));
+        }
         StoreCommand::Usage { session_id, reply } => {
             let _ = reply.send(usage_rows(connection, session_id));
         }
@@ -1264,6 +1271,40 @@ fn load_lanes(
         });
     }
     Ok(lanes)
+}
+
+fn load_family_agent(
+    connection: &Connection,
+    family_session_id: SessionId,
+    agent_id: AgentId,
+) -> Result<Option<AgentRecord>, StoreError> {
+    let raw_session: Option<String> = connection
+        .query_row(
+            "SELECT session_id FROM agents WHERE id = ?1 AND family_session_id = ?2",
+            rusqlite::params![
+                agent_id.as_uuid().to_string(),
+                family_session_id.as_uuid().to_string(),
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(raw_session) = raw_session else {
+        return Ok(None);
+    };
+    let session_id = SessionId::parse(&raw_session).ok_or_else(|| {
+        StoreError::Sqlite(format!("agent {agent_id} has a corrupt target session id"))
+    })?;
+    let loaded = load(connection, session_id)?;
+    let agent = loaded
+        .agents
+        .into_iter()
+        .find(|agent| agent.id == agent_id && agent.family_session_id == family_session_id)
+        .ok_or_else(|| {
+            StoreError::Sqlite(format!(
+                "agent {agent_id} is missing from its addressed session"
+            ))
+        })?;
+    Ok(Some(agent))
 }
 
 fn load_agent_family(

@@ -655,6 +655,18 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         "{fresh_wait:?}"
     );
     assert!(!fresh_wait.output.contains("child "), "{fresh_wait:?}");
+    let fresh_observation = family
+        .observe(fresh_agent)
+        .await
+        .expect("family observes fresh result");
+    assert!(matches!(
+        fresh_observation.status,
+        crate::agent::Status::Finished { .. }
+    ));
+    assert_eq!(
+        fresh_observation.result.as_deref(),
+        Some("session agent answer")
+    );
 
     let fork = spawn(json!({"objective": "fork work", "topology": "fork"})).await;
     assert!(!fork.is_error, "fork spawn failed: {fork:?}");
@@ -701,6 +713,18 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
     assert!(
         fork_wait.output.contains("session agent answer"),
         "{fork_wait:?}"
+    );
+    let fork_observation = family
+        .observe(fork_agent)
+        .await
+        .expect("family observes fork result");
+    assert!(matches!(
+        fork_observation.status,
+        crate::agent::Status::Finished { .. }
+    ));
+    assert_eq!(
+        fork_observation.result.as_deref(),
+        Some("session agent answer")
     );
 
     children.close().await.expect("close session agents");

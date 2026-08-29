@@ -903,24 +903,9 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.target(agent_id).await {
-                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
-                            match self.family.observe(agent_id).await {
-                                Ok(observation) => {
-                                    ToolOutcome::text(render_family_observation(&observation))
-                                }
-                                Err(err) => ToolOutcome::error(err.to_string()),
-                            }
-                        }
-                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
-                            let handle =
-                                child_handle_for_session(session_id, self.children.parent_id);
-                            match self.children.observe(handle).await {
-                                Ok(observation) => {
-                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
-                                }
-                                Err(err) => ToolOutcome::error(err),
-                            }
+                    match self.family.observe(agent_id).await {
+                        Ok(observation) => {
+                            ToolOutcome::text(render_family_observation(&observation))
                         }
                         Err(err) => ToolOutcome::error(err.to_string()),
                     }
@@ -949,9 +934,22 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                             let handle =
                                 child_handle_for_session(session_id, self.children.parent_id);
                             match self.children.wait(handle, cancel, progress.as_ref()).await {
-                                Ok(observation) => {
-                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
-                                }
+                                Ok(observation) => match observation.operation_id() {
+                                    Some(operation_id) => match self
+                                        .family
+                                        .observe_operation(agent_id, operation_id)
+                                        .await
+                                    {
+                                        Ok(observation) => ToolOutcome::text(
+                                            render_family_observation(&observation),
+                                        ),
+                                        Err(err) => ToolOutcome::error(err.to_string()),
+                                    },
+                                    None => ToolOutcome::text(render_child_as_agent(
+                                        agent_id,
+                                        &observation,
+                                    )),
+                                },
                                 Err(err) => ToolOutcome::error(err),
                             }
                         }
@@ -1002,9 +1000,12 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                                 .resume(handle, cancel, progress.as_ref())
                                 .await
                             {
-                                Ok(observation) => {
-                                    ToolOutcome::text(render_child_as_agent(agent_id, &observation))
-                                }
+                                Ok(_) => match self.family.observe(agent_id).await {
+                                    Ok(observation) => {
+                                        ToolOutcome::text(render_family_observation(&observation))
+                                    }
+                                    Err(err) => ToolOutcome::error(err.to_string()),
+                                },
                                 Err(err) => ToolOutcome::error(err),
                             }
                         }

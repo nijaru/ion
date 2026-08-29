@@ -161,7 +161,11 @@ impl Family {
         // committed its root record before we read family topology.
         let _ = session.snapshot().await?;
         let loaded = store.load(session_id).await?;
+        let family_agents = store.load_agent_family(session_id).await?;
         let root = AgentId::root(session_id);
+        if !family_agents.iter().any(|agent| agent.id == root) {
+            return Err(Error::Inconsistent(root));
+        }
         let retained = loaded
             .agents
             .iter()
@@ -221,10 +225,10 @@ impl Family {
     /// after `Family::attach` are still recognized without process-local
     /// registration.
     pub(crate) async fn target(&self, agent_id: AgentId) -> Result<AgentTarget, Error> {
-        let agents = self.store.load_agent_family(self.session_id).await?;
-        let agent = agents
-            .iter()
-            .find(|agent| agent.id == agent_id)
+        let agent = self
+            .store
+            .load_family_agent(self.session_id, agent_id)
+            .await?
             .ok_or(Error::UnknownAgent(agent_id))?;
         match &agent.history {
             AgentHistory::Root | AgentHistory::SharedLane { .. }
@@ -370,35 +374,18 @@ impl Family {
         Ok(operation_id)
     }
 
-    /// Observe authoritative durable operation state for one retained agent.
-    /// Reading a terminal/suspended state also releases any stale local permit;
-    /// it never consumes or deletes the durable completion.
+    /// Observe authoritative durable operation state for any retained family
+    /// agent. Shared-history permit cleanup remains local to the root runtime;
+    /// separately hosted residency is still owned by the child host for now.
     pub async fn status(&self, agent_id: AgentId) -> Result<Status, Error> {
-        if !self
-            .retained
-            .lock()
-            .expect("agent family poisoned")
-            .contains_key(&agent_id)
-        {
-            return Err(Error::UnknownAgent(agent_id));
-        }
-        let loaded = self.store.load(self.session_id).await?;
-        self.release_nonexecuting(&loaded);
+        let loaded = self.load_addressed_session(agent_id).await?;
         status_from_loaded(&loaded, agent_id)
     }
 
-    /// Observe the latest durable execution and its exact semantic result.
+    /// Observe the latest durable execution and its exact semantic result for
+    /// either shared-history or separately hosted topology.
     pub async fn observe(&self, agent_id: AgentId) -> Result<Observation, Error> {
-        if !self
-            .retained
-            .lock()
-            .expect("agent family poisoned")
-            .contains_key(&agent_id)
-        {
-            return Err(Error::UnknownAgent(agent_id));
-        }
-        let loaded = self.store.load(self.session_id).await?;
-        self.release_nonexecuting(&loaded);
+        let loaded = self.load_addressed_session(agent_id).await?;
         let status = status_from_loaded(&loaded, agent_id)?;
         let result = match status_operation_id(&status) {
             Some(operation_id) => operation_result(&loaded, agent_id, operation_id)?,
@@ -412,14 +399,14 @@ impl Family {
     }
 
     /// Observe one captured operation even if the agent has since started a
-    /// later run. This is the wait/result boundary used by model-facing tools.
+    /// later run. This exact durable result boundary spans all current family
+    /// topologies; waiting/execution residency remains topology-specific.
     pub async fn observe_operation(
         &self,
         agent_id: AgentId,
         operation_id: OperationId,
     ) -> Result<Observation, Error> {
-        let loaded = self.store.load(self.session_id).await?;
-        self.release_nonexecuting(&loaded);
+        let loaded = self.load_addressed_session(agent_id).await?;
         let status = status_for_operation(&loaded, agent_id, operation_id)?;
         let result = operation_result(&loaded, agent_id, operation_id)?;
         Ok(Observation {
@@ -427,6 +414,19 @@ impl Family {
             status,
             result,
         })
+    }
+
+    async fn load_addressed_session(&self, agent_id: AgentId) -> Result<LoadedSession, Error> {
+        let target = self.target(agent_id).await?;
+        let session_id = match target {
+            AgentTarget::SharedHistory { session_id }
+            | AgentTarget::SeparateSession { session_id } => session_id,
+        };
+        let loaded = self.store.load(session_id).await?;
+        if matches!(target, AgentTarget::SharedHistory { .. }) {
+            self.release_nonexecuting(&loaded);
+        }
+        Ok(loaded)
     }
 
     /// Wait for the execution that is current at this call's subscription
@@ -606,6 +606,12 @@ impl Family {
     }
 
     pub async fn cancel(&self, agent_id: AgentId) -> Result<(), Error> {
+        if !matches!(
+            self.target(agent_id).await?,
+            AgentTarget::SharedHistory { .. }
+        ) {
+            return Err(Error::UnknownAgent(agent_id));
+        }
         let status = self.status(agent_id).await?;
         let operation_id = match status {
             Status::Active { operation_id, .. } => operation_id,
