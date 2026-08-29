@@ -22,7 +22,9 @@ jobs:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
       - name: Apply typed effect writer migration
-        run: python .github/step8_typed_effect_writers.py
+        run: |
+          python .github/step8_typed_effect_writers.py
+          python .github/step8_fix1.py
       - name: Format
         run: cargo fmt --all
       - name: Format gate
@@ -34,7 +36,7 @@ jobs:
       - name: Commit validated source
         run: |
           git checkout "$GITHUB_HEAD_REF"
-          rm .github/step8_typed_effect_writers.py .github/workflows/step8-typed-effect-writers.yml
+          rm .github/step8_typed_effect_writers.py .github/step8_fix1.py .github/workflows/step8-typed-effect-writers.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add -A
