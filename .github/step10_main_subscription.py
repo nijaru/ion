@@ -1,26 +1,34 @@
 from pathlib import Path
 
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    assert text.count(old) == 1, f"{label} context changed"
+    return text.replace(old, new, 1)
+
+
 runtime = Path("crates/ion-core/src/runtime/mod.rs")
 text = runtime.read_text()
 
-replacements = [
-(
-"""    Subscribe {
+changes = [
+    (
+        "command variant",
+        """    Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
     },
     Close {
 """,
-"""    Subscribe {
+        """    Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
     },
     SubscribeAll {
         reply: oneshot::Sender<SubscribeReply>,
     },
     Close {
-"""
-),
-(
-"""    /// Snapshot plus bounded live events (DESIGN.md §21.2). A consumer
+""",
+    ),
+    (
+        "handle API",
+        """    /// Snapshot plus bounded live events (DESIGN.md §21.2). A consumer
     /// that falls behind resynchronizes from a fresh snapshot; past
     /// events are never replayed.
     pub async fn subscribe(&self) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
@@ -34,7 +42,7 @@ replacements = [
 
     /// Close the session (DESIGN.md §9.5): lifecycle shutdown, never a
 """,
-"""    /// Main-lane snapshot plus main-lane bounded live events (DESIGN.md
+        """    /// Main-lane snapshot plus main-lane bounded live events (DESIGN.md
     /// §16.1). A frontend that falls behind resynchronizes from a fresh
     /// snapshot; sibling-lane work cannot pollute or overflow this event ring.
     pub async fn subscribe(&self) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
@@ -61,45 +69,49 @@ replacements = [
     }
 
     /// Close the session (DESIGN.md §9.5): lifecycle shutdown, never a
-"""
-),
-(
-"""    events: broadcast::Sender<RuntimeEvent>,
+""",
+    ),
+    (
+        "runtime event fields",
+        """    events: broadcast::Sender<RuntimeEvent>,
     /// Persisted indeterminate outcomes that must remain visible to a
 """,
-"""    /// Session-wide event ring used only by operation-addressed family waits.
+        """    /// Session-wide event ring used only by operation-addressed family waits.
     events: broadcast::Sender<RuntimeEvent>,
     /// Main-lane event ring paired with the public main-lane snapshot.
     main_events: broadcast::Sender<RuntimeEvent>,
     /// Persisted indeterminate outcomes that must remain visible to a
-"""
-),
-(
-"""        let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
+""",
+    ),
+    (
+        "event ring construction",
+        """        let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut lanes = BTreeMap::new();
 """,
-"""        let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
+        """        let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let (main_events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut lanes = BTreeMap::new();
-"""
-),
-(
-"""            events,
+""",
+    ),
+    (
+        "event ring initialization",
+        """            events,
             indeterminate_warning: None,
 """,
-"""            events,
+        """            events,
             main_events,
             indeterminate_warning: None,
-"""
-),
-(
-"""            SessionCommand::Subscribe { reply } => {
+""",
+    ),
+    (
+        "command dispatch",
+        """            SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
                 false
             }
             SessionCommand::Close { reply } => {
 """,
-"""            SessionCommand::Subscribe { reply } => {
+        """            SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
                 false
             }
@@ -108,10 +120,11 @@ replacements = [
                 false
             }
             SessionCommand::Close { reply } => {
-"""
-),
-(
-"""    fn subscribe(&mut self) -> SubscribeReply {
+""",
+    ),
+    (
+        "runtime subscriptions",
+        """    fn subscribe(&mut self) -> SubscribeReply {
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -122,7 +135,7 @@ replacements = [
 
     fn snapshot(&self) -> SessionSnapshot {
 """,
-"""    fn subscribe(&mut self) -> SubscribeReply {
+        """    fn subscribe(&mut self) -> SubscribeReply {
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -141,16 +154,17 @@ replacements = [
     }
 
     fn snapshot(&self) -> SessionSnapshot {
-"""
-),
-(
-"""        // A full ring drops the oldest buffered events for that
+""",
+    ),
+    (
+        "event routing",
+        """        // A full ring drops the oldest buffered events for that
         // receiver; the receiver detects the gap and reports lag
         // reliably (broadcast semantics, §21.4). No receivers is the
         // normal idle case.
         let _ = self.events.send(event);
 """,
-"""        // Frontends project main, so sibling-lane traffic must not alter or
+        """        // Frontends project main, so sibling-lane traffic must not alter or
         // overflow their bounded event ring. Family waits retain a separate
         // session-wide stream and filter by exact operation identity.
         let is_main_event = event.operation_id().map_or(true, |operation_id| {
@@ -163,12 +177,11 @@ replacements = [
         // receiver detects the gap reliably. No receivers is the normal idle
         // case for either ring.
         let _ = self.events.send(event);
-"""
-),
+""",
+    ),
 ]
-for old, new in replacements:
-    assert text.count(old) == 1, f"runtime context changed: {old[:100]!r}"
-    text = text.replace(old, new, 1)
+for label, old, new in changes:
+    text = replace_once(text, old, new, label)
 runtime.write_text(text)
 
 agent = Path("crates/ion-core/src/agent.rs")
@@ -179,12 +192,12 @@ agent.write_text(text.replace(".subscribe().await?", ".subscribe_all().await?"))
 
 multi = Path("crates/ion-core/src/tests/multi_lane.rs")
 text = multi.read_text()
-old = "let (_snapshot, mut events) = session.subscribe().await.expect(\"subscribe\");"
-assert text.count(old) == 1, "multi-lane observer context changed"
-text = text.replace(
+old = 'let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");'
+text = replace_once(
+    text,
     old,
-    "let (_snapshot, mut events) = session.subscribe_all().await.expect(\"subscribe all\");",
-    1,
+    'let (_snapshot, mut events) = session.subscribe_all().await.expect("subscribe all");',
+    "multi-lane observer",
 )
 text += r'''
 
@@ -220,8 +233,6 @@ async fn frontend_subscription_projects_only_the_main_lane() {
     .expect("family observer sees worker start");
     assert_eq!(observed_worker, worker_operation);
 
-    // The public snapshot and event stream are one coherent main-lane
-    // projection even while a sibling lane is active.
     let snapshot = session.snapshot().await.expect("main snapshot");
     assert!(matches!(snapshot.operation, OperationStatus::Idle));
     let main_operation = session
@@ -249,11 +260,10 @@ multi.write_text(text)
 
 design = Path("DESIGN.md")
 text = design.read_text()
-old = "A future higher-level `Host` or family controller may own multiple loaded session harnesses when concrete lifecycle needs require it.\n\n### 16.1 Client/host boundary\n\nThe execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote or multi-client protocols project an initial snapshot plus ordered runtime/session events/actions and send commands carrying stable semantic IDs. A client disconnect must not implicitly cancel durable work. Settle this boundary before redesigning the TUI so frontend ownership never leaks into execution semantics."
-new = "A future higher-level `Host` or family controller may own multiple loaded session harnesses when concrete lifecycle needs require it.\n\n### 16.1 Client/host boundary\n\nThe execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote or multi-client protocols project an initial snapshot plus ordered runtime/session events/actions and send commands carrying stable semantic IDs. The public frontend subscription is a coherent `main`-lane projection: its snapshot and bounded event ring describe the same lane, so sibling-lane agents cannot mutate or overflow foreground presentation. Family control has a separate internal all-lane event observation path and filters it by stable operation identity. A client disconnect must not implicitly cancel durable work. Settle this boundary before redesigning the TUI so frontend ownership never leaks into execution semantics."
-assert text.count(old) == 1, "DESIGN §16.1 context changed"
-text = text.replace(old, new, 1)
+old = "The execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote or multi-client protocols project an initial snapshot plus ordered runtime/session events/actions and send commands carrying stable semantic IDs. A client disconnect must not implicitly cancel durable work. Settle this boundary before redesigning the TUI so frontend ownership never leaks into execution semantics."
+new = "The execution host/session writer is authoritative. TUI, print/JSON, ACP, and future remote or multi-client protocols project an initial snapshot plus ordered runtime/session events/actions and send commands carrying stable semantic IDs. The public frontend subscription is a coherent `main`-lane projection: its snapshot and bounded event ring describe the same lane, so sibling-lane agents cannot mutate or overflow foreground presentation. Family control has a separate internal all-lane event observation path and filters it by stable operation identity. A client disconnect must not implicitly cancel durable work. Settle this boundary before redesigning the TUI so frontend ownership never leaks into execution semantics."
+text = replace_once(text, old, new, "DESIGN §16.1")
 old = "10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition; after terminal acquisition, explicitly restore the terminal before startup diagnostics and unwind acquired store/catalog/runtime ownership on failure. Keep `SessionHandle` as the only runtime mutation path and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework."
 new = "10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition; after terminal acquisition, explicitly restore the terminal before startup diagnostics and unwind acquired store/catalog/runtime ownership on failure. Keep the public frontend snapshot/event subscription coherent on `main` while family waits observe all lanes internally. Keep `SessionHandle` as the only runtime mutation path and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework."
-assert text.count(old) == 1, "Step 10 context changed"
-design.write_text(text.replace(old, new, 1))
+text = replace_once(text, old, new, "Step 10")
+design.write_text(text)
