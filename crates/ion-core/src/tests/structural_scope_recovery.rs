@@ -57,9 +57,12 @@ async fn resumed_interactive_recovery_uses_frozen_agents_scope_snapshot() {
     );
     let loaded = store.load(session_id).await.expect("load");
     let frozen = &loaded.operations[0].capability_snapshot;
-    assert!(frozen.tools.iter().any(|tool| {
-        tool.name == "agent_probe" && tool.description == "agents-v1"
-    }));
+    assert!(
+        frozen
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "agent_probe" && tool.description == "agents-v1" })
+    );
 
     runtime.crash();
     gate.release();
@@ -111,12 +114,18 @@ async fn resumed_interactive_recovery_uses_frozen_agents_scope_snapshot() {
 
     let requests = recovered_provider.requests();
     assert_eq!(requests.len(), 1);
-    assert!(requests[0].tools.iter().any(|tool| {
-        tool.name == "agent_probe" && tool.description == "agents-v1"
-    }));
-    assert!(!requests[0].tools.iter().any(|tool| {
-        tool.name == "agent_probe" && tool.description == "agents-v2"
-    }));
+    assert!(
+        requests[0]
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "agent_probe" && tool.description == "agents-v1" })
+    );
+    assert!(
+        !requests[0]
+            .tools
+            .iter()
+            .any(|tool| { tool.name == "agent_probe" && tool.description == "agents-v2" })
+    );
     assert!(
         !requests[0]
             .tools
