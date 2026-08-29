@@ -25,7 +25,11 @@ use tracing::{debug, error, info, warn};
 use crate::context::{
     CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource, project_with_manifest,
 };
+use crate::effect::{
+    CacheExpectation, CompactionInvocation, DurableEffect, ModelStepPlan, ToolInvocation,
+};
 use crate::error::{CommandError, RuntimeError};
+use crate::harness::HarnessProfile;
 use crate::ids::{
     AgentId, EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,
 };
@@ -2740,9 +2744,9 @@ impl<P: Provider> SessionRuntime<P> {
         operation_id: OperationId,
         model: &ModelConfig,
         prefix_fingerprint: &str,
-    ) -> &'static str {
+    ) -> CacheExpectation {
         if !model.capabilities.prompt_cache {
-            return "unsupported";
+            return CacheExpectation::Unsupported;
         }
         match self
             .operation_lane_live(operation_id)
@@ -2750,9 +2754,11 @@ impl<P: Provider> SessionRuntime<P> {
             .last_prefix_fingerprint
             .as_deref()
         {
-            None => "cold_start",
-            Some(previous) if previous == prefix_fingerprint => "prefix_reuse_expected",
-            Some(_) => "prefix_changed",
+            None => CacheExpectation::ColdStart,
+            Some(previous) if previous == prefix_fingerprint => {
+                CacheExpectation::PrefixReuseExpected
+            }
+            Some(_) => CacheExpectation::PrefixChanged,
         }
     }
 
@@ -2849,17 +2855,21 @@ impl<P: Provider> SessionRuntime<P> {
         let EffectIntent::Compaction { operation_id, .. } = applied.intents[0].clone() else {
             panic!("StartCompaction must yield a compaction intent");
         };
-        let effect = EffectRecord {
-            id: EffectId::generate(),
-            kind: "compaction".to_owned(),
-            recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({
-                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
-                "model": model,
-                "plan": plan
+        let effect = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Compaction(CompactionInvocation {
+                step: self
+                    .live_mut(operation_id)
+                    .expect("main operation residency exists")
+                    .model_step
+                    + 1,
+                model: model.clone(),
+                plan: plan.clone(),
+                harness_profile: HarnessProfile::default_v1(),
             }),
-            attempt: 1,
-        };
+            RecoveryClass::ReplaySafe,
+            1,
+        );
         staged.open_effect = Some(effect.clone());
         let (request, new_entry_seq) = build_commit_request(
             self.session_id,
@@ -2989,21 +2999,25 @@ impl<P: Provider> SessionRuntime<P> {
             ContextManifest::new(&capability_snapshot, self.trusted_resources.clone());
         let prefix_fingerprint = context_manifest.stable_prefix_fingerprint(&model.model_ref);
         let cache_expectation = self.cache_expectation(operation_id, &model, &prefix_fingerprint);
-        let effect = EffectRecord {
-            id: EffectId::generate(),
-            kind: "model_step".to_owned(),
-            recovery_class: RecoveryClass::ReplaySafe,
-            effective_input: serde_json::json!({
-                "step": self.live_mut(operation_id).expect("main operation residency exists").model_step + 1,
-                "model": model,
-                "plan": plan,
-                "capability_snapshot_id": capability_snapshot.id,
-                "context_manifest_id": context_manifest.id,
-                "prefix_fingerprint": prefix_fingerprint,
-                "cache_expectation": cache_expectation
+        let effect = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::ModelStep(ModelStepPlan {
+                step: self
+                    .live_mut(operation_id)
+                    .expect("main operation residency exists")
+                    .model_step
+                    + 1,
+                model: model.clone(),
+                plan: plan.clone(),
+                capability_snapshot_id: capability_snapshot.id.clone(),
+                context_manifest_id: context_manifest.id.clone(),
+                harness_profile: HarnessProfile::default_v1(),
+                prefix_fingerprint: prefix_fingerprint.clone(),
+                cache_expectation,
             }),
-            attempt: 1,
-        };
+            RecoveryClass::ReplaySafe,
+            1,
+        );
         // The pending effect is part of the checkpoint: it must be on the
         // staged operation before the commit is built.
         staged.open_effect = Some(effect.clone());
@@ -3249,19 +3263,18 @@ impl<P: Provider> SessionRuntime<P> {
             Ok(invocation) => (Some(invocation.canonical), invocation.recovery_class),
             Err(_) => (None, RecoveryClass::NeverReplay),
         };
-        let effect = EffectRecord {
-            id: EffectId::generate(),
-            kind: format!("tool:{}", call.name),
-            recovery_class,
-            effective_input: serde_json::json!({
-                "tool": call.name,
-                "arguments": call.arguments,
-                "call_id": call.call_id,
-                "canonical": canonical,
-                "reconciliation": evidence,
+        let effect = EffectRecord::new(
+            EffectId::generate(),
+            DurableEffect::Tool(ToolInvocation {
+                tool: call.name.clone(),
+                arguments: call.arguments.clone(),
+                call_id: call.call_id,
+                canonical,
+                reconciliation: evidence.clone(),
             }),
-            attempt: 1,
-        };
+            recovery_class,
+            1,
+        );
         // The pending effect is part of the checkpoint: it must be on the
         // staged operation before the commit is built.
         let effect_id = effect.id;
@@ -3307,15 +3320,10 @@ impl<P: Provider> SessionRuntime<P> {
                 .operation_tool_calls += 1;
             let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
             self.emit_tool_started(call.operation_id, call.call_id, &call.name, target);
-            let reconciliation = self
-                .active(operation_id)
-                .and_then(|active| active.open_effect.as_ref())
-                .and_then(|effect| effect.effective_input.get("reconciliation"))
-                .cloned();
             let effect_id = self
                 .active(operation_id)
                 .and_then(|active| active.open_effect.as_ref().map(|effect| effect.id));
-            self.spawn_tool_effect(effect_id, call, reconciliation, step_tools);
+            self.spawn_tool_effect(effect_id, call, evidence, step_tools);
         }
         true
     }
