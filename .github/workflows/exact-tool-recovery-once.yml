@@ -6,6 +6,7 @@ on:
     paths:
       - .github/exact-tool-recovery.py
       - .github/workflows/exact-tool-recovery-once.yml
+  workflow_dispatch:
 
 permissions:
   contents: write
