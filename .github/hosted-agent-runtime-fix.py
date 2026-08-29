@@ -42,4 +42,23 @@ if resume_count != 1:
 """
 structural = structural.replace("\\\\", "\\")
 text = text[:start] + structural + text[end:]
+
+# The parser survives only for the cfg(test) synchronous delegate fixture once
+# the production child namespace is removed. Keep its compilation scope honest
+# instead of allowing dead production code.
+write_anchor = '''new_path.write_text(text)\np.unlink()\n'''
+write_replacement = '''text = text.replace("\\nfn parse_children(", "\\n#[cfg(test)]\\nfn parse_children(", 1)\nnew_path.write_text(text)\np.unlink()\n'''
+if write_anchor not in text:
+    raise SystemExit("agent_host write anchor missing")
+text = text.replace(write_anchor, write_replacement, 1)
+
+# Renaming child_budget -> budget creates one `budget: budget` in the retained
+# test-only delegate constructor. Use the Rust field shorthand required by the
+# strict Clippy contract.
+budget_anchor = '''text = text.replace("// ---- Bounded child delegation (§20, Step 7) ----", "// ---- Test-only synchronous delegation budget fixture ----")\np.write_text(text)\n'''
+budget_replacement = '''text = text.replace("// ---- Bounded child delegation (§20, Step 7) ----", "// ---- Test-only synchronous delegation budget fixture ----")\ntext = text.replace("budget: budget,", "budget,")\np.write_text(text)\n'''
+if budget_anchor not in text:
+    raise SystemExit("budget test write anchor missing")
+text = text.replace(budget_anchor, budget_replacement, 1)
+
 p.write_text(text)
