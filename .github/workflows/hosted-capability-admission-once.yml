@@ -1,0 +1,40 @@
+name: Hosted capability admission once
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/hosted-capability-admission.py
+      - .github/workflows/hosted-capability-admission-once.yml
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply hosted capability admission
+        run: python .github/hosted-capability-admission.py
+      - run: cargo fmt
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated slice
+        run: |
+          rm .github/hosted-capability-admission.py .github/workflows/hosted-capability-admission-once.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor(agent): persist hosted capability scope"
+          git push origin HEAD:main
