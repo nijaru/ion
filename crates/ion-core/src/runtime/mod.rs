@@ -475,36 +475,6 @@ enum SessionCommand {
     },
 }
 
-/// Command sender for the process runtime (DESIGN.md §8.1). Session
-/// commands live on [`SessionHandle`]; one-shot callers reach the sole
-/// session through [`Runtime::session`].
-#[derive(Clone)]
-pub struct RuntimeHandle {
-    tx: mpsc::Sender<SessionCommand>,
-}
-
-impl fmt::Debug for RuntimeHandle {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("RuntimeHandle").finish_non_exhaustive()
-    }
-}
-
-impl RuntimeHandle {
-    /// Close the runtime's sessions and shut down (DESIGN.md §25.2).
-    pub async fn shutdown(&self) -> Result<(), CommandError> {
-        self.request(|reply| SessionCommand::Close { reply }).await
-    }
-
-    async fn request<T>(
-        &self,
-        build: impl FnOnce(oneshot::Sender<Result<T, CommandError>>) -> SessionCommand,
-    ) -> Result<T, CommandError> {
-        let (reply, rx) = oneshot::channel();
-        self.tx.try_send(build(reply)).map_err(command_send_error)?;
-        rx.await.map_err(|_| CommandError::RuntimeDropped)?
-    }
-}
-
 /// Command sender for one loaded session (DESIGN.md §8.1). Success means
 /// the transition authority accepted the command durably (P4).
 #[derive(Clone)]
@@ -3809,7 +3779,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
 
 #[cfg(test)]
 pub(crate) struct SaturatedHandle {
-    handle: RuntimeHandle,
+    handle: SessionHandle,
     _rx: mpsc::Receiver<SessionCommand>,
 }
 
@@ -3817,20 +3787,20 @@ pub(crate) struct SaturatedHandle {
 impl SaturatedHandle {
     pub(crate) fn new() -> Self {
         let (tx, rx) = mpsc::channel(1);
-        let handle = RuntimeHandle { tx };
+        let handle = SessionHandle { tx };
         handle
             .fill_queue()
             .expect("first fill occupies the bounded command queue");
         Self { handle, _rx: rx }
     }
 
-    pub(crate) fn handle(&self) -> &RuntimeHandle {
+    pub(crate) fn handle(&self) -> &SessionHandle {
         &self.handle
     }
 }
 
 #[cfg(test)]
-impl RuntimeHandle {
+impl SessionHandle {
     fn fill_queue(&self) -> Result<(), CommandError> {
         let (reply, _rx) = oneshot::channel();
         self.tx

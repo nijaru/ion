@@ -462,8 +462,8 @@ Storage, recovery, and live execution now support multiple concurrent lanes unde
 5. Replace child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when a concrete owner exists.
 6. Add durable agent messaging/background completion through the common session-input path.
 7. Make scoped capability publication/teardown structural at lane/agent admission and exact on recovery; capability narrowing must never be reset by unrelated lane configuration changes. Current owners are established; live host deconfiguration stays deferred until a concrete owner exists.
-8. Finish typed tool/effect admission boundaries and expand evaluation around recovery and multi-agent invariants. Runtime effect writers and recovery consume the typed durable vocabulary through `EffectRecord`; ordinary and approved tool calls share one typed post-policy admission preparation, so canonical/recovery/reconciliation/denial state reaches the durable commit boundary as one coherent value. SQLite's compact kind/JSON encoding remains confined to the effect translation boundary.
-9. Shrink/rename public Rust API and remove dead migration scaffolding once ownership is stable.
+8. Typed tool/effect admission and recovery boundaries are established for current owners. Runtime writers and recovery consume `EffectRecord`, tool admission reaches the durable boundary as one coherent typed value, and recovery/multi-agent invariants cover structural-scope narrowing without a separate unowned eval crate.
+9. Shrink/rename public Rust API and remove dead migration scaffolding now that ownership is stable. Begin with usage-proven accidental surface; do not rename coherent runtime/session concepts speculatively.
 10. Redesign the TUI only after the authoritative session/agent host contract is coherent, with ACP as a first-class client boundary.
 
 Research from here is question-driven at concrete implementation boundaries, not another broad framework survey.
