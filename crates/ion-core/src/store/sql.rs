@@ -72,6 +72,7 @@ pub(super) fn handle_command(
                     .and_then(|()| commit(connection, &request).map_err(StoreError::from)),
             );
         }
+        #[cfg(test)]
         StoreCommand::AppendEntry {
             session_id,
             lane_name,
@@ -622,6 +623,7 @@ fn queue_next_run(
     tx.commit()
 }
 
+#[cfg(test)]
 fn append_entry(
     connection: &mut Connection,
     session_id: SessionId,

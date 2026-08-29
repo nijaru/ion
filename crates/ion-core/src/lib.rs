@@ -44,7 +44,7 @@ pub use extensions::{ExtensionDef, ExtensionService};
 pub use harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
-pub use operation::{InboxKind, OperationOutcome, OperationState, SessionEntry};
+pub use operation::{OperationOutcome, OperationState, SessionEntry};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
@@ -57,8 +57,8 @@ pub use runtime::{
     SessionSnapshot,
 };
 pub use store::{
-    CheckpointPayload, CheckpointRecord, EffectRecord, EntryRecord, InboxRecord, InboxStatus,
-    LoadedOperation, LoadedSession, SessionRecord, SessionStore, StoreError, default_db_path,
+    CheckpointPayload, EffectRecord, EntryRecord, LoadedOperation, LoadedSession, SessionRecord,
+    SessionStore, StoreError, default_db_path,
 };
 pub use tool::{
     BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
