@@ -1,0 +1,44 @@
+name: Step 9 final API boundary
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply final API boundary cleanup
+        run: python .github/step9_final_api_boundary.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Clippy gate
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test gate
+        run: cargo test --locked --workspace
+      - name: Commit validated source
+        if: github.event_name == 'pull_request'
+        env:
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          git checkout "$HEAD_REF"
+          python .github/step9_final_api_boundary.py
+          cargo fmt --all
+          rm .github/step9_final_api_boundary.py .github/workflows/step9-final-api-boundary.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add -A
+          git commit -m "refactor(core): finalize Step 9 API boundary"
+          git push origin "HEAD:$HEAD_REF"
