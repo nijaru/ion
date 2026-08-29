@@ -54,9 +54,7 @@ use crate::tool::{
 mod effects;
 mod persistence;
 mod recovery;
-use persistence::{
-    build_commit_request, compaction_from_input, model_step_from_input, tool_call_from_input,
-};
+use persistence::build_commit_request;
 
 const COMMAND_CAPACITY: usize = 32;
 const ENGINE_CAPACITY: usize = 64;
