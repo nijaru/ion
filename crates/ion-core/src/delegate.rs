@@ -881,13 +881,20 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(value) => value.to_owned(),
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.start(agent_id, objective).await {
-                        Ok(operation_id) => {
-                            ToolOutcome::text(format!("agent {agent_id} started: {operation_id}"))
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
+                            match self.family.start(agent_id, objective).await {
+                                Ok(operation_id) => ToolOutcome::text(format!(
+                                    "agent {agent_id} started: {operation_id}"
+                                )),
+                                Err(err) => ToolOutcome::error(err.to_string()),
+                            }
                         }
-                        Err(crate::agent::Error::UnknownAgent(_)) => ToolOutcome::error(
-                            "agent_start currently applies only to admitted lane agents; fresh/fork agents start at admission and use agent_resume after process loss",
-                        ),
+                        Ok(crate::agent::AgentTarget::SeparateSession { .. }) => {
+                            ToolOutcome::error(
+                                "agent_start currently applies only to admitted lane agents; fresh/fork agents start at admission and use agent_resume after process loss",
+                            )
+                        }
                         Err(err) => ToolOutcome::error(err.to_string()),
                     }
                 }
@@ -896,12 +903,18 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.observe(agent_id).await {
-                        Ok(observation) => {
-                            ToolOutcome::text(render_family_observation(&observation))
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
+                            match self.family.observe(agent_id).await {
+                                Ok(observation) => {
+                                    ToolOutcome::text(render_family_observation(&observation))
+                                }
+                                Err(err) => ToolOutcome::error(err.to_string()),
+                            }
                         }
-                        Err(crate::agent::Error::UnknownAgent(_)) => {
-                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
+                            let handle =
+                                child_handle_for_session(session_id, self.children.parent_id);
                             match self.children.observe(handle).await {
                                 Ok(observation) => {
                                     ToolOutcome::text(render_child_as_agent(agent_id, &observation))
@@ -917,8 +930,12 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.wait_one(agent_id, cancel.clone(), None).await {
-                        Ok(status) => {
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
+                            let status = match self.family.wait_one(agent_id, cancel, None).await {
+                                Ok(status) => status,
+                                Err(err) => return ToolOutcome::error(err.to_string()),
+                            };
                             let operation_id = host_status_operation_id(&status)
                                 .expect("family wait rejects admitted agents");
                             match self.family.observe_operation(agent_id, operation_id).await {
@@ -928,8 +945,9 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                                 Err(err) => ToolOutcome::error(err.to_string()),
                             }
                         }
-                        Err(crate::agent::Error::UnknownAgent(_)) => {
-                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
+                            let handle =
+                                child_handle_for_session(session_id, self.children.parent_id);
                             match self.children.wait(handle, cancel, progress.as_ref()).await {
                                 Ok(observation) => {
                                     ToolOutcome::text(render_child_as_agent(agent_id, &observation))
@@ -945,12 +963,18 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.cancel(agent_id).await {
-                        Ok(()) => {
-                            ToolOutcome::text(format!("cancellation accepted for agent {agent_id}"))
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => {
+                            match self.family.cancel(agent_id).await {
+                                Ok(()) => ToolOutcome::text(format!(
+                                    "cancellation accepted for agent {agent_id}"
+                                )),
+                                Err(err) => ToolOutcome::error(err.to_string()),
+                            }
                         }
-                        Err(crate::agent::Error::UnknownAgent(_)) => {
-                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
+                            let handle =
+                                child_handle_for_session(session_id, self.children.parent_id);
                             match self.children.cancel(handle).await {
                                 Ok(()) => ToolOutcome::text(format!(
                                     "cancellation accepted for agent {agent_id}"
@@ -966,12 +990,13 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(agent_id) => agent_id,
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self.family.status(agent_id).await {
-                        Ok(_) => ToolOutcome::error(
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => ToolOutcome::error(
                             "lane agents reattach with their root session and do not require agent_resume",
                         ),
-                        Err(crate::agent::Error::UnknownAgent(_)) => {
-                            let handle = child_handle_for(agent_id, self.children.parent_id);
+                        Ok(crate::agent::AgentTarget::SeparateSession { session_id }) => {
+                            let handle =
+                                child_handle_for_session(session_id, self.children.parent_id);
                             match self
                                 .children
                                 .resume(handle, cancel, progress.as_ref())
@@ -995,17 +1020,22 @@ impl<P: Provider + 'static> Tool for HostAgentTool<P> {
                         Ok(value) => value.to_owned(),
                         Err(err) => return ToolOutcome::error(err),
                     };
-                    match self
-                        .family
-                        .send(self.family.root(), agent_id, message)
-                        .await
-                    {
-                        Ok(operation_id) => ToolOutcome::text(format!(
-                            "message accepted for agent {agent_id}: {operation_id}"
-                        )),
-                        Err(crate::agent::Error::UnknownAgent(_)) => ToolOutcome::error(
-                            "agent_send for fresh/fork agents awaits cross-session durable input routing",
-                        ),
+                    match self.family.target(agent_id).await {
+                        Ok(crate::agent::AgentTarget::SharedHistory { .. }) => match self
+                            .family
+                            .send(self.family.root(), agent_id, message)
+                            .await
+                        {
+                            Ok(operation_id) => ToolOutcome::text(format!(
+                                "message accepted for agent {agent_id}: {operation_id}"
+                            )),
+                            Err(err) => ToolOutcome::error(err.to_string()),
+                        },
+                        Ok(crate::agent::AgentTarget::SeparateSession { .. }) => {
+                            ToolOutcome::error(
+                                "agent_send for fresh/fork agents awaits cross-session durable input routing",
+                            )
+                        }
                         Err(err) => ToolOutcome::error(err.to_string()),
                     }
                 }
@@ -1088,9 +1118,9 @@ fn parse_host_agent_handle(arguments: &Value) -> Result<crate::ids::AgentId, Str
     crate::ids::AgentId::parse(uuid).ok_or_else(|| format!("malformed agent handle {raw:?}"))
 }
 
-fn child_handle_for(agent_id: crate::ids::AgentId, parent_id: SessionId) -> ChildHandle {
+fn child_handle_for_session(session_id: SessionId, parent_id: SessionId) -> ChildHandle {
     ChildHandle {
-        session_id: SessionId::from_uuid(agent_id.as_uuid()),
+        session_id,
         control_parent_session_id: parent_id,
     }
 }

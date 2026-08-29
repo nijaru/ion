@@ -598,6 +598,18 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
     let lane = spawn(json!({"objective": "lane work"})).await;
     assert!(!lane.is_error, "lane spawn failed: {lane:?}");
     let lane_handle = handle_from(&lane.output);
+    let lane_agent = crate::AgentId::parse(
+        lane_handle
+            .strip_prefix("agent-")
+            .expect("lane agent prefix"),
+    )
+    .expect("lane agent id");
+    assert_eq!(
+        family.target(lane_agent).await.expect("lane target"),
+        crate::agent::AgentTarget::SharedHistory {
+            session_id: runtime.session_id(),
+        }
+    );
     let lane_wait = wait(lane_handle).await;
     assert!(!lane_wait.is_error, "lane wait failed: {lane_wait:?}");
     assert!(lane_wait.output.contains("working"), "{lane_wait:?}");
@@ -610,6 +622,12 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         crate::AgentId::parse(fresh_handle.strip_prefix("agent-").expect("agent prefix"))
             .expect("fresh agent id");
     let fresh_session = crate::SessionId::from_uuid(fresh_agent.as_uuid());
+    assert_eq!(
+        family.target(fresh_agent).await.expect("fresh target"),
+        crate::agent::AgentTarget::SeparateSession {
+            session_id: fresh_session,
+        }
+    );
     let fresh_loaded = store.load(fresh_session).await.expect("fresh session");
     assert_eq!(
         fresh_loaded.session.control_parent_session_id,
@@ -645,6 +663,12 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
         crate::AgentId::parse(fork_handle.strip_prefix("agent-").expect("agent prefix"))
             .expect("fork agent id");
     let fork_session = crate::SessionId::from_uuid(fork_agent.as_uuid());
+    assert_eq!(
+        family.target(fork_agent).await.expect("fork target"),
+        crate::agent::AgentTarget::SeparateSession {
+            session_id: fork_session,
+        }
+    );
     let fork_loaded = store.load(fork_session).await.expect("fork session");
     assert_eq!(
         fork_loaded.session.control_parent_session_id,

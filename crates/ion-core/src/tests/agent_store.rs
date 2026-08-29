@@ -192,6 +192,14 @@ async fn session_agents_publish_fresh_and_fork_topology_atomically() {
         root.agents[0].history,
         crate::store::AgentHistory::Root
     ));
+    let family = store
+        .load_agent_family(root_session)
+        .await
+        .expect("family topology");
+    assert_eq!(family.len(), 3);
+    assert!(family.iter().any(|agent| agent.id == root_agent));
+    assert!(family.iter().any(|agent| agent.id == fresh_agent));
+    assert!(family.iter().any(|agent| agent.id == fork_agent));
 
     store.close().await.expect("close store");
 }

@@ -344,6 +344,10 @@ enum StoreCommand {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
     },
+    LoadAgentFamily {
+        family_session_id: SessionId,
+        reply: oneshot::Sender<Result<Vec<AgentRecord>, StoreError>>,
+    },
     LatestSession {
         reply: oneshot::Sender<Result<Option<SessionId>, StoreError>>,
     },
@@ -657,6 +661,20 @@ impl SessionStore {
     pub async fn load(&self, session_id: SessionId) -> Result<LoadedSession, StoreError> {
         self.request(|reply| StoreCommand::Load { session_id, reply })
             .await
+    }
+
+    /// Load the complete durable semantic agent family while preserving
+    /// `LoadedSession::agents` as a session-local view. Every returned record
+    /// is validated by loading the session it addresses.
+    pub(crate) async fn load_agent_family(
+        &self,
+        family_session_id: SessionId,
+    ) -> Result<Vec<AgentRecord>, StoreError> {
+        self.request(|reply| StoreCommand::LoadAgentFamily {
+            family_session_id,
+            reply,
+        })
+        .await
     }
 
     /// Token usage rows recorded for one session (DESIGN.md §27.2).

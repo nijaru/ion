@@ -11,7 +11,7 @@ use crate::error::{CommandError, RuntimeError};
 use crate::ids::{AgentId, OperationId, SessionId};
 use crate::operation::{OperationOutcome, OperationState};
 use crate::runtime::{RuntimeEvent, SessionHandle};
-use crate::store::{AgentRecord, LoadedSession, SessionStore, StoreError};
+use crate::store::{AgentHistory, AgentRecord, LoadedSession, SessionStore, StoreError};
 use crate::tool::{Tool, ToolCatalog, ToolOutcome, ToolSpec};
 
 #[derive(Debug, thiserror::Error)]
@@ -94,6 +94,12 @@ impl Observation {
             None => format!("agent {}: {status}", self.agent_id),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum AgentTarget {
+    SharedHistory { session_id: SessionId },
+    SeparateSession { session_id: SessionId },
 }
 
 #[derive(Debug, Clone)]
@@ -208,6 +214,35 @@ impl Family {
     #[must_use]
     pub const fn root(&self) -> AgentId {
         self.root
+    }
+
+    /// Resolve one durable family address to its history/runtime topology.
+    /// This lookup is store-backed so separately hosted descendants admitted
+    /// after `Family::attach` are still recognized without process-local
+    /// registration.
+    pub(crate) async fn target(&self, agent_id: AgentId) -> Result<AgentTarget, Error> {
+        let agents = self.store.load_agent_family(self.session_id).await?;
+        let agent = agents
+            .iter()
+            .find(|agent| agent.id == agent_id)
+            .ok_or(Error::UnknownAgent(agent_id))?;
+        match &agent.history {
+            AgentHistory::Root | AgentHistory::SharedLane { .. }
+                if agent.session_id == self.session_id =>
+            {
+                Ok(AgentTarget::SharedHistory {
+                    session_id: agent.session_id,
+                })
+            }
+            AgentHistory::Fresh | AgentHistory::Fork { .. }
+                if agent.session_id != self.session_id =>
+            {
+                Ok(AgentTarget::SeparateSession {
+                    session_id: agent.session_id,
+                })
+            }
+            _ => Err(Error::Inconsistent(agent_id)),
+        }
     }
 
     /// Admit a retained shared-history agent from the control parent's current

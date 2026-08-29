@@ -106,6 +106,12 @@ pub(super) fn handle_command(
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
+        StoreCommand::LoadAgentFamily {
+            family_session_id,
+            reply,
+        } => {
+            let _ = reply.send(load_agent_family(connection, family_session_id));
+        }
         StoreCommand::Usage { session_id, reply } => {
             let _ = reply.send(usage_rows(connection, session_id));
         }
@@ -1258,6 +1264,49 @@ fn load_lanes(
         });
     }
     Ok(lanes)
+}
+
+fn load_agent_family(
+    connection: &Connection,
+    family_session_id: SessionId,
+) -> Result<Vec<AgentRecord>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT session_id FROM agents
+         WHERE family_session_id = ?1 ORDER BY session_id",
+    )?;
+    let mut rows = statement.query([family_session_id.as_uuid().to_string()])?;
+    let mut session_ids = Vec::new();
+    while let Some(row) = rows.next()? {
+        let raw: String = row.get(0)?;
+        let session_id = SessionId::parse(&raw).ok_or_else(|| {
+            StoreError::Sqlite("agent family has a corrupt target session id".to_owned())
+        })?;
+        session_ids.push(session_id);
+    }
+    drop(rows);
+    drop(statement);
+
+    let mut agents = Vec::new();
+    for session_id in session_ids {
+        let loaded = load(connection, session_id)?;
+        agents.extend(
+            loaded
+                .agents
+                .into_iter()
+                .filter(|agent| agent.family_session_id == family_session_id),
+        );
+    }
+    let root = AgentId::root(family_session_id);
+    if !agents.iter().any(|agent| {
+        agent.id == root
+            && agent.session_id == family_session_id
+            && matches!(agent.history, AgentHistory::Root)
+    }) {
+        return Err(StoreError::Sqlite(format!(
+            "agent family {family_session_id} has no durable root"
+        )));
+    }
+    Ok(agents)
 }
 
 fn load_agents(
