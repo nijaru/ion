@@ -278,8 +278,8 @@ impl<P: Provider> SessionRuntime<P> {
                             staged.state_seq += 1;
                             let effect_id = effect.id;
                             staged.open_effect = Some(effect);
+                            let tools = staged.tool_registry.clone();
                             self.install_active(staged);
-                            let tools = self.tools.snapshot();
                             self.emit_tool_started(
                                 operation_id,
                                 call.call_id,
@@ -416,8 +416,8 @@ impl<P: Provider> SessionRuntime<P> {
                                     let operation_id = staged.machine.operation_id();
                                     self.next_entry_seq = new_entry_seq;
                                     staged.state_seq += 1;
+                                    let tools = staged.tool_registry.clone();
                                     self.install_active(staged);
-                                    let tools = self.tools.snapshot();
                                     self.emit_tool_started(
                                         operation_id,
                                         call.call_id,
@@ -546,7 +546,11 @@ impl<P: Provider> SessionRuntime<P> {
                         .cloned()
                         .expect("parked approval carries its staged call");
                     if self.interactive_approvals {
-                        let tools = self.tools.snapshot();
+                        let tools = self
+                            .active(operation_id)
+                            .expect("parked approval operation is resident")
+                            .tool_registry
+                            .clone();
                         let target = target_summary_registry(&tools, &call.name, &call.arguments);
                         self.emit(RuntimeEvent::ApprovalPending {
                             cursor: RuntimeCursor::default(),

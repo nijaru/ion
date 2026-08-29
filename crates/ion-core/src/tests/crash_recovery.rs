@@ -176,6 +176,87 @@ async fn effect_gate_crash_prefix_reopens_before_tool_execution() {
 }
 
 #[tokio::test]
+async fn replay_safe_recovery_does_not_reacquire_a_structurally_removed_tool() {
+    let dir = std::env::temp_dir().join(format!("ion-gate-removed-read-{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    std::fs::write(dir.join("note.txt"), "must not be reread").expect("write");
+    let store = SessionStore::open_in_memory().expect("store");
+    let gate = EffectGate::new(EffectBoundary::ToolExecution);
+    let runtime = Runtime::start_with_effect_gate(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "read",
+            json!({"path": "note.txt"}),
+        )]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        gate.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, _events) = session.subscribe().await.expect("subscribe");
+    let submit_session = session.clone();
+    let submit = tokio::spawn(async move { submit_session.submit_if_idle("read").await });
+    timeout(Duration::from_secs(2), gate.wait_until_reached())
+        .await
+        .expect("tool gate reached");
+
+    runtime.crash();
+    gate.release();
+    let _ = submit.await.expect("submit task");
+    drop(session);
+    drop(runtime);
+
+    let loaded = store.load(session_id).await.expect("load");
+    let mut config = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("main lane")
+        .config
+        .clone();
+    config.tools =
+        crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["find".to_owned()]));
+    store
+        .set_lane_config(session_id, crate::session::lane::MAIN, config)
+        .await
+        .expect("remove read capability");
+
+    let runtime = Runtime::open_session(
+        ScriptedProvider::new(vec![ScriptedMessage::text("recovered\n")]),
+        ToolRegistry::with_cwd(&dir),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+
+    let loaded = store.load(session_id).await.expect("reload");
+    assert!(loaded.entries.iter().any(|record| matches!(
+        &record.entry,
+        SessionEntry::ToolResult {
+            result: ToolResult::Err { error, .. }
+        } if error.contains("unknown tool: read")
+    )));
+    assert!(!loaded.entries.iter().any(|record| matches!(
+        &record.entry,
+        SessionEntry::ToolResult {
+            result: ToolResult::Ok { output, .. }
+        } if output.contains("must not be reread")
+    )));
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[tokio::test]
 async fn effect_gate_crash_prefix_reopens_after_tool_execution() {
     let dir = std::env::temp_dir().join(format!("ion-gate-settle-{}", std::process::id()));
     let _ = std::fs::create_dir_all(&dir);

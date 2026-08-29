@@ -7,9 +7,7 @@ pub(super) use tokio::sync::mpsc;
 pub(super) use tokio::time::{sleep, timeout};
 pub(super) use tokio_util::sync::CancellationToken;
 
-pub(super) use crate::context::{
-    CapabilitySnapshot, ContextMessage, ContextPlan, load_trusted_resources,
-};
+pub(super) use crate::context::{ContextMessage, ContextPlan, load_trusted_resources};
 pub(super) use crate::error::{CommandError, RuntimeError};
 pub(super) use crate::ids::{EffectId, InboxId, OperationId};
 pub(super) use crate::operation::{

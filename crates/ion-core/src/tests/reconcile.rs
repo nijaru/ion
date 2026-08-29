@@ -193,7 +193,9 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
         .await
         .expect("create session");
     let operation_id = OperationId::generate();
-    let (mut machine, _) = OperationMachine::accept(operation_id, "go", Vec::new());
+    let capability_snapshot = ToolRegistry::with_cwd(cwd).capability_snapshot();
+    let (mut machine, _) =
+        OperationMachine::accept(operation_id, "go", capability_snapshot.tools.clone());
     let root_inbox = InboxRecord {
         id: InboxId::generate(),
         kind: InboxKind::Prompt,
@@ -212,10 +214,10 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
             state: machine.state().clone(),
             cancel_requested: false,
             prompt: "go".to_owned(),
-            capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
+            capability_snapshot_id: capability_snapshot.id.clone(),
             open_effect: None,
         },
-        capability_snapshot: CapabilitySnapshot::new(Vec::new()),
+        capability_snapshot: capability_snapshot.clone(),
     };
     store
         .begin_operation(
@@ -280,10 +282,10 @@ async fn pending_write_session(store: &SessionStore, cwd: &std::path::Path) -> c
             state: machine.state().clone(),
             cancel_requested: false,
             prompt: "go".to_owned(),
-            capability_snapshot_id: CapabilitySnapshot::new(Vec::new()).id.clone(),
+            capability_snapshot_id: capability_snapshot.id.clone(),
             open_effect: Some(effect.clone()),
         },
-        capability_snapshot: CapabilitySnapshot::new(Vec::new()),
+        capability_snapshot,
     };
     store
         .commit(CommitRequest {
