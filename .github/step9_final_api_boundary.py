@@ -32,20 +32,34 @@ old = """pub use store::{
 """
 new = """pub use store::{EntryRecord, LoadedSession, SessionRecord, SessionStore, StoreError, default_db_path};
 """
-assert text.count(old) == 1, "store export block changed"
+assert text.count(old) == 1, "store root export block changed"
 lib.write_text(text.replace(old, new, 1))
 
 # Durable effect construction/decoding is the runtime/store translation
 # boundary. It is not a host/frontend contract.
 effect = Path("crates/ion-core/src/effect.rs")
 text = effect.read_text()
+old = """impl CacheExpectation {
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unsupported => "unsupported",
+            Self::ColdStart => "cold_start",
+            Self::PrefixReuseExpected => "prefix_reuse_expected",
+            Self::PrefixChanged => "prefix_changed",
+        }
+    }
+}
+
+"""
+assert text.count(old) == 1, "dead cache expectation display helper changed"
+text = text.replace(old, "", 1)
 for old, new in [
     ("pub enum CacheExpectation", "pub(crate) enum CacheExpectation"),
     ("pub struct ModelStepPlan", "pub(crate) struct ModelStepPlan"),
     ("pub struct CompactionInvocation", "pub(crate) struct CompactionInvocation"),
     ("pub struct ToolInvocation", "pub(crate) struct ToolInvocation"),
     ("pub enum DurableEffect", "pub(crate) enum DurableEffect"),
-    ("    pub const fn as_str", "    pub(crate) const fn as_str"),
     ("    pub fn into_call", "    pub(crate) fn into_call"),
     ("    pub fn new(\n", "    pub(crate) fn new(\n"),
     ("    pub fn decode(&self)", "    pub(crate) fn decode(&self)"),
@@ -148,6 +162,13 @@ use crate::harness::{DEFAULT_HARNESS_PROFILE_ID, HarnessProfile};
 """
 assert text.count(old) == 1, "structural recovery internal imports changed"
 scope_test.write_text(text.replace(old, new, 1))
+
+reconcile_test = Path("crates/ion-core/src/tests/reconcile.rs")
+text = reconcile_test.read_text()
+old = "let effect = crate::EffectRecord {"
+new = "let effect = crate::store::EffectRecord {"
+assert text.count(old) == 1, "reconcile effect record construction changed"
+reconcile_test.write_text(text.replace(old, new, 1))
 
 design = Path("DESIGN.md")
 text = design.read_text()
