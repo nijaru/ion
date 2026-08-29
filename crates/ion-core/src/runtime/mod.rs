@@ -470,6 +470,9 @@ enum SessionCommand {
     Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
     },
+    SubscribeAll {
+        reply: oneshot::Sender<SubscribeReply>,
+    },
     Close {
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
@@ -700,13 +703,27 @@ impl SessionHandle {
         Ok(snapshot)
     }
 
-    /// Snapshot plus bounded live events (DESIGN.md §21.2). A consumer
-    /// that falls behind resynchronizes from a fresh snapshot; past
-    /// events are never replayed.
+    /// Main-lane snapshot plus main-lane bounded live events (DESIGN.md
+    /// §16.1). A frontend that falls behind resynchronizes from a fresh
+    /// snapshot; sibling-lane work cannot pollute or overflow this event ring.
     pub async fn subscribe(&self) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
         let (reply, rx) = oneshot::channel();
         self.tx
             .try_send(SessionCommand::Subscribe { reply })
+            .map_err(command_send_error)?;
+        let (snapshot, events) = rx.await.map_err(|_| CommandError::RuntimeDropped)??;
+        Ok((snapshot, events))
+    }
+
+    /// Session-wide event observation for the family controller. The snapshot
+    /// remains the public main-lane projection; internal callers use the event
+    /// stream only for exact operation-addressed waits across shared lanes.
+    pub(crate) async fn subscribe_all(
+        &self,
+    ) -> Result<(SessionSnapshot, EventSubscription), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::SubscribeAll { reply })
             .map_err(command_send_error)?;
         let (snapshot, events) = rx.await.map_err(|_| CommandError::RuntimeDropped)??;
         Ok((snapshot, events))
@@ -1342,7 +1359,10 @@ struct SessionRuntime<P> {
         crate::store::CheckpointPayload,
         CapabilitySnapshot,
     )>,
+    /// Session-wide event ring used only by operation-addressed family waits.
     events: broadcast::Sender<RuntimeEvent>,
+    /// Main-lane event ring paired with the public main-lane snapshot.
+    main_events: broadcast::Sender<RuntimeEvent>,
     /// Persisted indeterminate outcomes that must remain visible to a
     /// frontend attaching after startup recovery.
     indeterminate_warning: Option<IndeterminateWarning>,
@@ -1383,6 +1403,7 @@ impl<P: Provider> SessionRuntime<P> {
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
+        let (main_events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut lanes = BTreeMap::new();
         lanes.insert(
             crate::session::lane::MAIN.to_owned(),
@@ -1428,6 +1449,7 @@ impl<P: Provider> SessionRuntime<P> {
             operations: HashMap::new(),
             suspended_operations: Vec::new(),
             events,
+            main_events,
             indeterminate_warning: None,
             closed: false,
             resumed,
@@ -1983,6 +2005,10 @@ impl<P: Provider> SessionRuntime<P> {
             }
             SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
+                false
+            }
+            SessionCommand::SubscribeAll { reply } => {
+                let _ = reply.send(self.subscribe_all());
                 false
             }
             SessionCommand::Close { reply } => {
@@ -3524,6 +3550,15 @@ impl<P: Provider> SessionRuntime<P> {
             return Err(CommandError::Closed);
         }
         let snapshot = self.snapshot();
+        let rx = self.main_events.subscribe();
+        Ok((snapshot, EventSubscription { rx }))
+    }
+
+    fn subscribe_all(&mut self) -> SubscribeReply {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let snapshot = self.snapshot();
         let rx = self.events.subscribe();
         Ok((snapshot, EventSubscription { rx }))
     }
@@ -3701,10 +3736,18 @@ impl<P: Provider> SessionRuntime<P> {
                 );
             }
         }
-        // A full ring drops the oldest buffered events for that
-        // receiver; the receiver detects the gap and reports lag
-        // reliably (broadcast semantics, §21.4). No receivers is the
-        // normal idle case.
+        // Frontends project main, so sibling-lane traffic must not alter or
+        // overflow their bounded event ring. Family waits retain a separate
+        // session-wide stream and filter by exact operation identity.
+        let is_main_event = event.operation_id().is_none_or(|operation_id| {
+            self.operation_lane_name(operation_id) == Some(crate::session::lane::MAIN)
+        });
+        if is_main_event {
+            let _ = self.main_events.send(event.clone());
+        }
+        // A full ring drops the oldest buffered events for that receiver; the
+        // receiver detects the gap reliably. No receivers is the normal idle
+        // case for either ring.
         let _ = self.events.send(event);
     }
 }
