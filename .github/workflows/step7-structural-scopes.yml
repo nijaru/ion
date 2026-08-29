@@ -1,0 +1,41 @@
+name: Step 7 structural scopes
+
+on:
+  push:
+    branches: ["agent/step7-structural-scopes"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply structural-scope patch
+        run: python .github/step7_structural_scopes.py
+      - name: Format
+        run: cargo fmt --all
+      - name: Format gate
+        run: cargo fmt --all -- --check
+      - name: Clippy gate
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Test gate
+        run: cargo test --locked --workspace
+      - name: Commit validated source
+        run: |
+          rm .github/step7_structural_scopes.py .github/workflows/step7-structural-scopes.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "feat(runtime): make scope publication structural"
+          git push origin HEAD:agent/step7-structural-scopes
