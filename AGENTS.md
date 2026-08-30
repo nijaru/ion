@@ -77,9 +77,9 @@ Full set with rationale: `DESIGN.md` P1–P14 and §31. Non-negotiables:
 
 ## Checks
 
-    cargo fmt --check
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
-    cargo test --workspace
+    cargo fmt --all -- --check
+    cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+    cargo test --locked --workspace
     scripts/smoke.sh   # before any dogfood request; tmux-based daily-driver flows
 
 Match deeper checks to the slice (DESIGN.md §30): transition tests,
