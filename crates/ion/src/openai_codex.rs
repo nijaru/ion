@@ -142,6 +142,10 @@ impl OpenAICodexProvider {
 }
 
 impl Provider for OpenAICodexProvider {
+    fn initial_model_ref(&self) -> String {
+        self.model.clone()
+    }
+
     async fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities {
             reasoning: true,
