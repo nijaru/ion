@@ -22,9 +22,11 @@ impl<W: Write> PrintFrontend<W> {
         session: &SessionHandle,
         prompt: impl Into<String>,
     ) -> Result<(), RuntimeError> {
-        let (_snapshot, events) = session.subscribe().await?;
+        let (snapshot, events) = session.subscribe().await?;
+        let history_baseline = print_text(&snapshot);
         let operation_id = session.submit_if_idle(prompt).await?;
-        self.run_operation(session, events, operation_id).await
+        self.run_operation(session, events, operation_id, history_baseline)
+            .await
     }
 
     async fn run_operation(
@@ -32,6 +34,7 @@ impl<W: Write> PrintFrontend<W> {
         session: &SessionHandle,
         mut events: EventSubscription,
         operation_id: OperationId,
+        history_baseline: String,
     ) -> Result<(), RuntimeError> {
         let mut emitted = String::new();
         loop {
@@ -40,7 +43,7 @@ impl<W: Write> PrintFrontend<W> {
                 Err(RuntimeError::SubscriptionLagged) => {
                     let (snapshot, fresh) = session.subscribe().await?;
                     events = fresh;
-                    self.reconstruct_after_lag(&snapshot, &mut emitted)?;
+                    self.reconstruct_after_lag(&snapshot, &history_baseline, &mut emitted)?;
                     if let Some(result) = settlement_result(&snapshot, operation_id) {
                         return result;
                     }
@@ -112,10 +115,17 @@ impl<W: Write> PrintFrontend<W> {
     fn reconstruct_after_lag(
         &mut self,
         snapshot: &SessionSnapshot,
+        history_baseline: &str,
         emitted: &mut String,
     ) -> Result<(), RuntimeError> {
         let authoritative = print_text(snapshot);
-        let Some(missing) = authoritative.strip_prefix(emitted.as_str()) else {
+        let Some(current_turn) = authoritative.strip_prefix(history_baseline) else {
+            return Err(RuntimeError::OperationFailed(
+                "print event stream lagged after its session-history baseline changed; exact output reconstruction is unavailable"
+                    .to_owned(),
+            ));
+        };
+        let Some(missing) = current_turn.strip_prefix(emitted.as_str()) else {
             return Err(RuntimeError::OperationFailed(
                 "print event stream lagged after non-durable partial output; exact output reconstruction is unavailable"
                     .to_owned(),
@@ -298,10 +308,54 @@ mod tests {
 
         let mut output = Vec::new();
         PrintFrontend::new(&mut output)
-            .run_operation(&session, events, operation_id)
+            .run_operation(&session, events, operation_id, String::new())
             .await
             .expect("lagged print should reconstruct");
         assert_eq!(output, vec![b'x'; 96]);
+
+        session.close().await.expect("close");
+        runtime.join().await.expect("join");
+    }
+
+    #[tokio::test]
+    async fn lagged_print_reconstructs_only_current_turn_after_prior_history() {
+        let runtime = Runtime::start_with_store(
+            BurstProvider {
+                settle_delay: Duration::ZERO,
+            },
+            ToolRegistry::default(),
+            SessionStore::open_in_memory().expect("store"),
+        );
+        let session = runtime.session();
+
+        let mut first_output = Vec::new();
+        PrintFrontend::new(&mut first_output)
+            .run(&session, "first")
+            .await
+            .expect("first turn");
+        assert_eq!(first_output, vec![b'x'; 96]);
+
+        let (snapshot, events) = session.subscribe().await.expect("subscribe");
+        let history_baseline = print_text(&snapshot);
+        assert_eq!(history_baseline.as_bytes(), vec![b'x'; 96]);
+        let operation_id = session.submit_if_idle("second").await.expect("submit");
+        wait_for_snapshot(&session, |snapshot| {
+            snapshot
+                .latest_settlement
+                .as_ref()
+                .is_some_and(|settlement| {
+                    settlement.operation_id == operation_id
+                        && settlement.outcome == OperationOutcome::Completed
+                })
+        })
+        .await;
+
+        let mut second_output = Vec::new();
+        PrintFrontend::new(&mut second_output)
+            .run_operation(&session, events, operation_id, history_baseline)
+            .await
+            .expect("lagged second turn should reconstruct");
+        assert_eq!(second_output, vec![b'x'; 96]);
 
         session.close().await.expect("close");
         runtime.join().await.expect("join");
@@ -332,7 +386,7 @@ mod tests {
 
         let mut output = Vec::new();
         PrintFrontend::new(&mut output)
-            .run_operation(&session, events, operation_id)
+            .run_operation(&session, events, operation_id, String::new())
             .await
             .expect("lagged active print should stay attached");
         assert_eq!(output, vec![b'x'; 96]);
