@@ -241,6 +241,7 @@ impl Provider for OpenRouterProvider {
             let mut buffer = Vec::new();
             // Accumulated tool calls by stream index: (id, name, args).
             let mut tool_calls: Vec<(Option<String>, String, String)> = Vec::new();
+            let mut saw_done = false;
 
             'stream: loop {
                 let chunk = tokio::select! {
@@ -270,6 +271,7 @@ impl Provider for OpenRouterProvider {
                     };
                     let payload = payload.trim();
                     if payload == "[DONE]" {
+                        saw_done = true;
                         buffer.clear();
                         break 'stream;
                     }
@@ -352,8 +354,19 @@ impl Provider for OpenRouterProvider {
                     }
                 }
                 // No early break on finish_reason: the usage chunk (and
-                // any trailing provider metadata) arrives after it; the
-                // stream ends at [DONE] or EOF.
+                // any trailing provider metadata) arrives after it. Only
+                // OpenRouter's [DONE] marker proves semantic completion.
+            }
+
+            if !saw_done {
+                let _ = out
+                    .send(EngineSignal::Failed {
+                        operation_id,
+                        step,
+                        message: "provider stream ended before [DONE]".to_owned(),
+                    })
+                    .await;
+                return;
             }
 
             // The step is complete: emit whole tool calls only (§15.2).
@@ -696,6 +709,33 @@ mod tests {
         assert!(matches!(
             signals.last(),
             Some(EngineSignal::Completed { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn eof_before_done_fails_instead_of_completing_partial_output() {
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n\
+             data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
+            None,
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+
+        assert!(signals.iter().any(|signal| matches!(
+            signal,
+            EngineSignal::TextDelta { text, .. } if text == "partial"
+        )));
+        assert!(
+            !signals
+                .iter()
+                .any(|signal| matches!(signal, EngineSignal::Completed { .. })),
+            "transport EOF must not promote partial provider output to completion: {signals:?}",
+        );
+        assert!(matches!(
+            signals.last(),
+            Some(EngineSignal::Failed { message, .. })
+                if message == "provider stream ended before [DONE]"
         ));
     }
 
