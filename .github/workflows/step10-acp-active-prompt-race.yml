@@ -1,0 +1,45 @@
+name: Step 10 ACP active prompt race
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  validate-and-commit:
+    if: github.head_ref == 'agent/step10-acp-active-prompt-race'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact source patch
+        run: python .github/step10_acp_active_prompt_race.py
+      - name: Format source
+        run: cargo fmt --all
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+      - name: Strict Clippy
+        run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace tests
+        run: cargo test --locked --workspace
+      - name: Commit only validated source
+        run: |
+          rm .github/step10_acp_active_prompt_race.py
+          rm .github/workflows/step10-acp-active-prompt-race.yml
+          git config user.name github-actions[bot]
+          git config user.email 41898282+github-actions[bot]@users.noreply.github.com
+          git add crates/ion/src/acp.rs .github
+          git diff --cached --check
+          git commit -m 'fix(acp): preserve newer prompt cancellation ownership'
+          git push origin HEAD:${{ github.head_ref }}
