@@ -116,6 +116,10 @@ impl OpenRouterProvider {
 }
 
 impl Provider for OpenRouterProvider {
+    fn initial_model_ref(&self) -> String {
+        self.model.clone()
+    }
+
     async fn capabilities(&self) -> ModelCapabilities {
         ModelCapabilities {
             reasoning: true,

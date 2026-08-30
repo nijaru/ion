@@ -106,6 +106,20 @@ pub enum CliProvider {
 }
 
 impl Provider for CliProvider {
+    fn initial_model_ref(&self) -> String {
+        match self {
+            CliProvider::OpenAICodex(provider) => provider.initial_model_ref(),
+            CliProvider::OpenRouter(provider) | CliProvider::Desktop(provider) => {
+                provider.initial_model_ref()
+            }
+            // Preserve the pre-existing identity for host/test placeholders that
+            // do not own a configured external model.
+            CliProvider::Scripted(_) | CliProvider::Unavailable(_) => {
+                std::any::type_name::<Self>().to_owned()
+            }
+        }
+    }
+
     fn run(
         &self,
         request: ProviderRequest,
@@ -169,4 +183,29 @@ pub fn scripted_provider_factory(
     script: Vec<ion_core::ScriptedMessage>,
 ) -> Arc<dyn Fn() -> CliProvider + Send + Sync> {
     Arc::new(move || CliProvider::Scripted(ScriptedProvider::new(script.clone())))
+}
+
+#[cfg(test)]
+mod provider_identity_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn raw_cli_provider_seeds_runtime_with_configured_model_identity() {
+        let store = ion_core::SessionStore::open_in_memory().expect("store");
+        let runtime = ion_core::Runtime::start_with_store(
+            CliProvider::OpenRouter(OpenRouterProvider::new("test/model", "key")),
+            ion_core::ToolRegistry::default(),
+            store,
+        );
+        let session = runtime.session();
+        let snapshot = session.snapshot().await.expect("snapshot");
+        assert_eq!(snapshot.model_ref, "test/model");
+        assert!(
+            CliProvider::OpenAICodex(OpenAICodexProvider::new("gpt-test", "token", "account",))
+                .supports_model("gpt-test"),
+            "fixed Codex adapters must expose their configured model identity",
+        );
+        session.close().await.expect("close");
+        runtime.join().await.expect("join");
+    }
 }
