@@ -272,7 +272,11 @@ impl<P> HostedAgentRuntimes<P> {
                 let Some(make_provider) = self.config.make_provider_for_model.as_ref() else {
                     return Err(format!("model override `{model_ref}` is unavailable"));
                 };
-                make_provider(model_ref.to_owned())
+                let provider = make_provider(model_ref.to_owned());
+                if !provider.supports_model(model_ref) {
+                    return Err(format!("model override `{model_ref}` is unavailable"));
+                }
+                provider
             }
             None => (self.config.make_provider)(),
         };
