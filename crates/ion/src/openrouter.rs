@@ -500,19 +500,24 @@ fn decode_events(payload: &str) -> Result<Vec<StreamEvent>, String> {
             .and_then(|usage| usage.get("completion_tokens"))
             .and_then(|v| v.as_u64()),
     ) {
-        let cache_read = usage_value
-            .and_then(|usage| usage.get("prompt_tokens_details"))
+        let prompt_details = usage_value.and_then(|usage| usage.get("prompt_tokens_details"));
+        let cache_read = prompt_details
             .and_then(|details| details.get("cached_tokens"))
             .and_then(|v| v.as_u64())
             .unwrap_or(0);
-        // Anthropic-style cache writes, when the upstream passes them
-        // through OpenRouter.
-        let cache_write = usage_value
-            .and_then(|usage| usage.get("cache_creation_input_tokens"))
+        let cache_write = prompt_details
+            .and_then(|details| details.get("cache_write_tokens"))
             .and_then(|v| v.as_u64())
+            // Older/upstream-specific payloads may still expose the
+            // Anthropic-style cache-write count at the usage root.
+            .or_else(|| {
+                usage_value
+                    .and_then(|usage| usage.get("cache_creation_input_tokens"))
+                    .and_then(|v| v.as_u64())
+            })
             .unwrap_or(0);
         events.push(StreamEvent::Usage(TokenUsage {
-            input,
+            input: input.saturating_sub(cache_read.saturating_add(cache_write)),
             output,
             cache_read,
             cache_write,
@@ -929,10 +934,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cache_metrics_decode_from_usage_details() {
+    async fn cache_metrics_decode_into_disjoint_usage_buckets() {
         let base_url = spawn_sse_server(
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":500,\"completion_tokens\":10,\
-             \"prompt_tokens_details\":{\"cached_tokens\":420},\"cache_creation_input_tokens\":80}}\n\n\
+             \"prompt_tokens_details\":{\"cached_tokens\":420,\"cache_write_tokens\":80}}}\n\n\
              data: [DONE]\n\n",
             None,
         );
@@ -946,8 +951,20 @@ mod tests {
             })
             .collect();
         assert_eq!(usages.len(), 1);
-        assert_eq!(usages[0].cache_read, 420);
-        assert_eq!(usages[0].cache_write, 80);
+        assert_eq!(
+            usages[0],
+            TokenUsage {
+                input: 0,
+                output: 10,
+                cache_read: 420,
+                cache_write: 80,
+            }
+        );
+        assert_eq!(
+            usages[0].input + usages[0].output + usages[0].cache_read + usages[0].cache_write,
+            510,
+            "Ion usage buckets must sum back to provider total tokens",
+        );
     }
 
     #[tokio::test]

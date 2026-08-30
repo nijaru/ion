@@ -22,6 +22,8 @@ use crate::tool::{ToolCall, ToolSpec};
 /// Token accounting for one model step (DESIGN.md §27.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
+    /// Fresh input tokens, excluding the cache-read/write buckets below.
+    /// The four fields are disjoint and may be summed for context accounting.
     pub input: u64,
     pub output: u64,
     /// Tokens served from the provider prompt cache (§14.4).
