@@ -154,14 +154,23 @@ The contract is checked at the owning boundary:
   resize invalidation.
 - Ion PTY tests cover clean exit, panic restoration, and slash-command
   rendering through the same session owner.
-- Workspace gates are `cargo fmt --check`, workspace Clippy with warnings
-  denied, and `cargo test --workspace`.
-- Real tmux checks remain required for width/reflow and resume history.
-- Maintainer live dogfood is still required for the H0a acceptance verdict;
-  automated green tests do not close that human gate.
+- Workspace gates are `cargo fmt --all -- --check`, locked workspace Clippy
+  across all targets/features with warnings denied, and locked workspace tests.
+- `scripts/smoke.sh` covers the tmux daily-driver path including fresh start,
+  normal turn, clean exit, resume, interrupted-operation recovery, schema
+  archive, resize storm, and final clean exit.
+- Maintainer live dogfood covers real-terminal behavior that automation cannot
+  establish by itself: resize/reflow, composer/footer stability, multiline
+  editing/cursor placement, clean exit, and resume history.
 
-The automated substrate work is complete through keyboard/capability
-negotiation, synchronized output, virtual-surface, PTY restoration, and resize
-regressions. Real-terminal checks and the maintainer's H0a/H0b dogfood verdict
-remain open, as do any concrete defects found there. Do not claim terminal
-completion from automated gates alone.
+The automated tmux daily-driver smoke passed before the maintainer acceptance
+request. Maintainer dogfood then passed on `c9cfc424` in a real tmux PTY:
+fresh start and a normal turn; narrow → wide → narrow resize with correct
+history reflow and a stable composer/footer; multiline editing and cursor
+placement; clean exit with status 0; and `--resume` with the correct prior
+transcript. No duplicate or lost content and no TUI defects were observed.
+
+This closes the H0a/H0b terminal acceptance gate for the current implementation.
+Future terminal changes should reopen only the acceptance evidence affected by
+that behavior; automated green tests alone still do not substitute for a human
+terminal verdict when the renderer or terminal lifecycle materially changes.
