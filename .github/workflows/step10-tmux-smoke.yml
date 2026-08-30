@@ -1,0 +1,21 @@
+name: Step 10 tmux smoke
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  smoke:
+    if: github.head_ref == 'agent/step10-tmux-smoke'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - name: Install tmux
+        run: |
+          if ! command -v tmux >/dev/null; then
+            sudo apt-get update
+            sudo apt-get install -y tmux
+          fi
+      - name: Run daily-driver tmux smoke
+        run: scripts/smoke.sh
