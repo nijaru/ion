@@ -1,0 +1,25 @@
+from pathlib import Path
+
+path = Path("crates/ion/src/openrouter.rs")
+text = path.read_text()
+old = '''        let cache_read = usage_value\n            .and_then(|usage| usage.get("prompt_tokens_details"))\n            .and_then(|details| details.get("cached_tokens"))\n            .and_then(|v| v.as_u64())\n            .unwrap_or(0);\n        // Anthropic-style cache writes, when the upstream passes them\n        // through OpenRouter.\n        let cache_write = usage_value\n            .and_then(|usage| usage.get("cache_creation_input_tokens"))\n            .and_then(|v| v.as_u64())\n            .unwrap_or(0);\n        events.push(StreamEvent::Usage(TokenUsage {\n            input,\n            output,\n            cache_read,\n            cache_write,\n        }));\n'''
+new = '''        let prompt_details = usage_value\n            .and_then(|usage| usage.get("prompt_tokens_details"));\n        let cache_read = prompt_details\n            .and_then(|details| details.get("cached_tokens"))\n            .and_then(|v| v.as_u64())\n            .unwrap_or(0);\n        let cache_write = prompt_details\n            .and_then(|details| details.get("cache_write_tokens"))\n            .and_then(|v| v.as_u64())\n            // Older/upstream-specific payloads may still expose the\n            // Anthropic-style cache-write count at the usage root.\n            .or_else(|| {\n                usage_value\n                    .and_then(|usage| usage.get("cache_creation_input_tokens"))\n                    .and_then(|v| v.as_u64())\n            })\n            .unwrap_or(0);\n        events.push(StreamEvent::Usage(TokenUsage {\n            input: input.saturating_sub(cache_read.saturating_add(cache_write)),\n            output,\n            cache_read,\n            cache_write,\n        }));\n'''
+if text.count(old) != 1:
+    raise SystemExit(f"expected one usage decoder anchor, found {text.count(old)}")
+text = text.replace(old, new, 1)
+
+old = '''    async fn cache_metrics_decode_from_usage_details() {\n        let base_url = spawn_sse_server(\n            "data: {\\\"choices\\\":[],\\\"usage\\\":{\\\"prompt_tokens\\\":500,\\\"completion_tokens\\\":10,\\\n             \\\"prompt_tokens_details\\\":{\\\"cached_tokens\\\":420},\\\"cache_creation_input_tokens\\\":80}}\\n\\n\\\n             data: [DONE]\\n\\n",\n            None,\n        );\n        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);\n        let signals = collect(provider).await;\n        let usages: Vec<_> = signals\n            .iter()\n            .filter_map(|signal| match signal {\n                EngineSignal::UsageUpdate { usage, .. } => Some(*usage),\n                _ => None,\n            })\n            .collect();\n        assert_eq!(usages.len(), 1);\n        assert_eq!(usages[0].cache_read, 420);\n        assert_eq!(usages[0].cache_write, 80);\n    }\n'''
+new = '''    async fn cache_metrics_decode_into_disjoint_usage_buckets() {\n        let base_url = spawn_sse_server(\n            "data: {\\\"choices\\\":[],\\\"usage\\\":{\\\"prompt_tokens\\\":500,\\\"completion_tokens\\\":10,\\\n             \\\"prompt_tokens_details\\\":{\\\"cached_tokens\\\":420,\\\"cache_write_tokens\\\":80}}}\\n\\n\\\n             data: [DONE]\\n\\n",\n            None,\n        );\n        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);\n        let signals = collect(provider).await;\n        let usages: Vec<_> = signals\n            .iter()\n            .filter_map(|signal| match signal {\n                EngineSignal::UsageUpdate { usage, .. } => Some(*usage),\n                _ => None,\n            })\n            .collect();\n        assert_eq!(usages.len(), 1);\n        assert_eq!(\n            usages[0],\n            TokenUsage {\n                input: 0,\n                output: 10,\n                cache_read: 420,\n                cache_write: 80,\n            }\n        );\n        assert_eq!(\n            usages[0].input + usages[0].output + usages[0].cache_read + usages[0].cache_write,\n            510,\n            "Ion usage buckets must sum back to provider total tokens",\n        );\n    }\n'''
+if text.count(old) != 1:
+    raise SystemExit(f"expected one cache metrics test anchor, found {text.count(old)}")
+text = text.replace(old, new, 1)
+path.write_text(text)
+
+path = Path("crates/ion-core/src/provider.rs")
+text = path.read_text()
+old = '''pub struct TokenUsage {\n    pub input: u64,\n    pub output: u64,\n    /// Tokens served from the provider prompt cache (§14.4).\n'''
+new = '''pub struct TokenUsage {\n    /// Fresh input tokens, excluding the cache-read/write buckets below.\n    /// The four fields are disjoint and may be summed for context accounting.\n    pub input: u64,\n    pub output: u64,\n    /// Tokens served from the provider prompt cache (§14.4).\n'''
+if text.count(old) != 1:
+    raise SystemExit(f"expected one TokenUsage doc anchor, found {text.count(old)}")
+text = text.replace(old, new, 1)
+path.write_text(text)
