@@ -193,7 +193,14 @@ where
                         prompt_tasks.spawn(async move {
                             let stop =
                                 pump_turn(events, handle, operation_id, &session_id, &output).await;
-                            finish_prompt(&output, Some(request_id), stop, active_prompt).await;
+                            finish_prompt(
+                                &output,
+                                Some(request_id),
+                                stop,
+                                operation_id,
+                                active_prompt,
+                            )
+                            .await;
                         });
                     }
                     Err(err) => {
@@ -444,11 +451,19 @@ async fn finish_prompt<W>(
     output: &Arc<Mutex<W>>,
     id: Option<Value>,
     stop: TurnStop,
+    operation_id: OperationId,
     active_prompt: Arc<Mutex<Option<(Value, OperationId)>>>,
 ) where
     W: AsyncWrite + Unpin + Send + 'static,
 {
-    active_prompt.lock().await.take();
+    let mut active = active_prompt.lock().await;
+    if active
+        .as_ref()
+        .is_some_and(|(_, active_operation_id)| *active_operation_id == operation_id)
+    {
+        active.take();
+    }
+    drop(active);
     match stop {
         TurnStop::EndTurn => {
             write(
@@ -857,6 +872,41 @@ mod tests {
         })
         .await
         .expect("snapshot condition timed out")
+    }
+
+    #[tokio::test]
+    async fn finish_prompt_clears_only_its_own_active_turn() {
+        let old = OperationId::generate();
+        let newer = OperationId::generate();
+        let active_prompt = Arc::new(Mutex::new(Some((json!(2), newer))));
+        let output = Arc::new(Mutex::new(tokio::io::sink()));
+
+        finish_prompt(
+            &output,
+            Some(json!(1)),
+            TurnStop::EndTurn,
+            old,
+            Arc::clone(&active_prompt),
+        )
+        .await;
+        assert_eq!(
+            active_prompt.lock().await.as_ref().map(|(_, id)| *id),
+            Some(newer),
+            "an older prompt must not erase cancellation ownership for a newer turn",
+        );
+
+        finish_prompt(
+            &output,
+            Some(json!(2)),
+            TurnStop::Cancelled,
+            newer,
+            Arc::clone(&active_prompt),
+        )
+        .await;
+        assert!(
+            active_prompt.lock().await.is_none(),
+            "a prompt must release its own cancellation ownership when it finishes",
+        );
     }
 
     #[tokio::test]
