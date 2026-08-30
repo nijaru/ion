@@ -292,6 +292,36 @@ fn stop_from_settlement(
     }
 }
 
+fn stop_after_resubscribe(
+    snapshot: &ion_core::SessionSnapshot,
+    operation_id: OperationId,
+    updates_incomplete: bool,
+) -> Result<Option<TurnStop>, String> {
+    if let Some(settlement) = snapshot
+        .latest_settlement
+        .as_ref()
+        .filter(|settlement| settlement.operation_id == operation_id)
+    {
+        return Ok(Some(stop_from_settlement(
+            settlement,
+            snapshot.indeterminate.as_ref(),
+            updates_incomplete,
+        )));
+    }
+    match &snapshot.operation {
+        OperationStatus::Active {
+            operation_id: active,
+            ..
+        } if *active == operation_id => Ok(None),
+        OperationStatus::Active { .. } => {
+            Err("event stream resynchronized to a different active operation".to_owned())
+        }
+        OperationStatus::Idle => {
+            Err("event stream lagged; operation settlement unavailable".to_owned())
+        }
+    }
+}
+
 /// Stream one operation's events as ACP updates; returns only when the durable
 /// operation settles. Lag marks streamed presentation as incomplete, but never
 /// detaches the prompt task from still-running work.
@@ -320,33 +350,10 @@ where
                     }
                 };
                 events = fresh;
-                match &snapshot.operation {
-                    OperationStatus::Active {
-                        operation_id: active,
-                        ..
-                    } if *active == operation_id => continue,
-                    OperationStatus::Active { .. } => {
-                        return TurnStop::Failed(
-                            "event stream resynchronized to a different active operation"
-                                .to_owned(),
-                        );
-                    }
-                    OperationStatus::Idle => {
-                        if let Some(settlement) = snapshot
-                            .latest_settlement
-                            .as_ref()
-                            .filter(|settlement| settlement.operation_id == operation_id)
-                        {
-                            return stop_from_settlement(
-                                settlement,
-                                snapshot.indeterminate.as_ref(),
-                                updates_incomplete,
-                            );
-                        }
-                        return TurnStop::Failed(
-                            "event stream lagged; operation settlement unavailable".to_owned(),
-                        );
-                    }
+                match stop_after_resubscribe(&snapshot, operation_id, updates_incomplete) {
+                    Ok(Some(stop)) => return stop,
+                    Ok(None) => continue,
+                    Err(message) => return TurnStop::Failed(message),
                 }
             }
             Err(_) => return TurnStop::Failed("event stream closed".to_owned()),
@@ -892,6 +899,38 @@ mod tests {
 
         session.close().await.expect("close");
         runtime.join().await.expect("join");
+    }
+
+    #[test]
+    fn resubscribe_prefers_target_settlement_over_newer_active_operation() {
+        let target = OperationId::generate();
+        let newer = OperationId::generate();
+        let snapshot = ion_core::SessionSnapshot {
+            cursor: ion_core::RuntimeCursor::default(),
+            runtime_instance_id: ion_core::RuntimeInstanceId::generate(),
+            indeterminate: None,
+            latest_settlement: Some(OperationSettlement {
+                operation_id: target,
+                outcome: OperationOutcome::Completed,
+            }),
+            operation: OperationStatus::Active {
+                operation_id: newer,
+                prompt: "next turn".to_owned(),
+                state: ion_core::OperationState::NeedAssistant,
+            },
+            entries: Vec::new(),
+            reopen_entry_count: None,
+            model_ref: "test-model".to_owned(),
+            latest_usage: None,
+            live: None,
+        };
+        let stop = stop_after_resubscribe(&snapshot, target, true)
+            .expect("target settlement is authoritative")
+            .expect("settled target stops the pump");
+        assert!(matches!(
+            stop,
+            TurnStop::Failed(message) if message == LAGGED_UPDATES_MESSAGE
+        ));
     }
 
     #[tokio::test]

@@ -1482,9 +1482,12 @@ impl UiState {
         // Restore the runtime-owned projection of the latest durable usage;
         // frontend resynchronization never reads the store directly.
         self.usage = snapshot.latest_usage;
-        // Terminal events may also have fallen out of the ring. Rebuild the
-        // latest durable notice before reconstructing live draft state.
-        self.surface_latest_settlement(snapshot.latest_settlement.as_ref());
+        // A terminal settlement is relevant to the reconstructed foreground
+        // only while main is idle. During a newer active operation the retained
+        // settlement belongs to an earlier turn and must not be re-announced.
+        if matches!(snapshot.operation, OperationStatus::Idle) {
+            self.surface_latest_settlement(snapshot.latest_settlement.as_ref());
+        }
         self.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
         match &snapshot.live {
             // The snapshot's draft is the runtime's authoritative
@@ -1683,7 +1686,9 @@ pub async fn run(
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
-    state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
+    if matches!(snapshot.operation, OperationStatus::Idle) {
+        state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
+    }
     state.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
     // §21.4/§31.14: the initial snapshot is authoritative for durable
     // history. Entries settled between the resume load and this subscribe
@@ -2383,6 +2388,46 @@ pub(crate) mod tests {
             .collect::<String>();
         assert!(rendered.contains(&operation_id.to_string()));
         assert!(rendered.contains("inspect it before retrying"));
+    }
+
+    #[test]
+    fn resync_after_lag_does_not_resurface_previous_settlement_while_active() {
+        let previous = OperationId::generate();
+        let current = OperationId::generate();
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
+            latest_settlement: Some(OperationSettlement {
+                operation_id: previous,
+                outcome: OperationOutcome::Failed("old failure".to_owned()),
+            }),
+            reopen_entry_count: None,
+            operation: OperationStatus::Active {
+                operation_id: current,
+                prompt: "new work".to_owned(),
+                state: OperationState::NeedAssistant,
+            },
+            entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
+            latest_usage: None,
+            live: None,
+        };
+        let mut state = UiState::new();
+        state.resync_after_lag(&snapshot);
+        let rendered = state
+            .pending_scrollback
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(!rendered.contains("old failure"));
+        assert_eq!(
+            state.status,
+            UiStatus::Working {
+                operation: "working: new work".to_owned(),
+            }
+        );
     }
 
     #[test]
