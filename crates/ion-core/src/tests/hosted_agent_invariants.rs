@@ -351,6 +351,71 @@ async fn fork_history_and_model_override_are_explicit() {
 }
 
 #[tokio::test]
+async fn unsupported_hosted_model_override_fails_before_durable_admission() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_store(
+        crate::SwitchingProvider::new("parent-model", ScriptedProvider::new(Vec::new())),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let parent_id = runtime.session_id();
+    let family = Arc::new(runtime.agent_family(2).await.expect("family"));
+    let hosted = crate::hosted_agent_runtimes(
+        crate::HostedAgentConfig {
+            store: store.clone(),
+            make_provider: Arc::new(|| {
+                crate::SwitchingProvider::new(
+                    "default-agent-model",
+                    ScriptedProvider::new(vec![ScriptedMessage::text("default")]),
+                )
+            }),
+            make_provider_for_model: Some(Arc::new(|_| {
+                crate::SwitchingProvider::new(
+                    "different-model",
+                    ScriptedProvider::new(vec![ScriptedMessage::text("wrong")]),
+                )
+            })),
+            max_active: 1,
+            budget: crate::RuntimeBudget::unbounded(),
+            trusted_resources: Vec::new(),
+            cwd: std::env::current_dir().expect("cwd"),
+        },
+        parent_id,
+    );
+    let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&hosted));
+    let spawned = spawn(
+        &tools,
+        json!({
+            "objective": "use an unsupported model",
+            "topology": "fresh",
+            "model_override": "requested-model"
+        }),
+        CancellationToken::new(),
+    )
+    .await;
+    assert!(
+        spawned.is_error,
+        "unsupported override was admitted: {spawned:?}"
+    );
+    assert!(
+        spawned
+            .output
+            .contains("model override `requested-model` is unavailable"),
+        "unexpected override failure: {spawned:?}"
+    );
+    assert_eq!(
+        store.latest_session().await.expect("latest session"),
+        Some(parent_id),
+        "unsupported override must fail before child session admission"
+    );
+
+    hosted.close().await.expect("close hosted agents");
+    runtime.session().close().await.expect("close root");
+    runtime.join().await.expect("join root");
+    store.close().await.expect("close store");
+}
+
+#[tokio::test]
 async fn hosted_agent_cannot_widen_read_only_capabilities() {
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_with_store(

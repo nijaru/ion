@@ -32,6 +32,17 @@ pub struct TokenUsage {
     pub cache_write: u64,
 }
 
+impl TokenUsage {
+    /// Total tokens occupying model context. Provider counters are external
+    /// input, so overflow saturates instead of panicking or wrapping.
+    pub(crate) fn context_tokens(self) -> u64 {
+        self.input
+            .saturating_add(self.output)
+            .saturating_add(self.cache_read)
+            .saturating_add(self.cache_write)
+    }
+}
+
 /// Provider identity and metadata frozen for one model-step attempt.
 /// Recovery must use this exact identity rather than the host's current
 /// launch default (DESIGN.md §§6, 11.3, 14.8).
@@ -560,5 +571,21 @@ impl Provider for ScriptedProvider {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod token_usage_tests {
+    use super::TokenUsage;
+
+    #[test]
+    fn context_tokens_saturate_external_counters() {
+        let usage = TokenUsage {
+            input: u64::MAX,
+            output: 1,
+            cache_read: u64::MAX,
+            cache_write: u64::MAX,
+        };
+        assert_eq!(usage.context_tokens(), u64::MAX);
     }
 }

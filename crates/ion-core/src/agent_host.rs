@@ -104,6 +104,10 @@ pub fn hosted_agent_runtimes<P: Provider + 'static>(
     HostedAgentRuntimes::new(Arc::new(config), parent_id)
 }
 
+fn provider_if_supported<P: Provider>(provider: P, model_ref: &str) -> Option<P> {
+    provider.supports_model(model_ref).then_some(provider)
+}
+
 impl<P> HostedAgentRuntimes<P> {
     fn new(config: Arc<HostedAgentConfig<P>>, parent_id: SessionId) -> Arc<Self> {
         Arc::new(Self {
@@ -272,7 +276,8 @@ impl<P> HostedAgentRuntimes<P> {
                 let Some(make_provider) = self.config.make_provider_for_model.as_ref() else {
                     return Err(format!("model override `{model_ref}` is unavailable"));
                 };
-                make_provider(model_ref.to_owned())
+                provider_if_supported(make_provider(model_ref.to_owned()), model_ref)
+                    .ok_or_else(|| format!("model override `{model_ref}` is unavailable"))?
             }
             None => (self.config.make_provider)(),
         };
@@ -416,15 +421,12 @@ impl<P> HostedAgentRuntimes<P> {
         let model_ref = loaded.session.initial_model_ref.clone();
         let provider = match self.config.make_provider_for_model.as_ref() {
             Some(make_provider) => make_provider(model_ref.clone()),
-            None => {
-                let provider = (self.config.make_provider)();
-                if !provider.supports_model(&model_ref) {
-                    return Err(format!(
-                        "model `{model_ref}` is unavailable for this hosted agent"
-                    ));
-                }
-                provider
-            }
+            None => (self.config.make_provider)(),
+        };
+        let Some(provider) = provider_if_supported(provider, &model_ref) else {
+            return Err(format!(
+                "model `{model_ref}` is unavailable for this hosted agent"
+            ));
         };
         let catalog = crate::tool::ToolCatalog::read_only(&loaded.session.cwd);
         let runtime = Runtime::open_hosted(
