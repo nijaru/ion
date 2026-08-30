@@ -9,7 +9,8 @@ design is [DESIGN.md](DESIGN.md). The last Go implementation is tagged
 
 ## Quickstart
 
-Requires a Rust stable toolchain.
+Requires Rust 1.98.0. The repository toolchain configuration pins the
+supported compiler and components.
 
 ```sh
 cargo run -p ion
@@ -89,14 +90,15 @@ Project-local extensions load only behind explicit `--trust-project`.
 ## Development
 
 ```sh
-cargo fmt --check
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo test --workspace
+cargo fmt --all -- --check
+cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+cargo test --locked --workspace
 ```
 
-CI runs the lint gates only; tests are expected to pass locally before
-push. Current work and status live in [AGENTS.md](AGENTS.md) and the
-central `agent-context` brief.
+CI runs these required formatting, lint, and test gates on pushes and pull
+requests. A separate scheduled job performs the dependency advisory audit.
+Current work and status live in [AGENTS.md](AGENTS.md) and the central
+`agent-context` brief.
 
 ## License
 
