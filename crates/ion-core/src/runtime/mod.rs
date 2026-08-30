@@ -1488,13 +1488,7 @@ impl<P: Provider> SessionRuntime<P> {
             cache_read: usage.cache_read_tokens,
             cache_write: usage.cache_write_tokens,
         });
-        let last_context_tokens = latest_usage.map(|usage| {
-            usage
-                .input
-                .saturating_add(usage.output)
-                .saturating_add(usage.cache_read)
-                .saturating_add(usage.cache_write)
-        });
+        let last_context_tokens = latest_usage.map(TokenUsage::context_tokens);
         let assistant_frames = loaded.assistant_frames;
         let max_seq = loaded
             .entries

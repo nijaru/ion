@@ -195,8 +195,7 @@ impl<P: Provider> SessionRuntime<P> {
             EngineSignal::UsageUpdate { usage, .. } => {
                 self.operation_lane_live_mut(operation_id)
                     .expect("resident operation has an owning lane")
-                    .last_context_tokens =
-                    Some(usage.input + usage.output + usage.cache_read + usage.cache_write);
+                    .last_context_tokens = Some(usage.context_tokens());
                 self.live_mut(operation_id)
                     .expect("resident operation has live execution state")
                     .draft_usage = Some(usage);
