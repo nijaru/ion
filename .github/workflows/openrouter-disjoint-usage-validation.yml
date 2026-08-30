@@ -1,0 +1,38 @@
+name: OpenRouter disjoint usage validation
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  validate-and-commit:
+    if: github.head_ref == 'agent/openrouter-disjoint-usage'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact source patch
+        run: python3 .github/openrouter_disjoint_usage_patch.py
+      - name: Format source
+        run: cargo +1.98.0 fmt --all
+      - name: Check formatting
+        run: cargo +1.98.0 fmt --all -- --check
+      - name: Strict Clippy
+        run: cargo +1.98.0 clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - name: Workspace tests
+        run: cargo +1.98.0 test --locked --workspace
+      - name: Commit validated source
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          rm .github/openrouter_disjoint_usage_patch.py .github/workflows/openrouter-disjoint-usage-validation.yml
+          git add -A
+          git commit -m 'fix(openrouter): normalize cached token usage'
+          git push origin HEAD:${{ github.head_ref }}
