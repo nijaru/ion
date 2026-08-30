@@ -838,7 +838,7 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     let session_id = runtime.session_id();
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
-    session.submit_if_idle("run").await.expect("submit");
+    let indeterminate_operation = session.submit_if_idle("run").await.expect("submit");
     loop {
         let event = timeout(Duration::from_secs(2), events.recv())
             .await
@@ -867,6 +867,13 @@ async fn crash_during_bash_settles_indeterminate_and_stays_usable() {
     let session = runtime.session();
     let snapshot = session.snapshot().await.expect("snapshot");
     assert_eq!(snapshot.operation, OperationStatus::Idle);
+    assert_eq!(
+        snapshot.latest_settlement,
+        Some(crate::OperationSettlement {
+            operation_id: indeterminate_operation,
+            outcome: OperationOutcome::Indeterminate,
+        })
+    );
     let warning = snapshot
         .indeterminate
         .as_ref()
@@ -945,6 +952,7 @@ async fn worker_indeterminate_does_not_leak_into_main_snapshot() {
     let session = runtime.session();
     let snapshot = session.snapshot().await.expect("main snapshot");
     assert!(snapshot.indeterminate.is_none());
+    assert!(snapshot.latest_settlement.is_none());
     assert_eq!(snapshot.operation, OperationStatus::Idle);
 
     let loaded = store.load(session_id).await.expect("load");

@@ -49,8 +49,8 @@ pub use provider::{
 };
 pub use runtime::{
     EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState,
-    OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent, SessionHandle,
-    SessionSnapshot,
+    OperationSettlement, OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent,
+    SessionHandle, SessionSnapshot,
 };
 pub use store::{
     EntryRecord, LoadedSession, SessionRecord, SessionStore, StoreError, default_db_path,

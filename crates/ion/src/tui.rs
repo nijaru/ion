@@ -19,8 +19,8 @@ use unicode_width::UnicodeWidthStr as _;
 
 use crate::settings::Theme;
 use ion_core::{
-    CommandError, OperationState, OperationStatus, RuntimeError, RuntimeEvent, SessionHandle,
-    SessionSnapshot, TokenUsage,
+    CommandError, OperationOutcome, OperationSettlement, OperationState, OperationStatus,
+    RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot, TokenUsage,
 };
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
@@ -598,6 +598,34 @@ impl UiState {
             self.exit_history_browse();
         }
         self.break_edit_group();
+    }
+
+    /// Re-surface a terminal notice that may have fallen out of the bounded
+    /// event ring. Completed output is already represented by durable entries;
+    /// indeterminate keeps its stronger persistent warning below.
+    fn surface_latest_settlement(&mut self, settlement: Option<&OperationSettlement>) {
+        let Some(settlement) = settlement else {
+            return;
+        };
+        match &settlement.outcome {
+            OperationOutcome::Completed | OperationOutcome::Indeterminate => {}
+            OperationOutcome::Failed(message) => {
+                self.pending_scrollback
+                    .push(Line::from(format!("! failed: {message}")).red());
+            }
+            OperationOutcome::Cancelled => {
+                self.pending_scrollback
+                    .push(Line::from("! cancelled".to_owned()).yellow());
+            }
+            OperationOutcome::ApprovalRequired { tool } => {
+                self.pending_scrollback.push(
+                    Line::from(format!(
+                        "! approval required: `{tool}` — rerun with --allow {tool}"
+                    ))
+                    .yellow(),
+                );
+            }
+        }
     }
 
     /// Queue the authoritative snapshot warning. Lag resynchronization rebuilds
@@ -1454,8 +1482,9 @@ impl UiState {
         // Restore the runtime-owned projection of the latest durable usage;
         // frontend resynchronization never reads the store directly.
         self.usage = snapshot.latest_usage;
-        // Indeterminate recovery may have completed before the frontend saw its
-        // live event. The snapshot is authoritative for this warning too.
+        // Terminal events may also have fallen out of the ring. Rebuild the
+        // latest durable notice before reconstructing live draft state.
+        self.surface_latest_settlement(snapshot.latest_settlement.as_ref());
         self.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
         match &snapshot.live {
             // The snapshot's draft is the runtime's authoritative
@@ -1654,6 +1683,7 @@ pub async fn run(
     if host.model_name.is_some() {
         state.set_model_name(Some(snapshot.model_ref.clone()));
     }
+    state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
     state.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
     // §21.4/§31.14: the initial snapshot is authoritative for durable
     // history. Entries settled between the resume load and this subscribe
@@ -2278,6 +2308,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            latest_settlement: None,
             reopen_entry_count: None,
             operation: OperationStatus::Active {
                 operation_id: OperationId::generate(),
@@ -2330,6 +2361,10 @@ pub(crate) mod tests {
                 operation_id,
                 message: "inspect it before retrying".to_owned(),
             }),
+            latest_settlement: Some(OperationSettlement {
+                operation_id,
+                outcome: OperationOutcome::Indeterminate,
+            }),
             reopen_entry_count: None,
             operation: OperationStatus::Idle,
             entries: Vec::new(),
@@ -2351,6 +2386,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn resync_after_lag_resurfaces_failed_settlement() {
+        let operation_id = OperationId::generate();
+        let snapshot = SessionSnapshot {
+            cursor: RuntimeCursor::default(),
+            runtime_instance_id: RuntimeInstanceId::generate(),
+            indeterminate: None,
+            latest_settlement: Some(OperationSettlement {
+                operation_id,
+                outcome: OperationOutcome::Failed("provider failed".to_owned()),
+            }),
+            reopen_entry_count: None,
+            operation: OperationStatus::Idle,
+            entries: Vec::new(),
+            model_ref: "test-model".to_owned(),
+            latest_usage: None,
+            live: None,
+        };
+        let mut state = UiState::new();
+        state.resync_after_lag(&snapshot);
+        let rendered = state
+            .pending_scrollback
+            .iter()
+            .flat_map(|line| line.spans.iter())
+            .map(|span| span.content.as_ref())
+            .collect::<String>();
+        assert!(rendered.contains("! failed: provider failed"));
+    }
+
+    #[test]
     fn resync_after_lag_on_idle_clears_partial_draft() {
         let mut state = UiState::new();
         state.draft = "partial".to_owned();
@@ -2358,6 +2422,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            latest_settlement: None,
             reopen_entry_count: None,
             operation: OperationStatus::Idle,
             entries: Vec::new(),
@@ -2394,6 +2459,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            latest_settlement: None,
             reopen_entry_count: None,
             operation: OperationStatus::Active {
                 operation_id,
@@ -2426,6 +2492,7 @@ pub(crate) mod tests {
             cursor: RuntimeCursor::default(),
             runtime_instance_id: RuntimeInstanceId::generate(),
             indeterminate: None,
+            latest_settlement: None,
             reopen_entry_count: None,
             operation: OperationStatus::Active {
                 operation_id: call.operation_id,

@@ -331,6 +331,15 @@ pub enum OperationStatus {
     },
 }
 
+/// Most recently settled operation on the public `main` projection. A
+/// frontend that loses the terminal event can still classify the durable
+/// outcome without reaching through the runtime into the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OperationSettlement {
+    pub operation_id: OperationId,
+    pub outcome: OperationOutcome,
+}
+
 /// Snapshot-plus-cursor view of one session (DESIGN.md §21.2). The
 /// durable semantic view is the session entry log; live events are
 /// never persisted.
@@ -344,6 +353,9 @@ pub struct SessionSnapshot {
     /// Recovery can finish before a frontend subscribes, so this warning is
     /// carried in the snapshot as well as the live event.
     pub indeterminate: Option<IndeterminateWarning>,
+    /// Latest durable terminal outcome on `main`, retained independently of
+    /// whether its live terminal event is still present in the bounded ring.
+    pub latest_settlement: Option<OperationSettlement>,
     pub operation: OperationStatus,
     pub entries: Vec<SessionEntry>,
     /// Number of durable entries present when this runtime was reopened.
@@ -1363,6 +1375,10 @@ struct SessionRuntime<P> {
     events: broadcast::Sender<RuntimeEvent>,
     /// Main-lane event ring paired with the public main-lane snapshot.
     main_events: broadcast::Sender<RuntimeEvent>,
+    /// Most recently settled main-lane operation. Unlike the event ring this
+    /// is retained until a newer main operation settles, so lag recovery can
+    /// classify a missed terminal event.
+    main_latest_settlement: Option<OperationSettlement>,
     /// Main-lane indeterminate outcome that must remain visible to a
     /// frontend attaching after startup recovery. Shared-history worker
     /// outcomes remain observable through Family/durable operation state and
@@ -1452,6 +1468,7 @@ impl<P: Provider> SessionRuntime<P> {
             suspended_operations: Vec::new(),
             events,
             main_events,
+            main_latest_settlement: None,
             main_indeterminate_warning: None,
             closed: false,
             resumed,
@@ -1518,20 +1535,41 @@ impl<P: Provider> SessionRuntime<P> {
         };
         self.reopen_entry_count = Some(main_branch.len());
         self.next_entry_seq = max_seq + 1;
+        self.main_latest_settlement = loaded
+            .operations
+            .iter()
+            .filter(|operation| operation.lane_name == crate::session::lane::MAIN)
+            .filter_map(|operation| match &operation.latest.1.state {
+                OperationState::Finished(outcome) => Some((
+                    operation.accepted_seq,
+                    OperationSettlement {
+                        operation_id: operation.id,
+                        outcome: outcome.clone(),
+                    },
+                )),
+                _ => None,
+            })
+            .max_by_key(|(accepted_seq, _)| *accepted_seq)
+            .map(|(_, settlement)| settlement);
+        self.main_indeterminate_warning = loaded
+            .operations
+            .iter()
+            .filter(|operation| operation.lane_name == crate::session::lane::MAIN)
+            .filter_map(|operation| match &operation.latest.1.state {
+                OperationState::Finished(OperationOutcome::Indeterminate) => Some((
+                    operation.accepted_seq,
+                    IndeterminateWarning {
+                        operation_id: operation.id,
+                        message: INDETERMINATE_MESSAGE.to_owned(),
+                    },
+                )),
+                _ => None,
+            })
+            .max_by_key(|(accepted_seq, _)| *accepted_seq)
+            .map(|(_, warning)| warning);
 
         for operation in loaded.operations {
             let (state_seq, payload) = operation.latest;
-            if operation.lane_name == crate::session::lane::MAIN
-                && matches!(
-                    payload.state,
-                    OperationState::Finished(OperationOutcome::Indeterminate)
-                )
-            {
-                self.main_indeterminate_warning = Some(IndeterminateWarning {
-                    operation_id: operation.id,
-                    message: INDETERMINATE_MESSAGE.to_owned(),
-                });
-            }
             if matches!(payload.state, OperationState::Finished(_)) {
                 // Terminal operations stay in the transcript only.
                 continue;
@@ -3507,6 +3545,18 @@ impl<P: Provider> SessionRuntime<P> {
             live.live_tools.clear();
         }
         if let OperationState::Finished(outcome) = state {
+            if self.operation_lane_name(operation_id) == Some(crate::session::lane::MAIN) {
+                self.main_latest_settlement = Some(OperationSettlement {
+                    operation_id,
+                    outcome: outcome.clone(),
+                });
+                if matches!(outcome, OperationOutcome::Indeterminate) {
+                    self.main_indeterminate_warning = Some(IndeterminateWarning {
+                        operation_id,
+                        message: INDETERMINATE_MESSAGE.to_owned(),
+                    });
+                }
+            }
             match outcome {
                 OperationOutcome::Completed => {
                     self.emit(RuntimeEvent::OperationFinished {
@@ -3535,12 +3585,6 @@ impl<P: Provider> SessionRuntime<P> {
                     });
                 }
                 OperationOutcome::Indeterminate => {
-                    if self.operation_lane_name(operation_id) == Some(crate::session::lane::MAIN) {
-                        self.main_indeterminate_warning = Some(IndeterminateWarning {
-                            operation_id,
-                            message: INDETERMINATE_MESSAGE.to_owned(),
-                        });
-                    }
                     self.emit(RuntimeEvent::OperationIndeterminate {
                         cursor: RuntimeCursor::default(),
                         operation_id,
@@ -3574,6 +3618,7 @@ impl<P: Provider> SessionRuntime<P> {
             cursor: self.cursor,
             runtime_instance_id: self.runtime_instance_id,
             indeterminate: self.main_indeterminate_warning.clone(),
+            latest_settlement: self.main_latest_settlement.clone(),
             reopen_entry_count: self.reopen_entry_count,
             operation: match self.main_active() {
                 None => OperationStatus::Idle,

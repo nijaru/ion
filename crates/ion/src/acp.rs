@@ -19,7 +19,8 @@ use tokio::sync::Mutex;
 use tokio::task::JoinSet;
 
 use ion_core::{
-    EventSubscription, OperationId, Provider, Runtime, RuntimeError, RuntimeEvent, SessionStore,
+    EventSubscription, IndeterminateWarning, OperationId, OperationOutcome, OperationSettlement,
+    OperationStatus, Provider, Runtime, RuntimeError, RuntimeEvent, SessionHandle, SessionStore,
     ToolCatalog,
 };
 
@@ -187,9 +188,11 @@ where
                             .await
                             .replace((request_id.clone(), operation_id));
                         let output = Arc::clone(&output);
+                        let handle = session.handle.clone();
                         let session_id = session_id.to_owned();
                         prompt_tasks.spawn(async move {
-                            let stop = pump_turn(events, operation_id, &session_id, &output).await;
+                            let stop =
+                                pump_turn(events, handle, operation_id, &session_id, &output).await;
                             finish_prompt(&output, Some(request_id), stop, active_prompt).await;
                         });
                     }
@@ -263,10 +266,38 @@ enum TurnStop {
     ApprovalRequired(String),
 }
 
-/// Stream one operation's events as ACP updates; returns at the first
-/// terminal event.
+const LAGGED_UPDATES_MESSAGE: &str = "event stream lagged; updates incomplete";
+
+fn stop_from_settlement(
+    settlement: &OperationSettlement,
+    indeterminate: Option<&IndeterminateWarning>,
+    updates_incomplete: bool,
+) -> TurnStop {
+    match &settlement.outcome {
+        OperationOutcome::Completed if updates_incomplete => {
+            TurnStop::Failed(LAGGED_UPDATES_MESSAGE.to_owned())
+        }
+        OperationOutcome::Completed => TurnStop::EndTurn,
+        OperationOutcome::Failed(message) => TurnStop::Failed(message.clone()),
+        OperationOutcome::Cancelled => TurnStop::Cancelled,
+        OperationOutcome::Indeterminate => {
+            let message = indeterminate
+                .filter(|warning| warning.operation_id == settlement.operation_id)
+                .map_or("external effect outcome is indeterminate", |warning| {
+                    warning.message.as_str()
+                });
+            TurnStop::Failed(format!("indeterminate operation: {message}"))
+        }
+        OperationOutcome::ApprovalRequired { tool } => TurnStop::ApprovalRequired(tool.clone()),
+    }
+}
+
+/// Stream one operation's events as ACP updates; returns only when the durable
+/// operation settles. Lag marks streamed presentation as incomplete, but never
+/// detaches the prompt task from still-running work.
 async fn pump_turn<W>(
     mut events: EventSubscription,
+    session: SessionHandle,
     operation_id: OperationId,
     session_id: &str,
     output: &Arc<Mutex<W>>,
@@ -274,11 +305,49 @@ async fn pump_turn<W>(
 where
     W: AsyncWrite + Unpin + Send + 'static,
 {
+    let mut updates_incomplete = false;
     loop {
         let event = match events.recv().await {
             Ok(event) => event,
             Err(RuntimeError::SubscriptionLagged) => {
-                return TurnStop::Failed("event stream lagged; updates incomplete".to_owned());
+                updates_incomplete = true;
+                let (snapshot, fresh) = match session.subscribe().await {
+                    Ok(subscription) => subscription,
+                    Err(err) => {
+                        return TurnStop::Failed(format!(
+                            "event stream lagged and resubscribe failed: {err}"
+                        ));
+                    }
+                };
+                events = fresh;
+                match &snapshot.operation {
+                    OperationStatus::Active {
+                        operation_id: active,
+                        ..
+                    } if *active == operation_id => continue,
+                    OperationStatus::Active { .. } => {
+                        return TurnStop::Failed(
+                            "event stream resynchronized to a different active operation"
+                                .to_owned(),
+                        );
+                    }
+                    OperationStatus::Idle => {
+                        if let Some(settlement) = snapshot
+                            .latest_settlement
+                            .as_ref()
+                            .filter(|settlement| settlement.operation_id == operation_id)
+                        {
+                            return stop_from_settlement(
+                                settlement,
+                                snapshot.indeterminate.as_ref(),
+                                updates_incomplete,
+                            );
+                        }
+                        return TurnStop::Failed(
+                            "event stream lagged; operation settlement unavailable".to_owned(),
+                        );
+                    }
+                }
             }
             Err(_) => return TurnStop::Failed("event stream closed".to_owned()),
         };
@@ -337,7 +406,13 @@ where
                 .await;
             }
             RuntimeEvent::ToolProgress { .. } | RuntimeEvent::UsageUpdate { .. } => {}
-            RuntimeEvent::OperationFinished { .. } => return TurnStop::EndTurn,
+            RuntimeEvent::OperationFinished { .. } => {
+                return if updates_incomplete {
+                    TurnStop::Failed(LAGGED_UPDATES_MESSAGE.to_owned())
+                } else {
+                    TurnStop::EndTurn
+                };
+            }
             RuntimeEvent::OperationCancelled { .. } => return TurnStop::Cancelled,
             RuntimeEvent::OperationFailed { message, .. } => {
                 return TurnStop::Failed(message);
@@ -700,4 +775,172 @@ async fn error_response<W: AsyncWrite + Unpin>(
 /// Find the end of the first complete line in `buf`, if any.
 fn find_line(buf: &[u8]) -> Option<usize> {
     buf.iter().position(|&b| b == b'\n')
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::Future;
+    use std::time::Duration;
+
+    use ion_core::{EngineSignal, ProviderRequest, ToolRegistry};
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    #[derive(Clone, Copy)]
+    struct BurstProvider {
+        wait_for_cancel: bool,
+    }
+
+    impl Provider for BurstProvider {
+        fn run(
+            &self,
+            request: ProviderRequest,
+            cancel: CancellationToken,
+            out: mpsc::Sender<EngineSignal>,
+        ) -> impl Future<Output = ()> + Send {
+            let wait_for_cancel = self.wait_for_cancel;
+            async move {
+                for _ in 0..96 {
+                    if out
+                        .send(EngineSignal::TextDelta {
+                            operation_id: request.operation_id,
+                            step: request.step,
+                            text: "x".to_owned(),
+                        })
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                }
+                if wait_for_cancel {
+                    cancel.cancelled().await;
+                    let _ = out
+                        .send(EngineSignal::Cancelled {
+                            operation_id: request.operation_id,
+                            step: request.step,
+                        })
+                        .await;
+                } else {
+                    let _ = out
+                        .send(EngineSignal::Completed {
+                            operation_id: request.operation_id,
+                            step: request.step,
+                        })
+                        .await;
+                }
+            }
+        }
+    }
+
+    async fn wait_for_snapshot(
+        session: &SessionHandle,
+        predicate: impl Fn(&ion_core::SessionSnapshot) -> bool,
+    ) -> ion_core::SessionSnapshot {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                let snapshot = session.snapshot().await.expect("snapshot");
+                if predicate(&snapshot) {
+                    break snapshot;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("snapshot condition timed out")
+    }
+
+    #[tokio::test]
+    async fn lagged_pump_classifies_missed_completion_from_snapshot() {
+        let runtime = Runtime::start_with_store(
+            BurstProvider {
+                wait_for_cancel: false,
+            },
+            ToolRegistry::default(),
+            SessionStore::open_in_memory().expect("store"),
+        );
+        let session = runtime.session();
+        let (_snapshot, events) = session.subscribe().await.expect("subscribe");
+        let operation_id = session.submit_if_idle("go").await.expect("submit");
+        let snapshot = wait_for_snapshot(&session, |snapshot| {
+            snapshot
+                .latest_settlement
+                .as_ref()
+                .is_some_and(|settlement| {
+                    settlement.operation_id == operation_id
+                        && settlement.outcome == OperationOutcome::Completed
+                })
+        })
+        .await;
+        assert_eq!(snapshot.operation, OperationStatus::Idle);
+
+        let output = Arc::new(Mutex::new(tokio::io::sink()));
+        let stop = pump_turn(
+            events,
+            session.clone(),
+            operation_id,
+            "session-test",
+            &output,
+        )
+        .await;
+        assert!(matches!(
+            stop,
+            TurnStop::Failed(message) if message == LAGGED_UPDATES_MESSAGE
+        ));
+
+        session.close().await.expect("close");
+        runtime.join().await.expect("join");
+    }
+
+    #[tokio::test]
+    async fn lagged_pump_stays_attached_and_cancellable() {
+        let runtime = Runtime::start_with_store(
+            BurstProvider {
+                wait_for_cancel: true,
+            },
+            ToolRegistry::default(),
+            SessionStore::open_in_memory().expect("store"),
+        );
+        let session = runtime.session();
+        let (_snapshot, events) = session.subscribe().await.expect("subscribe");
+        let operation_id = session.submit_if_idle("go").await.expect("submit");
+        wait_for_snapshot(&session, |snapshot| {
+            matches!(
+                (&snapshot.operation, &snapshot.live),
+                (
+                    OperationStatus::Active { operation_id: active, .. },
+                    Some(live)
+                ) if *active == operation_id && live.draft_text.len() == 96
+            )
+        })
+        .await;
+
+        let output = Arc::new(Mutex::new(tokio::io::sink()));
+        let pump_output = Arc::clone(&output);
+        let pump_session = session.clone();
+        let pump = tokio::spawn(async move {
+            pump_turn(
+                events,
+                pump_session,
+                operation_id,
+                "session-test",
+                &pump_output,
+            )
+            .await
+        });
+        tokio::task::yield_now().await;
+        assert!(!pump.is_finished(), "lag must not detach the prompt task");
+
+        session.cancel(operation_id).await.expect("cancel");
+        let stop = tokio::time::timeout(Duration::from_secs(2), pump)
+            .await
+            .expect("pump timed out")
+            .expect("pump task");
+        assert!(matches!(stop, TurnStop::Cancelled));
+
+        session.close().await.expect("close");
+        runtime.join().await.expect("join");
+    }
 }
