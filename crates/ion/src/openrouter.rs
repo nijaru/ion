@@ -242,7 +242,7 @@ impl Provider for OpenRouterProvider {
             // Accumulated tool calls by stream index: (id, name, args).
             let mut tool_calls: Vec<(Option<String>, String, String)> = Vec::new();
 
-            loop {
+            'stream: loop {
                 let chunk = tokio::select! {
                     () = cancel.cancelled() => {
                         let _ = out.send(EngineSignal::Cancelled { operation_id, step }).await;
@@ -271,7 +271,7 @@ impl Provider for OpenRouterProvider {
                     let payload = payload.trim();
                     if payload == "[DONE]" {
                         buffer.clear();
-                        break;
+                        break 'stream;
                     }
                     match decode_events(payload) {
                         Ok(events) => {
@@ -587,6 +587,30 @@ mod tests {
         format!("http://127.0.0.1:{port}/v1")
     }
 
+    /// SSE server that deliberately keeps the chunked response open after
+    /// sending OpenRouter's semantic `[DONE]` marker. A correct client must
+    /// finish from that marker rather than waiting for transport EOF.
+    fn spawn_open_sse_server(body: &'static str) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut buf = vec![0u8; 16384];
+            let _ = socket.read(&mut buf);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n{:X}\r\n{}\r\n",
+                body.len(),
+                body,
+            );
+            socket
+                .write_all(response.as_bytes())
+                .expect("write SSE response");
+            socket.flush().expect("flush SSE response");
+            std::thread::sleep(Duration::from_secs(3));
+        });
+        format!("http://127.0.0.1:{port}/v1")
+    }
+
     async fn collect(provider: OpenRouterProvider) -> Vec<EngineSignal> {
         let cancel = CancellationToken::new();
         let (tx, mut rx) = mpsc::channel(64);
@@ -669,6 +693,53 @@ mod tests {
             })
             .collect();
         assert_eq!(texts, ["hel", "lo"]);
+        assert!(matches!(
+            signals.last(),
+            Some(EngineSignal::Completed { .. })
+        ));
+    }
+
+    #[tokio::test]
+    async fn done_marker_terminates_stream_without_waiting_for_eof() {
+        let base_url = spawn_open_sse_server(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n\
+             data: [DONE]\n\n",
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let cancel = CancellationToken::new();
+        let (tx, mut rx) = mpsc::channel(64);
+        let request = ProviderRequest {
+            operation_id: ion_core::OperationId::generate(),
+            step: 1,
+            model: ion_core::ModelConfig {
+                model_ref: "test/model".to_owned(),
+                context_window: None,
+                capabilities: ion_core::ModelCapabilities {
+                    reasoning: true,
+                    ..ion_core::ModelCapabilities::default()
+                },
+            },
+            plan: ContextPlan {
+                system: "sys".to_owned(),
+                messages: vec![ContextMessage::User {
+                    content: "hello".to_owned(),
+                }],
+            },
+            tools: Vec::new(),
+        };
+
+        tokio::time::timeout(Duration::from_secs(1), provider.run(request, cancel, tx))
+            .await
+            .expect("[DONE] must settle the provider before transport EOF");
+
+        let mut signals = Vec::new();
+        while let Some(signal) = rx.recv().await {
+            signals.push(signal);
+        }
+        assert!(signals.iter().any(|signal| matches!(
+            signal,
+            EngineSignal::TextDelta { text, .. } if text == "done"
+        )));
         assert!(matches!(
             signals.last(),
             Some(EngineSignal::Completed { .. })
