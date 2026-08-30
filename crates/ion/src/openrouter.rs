@@ -134,7 +134,7 @@ impl Provider for OpenRouterProvider {
         *self
             .context_window
             .get_or_init(|| async {
-                let url = format!("{}/models/{}", self.base_url, self.model);
+                let url = format!("{}/model/{}", self.base_url, self.model);
                 let value = self
                     .client
                     .get(url)
@@ -624,6 +624,29 @@ mod tests {
         format!("http://127.0.0.1:{port}/v1")
     }
 
+    fn spawn_json_server(
+        body: &'static str,
+        captured_request: std::sync::mpsc::Sender<String>,
+    ) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().expect("accept");
+            let mut buf = vec![0u8; 16384];
+            let n = socket.read(&mut buf).unwrap_or(0);
+            let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+            let _ = captured_request.send(request);
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket
+                .write_all(response.as_bytes())
+                .expect("write response");
+        });
+        format!("http://127.0.0.1:{port}/v1")
+    }
+
     async fn collect(provider: OpenRouterProvider) -> Vec<EngineSignal> {
         let cancel = CancellationToken::new();
         let (tx, mut rx) = mpsc::channel(64);
@@ -924,13 +947,22 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn context_window_fetched_from_models_endpoint() {
-        let base_url = spawn_sse_server(
+    async fn context_window_uses_single_model_metadata_route() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let base_url = spawn_json_server(
             "{\"data\":{\"id\":\"test/model\",\"context_length\":1000000}}",
-            None,
+            tx,
         );
         let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
         assert_eq!(provider.context_window().await, Some(1_000_000));
+
+        let request = rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("metadata request");
+        assert!(
+            request.starts_with("GET /v1/model/test/model HTTP/1.1\r\n"),
+            "unexpected metadata request: {request:?}",
+        );
     }
 
     #[tokio::test]
