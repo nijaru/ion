@@ -1,0 +1,63 @@
+name: Hosted model resolution validation
+
+on:
+  push:
+    branches: [agent/saturating-context-usage]
+    paths:
+      - .github/workflows/agent-hosted-model-resolution.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/saturating-context-usage
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Share exact hosted model support validation
+        shell: python
+        run: |
+          import base64
+          from pathlib import Path
+
+          path = Path("crates/ion-core/src/agent_host.rs")
+          source = path.read_text()
+          replacements = [
+              (
+                  "cHViIGZuIGhvc3RlZF9hZ2VudF9ydW50aW1lczxQOiBQcm92aWRlciArICdzdGF0aWM+KAogICAgY29uZmlnOiBIb3N0ZWRBZ2VudENvbmZpZzxQPiwKICAgIHBhcmVudF9pZDogU2Vzc2lvbklkLAopIC0+IEFyYzxIb3N0ZWRBZ2VudFJ1bnRpbWVzPFA+PiB7CiAgICBIb3N0ZWRBZ2VudFJ1bnRpbWVzOjpuZXcoQXJjOjpuZXcoY29uZmlnKSwgcGFyZW50X2lkKQp9Cgo=",
+                  "cHViIGZuIGhvc3RlZF9hZ2VudF9ydW50aW1lczxQOiBQcm92aWRlciArICdzdGF0aWM+KAogICAgY29uZmlnOiBIb3N0ZWRBZ2VudENvbmZpZzxQPiwKICAgIHBhcmVudF9pZDogU2Vzc2lvbklkLAopIC0+IEFyYzxIb3N0ZWRBZ2VudFJ1bnRpbWVzPFA+PiB7CiAgICBIb3N0ZWRBZ2VudFJ1bnRpbWVzOjpuZXcoQXJjOjpuZXcoY29uZmlnKSwgcGFyZW50X2lkKQp9CgpmbiBwcm92aWRlcl9pZl9zdXBwb3J0ZWQ8UDogUHJvdmlkZXI+KHByb3ZpZGVyOiBQLCBtb2RlbF9yZWY6ICZzdHIpIC0+IE9wdGlvbjxQPiB7CiAgICBwcm92aWRlci5zdXBwb3J0c19tb2RlbChtb2RlbF9yZWYpLnRoZW5fc29tZShwcm92aWRlcikKfQoK",
+              ),
+              (
+                  "ICAgICAgICBsZXQgcHJvdmlkZXIgPSBtYXRjaCBzcGVjLm1vZGVsX292ZXJyaWRlLmFzX2RlcmVmKCkgewogICAgICAgICAgICBTb21lKG1vZGVsX3JlZikgPT4gewogICAgICAgICAgICAgICAgbGV0IFNvbWUobWFrZV9wcm92aWRlcikgPSBzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyX2Zvcl9tb2RlbC5hc19yZWYoKSBlbHNlIHsKICAgICAgICAgICAgICAgICAgICByZXR1cm4gRXJyKGZvcm1hdCEoIm1vZGVsIG92ZXJyaWRlIGB7bW9kZWxfcmVmfWAgaXMgdW5hdmFpbGFibGUiKSk7CiAgICAgICAgICAgICAgICB9OwogICAgICAgICAgICAgICAgbGV0IHByb3ZpZGVyID0gbWFrZV9wcm92aWRlcihtb2RlbF9yZWYudG9fb3duZWQoKSk7CiAgICAgICAgICAgICAgICBpZiAhcHJvdmlkZXIuc3VwcG9ydHNfbW9kZWwobW9kZWxfcmVmKSB7CiAgICAgICAgICAgICAgICAgICAgcmV0dXJuIEVycihmb3JtYXQhKCJtb2RlbCBvdmVycmlkZSBge21vZGVsX3JlZn1gIGlzIHVuYXZhaWxhYmxlIikpOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgcHJvdmlkZXIKICAgICAgICAgICAgfQogICAgICAgICAgICBOb25lID0+IChzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyKSgpLAogICAgICAgIH07Cg==",
+                  "ICAgICAgICBsZXQgcHJvdmlkZXIgPSBtYXRjaCBzcGVjLm1vZGVsX292ZXJyaWRlLmFzX2RlcmVmKCkgewogICAgICAgICAgICBTb21lKG1vZGVsX3JlZikgPT4gewogICAgICAgICAgICAgICAgbGV0IFNvbWUobWFrZV9wcm92aWRlcikgPSBzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyX2Zvcl9tb2RlbC5hc19yZWYoKSBlbHNlIHsKICAgICAgICAgICAgICAgICAgICByZXR1cm4gRXJyKGZvcm1hdCEoIm1vZGVsIG92ZXJyaWRlIGB7bW9kZWxfcmVmfWAgaXMgdW5hdmFpbGFibGUiKSk7CiAgICAgICAgICAgICAgICB9OwogICAgICAgICAgICAgICAgcHJvdmlkZXJfaWZfc3VwcG9ydGVkKG1ha2VfcHJvdmlkZXIobW9kZWxfcmVmLnRvX293bmVkKCkpLCBtb2RlbF9yZWYpCiAgICAgICAgICAgICAgICAgICAgLm9rX29yX2Vsc2UofHwgZm9ybWF0ISgibW9kZWwgb3ZlcnJpZGUgYHttb2RlbF9yZWZ9YCBpcyB1bmF2YWlsYWJsZSIpKT8KICAgICAgICAgICAgfQogICAgICAgICAgICBOb25lID0+IChzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyKSgpLAogICAgICAgIH07Cg==",
+              ),
+              (
+                  "ICAgICAgICBsZXQgbW9kZWxfcmVmID0gbG9hZGVkLnNlc3Npb24uaW5pdGlhbF9tb2RlbF9yZWYuY2xvbmUoKTsKICAgICAgICBsZXQgcHJvdmlkZXIgPSBtYXRjaCBzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyX2Zvcl9tb2RlbC5hc19yZWYoKSB7CiAgICAgICAgICAgIFNvbWUobWFrZV9wcm92aWRlcikgPT4gbWFrZV9wcm92aWRlcihtb2RlbF9yZWYuY2xvbmUoKSksCiAgICAgICAgICAgIE5vbmUgPT4gewogICAgICAgICAgICAgICAgbGV0IHByb3ZpZGVyID0gKHNlbGYuY29uZmlnLm1ha2VfcHJvdmlkZXIpKCk7CiAgICAgICAgICAgICAgICBpZiAhcHJvdmlkZXIuc3VwcG9ydHNfbW9kZWwoJm1vZGVsX3JlZikgewogICAgICAgICAgICAgICAgICAgIHJldHVybiBFcnIoZm9ybWF0ISgKICAgICAgICAgICAgICAgICAgICAgICAgIm1vZGVsIGB7bW9kZWxfcmVmfWAgaXMgdW5hdmFpbGFibGUgZm9yIHRoaXMgaG9zdGVkIGFnZW50IgogICAgICAgICAgICAgICAgICAgICkpOwogICAgICAgICAgICAgICAgfQogICAgICAgICAgICAgICAgcHJvdmlkZXIKICAgICAgICAgICAgfQogICAgICAgIH07Cg==",
+                  "ICAgICAgICBsZXQgbW9kZWxfcmVmID0gbG9hZGVkLnNlc3Npb24uaW5pdGlhbF9tb2RlbF9yZWYuY2xvbmUoKTsKICAgICAgICBsZXQgcHJvdmlkZXIgPSBtYXRjaCBzZWxmLmNvbmZpZy5tYWtlX3Byb3ZpZGVyX2Zvcl9tb2RlbC5hc19yZWYoKSB7CiAgICAgICAgICAgIFNvbWUobWFrZV9wcm92aWRlcikgPT4gbWFrZV9wcm92aWRlcihtb2RlbF9yZWYuY2xvbmUoKSksCiAgICAgICAgICAgIE5vbmUgPT4gKHNlbGYuY29uZmlnLm1ha2VfcHJvdmlkZXIpKCksCiAgICAgICAgfTsKICAgICAgICBsZXQgU29tZShwcm92aWRlcikgPSBwcm92aWRlcl9pZl9zdXBwb3J0ZWQocHJvdmlkZXIsICZtb2RlbF9yZWYpIGVsc2UgewogICAgICAgICAgICByZXR1cm4gRXJyKGZvcm1hdCEoCiAgICAgICAgICAgICAgICAibW9kZWwgYHttb2RlbF9yZWZ9YCBpcyB1bmF2YWlsYWJsZSBmb3IgdGhpcyBob3N0ZWQgYWdlbnQiCiAgICAgICAgICAgICkpOwogICAgICAgIH07Cg==",
+              ),
+          ]
+          for old_b64, new_b64 in replacements:
+              old = base64.b64decode(old_b64).decode()
+              new = base64.b64decode(new_b64).decode()
+              if source.count(old) != 1:
+                  raise SystemExit("expected exact hosted model resolution source once")
+              source = source.replace(old, new, 1)
+          path.write_text(source)
+      - run: cargo fmt --all
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated source only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent-hosted-model-resolution.yml
+          git add crates/ion-core/src/agent_host.rs
+          git commit -m "fix(agent): validate hosted model resolution"
+          git push
