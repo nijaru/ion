@@ -1,0 +1,145 @@
+name: Hosted model override validation
+
+on:
+  push:
+    branches: [agent/saturating-context-usage]
+    paths:
+      - .github/workflows/agent-hosted-model-override.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply-and-validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/saturating-context-usage
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply hosted model override fix and regression
+        shell: python
+        run: |
+          from pathlib import Path
+
+          host_path = Path("crates/ion-core/src/agent_host.rs")
+          host = host_path.read_text()
+          old = '''        let provider = match spec.model_override.as_deref() {
+              Some(model_ref) => {
+                  let Some(make_provider) = self.config.make_provider_for_model.as_ref() else {
+                      return Err(format!("model override `{model_ref}` is unavailable"));
+                  };
+                  make_provider(model_ref.to_owned())
+              }
+              None => (self.config.make_provider)(),
+          };
+'''
+          new = '''        let provider = match spec.model_override.as_deref() {
+              Some(model_ref) => {
+                  let Some(make_provider) = self.config.make_provider_for_model.as_ref() else {
+                      return Err(format!("model override `{model_ref}` is unavailable"));
+                  };
+                  let provider = make_provider(model_ref.to_owned());
+                  if !provider.supports_model(model_ref) {
+                      return Err(format!("model override `{model_ref}` is unavailable"));
+                  }
+                  provider
+              }
+              None => (self.config.make_provider)(),
+          };
+'''
+          if old not in host:
+              raise SystemExit("agent_host.rs override block did not match expected source")
+          host_path.write_text(host.replace(old, new, 1))
+
+          test_path = Path("crates/ion-core/src/tests/hosted_agent_invariants.rs")
+          tests = test_path.read_text()
+          anchor = '''#[tokio::test]
+          async fn hosted_agent_cannot_widen_read_only_capabilities() {
+'''
+          regression = '''#[tokio::test]
+          async fn unsupported_hosted_model_override_fails_before_durable_admission() {
+              let store = SessionStore::open_in_memory().expect("store");
+              let runtime = Runtime::start_with_store(
+                  crate::SwitchingProvider::new(
+                      "parent-model",
+                      ScriptedProvider::new(Vec::new()),
+                  ),
+                  ToolRegistry::default(),
+                  store.clone(),
+              );
+              let parent_id = runtime.session_id();
+              let family = Arc::new(runtime.agent_family(2).await.expect("family"));
+              let hosted = crate::hosted_agent_runtimes(
+                  crate::HostedAgentConfig {
+                      store: store.clone(),
+                      make_provider: Arc::new(|| {
+                          crate::SwitchingProvider::new(
+                              "default-agent-model",
+                              ScriptedProvider::new(vec![ScriptedMessage::text("default")]),
+                          )
+                      }),
+                      make_provider_for_model: Some(Arc::new(|_| {
+                          crate::SwitchingProvider::new(
+                              "different-model",
+                              ScriptedProvider::new(vec![ScriptedMessage::text("wrong")]),
+                          )
+                      })),
+                      max_active: 1,
+                      budget: crate::RuntimeBudget::unbounded(),
+                      trusted_resources: Vec::new(),
+                      cwd: std::env::current_dir().expect("cwd"),
+                  },
+                  parent_id,
+              );
+              let tools = crate::agent_host_tools(Arc::clone(&family), Arc::clone(&hosted));
+              let spawned = spawn(
+                  &tools,
+                  json!({
+                      "objective": "use an unsupported model",
+                      "topology": "fresh",
+                      "model_override": "requested-model"
+                  }),
+                  CancellationToken::new(),
+              )
+              .await;
+              assert!(spawned.is_error, "unsupported override was admitted: {spawned:?}");
+              assert!(
+                  spawned
+                      .output
+                      .contains("model override `requested-model` is unavailable"),
+                  "unexpected override failure: {spawned:?}"
+              );
+              assert_eq!(
+                  store.latest_session().await.expect("latest session"),
+                  Some(parent_id),
+                  "unsupported override must fail before child session admission"
+              );
+
+              hosted.close().await.expect("close hosted agents");
+              runtime.session().close().await.expect("close root");
+              runtime.join().await.expect("join root");
+              store.close().await.expect("close store");
+          }
+
+          #[tokio::test]
+          async fn hosted_agent_cannot_widen_read_only_capabilities() {
+'''
+          if anchor not in tests:
+              raise SystemExit("hosted_agent_invariants.rs insertion anchor did not match expected source")
+          test_path.write_text(tests.replace(anchor, regression, 1))
+      - run: cargo fmt --all
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated source only
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git rm .github/workflows/agent-hosted-model-override.yml
+          git add crates/ion-core/src/agent_host.rs crates/ion-core/src/tests/hosted_agent_invariants.rs
+          git commit -m "fix(agent): reject unsupported hosted model overrides"
+          git push
