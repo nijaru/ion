@@ -164,7 +164,8 @@ fn seatbelt_profile(cwd: &Path) -> String {
          (allow process-fork) \
          (allow signal (target self)) \
          (allow sysctl-read) \
-         (allow file-write* (subpath \"{cwd}\"))"
+         (allow file-write* (subpath \"{cwd}\")) \
+         (allow file-write* (literal \"/dev/null\"))"
     )
 }
 

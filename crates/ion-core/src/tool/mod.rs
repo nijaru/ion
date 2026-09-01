@@ -2519,4 +2519,31 @@ mod preview_bound_tests {
             .expect("bash spec");
         assert!(spec.description.contains("sandbox: seatbelt"));
     }
+
+    /// Standard tools (git, shell redirection) open /dev/null for
+    /// reading and writing; the seatbelt profile must allow that
+    /// literal device without opening any other write path.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn seatbelt_allows_dev_null_writes() {
+        let workspace = tempfile::tempdir().expect("workspace");
+        let outcome = run_shell(
+            workspace.path(),
+            "printf redirected > /dev/null && printf ok > visible-file",
+            SandboxMode::Seatbelt,
+            None,
+            CancellationToken::new(),
+        )
+        .await;
+
+        assert!(
+            !outcome.is_error,
+            "dev/null redirect must work: {outcome:?}"
+        );
+        assert_eq!(
+            std::fs::read_to_string(workspace.path().join("visible-file"))
+                .expect("workspace write"),
+            "ok"
+        );
+    }
 }
