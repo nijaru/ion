@@ -81,6 +81,12 @@ pub enum UiEffect {
     SwitchThinking {
         thinking: Option<String>,
     },
+    /// Run one user shell passthrough (pi parity: `!command` visible to
+    /// the model, `!!command` durable but excluded).
+    RunShell {
+        command: String,
+        exclude_from_context: bool,
+    },
     Cancel,
     /// Approve the parked tool approval (§17.4).
     Approve,
@@ -672,6 +678,9 @@ pub struct UiState {
     thinking_level: Option<String>,
     /// Ephemeral thinking picker, when open.
     thinking_selector: Option<ModelSelector>,
+    /// Provisional live output of a running user shell passthrough.
+    /// Cleared when the durable settlement entry arrives.
+    shell_output: String,
     /// Ephemeral session picker (`/resume`), when open. Rows are
     /// host-supplied snapshots; selection returns a durable id.
     session_selector: Option<SessionSelector>,
@@ -1898,6 +1907,38 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             state.break_edit_group();
             state.history_index = None;
             state.history_stash = None;
+            // Shell passthrough (pi parity) is checked first: a text
+            // starting with '!' never collides with slash commands.
+            // `!cmd` output joins the model context; `!!cmd` stays durable
+            // but excluded. Only an idle lane can run one — the runtime
+            // refuses otherwise and the notice explains.
+            if let Some(command) = text.strip_prefix('!') {
+                let exclude_from_context = command.starts_with('!');
+                let command = command.strip_prefix('!').unwrap_or(command).trim();
+                if command.is_empty() {
+                    notice(&mut state, "shell command required after '!'");
+                    state.reset_composer();
+                    return (state, None);
+                }
+                if !matches!(state.status, UiStatus::Idle) {
+                    notice(
+                        &mut state,
+                        "shell passthrough needs an idle session — wait for the operation or cancel it",
+                    );
+                    state.reset_composer();
+                    return (state, None);
+                }
+                state.reset_composer();
+                state.history.push(text.clone());
+                state.pending_history = Some(text.clone());
+                return (
+                    state,
+                    Some(UiEffect::RunShell {
+                        command: command.to_owned(),
+                        exclude_from_context,
+                    }),
+                );
+            }
             // Slash commands are frontend presentation over SessionHandle
             // commands - never TUI-only session logic.
             if let Some(command) = text.strip_prefix('/') {
@@ -2264,6 +2305,65 @@ fn browse_history(state: &mut UiState, direction: i32) {
 fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
     let palette = palette(Theme::Dark);
     match event {
+        RuntimeEvent::ShellStarted {
+            command,
+            exclude_from_context,
+            ..
+        } => {
+            state.hotkeys_visible = false;
+            let prefix = if exclude_from_context { "!!" } else { "!" };
+            state
+                .pending_scrollback
+                .push(Line::from(format!("{prefix}{command}")).style(palette.user_marker));
+            state.status = UiStatus::Working {
+                operation: "shell".to_owned(),
+            };
+        }
+        RuntimeEvent::ShellOutput { output, .. } => {
+            // Provisional display only; bound the retained preview so a
+            // chatty command cannot grow UiState without limit. The
+            // durable entry keeps the real bounded output.
+            const SHELL_PREVIEW_MAX_BYTES: usize = 8 * 1024;
+            state.shell_output.push_str(&output);
+            if state.shell_output.len() > SHELL_PREVIEW_MAX_BYTES {
+                let keep = state
+                    .shell_output
+                    .char_indices()
+                    .rev()
+                    .nth(SHELL_PREVIEW_MAX_BYTES)
+                    .map_or(0, |(index, _)| index);
+                state.shell_output = state.shell_output[keep..].to_owned();
+            }
+        }
+        RuntimeEvent::ShellSettled {
+            exit_code,
+            cancelled,
+            output_preview,
+            ..
+        } => {
+            // The durable entry carries the settled output; the live
+            // preview is provisional and ends here. The bounded preview
+            // renders immediately; a lagged client rebuilds from entries.
+            state.shell_output.clear();
+            state.status = UiStatus::Idle;
+            if cancelled {
+                state
+                    .pending_scrollback
+                    .push(Line::from("! cancelled".to_owned()).yellow());
+            } else if exit_code != Some(0) {
+                state
+                    .pending_scrollback
+                    .push(Line::from(format!("! exited with {exit_code:?}")).yellow());
+            }
+            for logical_line in output_preview.as_deref().unwrap_or_default().split('\n') {
+                if logical_line.is_empty() {
+                    continue;
+                }
+                state
+                    .pending_scrollback
+                    .push(Line::from(format!("  {logical_line}")).style(palette.system_note));
+            }
+        }
         RuntimeEvent::OperationStarted { prompt, .. } => {
             state.hotkeys_visible = false;
             state
@@ -3255,6 +3355,16 @@ async fn dispatch(
             // arm exists only for match totality.
             None
         }
+        UiEffect::RunShell {
+            command,
+            exclude_from_context,
+        } => {
+            match session.run_shell(command, exclude_from_context).await {
+                Ok(_settlement) => {}
+                Err(err) => notice(state, &format!("! failed: {err}")),
+            }
+            None
+        }
         UiEffect::SwitchThinking { thinking } => {
             match session.switch_thinking(thinking.clone()).await {
                 Ok(_previous) => {
@@ -3368,6 +3478,20 @@ async fn dispatch(
             None
         }
         UiEffect::Cancel => {
+            // Esc during a user shell passthrough cancels the command
+            // (pi parity); its settlement entry still lands durably.
+            if matches!(
+                &state.status,
+                UiStatus::Working { operation } if operation == "shell"
+            ) && active_operation.is_none()
+            {
+                match session.cancel_shell().await {
+                    Ok(true) => {}
+                    Ok(false) => {}
+                    Err(err) => notice(state, &format!("! cancel failed: {err}")),
+                }
+                return None;
+            }
             if let Some(operation_id) = active_operation
                 && let Err(err) = session.cancel(operation_id).await
             {
@@ -5455,5 +5579,103 @@ mod thinking_parity_tests {
                 thinking: Some("max".to_owned())
             })
         );
+    }
+}
+
+#[cfg(test)]
+mod shell_passthrough_tests {
+    use super::tests::{key, type_text};
+    use super::*;
+
+    #[test]
+    fn bang_prefix_routes_to_shell_passthrough() {
+        let (state, effect) = update(type_text(UiState::new(), "!echo hi"), key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::RunShell {
+                command: "echo hi".to_owned(),
+                exclude_from_context: false,
+            })
+        );
+        assert!(
+            state.composer.is_empty(),
+            "composer resets after passthrough"
+        );
+        assert_eq!(state.history.last().map(String::as_str), Some("!echo hi"));
+    }
+
+    #[test]
+    fn double_bang_excludes_output_from_context() {
+        let (_, effect) = update(
+            type_text(UiState::new(), "!!secret-cmd"),
+            key(KeyCode::Enter),
+        );
+        assert_eq!(
+            effect,
+            Some(UiEffect::RunShell {
+                command: "secret-cmd".to_owned(),
+                exclude_from_context: true,
+            })
+        );
+    }
+
+    #[test]
+    fn bare_bang_and_working_session_refuse() {
+        // Bare '!' is a usage notice, not an effect.
+        let (state, effect) = update(type_text(UiState::new(), "!"), key(KeyCode::Enter));
+        assert_eq!(effect, None);
+        assert!(!state.pending_scrollback.is_empty(), "notice queued");
+
+        // A working session refuses: the runtime would reject anyway, but
+        // the reducer explains before the round trip.
+        let mut working = UiState::new();
+        working.status = UiStatus::Working {
+            operation: "thinking".to_owned(),
+        };
+        let (_, effect) = update(type_text(working, "!cargo test"), key(KeyCode::Enter));
+        assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn shell_events_drive_the_live_band_and_status() {
+        let mut state = UiState::new();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ShellStarted {
+                cursor: ion_core::RuntimeCursor::default(),
+                lane_name: "main".to_owned(),
+                command: "long-job".to_owned(),
+                exclude_from_context: false,
+            },
+        );
+        assert!(
+            matches!(&state.status, UiStatus::Working { operation, .. } if operation == "shell")
+        );
+
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ShellOutput {
+                cursor: ion_core::RuntimeCursor::default(),
+                lane_name: "main".to_owned(),
+                output: "partial\n".to_owned(),
+            },
+        );
+        assert_eq!(state.shell_output, "partial\n");
+
+        // Settlement restores idle and clears the provisional preview.
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::ShellSettled {
+                cursor: ion_core::RuntimeCursor::default(),
+                lane_name: "main".to_owned(),
+                command: "long-job".to_owned(),
+                exit_code: Some(0),
+                cancelled: false,
+                exclude_from_context: false,
+                output_preview: Some("done\n".to_owned()),
+            },
+        );
+        assert_eq!(state.status, UiStatus::Idle);
+        assert!(state.shell_output.is_empty());
     }
 }

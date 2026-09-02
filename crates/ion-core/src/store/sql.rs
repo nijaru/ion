@@ -83,6 +83,28 @@ pub(super) fn handle_command(
                 append_entry(connection, session_id, &lane_name, &entry).map_err(StoreError::from)
             }));
         }
+        StoreCommand::QueuePendingShell {
+            session_id,
+            lane_name,
+            pending,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                queue_pending_shell(connection, session_id, &lane_name, &pending)
+                    .map_err(StoreError::from)
+            }));
+        }
+        StoreCommand::SettleShellEntry {
+            session_id,
+            lane_name,
+            entry,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                settle_shell_entry(connection, session_id, &lane_name, &entry)
+                    .map_err(StoreError::from)
+            }));
+        }
         StoreCommand::SetLaneConfig {
             session_id,
             lane_name,
@@ -956,6 +978,85 @@ fn queue_next_run(
 
 /// Remove one lane's pending next-run input durably. Returns the cleared
 /// prompt so a frontend can restore it (pi parity: alt+up dequeue).
+/// Commit a user shell passthrough's durable intent (DESIGN.md §10):
+/// provision the entry identity, mark the lane busy, and record the
+/// exact command before the process is spawned. A crash between this
+/// commit and settlement leaves the marker as recovery evidence.
+fn queue_pending_shell(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane_name: &str,
+    pending: &crate::session::lane::PendingShell,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    let now = now_ms();
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            pending_shell_entry_id = ?3,
+            pending_shell_command = ?4,
+            pending_shell_excluded = ?5,
+            updated_at = ?6
+         WHERE session_id = ?1 AND name = ?2
+           AND current_operation_id IS NULL
+           AND pending_entry_id IS NULL
+           AND pending_shell_entry_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            lane_name,
+            pending.entry_id.as_uuid().to_string(),
+            pending.command,
+            if pending.exclude_from_context { 1 } else { 0 },
+            now,
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "lane cannot accept a shell passthrough now".to_owned(),
+        ));
+    }
+    tx.commit()
+}
+
+/// Settle a shell passthrough atomically: insert the settled entry,
+/// advance the lane leaf, and clear the pending marker in one
+/// transaction, so no reader can observe an entry without a marker
+/// clear or vice versa.
+fn settle_shell_entry(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane_name: &str,
+    entry: &EntryRecord,
+) -> Result<(), rusqlite::Error> {
+    let tx = connection.transaction()?;
+    insert_entry(&tx, session_id, lane_name, entry)?;
+    let changed = tx.execute(
+        "UPDATE lanes SET
+            leaf_id = ?3,
+            pending_shell_entry_id = NULL,
+            pending_shell_command = '',
+            pending_shell_excluded = 0,
+            updated_at = ?4
+         WHERE session_id = ?1 AND name = ?2 AND pending_shell_entry_id = ?5",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            lane_name,
+            entry.id.as_uuid().to_string(),
+            now_ms(),
+            entry.id.as_uuid().to_string(),
+        ],
+    )?;
+    if changed != 1 {
+        return Err(rusqlite::Error::InvalidParameterName(
+            "shell settlement marker mismatch".to_owned(),
+        ));
+    }
+    tx.execute(
+        "UPDATE sessions SET updated_at = ?2 WHERE id = ?1",
+        rusqlite::params![session_id.as_uuid().to_string(), now_ms()],
+    )?;
+    tx.commit()
+}
+
 fn clear_next_run(
     connection: &mut Connection,
     session_id: SessionId,
@@ -1587,11 +1688,15 @@ fn load_lanes(
         current_operation: Option<String>,
         pending_entry: Option<String>,
         pending_prompt: Option<String>,
+        pending_shell_entry: Option<String>,
+        pending_shell_command: Option<String>,
+        pending_shell_excluded: Option<i64>,
         config: String,
     }
 
     let mut statement = connection.prepare(
-        "SELECT name, leaf_id, current_operation_id, pending_entry_id, pending_prompt, config
+        "SELECT name, leaf_id, current_operation_id, pending_entry_id, pending_prompt,
+                pending_shell_entry_id, pending_shell_command, pending_shell_excluded, config
          FROM lanes WHERE session_id = ?1 ORDER BY name",
     )?;
     let mut rows = statement.query([session_id.as_uuid().to_string()])?;
@@ -1603,7 +1708,10 @@ fn load_lanes(
             current_operation: row.get(2)?,
             pending_entry: row.get(3)?,
             pending_prompt: row.get(4)?,
-            config: row.get(5)?,
+            pending_shell_entry: row.get(5)?,
+            pending_shell_command: row.get(6)?,
+            pending_shell_excluded: row.get(7)?,
+            config: row.get(8)?,
         };
         let lane_name = raw.name.clone();
         let leaf = raw
@@ -1645,12 +1753,32 @@ fn load_lanes(
         let config = serde_json::from_str(&raw.config).map_err(|err| {
             StoreError::Sqlite(format!("lane {lane_name:?} has corrupt config: {err}"))
         })?;
+        let pending_shell = match (
+            raw.pending_shell_entry,
+            raw.pending_shell_command,
+            raw.pending_shell_excluded,
+        ) {
+            (Some(entry), Some(command), Some(excluded)) => {
+                let entry_id = crate::ids::EntryId::parse(&entry).ok_or_else(|| {
+                    StoreError::Sqlite(format!(
+                        "lane {lane_name:?} has a corrupt pending shell entry id"
+                    ))
+                })?;
+                Some(crate::session::lane::PendingShell {
+                    entry_id,
+                    command,
+                    exclude_from_context: excluded != 0,
+                })
+            }
+            _ => None,
+        };
         lanes.push(crate::session::lane::Lane {
             name: raw.name,
             state: crate::session::lane::State {
                 leaf,
                 current_operation,
                 pending_next_run,
+                pending_shell,
             },
             config,
         });
@@ -2343,6 +2471,7 @@ fn entry_kind(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
         SessionEntry::AgentMessage { .. } => "agent_message",
+        SessionEntry::ShellExecution { .. } => "shell_execution",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",
@@ -2516,6 +2645,7 @@ mod tests {
                     leaf: Some(root_id),
                     current_operation: None,
                     pending_next_run: None,
+                    pending_shell: None,
                 },
                 config: crate::session::lane::Config::new("model-b"),
             },

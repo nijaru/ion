@@ -301,6 +301,34 @@ fn project_with_system<'a>(
                     content: format!("[Message from {from}]\n{text}"),
                 });
             }
+            SessionEntry::ShellExecution {
+                command,
+                output,
+                exit_code,
+                cancelled,
+                exclude_from_context,
+            } => {
+                // pi parity: `!!command` output stays durable and rendered
+                // but never enters the model projection; `!command` joins
+                // as user content in pi's exact shape.
+                if !*exclude_from_context {
+                    let mut content = format!("Ran `{command}`\n");
+                    if output.is_empty() {
+                        content.push_str("(no output)");
+                    } else {
+                        content.push_str(&format!("```\n{output}\n```"));
+                    }
+                    if *cancelled {
+                        content.push_str("\n\n(command cancelled)");
+                    } else if *exit_code != Some(0) {
+                        content.push_str(&format!(
+                            "\n\nCommand exited with code {}",
+                            exit_code.unwrap_or(-1)
+                        ));
+                    }
+                    messages.push(ContextMessage::User { content });
+                }
+            }
             SessionEntry::AssistantMessage { text } => {
                 messages.push(ContextMessage::Assistant {
                     content: text.clone(),

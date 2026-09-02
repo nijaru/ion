@@ -1,6 +1,7 @@
 //! Print mode tests.
 
 use super::support::*;
+use crate::{ContextMessage, project};
 
 // ---- Print-mode regression tests ----
 
@@ -584,4 +585,250 @@ async fn switch_thinking_is_durable_validated_and_applies_at_step_boundaries() {
     );
     session.close().await.expect("close reopened");
     runtime.join().await.expect("join reopened");
+}
+
+/// Poll until one shell passthrough command settles durably.
+async fn wait_for_entry(session: &SessionHandle, command: &str) {
+    for _ in 0..100 {
+        let snapshot = session.snapshot().await.expect("snapshot");
+        if snapshot.entries.iter().any(|entry| {
+            matches!(
+                entry,
+                SessionEntry::ShellExecution { command: c, .. } if c == command
+            )
+        }) {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    panic!("shell entry for {command:?} never settled");
+}
+
+#[tokio::test]
+async fn shell_passthrough_settles_durably_projects_and_excludes() {
+    let db = temp_db("shell-passthrough");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            std::time::Duration::from_secs(30),
+            "late",
+        )]),
+        ToolRegistry::with_cwd(std::env::temp_dir()),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let session_id = runtime.session_id();
+
+    // `!echo`: Ok returns at intent commit; settlement follows and is
+    // durable on the branch. Poll the snapshot for the settled entry.
+    session
+        .run_shell("printf ion-shell-test", false)
+        .await
+        .expect("shell passthrough accepted");
+    wait_for_entry(&session, "printf ion-shell-test").await;
+
+    // `!!echo` settles excluded.
+    session
+        .run_shell("printf ion-hidden", true)
+        .await
+        .expect("hidden passthrough accepted");
+    wait_for_entry(&session, "printf ion-hidden").await;
+
+    // Both entries are durable on the main branch, newest last.
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let shell_entries: Vec<_> = snapshot
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry, SessionEntry::ShellExecution { .. }))
+        .collect();
+    assert_eq!(shell_entries.len(), 2, "both shell runs are durable");
+    let (first, second) = (&shell_entries[0], &shell_entries[1]);
+    match (first, second) {
+        (
+            SessionEntry::ShellExecution {
+                command,
+                output,
+                exclude_from_context: false,
+                ..
+            },
+            SessionEntry::ShellExecution {
+                exclude_from_context: true,
+                ..
+            },
+        ) => {
+            assert_eq!(command, "printf ion-shell-test");
+            assert!(
+                output.contains("ion-shell-test"),
+                "output settled: {output}"
+            );
+        }
+        other => panic!("unexpected shell entries: {other:?}"),
+    }
+
+    // A visible shell entry joins the model projection in pi's shape; an
+    // excluded one never does.
+    let plan = project(&snapshot.entries, 1);
+    let user_texts: Vec<String> = plan
+        .messages
+        .iter()
+        .map(|message| match message {
+            ContextMessage::User { content } => content.clone(),
+            other => panic!("shell projection must be user content: {other:?}"),
+        })
+        .collect();
+    assert!(
+        user_texts
+            .iter()
+            .any(|text| text.contains("Ran `printf ion-shell-test`")),
+        "visible shell run joined the projection: {user_texts:?}"
+    );
+    assert!(
+        !user_texts.iter().any(|text| text.contains("ion-hidden")),
+        "excluded shell run never joins the projection: {user_texts:?}"
+    );
+
+    // Busy refusal: a running operation owns the branch. The delayed
+    // message keeps the operation active across the shell attempt.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let op = session
+        .submit_if_idle("hold")
+        .await
+        .expect("submit while idle");
+    let err = session
+        .run_shell("true", false)
+        .await
+        .expect_err("busy lane refuses shell");
+    assert!(
+        matches!(err, CommandError::Busy { .. }),
+        "expected busy, got {err:?}"
+    );
+    session.cancel(op).await.expect("cancel");
+    let _ = collect_until_terminal(&mut events).await.expect("collect");
+
+    // Reopen proves the entries are durable, not runtime-only.
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(std::env::temp_dir()),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let snapshot = session.snapshot().await.expect("snapshot after reopen");
+    let shell_count = snapshot
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry, SessionEntry::ShellExecution { .. }))
+        .count();
+    assert_eq!(shell_count, 2, "shell entries survive reopen");
+    session.close().await.expect("close reopened");
+    runtime.join().await.expect("join reopened");
+}
+
+#[tokio::test]
+async fn shell_passthrough_cancel_settles_durably_with_cancelled_flag() {
+    let db = temp_db("shell-cancel");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(std::env::temp_dir()),
+        store.clone(),
+    );
+    let session = runtime.session();
+
+    // Drive run_shell and esc-cancel: the reply returns at intent
+    // commit, so cancel and settlement are observed as events while the
+    // process is still in flight.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session
+        .run_shell("sleep 30", false)
+        .await
+        .expect("shell passthrough accepted");
+    let cancelled = session.cancel_shell().await.expect("cancel command");
+    assert!(cancelled, "a passthrough was in flight");
+    let mut settled_cancelled = false;
+    while !settled_cancelled {
+        let event = tokio::time::timeout(std::time::Duration::from_secs(10), events.recv())
+            .await
+            .expect("event within 10s")
+            .expect("event stream alive");
+        settled_cancelled = matches!(
+            event,
+            RuntimeEvent::ShellSettled {
+                cancelled: true,
+                ..
+            }
+        );
+    }
+
+    let snapshot = session.snapshot().await.expect("snapshot");
+    match snapshot.entries.last() {
+        Some(SessionEntry::ShellExecution {
+            command,
+            cancelled: true,
+            exit_code: None,
+            ..
+        }) if command == "sleep 30" => {}
+        other => panic!("cancelled shell entry not durable: {other:?}"),
+    }
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn shell_marker_owns_the_branch_until_settled() {
+    let db = temp_db("shell-branch-guard");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(std::env::temp_dir()),
+        store.clone(),
+    );
+    let session = runtime.session();
+
+    // Accept a slow passthrough; the marker owns the branch, so both
+    // submit and next-run must refuse with a clear error.
+    session
+        .run_shell("sleep 5", false)
+        .await
+        .expect("shell accepted");
+    let err = session
+        .submit_if_idle("meanwhile")
+        .await
+        .expect_err("submit refused while shell runs");
+    assert!(
+        matches!(err, CommandError::ShellPassthroughBusy),
+        "expected shell busy, got {err:?}"
+    );
+    let err = session
+        .next_run("queued meanwile")
+        .await
+        .expect_err("next-run refused while shell runs");
+    assert!(
+        matches!(err, CommandError::ShellPassthroughBusy),
+        "expected shell busy, got {err:?}"
+    );
+
+    // A second passthrough is also refused.
+    let err = session
+        .run_shell("true", false)
+        .await
+        .expect_err("one passthrough at a time");
+    assert!(
+        matches!(err, CommandError::ShellPassthroughBusy),
+        "expected shell busy, got {err:?}"
+    );
+
+    // After settlement the lane accepts work again.
+    wait_for_entry(&session, "sleep 5").await;
+    let op = session
+        .submit_if_idle("after")
+        .await
+        .expect("submit after settlement");
+    session.cancel(op).await.expect("cancel");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
 }

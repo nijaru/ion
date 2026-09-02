@@ -197,6 +197,7 @@ fn entry_kind_name(entry: &SessionEntry) -> &'static str {
     match entry {
         SessionEntry::UserMessage { .. } => "user_message",
         SessionEntry::AgentMessage { .. } => "agent_message",
+        SessionEntry::ShellExecution { .. } => "shell_execution",
         SessionEntry::AssistantMessage { .. } => "assistant_message",
         SessionEntry::ToolCall { .. } => "tool_call",
         SessionEntry::ToolResult { .. } => "tool_result",

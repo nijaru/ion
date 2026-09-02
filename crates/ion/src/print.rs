@@ -81,7 +81,12 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::ToolStarted { .. }
                 | RuntimeEvent::ToolProgress { .. }
                 | RuntimeEvent::ToolSettled { .. }
-                | RuntimeEvent::UsageUpdate { .. } => {}
+                | RuntimeEvent::UsageUpdate { .. }
+                // User shell passthrough output is not print-mode output;
+                // the settled entry is durable session history.
+                | RuntimeEvent::ShellStarted { .. }
+                | RuntimeEvent::ShellOutput { .. }
+                | RuntimeEvent::ShellSettled { .. } => {}
                 // Print mode is quiet output only.
                 RuntimeEvent::ThinkingDelta { .. } => {}
                 RuntimeEvent::OperationFinished { .. } => return Ok(()),

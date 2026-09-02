@@ -422,6 +422,12 @@ where
                 .await;
             }
             RuntimeEvent::ToolProgress { .. } | RuntimeEvent::UsageUpdate { .. } => {}
+            // User shell passthrough is interactive-TUI presentation;
+            // its durable entry reaches ACP via session updates, not live
+            // events.
+            RuntimeEvent::ShellStarted { .. }
+            | RuntimeEvent::ShellOutput { .. }
+            | RuntimeEvent::ShellSettled { .. } => {}
             RuntimeEvent::OperationFinished { .. } => {
                 return if updates_incomplete {
                     TurnStop::Failed(LAGGED_UPDATES_MESSAGE.to_owned())
@@ -731,6 +737,38 @@ fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
                 }
             }
             ion_core::SessionEntry::ToolResult { .. } => {}
+            // pi parity: excluded shell output never reaches any client;
+            // visible shell output projects like its model-facing text.
+            ion_core::SessionEntry::ShellExecution {
+                exclude_from_context: true,
+                ..
+            } => {}
+            ion_core::SessionEntry::ShellExecution {
+                command,
+                output,
+                exit_code,
+                cancelled,
+                ..
+            } => {
+                let mut text = format!("Ran `{command}`\n");
+                if output.is_empty() {
+                    text.push_str("(no output)");
+                } else {
+                    text.push_str(&format!("```\n{output}\n```"));
+                }
+                if *cancelled {
+                    text.push_str("\n\n(command cancelled)");
+                } else if *exit_code != Some(0) {
+                    text.push_str(&format!(
+                        "\n\nCommand exited with code {}",
+                        exit_code.unwrap_or(-1)
+                    ));
+                }
+                updates.push(json!({
+                    "sessionUpdate": "user_message_chunk",
+                    "content": { "type": "text", "text": text },
+                }));
+            }
         }
     }
     updates

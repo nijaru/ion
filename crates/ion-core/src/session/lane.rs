@@ -113,12 +113,25 @@ impl NextRun {
     }
 }
 
+/// A user shell passthrough whose durable intent is committed and whose
+/// process is (or was) in flight (pi parity: `!`/`!!`). The entry id is
+/// provisioned; the settled entry replaces this marker atomically.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct PendingShell {
+    pub(crate) entry_id: EntryId,
+    pub(crate) command: String,
+    pub(crate) exclude_from_context: bool,
+}
+
 /// Directly readable current state of one durable lane.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct State {
     pub(crate) leaf: Option<EntryId>,
     pub(crate) current_operation: Option<OperationId>,
     pub(crate) pending_next_run: Option<NextRun>,
+    /// In-flight user shell passthrough intent. The lane is busy while
+    /// this is set: the pending entry owns the next branch position.
+    pub(crate) pending_shell: Option<PendingShell>,
 }
 
 /// Current durable state and configuration of a lane.

@@ -98,6 +98,9 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
             RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
             RuntimeEvent::ApprovalPending { .. } => "approval_pending",
+            RuntimeEvent::ShellStarted { .. } => "shell_started",
+            RuntimeEvent::ShellOutput { .. } => "shell_output",
+            RuntimeEvent::ShellSettled { .. } => "shell_settled",
             RuntimeEvent::SessionClosed { .. } => "session_closed",
         })
         .collect()
@@ -224,6 +227,7 @@ pub(super) fn entry_kinds<'a>(
         .map(|entry| match entry {
             crate::SessionEntry::UserMessage { .. } => "user_message",
             crate::SessionEntry::AgentMessage { .. } => "agent_message",
+            crate::SessionEntry::ShellExecution { .. } => "shell_execution",
             crate::SessionEntry::AssistantMessage { .. } => "assistant_message",
             crate::SessionEntry::ToolCall { .. } => "tool_call",
             crate::SessionEntry::ToolResult { .. } => "tool_result",

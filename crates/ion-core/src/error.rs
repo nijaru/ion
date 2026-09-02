@@ -32,6 +32,8 @@ pub enum CommandError {
     UnsupportedModel(String),
     #[error("unsupported thinking level: {0} (off/minimal/low/medium/high/xhigh/max)")]
     UnsupportedThinking(String),
+    #[error("a shell passthrough is already running")]
+    ShellPassthroughBusy,
     #[error("durable write failed: {0}")]
     Persistence(String),
 }

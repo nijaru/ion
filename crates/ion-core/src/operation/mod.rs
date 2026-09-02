@@ -48,6 +48,23 @@ pub enum SessionEntry {
         from: AgentId,
         text: String,
     },
+    /// One user-initiated shell passthrough (pi parity: `!command`
+    /// sends output to the model, `!!command` records it without model
+    /// visibility). Durable even when excluded from projection; the
+    /// entry settles only after execution completes or is cancelled,
+    /// so the accepted command itself is never an unrecorded external
+    /// effect (DESIGN.md §10: no repeat-sensitive effect starts before
+    /// its invocation intent is durable).
+    ShellExecution {
+        command: String,
+        /// Bounded combined output exactly as the model would see it.
+        output: String,
+        /// Process exit status; `None` when cancelled or when the exit
+        /// status could not be observed.
+        exit_code: Option<i64>,
+        cancelled: bool,
+        exclude_from_context: bool,
+    },
     /// Only validated completed provider output becomes this entry.
     AssistantMessage {
         text: String,

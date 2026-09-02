@@ -393,6 +393,21 @@ impl ToolCatalog {
     ) -> ToolOutcome {
         self.snapshot().execute(name, arguments, cancel).await
     }
+
+    /// Execute with a live progress stream (§16.1). Same capability
+    /// snapshot as [`Self::execute`]; used by user shell passthrough so
+    /// its streaming matches model-initiated tool execution.
+    pub(crate) async fn execute_with_progress(
+        &self,
+        name: &str,
+        arguments: &Value,
+        cancel: CancellationToken,
+        progress: Option<crate::tool::ToolProgressSender>,
+    ) -> ToolOutcome {
+        self.snapshot()
+            .execute_with_progress(name, arguments, cancel, progress)
+            .await
+    }
 }
 
 impl From<ToolRegistry> for ToolCatalog {

@@ -580,6 +580,14 @@ pub(super) fn build_live_at_height(
             head.push(line);
         }
     }
+    // Provisional shell passthrough output streams above the composer
+    // while the command runs; the durable settlement replaces it.
+    if !state.shell_output.is_empty() {
+        let preview: Vec<&str> = state.shell_output.lines().rev().take(8).collect::<Vec<_>>();
+        for line in preview.iter().rev() {
+            head.extend(wrap_line(&Line::from(format!("  {line}")).dim(), width));
+        }
+    }
     // A durable queued follow-up stays visible above the composer
     // (pi parity: queued messages remain inspectable and restorable).
     if let Some(queued) = &state.queued_prompt {
@@ -871,6 +879,30 @@ fn push_entry_lines(
                     continue;
                 }
                 out.push(Line::from(logical_line.to_owned()).style(palette.assistant));
+            }
+        }
+        ion_core::SessionEntry::ShellExecution {
+            command,
+            output,
+            exit_code,
+            cancelled,
+            exclude_from_context,
+        } => {
+            let prefix = if *exclude_from_context { "!!" } else { "!" };
+            out.push(Line::from(format!("{prefix}{command}")).style(palette.user_marker));
+            for logical_line in output.split('\n') {
+                if logical_line.is_empty() {
+                    continue;
+                }
+                out.push(Line::from(format!("  {logical_line}")).style(palette.system_note));
+            }
+            if *cancelled {
+                out.push(Line::from("  (command cancelled)").style(palette.tool_error));
+            } else if *exit_code != Some(0) {
+                out.push(
+                    Line::from(format!("  (exit {}) ", exit_code.unwrap_or(-1)))
+                        .style(palette.tool_error),
+                );
             }
         }
         ion_core::SessionEntry::ToolCall { call } => {

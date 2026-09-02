@@ -347,6 +347,18 @@ enum StoreCommand {
         entry: EntryRecord,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    QueuePendingShell {
+        session_id: SessionId,
+        lane_name: String,
+        pending: crate::session::lane::PendingShell,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    SettleShellEntry {
+        session_id: SessionId,
+        lane_name: String,
+        entry: EntryRecord,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
     SetLaneConfig {
         session_id: SessionId,
         lane_name: String,
@@ -551,6 +563,7 @@ impl SessionStore {
                 leaf: source_leaf,
                 current_operation: None,
                 pending_next_run: None,
+                pending_shell: None,
             },
             config,
         };
@@ -579,6 +592,7 @@ impl SessionStore {
                 leaf: source_leaf,
                 current_operation: None,
                 pending_next_run: None,
+                pending_shell: None,
             },
             config,
         };
@@ -650,6 +664,43 @@ impl SessionStore {
     ) -> Result<(), StoreError> {
         let lane_name = lane_name.into();
         self.request(|reply| StoreCommand::AppendEntry {
+            session_id,
+            lane_name,
+            entry,
+            reply,
+        })
+        .await
+    }
+
+    /// Commit a shell passthrough's durable intent on one idle lane.
+    /// The caller provisions the entry identity; the marker makes the
+    /// lane busy until settlement.
+    pub(crate) async fn queue_pending_shell(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        pending: crate::session::lane::PendingShell,
+    ) -> Result<(), StoreError> {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::QueuePendingShell {
+            session_id,
+            lane_name,
+            pending,
+            reply,
+        })
+        .await
+    }
+
+    /// Atomically settle a shell passthrough: the entry becomes durable,
+    /// the leaf advances, and the marker clears in one transaction.
+    pub(crate) async fn settle_shell_entry(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        entry: EntryRecord,
+    ) -> Result<(), StoreError> {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::SettleShellEntry {
             session_id,
             lane_name,
             entry,

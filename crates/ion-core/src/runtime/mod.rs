@@ -141,6 +141,22 @@ enum ToolSignal {
     },
 }
 
+/// Signals from a running user shell passthrough, drained by the session
+/// loop: streamed progress for display, then the bounded settlement.
+enum ShellSignal {
+    Output {
+        lane_name: String,
+        output: String,
+    },
+    Settled {
+        lane_name: String,
+        command: String,
+        outcome: crate::tool::ToolOutcome,
+        cancelled: bool,
+        exclude_from_context: bool,
+    },
+}
+
 type ToolSettlement = ToolSignal;
 
 /// Keep auxiliary recovery output bounded without splitting UTF-8.
@@ -225,6 +241,34 @@ pub enum RuntimeEvent {
         /// Bounded tail of the settled output for frontend rendering.
         preview: Option<String>,
     },
+    /// A user shell passthrough started (pi parity: `!`/`!!`). Display
+    /// only; the settled entry is the durable truth.
+    ShellStarted {
+        cursor: RuntimeCursor,
+        lane_name: String,
+        command: String,
+        exclude_from_context: bool,
+    },
+    /// Bounded live output from a running user shell passthrough. Never
+    /// a semantic result or completion signal.
+    ShellOutput {
+        cursor: RuntimeCursor,
+        lane_name: String,
+        output: String,
+    },
+    /// A user shell passthrough settled durably. Emitted after the
+    /// ShellExecution entry commits, so subscribers see completion
+    /// exactly when it is durable. `output_preview` is a bounded tail
+    /// for frontend rendering; the entry is the semantic truth.
+    ShellSettled {
+        cursor: RuntimeCursor,
+        lane_name: String,
+        command: String,
+        exit_code: Option<i64>,
+        cancelled: bool,
+        exclude_from_context: bool,
+        output_preview: Option<String>,
+    },
     /// Provider-reported usage for the current model step. This is a
     /// display event; the durable usage row is still committed only with
     /// model-step settlement.
@@ -295,7 +339,10 @@ impl RuntimeEvent {
             | Self::OperationCancelled { operation_id, .. }
             | Self::OperationApprovalRequired { operation_id, .. }
             | Self::ApprovalPending { operation_id, .. } => Some(*operation_id),
-            Self::SessionClosed { .. } => None,
+            Self::ShellStarted { .. }
+            | Self::ShellOutput { .. }
+            | Self::ShellSettled { .. }
+            | Self::SessionClosed { .. } => None,
         }
     }
 
@@ -315,6 +362,9 @@ impl RuntimeEvent {
             | Self::OperationCancelled { cursor, .. }
             | Self::OperationApprovalRequired { cursor, .. }
             | Self::ApprovalPending { cursor, .. }
+            | Self::ShellStarted { cursor, .. }
+            | Self::ShellOutput { cursor, .. }
+            | Self::ShellSettled { cursor, .. }
             | Self::SessionClosed { cursor } => *cursor,
         }
     }
@@ -340,7 +390,13 @@ pub struct OperationSettlement {
     pub outcome: OperationOutcome,
 }
 
-/// Snapshot-plus-cursor view of one session (DESIGN.md §21.2). The
+/// One user-initiated shell passthrough (pi parity: `!command`
+/// output joins the model projection; `!!command` output stays
+/// durable but excluded). The reply returns Ok once the run's
+/// durable intent is committed and the process spawned; completion
+/// is observed through `ShellSettled` events and the durable
+/// entry. Only an idle lane accepts one: an active operation owns
+/// the branch, and shell output must not race its tool effects./// Snapshot-plus-cursor view of one session (DESIGN.md §21.2). The
 /// durable semantic view is the session entry log; live events are
 /// never persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -468,6 +524,24 @@ enum SessionCommand {
     DequeueNextRun {
         lane_name: String,
         reply: oneshot::Sender<Result<Option<String>, CommandError>>,
+    },
+    /// One user-initiated shell passthrough (pi parity: `!command`
+    /// output joins the model projection; `!!command` output stays
+    /// durable but excluded). The reply returns Ok once the run's
+    /// durable intent is committed and the process spawned; completion
+    /// is observed through `ShellSettled` events and the durable
+    /// entry. Only an idle lane accepts one: an active operation owns
+    /// the branch, and shell output must not race its tool effects.
+    RunShell {
+        lane_name: String,
+        command: String,
+        exclude_from_context: bool,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    },
+    /// Cancel the running user shell passthrough, if any. The settled
+    /// entry still lands durably with `cancelled: true`.
+    CancelShell {
+        reply: oneshot::Sender<Result<bool, CommandError>>,
     },
     Steer {
         text: String,
@@ -630,6 +704,38 @@ impl SessionHandle {
                 prompt: prompt.into(),
                 reply,
             })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Run one user shell passthrough on the main lane (pi parity:
+    /// `!command` / `!!command`). Returns Ok once the run's durable
+    /// intent is committed and the process spawned; the settled entry
+    /// and `ShellSettled` event carry the outcome.
+    pub async fn run_shell(
+        &self,
+        command: impl Into<String>,
+        exclude_from_context: bool,
+    ) -> Result<(), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::RunShell {
+                lane_name: crate::session::lane::MAIN.to_owned(),
+                command: command.into(),
+                exclude_from_context,
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Cancel the running user shell passthrough (pi parity: esc while
+    /// `!`/`!!` runs). The settlement entry still lands durably with
+    /// `cancelled: true`; returns false when nothing is running.
+    pub async fn cancel_shell(&self) -> Result<bool, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::CancelShell { reply })
             .map_err(command_send_error)?;
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
@@ -1410,6 +1516,10 @@ struct SessionRuntime<P> {
     engine_rx: mpsc::Receiver<EngineSignal>,
     tool_tx: mpsc::Sender<ToolSettlement>,
     tool_rx: mpsc::Receiver<ToolSettlement>,
+    shell_tx: mpsc::Sender<ShellSignal>,
+    shell_rx: mpsc::Receiver<ShellSignal>,
+    /// The running passthrough's cancel token, when one is in flight.
+    shell_cancel: Option<tokio_util::sync::CancellationToken>,
     cancel_root: CancellationToken,
     tracker: TaskTracker,
     cursor: RuntimeCursor,
@@ -1484,6 +1594,7 @@ impl<P: Provider> SessionRuntime<P> {
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
+        let (shell_tx, shell_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let (main_events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let mut lanes = BTreeMap::new();
@@ -1495,6 +1606,7 @@ impl<P: Provider> SessionRuntime<P> {
                     leaf: None,
                     current_operation: None,
                     pending_next_run: None,
+                    pending_shell: None,
                 },
                 config: crate::session::lane::Config::new(initial_model_ref),
             }),
@@ -1520,7 +1632,10 @@ impl<P: Provider> SessionRuntime<P> {
             engine_tx,
             engine_rx,
             tool_tx,
+            shell_tx,
             tool_rx,
+            shell_rx,
+            shell_cancel: None,
             cancel_root: CancellationToken::new(),
             tracker: TaskTracker::new(),
             cursor: RuntimeCursor::default(),
@@ -1868,6 +1983,62 @@ impl<P: Provider> SessionRuntime<P> {
         self.lane(lane_name)?.state.pending_next_run.as_ref()
     }
 
+    fn lane_pending_shell(&self, lane_name: &str) -> Option<&crate::session::lane::PendingShell> {
+        self.lane(lane_name)?.state.pending_shell.as_ref()
+    }
+
+    /// Reopen recovery for a shell passthrough interrupted by process
+    /// loss (§10): the command was user-initiated and its completion
+    /// was never observed, so it never silently replays. Settle the
+    /// marker durably as cancelled — the honest record — rather than
+    /// leaving a busy marker or dropping the run.
+    async fn recover_pending_shells(&mut self, loaded: &crate::store::LoadedSession) {
+        for lane in &loaded.lanes {
+            let Some(pending) = &lane.state.pending_shell else {
+                continue;
+            };
+            let entry = SessionEntry::ShellExecution {
+                command: pending.command.clone(),
+                output: String::new(),
+                exit_code: None,
+                cancelled: true,
+                exclude_from_context: pending.exclude_from_context,
+            };
+            let record = EntryRecord {
+                id: pending.entry_id,
+                parent: lane.state.leaf,
+                seq: self.next_entry_seq,
+                entry,
+            };
+            if let Err(err) = self
+                .store
+                .settle_shell_entry(self.session_id, &lane.name, record.clone())
+                .await
+            {
+                error!(
+                    session = %self.session_id,
+                    lane = %lane.name,
+                    %err,
+                    "interrupted shell passthrough could not settle; lane stays marked"
+                );
+                continue;
+            }
+            self.next_entry_seq += 1;
+            let lane_state = &mut self
+                .lane_mut(&lane.name)
+                .expect("recovered lane is resident")
+                .state;
+            lane_state.leaf = Some(record.id);
+            lane_state.pending_shell = None;
+            self.install_tree_entries(vec![record]);
+            warn!(
+                session = %self.session_id,
+                lane = %lane.name,
+                "reopened with an interrupted shell passthrough; settled as cancelled"
+            );
+        }
+    }
+
     fn main_model_ref(&self) -> &str {
         &self.main_lane().config.model_ref
     }
@@ -1921,6 +2092,13 @@ impl<P: Provider> SessionRuntime<P> {
                 return;
             }
             self.restore_from(loaded);
+            let loaded_for_recovery = self.store.load(self.session_id).await;
+            match loaded_for_recovery {
+                Ok(fresh) => self.recover_pending_shells(&fresh).await,
+                Err(err) => {
+                    error!(session = %self.session_id, %err, "could not reload lanes for shell recovery");
+                }
+            }
         } else {
             let published = self.tools.admission_scopes();
             self.lane_mut(crate::session::lane::MAIN)
@@ -2007,6 +2185,11 @@ impl<P: Provider> SessionRuntime<P> {
                         self.handle_tool_result(result).await;
                     }
                 }
+                signal = self.shell_rx.recv() => {
+                    if let Some(signal) = signal {
+                        self.handle_shell_signal(signal).await;
+                    }
+                }
             }
         }
         // The session task is ending; the close result has no caller.
@@ -2054,6 +2237,23 @@ impl<P: Provider> SessionRuntime<P> {
             }
             SessionCommand::DequeueNextRun { lane_name, reply } => {
                 let _ = reply.send(self.dequeue_next_run(&lane_name).await);
+                false
+            }
+            SessionCommand::RunShell {
+                lane_name,
+                command,
+                exclude_from_context,
+                reply,
+            } => {
+                self.run_shell_on_lane(&lane_name, command, exclude_from_context, reply)
+                    .await;
+                false
+            }
+            SessionCommand::CancelShell { reply } => {
+                let _ = reply.send(Ok(self.shell_cancel.as_ref().is_some_and(|token| {
+                    token.cancel();
+                    true
+                })));
                 false
             }
             SessionCommand::Steer { text, reply } => {
@@ -2163,6 +2363,7 @@ impl<P: Provider> SessionRuntime<P> {
                     leaf: source_leaf,
                     current_operation: None,
                     pending_next_run: None,
+                    pending_shell: None,
                 },
                 config,
             }),
@@ -2209,6 +2410,7 @@ impl<P: Provider> SessionRuntime<P> {
                     leaf: source_leaf,
                     current_operation: None,
                     pending_next_run: None,
+                    pending_shell: None,
                 },
                 config,
             }),
@@ -2259,6 +2461,11 @@ impl<P: Provider> SessionRuntime<P> {
                 entry_id: pending.entry_id,
             });
         }
+        // A running shell passthrough owns the next branch position; an
+        // operation accepted now would fork against its settlement.
+        if self.lane_pending_shell(&lane_name).is_some() {
+            return Err(CommandError::ShellPassthroughBusy);
+        }
         let (active, _) = self
             .accept_operation_record(&lane_name, prompt, None)
             .await?;
@@ -2286,6 +2493,9 @@ impl<P: Provider> SessionRuntime<P> {
             return Err(CommandError::NextRunQueued {
                 entry_id: pending.entry_id,
             });
+        }
+        if self.lane_pending_shell(&lane_name).is_some() {
+            return Err(CommandError::ShellPassthroughBusy);
         }
         if self.lane_resident_id(&lane_name).is_none() {
             let (active, entry_id) = self
@@ -2575,6 +2785,207 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("configured lane remains resident")
             .config = config;
         Ok(previous)
+    }
+
+    /// Run one user shell passthrough on an idle lane (pi parity:
+    /// `!command`/`!!command`). The passthrough's intent — provisioned
+    /// entry identity plus the exact command — is committed durably
+    /// *before* the process spawns (DESIGN.md §10), and the reply
+    /// returns once that intent is durable; the settled entry follows
+    /// via the shell signal path and the pending reply is answered then.
+    /// Execution reuses the native `bash` tool's executor so the sandbox
+    /// policy, process-group teardown, and output bounding are identical
+    /// to model-initiated shell. A lane with an active operation, a
+    /// queued next-run, or another passthrough refuses.
+    async fn run_shell_on_lane(
+        &mut self,
+        lane_name: &str,
+        command: String,
+        exclude_from_context: bool,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    ) {
+        if self.closed {
+            let _ = reply.send(Err(CommandError::Closed));
+            return;
+        }
+        if self.lane(lane_name).is_none() {
+            let _ = reply.send(Err(CommandError::LaneNotFound(lane_name.to_owned())));
+            return;
+        }
+        if let Some(operation_id) = self.lane_resident_id(lane_name) {
+            let _ = reply.send(Err(CommandError::Busy { operation_id }));
+            return;
+        }
+        if let Some(pending) = self.lane_pending_next_run(lane_name) {
+            let _ = reply.send(Err(CommandError::NextRunQueued {
+                entry_id: pending.entry_id,
+            }));
+            return;
+        }
+        if self.lane_pending_shell(lane_name).is_some() || self.shell_cancel.is_some() {
+            let _ = reply.send(Err(CommandError::ShellPassthroughBusy));
+            return;
+        }
+        // Durable intent first (§10): provision the entry identity and
+        // mark the lane busy before any process exists.
+        let pending = crate::session::lane::PendingShell {
+            entry_id: EntryId::generate(),
+            command: command.clone(),
+            exclude_from_context,
+        };
+        if let Err(err) = self
+            .store
+            .queue_pending_shell(self.session_id, lane_name, pending.clone())
+            .await
+        {
+            let _ = reply.send(Err(persistence_command_error(err)));
+            return;
+        }
+        self.lane_mut(lane_name)
+            .expect("shell lane remains resident")
+            .state
+            .pending_shell = Some(pending);
+        self.emit(RuntimeEvent::ShellStarted {
+            cursor: RuntimeCursor::default(),
+            lane_name: lane_name.to_owned(),
+            command: command.clone(),
+            exclude_from_context,
+        });
+        // Spawn through the native bash executor: one process path, one
+        // sandbox policy, one bounding rule. The per-run token lets esc
+        // cancel; close cancels through the child of cancel_root.
+        let shell_cancel = self.cancel_root.child_token();
+        self.shell_cancel = Some(shell_cancel.clone());
+        let cancel = shell_cancel.clone();
+        let tools = Arc::clone(&self.tools);
+        let arguments = serde_json::json!({ "command": command });
+        let (progress_tx, mut progress_rx) = mpsc::channel::<crate::tool::ToolProgress>(8);
+        let shell_tx = self.shell_tx.clone();
+        let lane = lane_name.to_owned();
+        let settle_command = command.clone();
+        self.tracker.spawn(async move {
+            let forward = async {
+                while let Some(progress) = progress_rx.recv().await {
+                    let _ = shell_tx
+                        .send(ShellSignal::Output {
+                            lane_name: lane.clone(),
+                            output: progress.output,
+                        })
+                        .await;
+                }
+            };
+            let (outcome, ()) = tokio::join!(
+                tools.execute_with_progress("bash", &arguments, cancel.clone(), Some(progress_tx)),
+                forward
+            );
+            let _ = shell_tx
+                .send(ShellSignal::Settled {
+                    lane_name: lane,
+                    command: settle_command,
+                    outcome,
+                    cancelled: cancel.is_cancelled(),
+                    exclude_from_context,
+                })
+                .await;
+        });
+        // The reply is answered now: durable intent is committed and the
+        // process is in flight. Outcome arrives via the settled entry
+        // and its event, exactly like tool completion.
+        let _ = reply.send(Ok(()));
+    }
+
+    /// Drain one shell passthrough signal. Output forwards as a
+    /// display-only event; settlement makes the entry durable before
+    /// the pending reply is answered.
+    async fn handle_shell_signal(&mut self, signal: ShellSignal) {
+        match signal {
+            ShellSignal::Output { lane_name, output } => {
+                self.emit(RuntimeEvent::ShellOutput {
+                    cursor: RuntimeCursor::default(),
+                    lane_name,
+                    output,
+                });
+            }
+            ShellSignal::Settled {
+                lane_name,
+                command,
+                outcome,
+                cancelled,
+                exclude_from_context,
+            } => {
+                self.shell_cancel = None;
+                // The bash executor reports nonzero exits (and
+                // cancellation) as error outcomes whose text is the
+                // combined output. pi's settlement shape: cancelled has
+                // no exit status; failure records what was observed.
+                let (exit_code, output) = if cancelled {
+                    (None, String::new())
+                } else if outcome.is_error {
+                    (None, outcome.output)
+                } else {
+                    (Some(0), outcome.output)
+                };
+                let output_preview = crate::tool::ToolResult::Ok {
+                    call_id: 0,
+                    output: output.clone(),
+                    artifact: None,
+                }
+                .display_preview();
+                let entry = SessionEntry::ShellExecution {
+                    command: command.clone(),
+                    output,
+                    exit_code,
+                    cancelled,
+                    exclude_from_context,
+                };
+                // The entry identity was provisioned with the durable
+                // intent; settlement must use it or the marker can never
+                // match (the store's WHERE clause binds the two).
+                let pending_entry_id = self
+                    .lane_pending_shell(&lane_name)
+                    .expect("shell settlement has a pending marker")
+                    .entry_id;
+                let record = EntryRecord {
+                    id: pending_entry_id,
+                    seq: self.next_entry_seq,
+                    parent: self.lane_leaf(&lane_name),
+                    entry,
+                };
+                let append = self
+                    .store
+                    .settle_shell_entry(self.session_id, &lane_name, record.clone())
+                    .await;
+                match append {
+                    Ok(()) => {
+                        self.next_entry_seq += 1;
+                        let lane_state = &mut self
+                            .lane_mut(&lane_name)
+                            .expect("shell lane remains resident")
+                            .state;
+                        lane_state.leaf = Some(record.id);
+                        lane_state.pending_shell = None;
+                        self.install_tree_entries(vec![record]);
+                        self.emit(RuntimeEvent::ShellSettled {
+                            cursor: RuntimeCursor::default(),
+                            lane_name: lane_name.clone(),
+                            command: command.clone(),
+                            exit_code,
+                            cancelled,
+                            exclude_from_context,
+                            output_preview,
+                        });
+                        info!(session = %self.session_id, command = %command, "shell passthrough settled")
+                    }
+                    Err(err) => {
+                        // §15: persistence failure is a harness failure.
+                        // Surface it; the entry is not durable.
+                        error!(session = %self.session_id, %err, "shell settlement not durable")
+                    }
+                };
+                // Outcome visibility is the settled entry plus its event;
+                // there is no pending command reply to answer.
+            }
+        }
     }
 
     async fn enqueue_steer(&mut self, text: String) -> Result<(), CommandError> {
@@ -3901,11 +4312,13 @@ impl<P: Provider> SessionRuntime<P> {
         self.tracker.close();
         // Drain while joining: a provider blocked sending into a full
         // engine channel can only finish if someone keeps reading.
+        let mut settled_shell: Vec<ShellSignal> = Vec::new();
         {
             let wait = self.tracker.wait();
             tokio::pin!(wait);
             let mut engine_open = true;
             let mut tool_open = true;
+            let mut shell_open = true;
             loop {
                 tokio::select! {
                     _ = &mut wait => break,
@@ -3921,9 +4334,22 @@ impl<P: Provider> SessionRuntime<P> {
                             None => tool_open = false,
                         }
                     }
+                    signal = self.shell_rx.recv(), if shell_open => {
+                        match signal {
+                            // A shell passthrough cancelled by close still
+                            // settles durably: dropping it would lose the
+                            // record of an external effect that ran. Collect
+                            // here; settled after the join completes.
+                            Some(signal) => settled_shell.push(signal),
+                            None => shell_open = false,
+                        }
+                    }
                     else => break,
                 }
             }
+        }
+        for signal in settled_shell {
+            self.handle_shell_signal(signal).await;
         }
         self.tracker.wait().await;
         self.emit(RuntimeEvent::SessionClosed {
@@ -4009,6 +4435,9 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
         | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
         | RuntimeEvent::ApprovalPending { cursor: slot, .. }
+        | RuntimeEvent::ShellStarted { cursor: slot, .. }
+        | RuntimeEvent::ShellOutput { cursor: slot, .. }
+        | RuntimeEvent::ShellSettled { cursor: slot, .. }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
     }
 }
@@ -4028,6 +4457,9 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::OperationCancelled { .. } => "operation_cancelled",
         RuntimeEvent::OperationApprovalRequired { .. } => "operation_approval_required",
         RuntimeEvent::ApprovalPending { .. } => "approval_pending",
+        RuntimeEvent::ShellStarted { .. } => "shell_started",
+        RuntimeEvent::ShellOutput { .. } => "shell_output",
+        RuntimeEvent::ShellSettled { .. } => "shell_settled",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
     }
 }
