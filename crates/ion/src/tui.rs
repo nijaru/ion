@@ -81,6 +81,10 @@ pub enum UiEffect {
     Approve,
     /// Deny the parked tool approval (§17.4).
     Deny,
+    /// Suspend the terminal, edit the composer draft in
+    /// $VISUAL/$EDITOR, and continue with the edited text (pi parity:
+    /// app.editor.external).
+    ExternalEditor,
     /// Close the attached session and start a new durable one.
     NewSession,
     /// Close the attached session and reopen the requested durable one.
@@ -135,6 +139,9 @@ pub enum UiMessage {
     /// A session command failed; the draft is restored for retry.
     SessionCommandFailed(String),
     RenameAccepted,
+    /// The external editor returned the edited draft (empty output
+    /// keeps the current composer unchanged).
+    ExternalEdited(String),
 }
 
 /// The live operation presentation, derived from runtime events.
@@ -166,13 +173,24 @@ pub enum Action {
     HistoryNext,
     CursorLeft,
     CursorRight,
+    /// Word-wise motion (pi: tui.editor.cursorWordLeft/Right).
+    CursorWordLeft,
+    CursorWordRight,
     CursorHome,
     CursorEnd,
     KillToEnd,
     KillToStart,
     KillWord,
+    /// Delete the word after the cursor into the kill ring (pi:
+    /// tui.editor.deleteWordForward, alt+d).
+    KillWordForward,
     Yank,
+    /// Cycle the kill ring after a yank (pi: tui.editor.yankPop, alt+y).
+    YankPop,
     Undo,
+    /// Open the composer in $VISUAL/$EDITOR (pi: app.editor.external,
+    /// ctrl+g).
+    ExternalEditor,
 }
 
 /// Resolved action → key bindings. Plain data owned by the UI state;
@@ -252,6 +270,25 @@ impl Default for KeyMap {
             KeyCode::Right,
             Modifiers::NONE,
         );
+        // Word-wise motion (pi defaults: ctrl/alt+left, ctrl/alt+right,
+        // alt+b, alt+f).
+        for (action, code, modifiers) in [
+            (Action::CursorWordLeft, KeyCode::Left, Modifiers::ALT),
+            (Action::CursorWordLeft, KeyCode::Left, Modifiers::CONTROL),
+            (Action::CursorWordLeft, KeyCode::Char('b'), Modifiers::ALT),
+            (Action::CursorWordRight, KeyCode::Right, Modifiers::ALT),
+            (Action::CursorWordRight, KeyCode::Right, Modifiers::CONTROL),
+            (Action::CursorWordRight, KeyCode::Char('f'), Modifiers::ALT),
+            (Action::KillWordForward, KeyCode::Char('d'), Modifiers::ALT),
+            (Action::YankPop, KeyCode::Char('y'), Modifiers::ALT),
+            (
+                Action::ExternalEditor,
+                KeyCode::Char('g'),
+                Modifiers::CONTROL,
+            ),
+        ] {
+            bind(&mut bindings, action, code, modifiers);
+        }
         bind(
             &mut bindings,
             Action::CursorHome,
@@ -372,7 +409,24 @@ impl KeyMap {
         rebind(&mut map, Action::KillToEnd, &overrides.kill_to_end)?;
         rebind(&mut map, Action::KillToStart, &overrides.kill_to_start)?;
         rebind(&mut map, Action::KillWord, &overrides.kill_word)?;
+        rebind(
+            &mut map,
+            Action::KillWordForward,
+            &overrides.kill_word_forward,
+        )?;
         rebind(&mut map, Action::Yank, &overrides.yank)?;
+        rebind(&mut map, Action::YankPop, &overrides.yank_pop)?;
+        rebind(
+            &mut map,
+            Action::CursorWordLeft,
+            &overrides.cursor_word_left,
+        )?;
+        rebind(
+            &mut map,
+            Action::CursorWordRight,
+            &overrides.cursor_word_right,
+        )?;
+        rebind(&mut map, Action::ExternalEditor, &overrides.external_editor)?;
         rebind(&mut map, Action::Undo, &overrides.undo)?;
         rebind(
             &mut map,
@@ -560,6 +614,16 @@ pub struct UiState {
     pending_history: Option<String>,
     /// Last kill (ctrl-k/u/w); ctrl-y yanks it back.
     kill_buffer: String,
+    /// Kill ring for yank-pop (alt+y): older kills, newest last. The
+    /// most recent entry lives in `kill_buffer`; consecutive kills
+    /// push the previous one here.
+    kill_ring: Vec<String>,
+    /// Which ring entry (index into [kill_buffer] + kill_ring) the
+    /// last yank inserted; `None` until the first yank.
+    yank_index: Option<usize>,
+    /// Char span of the text inserted by the most recent yank, so
+    /// yank-pop replaces exactly that span.
+    yank_span: Option<(usize, usize)>,
     /// Bounded local composer history. Adjacent typing/deletion is one edit;
     /// each bracketed paste is one edit.
     undo_stack: Vec<EditSnapshot>,
@@ -1010,6 +1074,16 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
                 .push(Line::from("session renamed").dim());
             (state, None)
         }
+        UiMessage::ExternalEdited(text) => {
+            // Replace the composer wholesale: the editor is authoritative
+            // for the whole draft while it was open.
+            state.composer = text;
+            state.cursor = state.composer.chars().count();
+            state.preferred_column = None;
+            state.undo_stack.clear();
+            state.last_edit = None;
+            (state, None)
+        }
     }
 }
 
@@ -1149,6 +1223,9 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         KeyCode::Backspace => handle_backspace(state),
         KeyCode::Delete => {
             let mut state = state;
+            if state.cursor < state.composer.chars().count() {
+                state.record_edit(EditKind::Delete);
+            }
             delete_at_cursor(&mut state);
             (state, None)
         }
@@ -1202,6 +1279,10 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
                 "ctrl+j                  - insert a newline",
+                "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
+                "alt+left/right · alt+b/f - move by words",
+                "alt+d                   - delete the next word",
+                "ctrl+y · alt+y          - yank; alt+y cycles the kill ring",
                 "tab                     - complete commands/models",
                 "ctrl+l                  - open the model picker",
                 "ctrl+p                  - cycle models forward",
@@ -1525,6 +1606,11 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             state.undo_edit();
             (state, None)
         }
+        Action::ExternalEditor => {
+            // The loop owns the terminal; it suspends raw mode, runs the
+            // editor, and returns the edited draft as a message.
+            (state, Some(UiEffect::ExternalEditor))
+        }
         Action::OpenModelSelector => {
             if !state.model_switching_available {
                 notice(
@@ -1611,6 +1697,25 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             state.break_edit_group();
             (state, None)
         }
+        Action::CursorWordLeft => {
+            if state.cursor > 0 {
+                state.cursor = word_start(&state.composer, state.cursor);
+                state.preferred_column = None;
+                state.break_edit_group();
+                state.exit_history_browse();
+            }
+            (state, None)
+        }
+        Action::CursorWordRight => {
+            let chars = state.composer.chars().count();
+            if state.cursor < chars {
+                state.cursor = word_end(&state.composer, state.cursor);
+                state.preferred_column = None;
+                state.break_edit_group();
+                state.exit_history_browse();
+            }
+            (state, None)
+        }
         Action::CursorHome => {
             state.cursor = 0;
             state.preferred_column = None;
@@ -1644,7 +1749,8 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if state.cursor < chars {
                 state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
-                state.kill_buffer = split_off_chars(&mut state.composer, state.cursor, chars);
+                let killed = split_off_chars(&mut state.composer, state.cursor, chars);
+                state.push_kill(killed);
             }
             (state, None)
         }
@@ -1652,7 +1758,8 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if state.cursor > 0 {
                 state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
-                state.kill_buffer = split_off_chars(&mut state.composer, 0, state.cursor);
+                let killed = split_off_chars(&mut state.composer, 0, state.cursor);
+                state.push_kill(killed);
                 state.cursor = 0;
             }
             (state, None)
@@ -1662,14 +1769,55 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             if start < state.cursor {
                 state.preferred_column = None;
                 state.record_edit(EditKind::Delete);
-                state.kill_buffer = split_off_chars(&mut state.composer, start, state.cursor);
+                let killed = split_off_chars(&mut state.composer, start, state.cursor);
+                state.push_kill(killed);
                 state.cursor = start;
             }
             (state, None)
         }
+        Action::KillWordForward => {
+            let end = word_end(&state.composer, state.cursor);
+            if end > state.cursor {
+                state.preferred_column = None;
+                state.record_edit(EditKind::Delete);
+                let killed = split_off_chars(&mut state.composer, state.cursor, end);
+                state.push_kill(killed);
+            }
+            (state, None)
+        }
         Action::Yank => {
-            let yank = state.kill_buffer.clone();
-            insert_at_cursor(&mut state, &yank);
+            if !state.kill_buffer.is_empty() {
+                let yank = state.kill_buffer.clone();
+                insert_at_cursor(&mut state, &yank);
+                state.yank_index = Some(0);
+                state.yank_span = Some((state.cursor - yank.chars().count(), state.cursor));
+            }
+            (state, None)
+        }
+        Action::YankPop => {
+            // Replace the last yanked span with the next older ring entry.
+            let ring_len = 1 + state.kill_ring.len();
+            if ring_len <= 1 {
+                return (state, None);
+            }
+            let Some(current) = state.yank_index else {
+                return (state, None);
+            };
+            let Some((start, end)) = state.yank_span else {
+                return (state, None);
+            };
+            let next = (current + 1) % ring_len;
+            let entry = state.ring_entry(next).to_owned();
+            state.preferred_column = None;
+            state.record_edit(EditKind::Delete);
+            // Remove the previously yanked span, insert the next entry.
+            split_off_chars(&mut state.composer, start, end);
+            let byte = char_offset_to_byte(&state.composer, start);
+            state.composer.insert_str(byte, &entry);
+            state.cursor = start + entry.chars().count();
+            state.record_edit(EditKind::Insert);
+            state.yank_index = Some(next);
+            state.yank_span = Some((start, state.cursor));
             (state, None)
         }
     }
@@ -1763,6 +1911,34 @@ fn word_start(buffer: &str, cursor: usize) -> usize {
     i
 }
 
+/// End of the word at/after `cursor` (whitespace-delimited). Inside a
+/// word this is that word's end; between words it is the next word's
+/// end (emacs forward-word).
+fn word_end(buffer: &str, cursor: usize) -> usize {
+    let mut chars = buffer.chars().enumerate().skip(cursor).peekable();
+    let mut end = cursor;
+    // If the cursor sits on a word character, its end is the target.
+    if let Some((index, ch)) = chars.peek()
+        && !ch.is_whitespace()
+    {
+        end = *index;
+    }
+    // Advance over whitespace then the word (or the rest of the current
+    // word when the cursor was inside one).
+    let mut in_word = false;
+    for (index, ch) in chars.by_ref() {
+        if ch.is_whitespace() {
+            if in_word {
+                return index;
+            }
+        } else {
+            in_word = true;
+            end = index + 1;
+        }
+    }
+    end
+}
+
 fn char_offset_to_byte(buffer: &str, offset: usize) -> usize {
     buffer
         .char_indices()
@@ -1776,6 +1952,33 @@ impl UiState {
             self.history_index = None;
             self.history_stash = None;
         }
+    }
+
+    /// Record a kill: the previous head moves onto the ring; the new
+    /// text becomes the yank head. The ring is bounded; the oldest
+    /// entry drops when full.
+    fn push_kill(&mut self, text: String) {
+        const KILL_RING_LIMIT: usize = 16;
+        if !self.kill_buffer.is_empty() {
+            self.kill_ring.push(std::mem::take(&mut self.kill_buffer));
+            if self.kill_ring.len() > KILL_RING_LIMIT {
+                self.kill_ring.remove(0);
+            }
+        }
+        self.kill_buffer = text;
+        self.yank_index = None;
+        self.yank_span = None;
+    }
+
+    /// Ring entry by index: 0 is the head (`kill_buffer`), older
+    /// entries follow in reverse-chronological order.
+    fn ring_entry(&self, index: usize) -> &str {
+        if index == 0 {
+            return &self.kill_buffer;
+        }
+        self.kill_ring
+            .get(self.kill_ring.len().saturating_sub(index))
+            .map_or("", String::as_str)
     }
 }
 
@@ -2176,6 +2379,61 @@ fn suspend_and_rearm(
     Ok(())
 }
 
+/// Open the composer draft in $VISUAL/$EDITOR (pi parity: ctrl+g). The
+/// terminal is suspended for the child, so the editor gets a cooked
+/// screen; on return the TUI re-arms and the edited text replaces the
+/// composer wholesale. An empty result keeps the draft unchanged.
+fn run_external_editor(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    draft: &str,
+) -> Result<String, RuntimeError> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "nano".to_owned());
+    // $VISUAL/$EDITOR may carry arguments ("code --wait"); split on
+    // whitespace like a shell would for this simple case.
+    let mut editor_words = editor.split_whitespace().map(str::to_owned);
+    let Some(program) = editor_words.next() else {
+        return Err(RuntimeError::OperationFailed(
+            "external editor is configured empty".to_owned(),
+        ));
+    };
+    let editor_args: Vec<String> = editor_words.collect();
+    let path = std::env::temp_dir().join(format!("ion-compose-{}", std::process::id()));
+    if let Err(err) = std::fs::write(&path, draft) {
+        return Err(RuntimeError::OperationFailed(format!(
+            "could not stage the draft: {err}"
+        )));
+    }
+    terminal
+        .suspend()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal suspend failed: {err}")))?;
+    let status = std::process::Command::new(&program)
+        .args(&editor_args)
+        .arg(&path)
+        .status()
+        .map_err(|err| RuntimeError::OperationFailed(format!("could not run {program:?}: {err}")));
+    let read = std::fs::read_to_string(&path);
+    let _ = std::fs::remove_file(&path);
+    terminal
+        .resume()
+        .map_err(|err| RuntimeError::OperationFailed(format!("terminal resume failed: {err}")))?;
+    screen.invalidate();
+    let status = status?;
+    if !status.success() {
+        return Err(RuntimeError::OperationFailed(format!(
+            "editor {program:?} exited with {status}"
+        )));
+    }
+    let edited = read.map_err(|err| {
+        RuntimeError::OperationFailed(format!("could not read the edited draft: {err}"))
+    })?;
+    // One trailing newline is the editor's line terminator, not content.
+    let edited = edited.strip_suffix('\n').unwrap_or(&edited).to_owned();
+    Ok(edited)
+}
+
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
@@ -2408,35 +2666,59 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
-                            let switch = dispatch(
-                                &session,
-                                manager.as_ref(),
-                                &mut state,
-                                active_operation,
-                                effect,
-                            )
-                            .await;
-                            if let Some(switch) = switch {
-                                match switch_session(
-                                    manager.as_ref(),
-                                    &mut attached,
-                                    &mut session,
-                                    &mut events,
-                                    &mut resume_session,
-                                    &mut state,
-                                    &mut transcript,
-                                    &mut active_operation,
-                                    &palette,
-                                    switch,
-                                )
-                                .await
-                                {
-                                    Ok(()) => {}
-                                    Err(err) => {
-                                        notice(
-                                            &mut state,
-                                            &format!("session switch failed: {err}"),
+                            // The external editor needs the terminal; the
+                            // loop owns it, so this effect resolves here
+                            // rather than in dispatch.
+                            if matches!(effect, UiEffect::ExternalEditor) {
+                                let edited = run_external_editor(
+                                    &mut terminal,
+                                    &mut screen,
+                                    &state.composer,
+                                );
+                                match edited {
+                                    Ok(text) => {
+                                        let (next, _) = update(
+                                            std::mem::take(&mut state),
+                                            UiMessage::ExternalEdited(text),
                                         );
+                                        state = next;
+                                    }
+                                    Err(err) => notice(
+                                        &mut state,
+                                        &format!("external editor failed: {err}"),
+                                    ),
+                                }
+                            } else {
+                                let switch = dispatch(
+                                    &session,
+                                    manager.as_ref(),
+                                    &mut state,
+                                    active_operation,
+                                    effect,
+                                )
+                                .await;
+                                if let Some(switch) = switch {
+                                    match switch_session(
+                                        manager.as_ref(),
+                                        &mut attached,
+                                        &mut session,
+                                        &mut events,
+                                        &mut resume_session,
+                                        &mut state,
+                                        &mut transcript,
+                                        &mut active_operation,
+                                        &palette,
+                                        switch,
+                                    )
+                                    .await
+                                    {
+                                        Ok(()) => {}
+                                        Err(err) => {
+                                            notice(
+                                                &mut state,
+                                                &format!("session switch failed: {err}"),
+                                            );
+                                        }
                                     }
                                 }
                             }
@@ -2713,6 +2995,11 @@ async fn dispatch(
     match effect {
         UiEffect::Quit => {
             state.quit_requested = true;
+            None
+        }
+        UiEffect::ExternalEditor => {
+            // Resolved by the run loop, which owns the terminal; this
+            // arm exists only for match totality.
             None
         }
         UiEffect::Submit { text } => {
@@ -4556,5 +4843,114 @@ mod session_command_tests {
         let row = session_row_for_picker(&summary);
         assert!(row.label.contains("unknown age"), "{}", row.label);
         assert!(row.label.ends_with("empty"), "{}", row.label);
+    }
+}
+
+#[cfg(test)]
+mod editor_parity_tests {
+    use super::tests::{ctrl, key, type_text};
+    use super::*;
+    use ion_terminal::Modifiers;
+
+    fn word_key(code: KeyCode, modifiers: Modifiers) -> UiMessage {
+        UiMessage::Key(KeyEvent::new(code, modifiers))
+    }
+
+    #[test]
+    fn word_motion_moves_by_words_in_both_directions() {
+        let state = type_text(UiState::new(), "one two three");
+        // Cursor at 13 (end). alt+left → start of "three" (8).
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::ALT));
+        assert_eq!(state.cursor, 8, "alt+left lands on the word start");
+        // alt+right from inside "three" → its end (13).
+        let (state, _) = update(state, word_key(KeyCode::Right, Modifiers::ALT));
+        assert_eq!(state.cursor, 13);
+        // ctrl+left from 13 → 8 ("three" start), again → 4 ("two" start),
+        // a third time → 0 ("one" start).
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::CONTROL));
+        assert_eq!(state.cursor, 8);
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::CONTROL));
+        assert_eq!(state.cursor, 4);
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::CONTROL));
+        assert_eq!(state.cursor, 0);
+        // alt+b/alt+f behave the same.
+        let (state, _) = update(state, word_key(KeyCode::Char('f'), Modifiers::ALT));
+        assert_eq!(state.cursor, 3, "alt+f moves to the word end");
+        let (state, _) = update(state, word_key(KeyCode::Char('b'), Modifiers::ALT));
+        assert_eq!(state.cursor, 0, "alt+b moves to the word start");
+    }
+
+    #[test]
+    fn word_motion_skips_whitespace_gaps() {
+        let state = type_text(UiState::new(), "alpha   beta");
+        // Cursor at 5 (inside the gap). alt+right → end of "beta" (12).
+        let mut state = state;
+        state.cursor = 5;
+        let (state, _) = update(state, word_key(KeyCode::Right, Modifiers::ALT));
+        assert_eq!(state.cursor, 12);
+        // Backward from "beta"'s end lands on its start (8); a second
+        // alt+left crosses the gap to "alpha"'s start (0).
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::ALT));
+        assert_eq!(state.cursor, 8, "alt+left lands on the word start");
+        let (state, _) = update(state, word_key(KeyCode::Left, Modifiers::ALT));
+        assert_eq!(state.cursor, 0, "alt+left across the gap");
+    }
+
+    #[test]
+    fn kill_word_forward_removes_the_next_word() {
+        let state = type_text(UiState::new(), "keep drop this");
+        let mut state = state;
+        state.cursor = 5;
+        let (state, _) = update(state, word_key(KeyCode::Char('d'), Modifiers::ALT));
+        assert_eq!(state.composer, "keep  this");
+        assert_eq!(state.kill_buffer, "drop");
+    }
+
+    #[test]
+    fn kill_ring_yank_pop_cycles_older_kills() {
+        // Kill "two" (ctrl+w), then kill the rest of the line (ctrl+k);
+        // the ring keeps both and yank-pop cycles them.
+        let mut state = type_text(UiState::new(), "one two");
+        state.cursor = 7;
+        let (state, _) = update(state, ctrl('w'));
+        assert_eq!(state.kill_buffer, "two");
+        // Home first so ctrl+k removes the remaining word.
+        let (state, _) = update(state, key(KeyCode::Home));
+        let (state, _) = update(state, ctrl('k'));
+        assert_eq!(state.kill_buffer, "one ");
+        assert_eq!(state.kill_ring, vec!["two".to_owned()]);
+
+        // Yank inserts the head; yank-pop replaces it with the older kill.
+        let (state, _) = update(state, ctrl('y'));
+        assert_eq!(state.composer, "one ");
+        let (state, _) = update(state, word_key(KeyCode::Char('y'), Modifiers::ALT));
+        assert_eq!(
+            state.composer, "two",
+            "yank-pop replaced the head with the older kill"
+        );
+        // A second pop returns to the head.
+        let (state, _) = update(state, word_key(KeyCode::Char('y'), Modifiers::ALT));
+        assert_eq!(state.composer, "one ");
+    }
+
+    #[test]
+    fn external_editor_effect_is_loop_terminally_owned() {
+        // ctrl+g produces the effect; the reducer never owns the terminal.
+        let state = type_text(UiState::new(), "draft");
+        let (_state, effect) = update(state, ctrl('g'));
+        assert_eq!(effect, Some(UiEffect::ExternalEditor));
+    }
+
+    #[test]
+    fn external_edit_replaces_the_whole_composer() {
+        let mut state = type_text(UiState::new(), "old draft");
+        state.undo_stack.push(EditSnapshot {
+            composer: "x".to_owned(),
+            cursor: 1,
+        });
+        let (state, _) = update(state, UiMessage::ExternalEdited("replaced".to_owned()));
+        assert_eq!(state.composer, "replaced");
+        assert_eq!(state.cursor, 8);
+        assert!(state.undo_stack.is_empty(), "editor text is not undoable");
     }
 }
