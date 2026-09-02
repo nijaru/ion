@@ -9,7 +9,7 @@ pub(super) use tokio_util::sync::CancellationToken;
 
 pub(super) use crate::context::{ContextMessage, ContextPlan, load_trusted_resources};
 pub(super) use crate::error::{CommandError, RuntimeError};
-pub(super) use crate::ids::{EffectId, InboxId, OperationId};
+pub(super) use crate::ids::{EffectId, InboxId, OperationId, SessionId};
 pub(super) use crate::operation::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
@@ -24,7 +24,7 @@ pub(super) use crate::runtime::{
 };
 pub(super) use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EntryRecord, InboxRecord, SessionRecord,
-    SessionStore,
+    SessionStore, SessionSummary, StoreError,
 };
 pub(super) use crate::tool::{
     RecoveryClass, Tool, ToolCall, ToolCatalog, ToolOutcome, ToolRegistry, ToolResult, ToolSpec,

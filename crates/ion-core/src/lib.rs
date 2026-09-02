@@ -53,7 +53,8 @@ pub use runtime::{
     SessionHandle, SessionSnapshot,
 };
 pub use store::{
-    EntryRecord, LoadedSession, SessionRecord, SessionStore, StoreError, default_db_path,
+    EntryRecord, LoadedSession, SessionRecord, SessionStore, SessionSummary, StoreError,
+    default_db_path,
 };
 pub use tool::{
     BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,

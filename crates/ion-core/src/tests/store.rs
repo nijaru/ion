@@ -354,3 +354,124 @@ fn newer_schema_store_is_refused_visibly() {
             .exists()
     );
 }
+
+#[tokio::test]
+async fn session_management_apis_list_rename_and_delete() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let first = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_a = first.session();
+    let (_snapshot, mut events) = session_a.subscribe().await.expect("subscribe");
+    let op_a = session_a.submit_if_idle("hello").await.expect("submit a");
+    collect_until_terminal(&mut events).await.expect("finish a");
+    assert_eq!(op_a, op_a); // keep the operation id observable for the debug log
+    session_a.close().await.expect("close a");
+    first.join().await.expect("join a");
+
+    let second = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_b = second.session();
+    let (_snapshot, mut events_b) = session_b.subscribe().await.expect("subscribe b");
+    let op_b = session_b.submit_if_idle("world").await.expect("submit b");
+    collect_until_terminal(&mut events_b)
+        .await
+        .expect("finish b");
+    let id_b = second.session_id();
+    session_b.close().await.expect("close b");
+    second.join().await.expect("join b");
+    assert_ne!(op_a, op_b);
+
+    // Listing shows roots, newest first, with entry counts.
+    let listed = store.list_sessions().await.expect("list");
+    assert_eq!(listed.len(), 2, "two roots: {listed:?}");
+    assert_eq!(listed[0].id, id_b, "newest first");
+    assert_eq!(listed[0].entry_count, 2, "user + assistant");
+    assert_eq!(listed[1].entry_count, 2);
+
+    // Rename is durable and trims; empty titles are refused.
+    store
+        .rename_session(id_b, "  deep dive  ")
+        .await
+        .expect("rename");
+    let listed = store.list_sessions().await.expect("list");
+    assert_eq!(listed[0].title, "deep dive");
+    let err = store.rename_session(id_b, "   ").await.expect_err("empty");
+    assert!(matches!(err, StoreError::InvalidTitle), "{err}");
+    let err = store
+        .rename_session(SessionId::generate(), "x")
+        .await
+        .expect_err("missing");
+    assert!(matches!(err, StoreError::NotFound(_)), "{err}");
+
+    // Delete removes the session; a second delete is a visible miss.
+    store.delete_session(id_b).await.expect("delete");
+    let listed = store.list_sessions().await.expect("list");
+    assert_eq!(listed.len(), 1);
+    let err = store
+        .delete_session(id_b)
+        .await
+        .expect_err("already deleted");
+    assert!(matches!(err, StoreError::NotFound(_)), "{err}");
+}
+
+#[tokio::test]
+async fn clone_session_copies_history_with_lineage_and_a_clean_tip() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let source_id = runtime.session_id();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let op = session.submit_if_idle("one").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("finish");
+    assert_eq!(op, op); // keep the operation id observable for the debug log
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let target = store
+        .clone_session(source_id, "fork of one")
+        .await
+        .expect("clone");
+
+    let loaded = store.load(target).await.expect("load clone");
+    assert_eq!(loaded.session.title, "fork of one");
+    assert_eq!(loaded.session.fork_source_session_id, Some(source_id));
+    assert_eq!(loaded.session.control_parent_session_id, None);
+    assert_eq!(loaded.entries.len(), 2, "user + assistant copied");
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("main lane");
+    assert!(main.state.current_operation.is_none());
+    assert!(main.state.pending_next_run.is_none());
+    assert!(main.state.leaf.is_some(), "clone keeps the tip");
+
+    // The clone is a usable session with the copied history in place.
+    let reopened = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        target,
+    )
+    .await
+    .expect("open clone");
+    let handle = reopened.session();
+    let (snapshot, _events) = handle.subscribe().await.expect("subscribe clone");
+    assert_eq!(snapshot.entries.len(), 2, "copied history is visible");
+    handle.close().await.expect("close clone");
+    reopened.join().await.expect("join clone");
+
+    // The source keeps its own tree and is unaffected.
+    let source = store.load(source_id).await.expect("load source");
+    assert_eq!(source.entries.len(), 2);
+}

@@ -24,6 +24,19 @@ use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
 
+/// One picker row for session management: durable identity plus
+/// presentation metadata derived from the store.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SessionSummary {
+    pub id: SessionId,
+    /// Display title; empty titles render as the short session id.
+    pub title: String,
+    /// Last durable update, epoch milliseconds, for ordering/recency.
+    pub updated_at: u64,
+    /// Durable semantic entry count for a size hint.
+    pub entry_count: u64,
+}
+
 mod schema;
 mod sql;
 use schema::{SchemaPlan, classify, create_fresh};
@@ -277,6 +290,10 @@ pub enum StoreError {
     Injected,
     #[error("session {0} not found")]
     NotFound(SessionId),
+    #[error("session title must not be empty")]
+    InvalidTitle,
+    #[error("cannot clone hosted agent session {0}")]
+    CloneHostedSession(SessionId),
     #[error("store is closed")]
     Closed,
 }
@@ -357,6 +374,25 @@ enum StoreCommand {
     },
     LatestSession {
         reply: oneshot::Sender<Result<Option<SessionId>, StoreError>>,
+    },
+    ListSessions {
+        reply: oneshot::Sender<Result<Vec<SessionSummary>, StoreError>>,
+    },
+    RenameSession {
+        session_id: SessionId,
+        title: String,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    DeleteSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    CloneSession {
+        source: SessionId,
+        target: SessionId,
+        fork_source_entry_id: Option<EntryId>,
+        title: String,
+        reply: oneshot::Sender<Result<(), StoreError>>,
     },
     Shutdown {
         reply: oneshot::Sender<Result<(), StoreError>>,
@@ -697,6 +733,54 @@ impl SessionStore {
     pub async fn latest_session(&self) -> Result<Option<SessionId>, StoreError> {
         self.request(|reply| StoreCommand::LatestSession { reply })
             .await
+    }
+
+    /// Durable session roots for pickers and `/resume`, newest first.
+    /// Hosted-agent descendants are family-internal and never listed.
+    pub async fn list_sessions(&self) -> Result<Vec<SessionSummary>, StoreError> {
+        self.request(|reply| StoreCommand::ListSessions { reply })
+            .await
+    }
+
+    /// Set a session's display title (durable, presentation-only).
+    pub async fn rename_session(
+        &self,
+        session_id: SessionId,
+        title: impl Into<String>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::RenameSession {
+            session_id,
+            title: title.into(),
+            reply,
+        })
+        .await
+    }
+
+    /// Delete a session root (and its hosted descendants). Deleting the
+    /// session backing a loaded runtime is a host bug; hosts close first.
+    pub async fn delete_session(&self, session_id: SessionId) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::DeleteSession { session_id, reply })
+            .await
+    }
+
+    /// Clone a session's semantic conversation tree into a new durable
+    /// session with history lineage back to the source (DESIGN.md §13.2).
+    /// Returns the new session id.
+    pub async fn clone_session(
+        &self,
+        source: SessionId,
+        title: impl Into<String>,
+    ) -> Result<SessionId, StoreError> {
+        let target = SessionId::generate();
+        self.request(|reply| StoreCommand::CloneSession {
+            source,
+            target,
+            fork_source_entry_id: None,
+            title: title.into(),
+            reply,
+        })
+        .await?;
+        Ok(target)
     }
 
     /// Persist the newest bounded frame for an in-flight assistant effect.

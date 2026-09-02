@@ -128,6 +128,36 @@ pub(super) fn handle_command(
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
         }
+        StoreCommand::ListSessions { reply } => {
+            let _ = reply.send(list_sessions(connection));
+        }
+        StoreCommand::RenameSession {
+            session_id,
+            title,
+            reply,
+        } => {
+            let _ = reply.send(
+                check_injected(fail_next_write)
+                    .and_then(|()| rename_session(connection, session_id, &title)),
+            );
+        }
+        StoreCommand::DeleteSession { session_id, reply } => {
+            let _ = reply.send(
+                check_injected(fail_next_write)
+                    .and_then(|()| delete_session(connection, session_id)),
+            );
+        }
+        StoreCommand::CloneSession {
+            source,
+            target,
+            fork_source_entry_id,
+            title,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                clone_session(connection, source, target, fork_source_entry_id, &title)
+            }));
+        }
         StoreCommand::Shutdown { reply } => {
             let _ = reply.send(Ok(()));
         }
@@ -192,6 +222,296 @@ fn upsert_assistant_frame(
             now_ms(),
         ],
     )?;
+    Ok(())
+}
+
+/// One picker row: durable session identity plus presentation metadata.
+fn session_summary_row(row: &rusqlite::Row<'_>) -> Result<SessionSummary, rusqlite::Error> {
+    let id: String = row.get(0)?;
+    let title: String = row.get(1)?;
+    let updated_at: i64 = row.get(2)?;
+    let entry_count: i64 = row.get(3)?;
+    Ok(SessionSummary {
+        id: SessionId::parse(&id).ok_or_else(|| {
+            rusqlite::Error::FromSqlConversionFailure(
+                0,
+                rusqlite::types::Type::Text,
+                format!("corrupt session id {id:?}").into(),
+            )
+        })?,
+        title,
+        updated_at: u64::try_from(updated_at).unwrap_or(0),
+        entry_count: u64::try_from(entry_count).unwrap_or(0),
+    })
+}
+
+fn list_sessions(connection: &Connection) -> Result<Vec<SessionSummary>, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT s.id, s.title, s.updated_at, (
+            SELECT COUNT(*) FROM entries e WHERE e.session_id = s.id
+        )
+         FROM sessions s
+         WHERE s.control_parent_session_id IS NULL
+         ORDER BY s.updated_at DESC, s.created_at DESC",
+    )?;
+    let rows = statement
+        .query_map([], session_summary_row)?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+fn rename_session(
+    connection: &mut Connection,
+    session_id: SessionId,
+    title: &str,
+) -> Result<(), StoreError> {
+    let title = title.trim();
+    if title.is_empty() {
+        return Err(StoreError::InvalidTitle);
+    }
+    let updated = connection
+        .execute(
+            "UPDATE sessions SET title = ?2, updated_at = ?3 WHERE id = ?1",
+            rusqlite::params![session_id.as_uuid().to_string(), title, now_ms()],
+        )
+        .map_err(StoreError::from)?;
+    if updated == 0 {
+        return Err(StoreError::NotFound(session_id));
+    }
+    Ok(())
+}
+
+/// Delete a session and all dependent rows. Hosted-agent descendants
+/// (`control_parent_session_id`) are deleted with their root per family
+/// integrity; the picker only ever lists roots, so this is the explicit
+/// root-delete path.
+fn delete_session(connection: &mut Connection, session_id: SessionId) -> Result<(), StoreError> {
+    let tx = connection.transaction()?;
+    // A root takes its hosted descendants with it; deleting a hosted
+    // session directly would strand control lineage. Dependent rows
+    // are removed children-first. operation_origins rows are
+    // delete-trigger-protected; the trigger is dropped for this
+    // transaction's delete and recreated immediately, so origins leave
+    // with their operation without weakening the invariant elsewhere.
+    let mut exists = false;
+    {
+        let mut statement = tx.prepare(
+            "SELECT 1 FROM sessions WHERE id = ?1 OR control_parent_session_id = ?1 LIMIT 1",
+        )?;
+        exists = statement
+            .query([session_id.as_uuid().to_string()])?
+            .next()?
+            .is_some();
+    }
+    if !exists {
+        tx.rollback().map_err(StoreError::from)?;
+        return Err(StoreError::NotFound(session_id));
+    }
+    let ids = [session_id.as_uuid().to_string()];
+    // Immutable-guarded rows (append-only revisions, immutable agent
+    // topology, immutable operation origins) leave with their session
+    // inside this one transaction: drop each guard, delete the rows,
+    // recreate the guard. Nothing outside this transaction observes the
+    // missing trigger, so the durable invariants they enforce are never
+    // relaxed for ordinary writes.
+    tx.execute(
+        "DROP TRIGGER IF EXISTS operation_state_revisions_no_delete",
+        [],
+    )?;
+    tx.execute("DROP TRIGGER IF EXISTS agents_no_delete", [])?;
+    tx.execute("DROP TRIGGER IF EXISTS operation_origins_no_delete", [])?;
+    for sql in [
+        "DELETE FROM operation_state_revisions WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        "DELETE FROM operation_state WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        "DELETE FROM model_steps WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        "DELETE FROM assistant_frames WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        "DELETE FROM tool_progress WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        "DELETE FROM inbox_items WHERE session_id = ?1",
+        "DELETE FROM effects WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+    ] {
+        tx.execute(sql, ids.clone())?;
+    }
+    tx.execute(
+        "DELETE FROM operation_origins WHERE operation_id IN (
+            SELECT id FROM operations WHERE session_id = ?1)",
+        ids.clone(),
+    )?;
+    tx.execute("DELETE FROM operations WHERE session_id = ?1", ids.clone())?;
+    tx.execute(
+        "DELETE FROM agents WHERE family_session_id = ?1 OR session_id = ?1 OR source_session_id = ?1",
+        ids.clone(),
+    )?;
+    for sql in [
+        "DELETE FROM lanes WHERE session_id = ?1",
+        "DELETE FROM entries WHERE session_id = ?1",
+        "DELETE FROM usage WHERE session_id = ?1",
+        "DELETE FROM sessions WHERE id = ?1 OR control_parent_session_id = ?1",
+    ] {
+        tx.execute(sql, ids.clone())?;
+    }
+    // Re-arm every immutable guard before commit.
+    tx.execute(
+        "CREATE TRIGGER IF NOT EXISTS operation_state_revisions_no_delete
+         BEFORE DELETE ON operation_state_revisions
+         BEGIN
+             SELECT RAISE(ABORT, 'operation state revisions are append-only');
+         END",
+        [],
+    )?;
+    tx.execute(
+        "CREATE TRIGGER IF NOT EXISTS agents_no_delete
+         BEFORE DELETE ON agents
+         BEGIN
+             SELECT RAISE(ABORT, 'agent topology is immutable');
+         END",
+        [],
+    )?;
+    tx.execute(
+        "CREATE TRIGGER IF NOT EXISTS operation_origins_no_delete
+         BEFORE DELETE ON operation_origins
+         BEGIN
+             SELECT RAISE(ABORT, 'operation origin is immutable');
+         END",
+        [],
+    )?;
+    tx.commit().map_err(StoreError::from)?;
+    Ok(())
+}
+
+/// Clone a session: copy the semantic conversation tree and every lane
+/// into a fresh durable session with history lineage pointing back at the
+/// source (DESIGN.md §13.2). The clone is a semantic snapshot at the
+/// main-lane tip; durable operation/agent/usage records stay with the
+/// source because they are execution history, not conversation content.
+fn clone_session(
+    connection: &mut Connection,
+    source: SessionId,
+    target: SessionId,
+    fork_source_entry_id: Option<EntryId>,
+    title: &str,
+) -> Result<(), StoreError> {
+    let loaded = load(connection, source)?;
+    if loaded.session.control_parent_session_id.is_some() {
+        return Err(StoreError::CloneHostedSession(source));
+    }
+    let tx = connection.transaction()?;
+    let now = now_ms();
+    // Copy the tree preserving shape: fresh entry ids (ids are globally
+    // unique and belong to the source) and a seq map from old id to new
+    // id so parent links and lane leaves survive the copy.
+    let mut statement = tx.prepare(
+        "SELECT id, parent_id, kind, payload, created_at FROM entries
+         WHERE session_id = ?1 ORDER BY seq",
+    )?;
+    let rows = statement
+        .query_map([source.as_uuid().to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    let mut id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for (id, _, _, _, _) in &rows {
+        let fresh = crate::ids::EntryId::generate().as_uuid().to_string();
+        id_map.insert(id.clone(), fresh);
+    }
+    tx.execute(
+        "INSERT INTO sessions (
+            id, created_at, updated_at, cwd, title, control_parent_session_id,
+            fork_source_session_id, fork_source_entry_id
+         ) VALUES (?1, ?2, ?2, ?3, ?4, NULL, ?5, ?6)",
+        rusqlite::params![
+            target.as_uuid().to_string(),
+            now,
+            loaded.session.cwd,
+            title,
+            source.as_uuid().to_string(),
+            fork_source_entry_id.map(|id| id.as_uuid().to_string()),
+        ],
+    )
+    .map_err(StoreError::from)?;
+    for (seq, (id, parent, kind, payload, created_at)) in rows.into_iter().enumerate() {
+        let mapped_parent = parent
+            .as_ref()
+            .and_then(|parent| id_map.get(parent).cloned());
+        tx.execute(
+            "INSERT INTO entries (
+                session_id, seq, id, parent_id, kind, payload, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                target.as_uuid().to_string(),
+                i64::try_from(seq).unwrap_or(i64::MAX) + 1,
+                id_map.get(&id).cloned().unwrap_or_else(|| id.clone()),
+                mapped_parent,
+                kind,
+                payload,
+                created_at,
+            ],
+        )
+        .map_err(StoreError::from)?;
+    }
+    // Lanes copy with remapped leaf pointers and a cleared
+    // open-operation/pending pointer: a clone must not resurrect a
+    // half-finished operation.
+    let mut statement = tx.prepare(
+        "SELECT name, leaf_id, config, created_at FROM lanes
+         WHERE session_id = ?1 ORDER BY name",
+    )?;
+    let lane_rows = statement
+        .query_map([source.as_uuid().to_string()], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(statement);
+    for (name, leaf, config, created_at) in lane_rows {
+        let mapped_leaf = leaf.as_ref().and_then(|leaf| id_map.get(leaf).cloned());
+        tx.execute(
+            "INSERT INTO lanes (
+                session_id, name, leaf_id, current_operation_id,
+                pending_entry_id, pending_prompt, config, created_at, updated_at
+            ) VALUES (?1, ?2, ?3, NULL, NULL, NULL, ?4, ?5, ?6)",
+            rusqlite::params![
+                target.as_uuid().to_string(),
+                name,
+                mapped_leaf,
+                config,
+                created_at,
+                now,
+            ],
+        )
+        .map_err(StoreError::from)?;
+    }
+    // The clone's own root agent row: durable family topology requires a
+    // root address even though control lineage is absent (a user clone).
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, NULL, ?2, 'main', 'root', NULL, NULL, ?3)",
+        rusqlite::params![
+            crate::ids::AgentId::root(target).as_uuid().to_string(),
+            target.as_uuid().to_string(),
+            now,
+        ],
+    )
+    .map_err(StoreError::from)?;
+    tx.commit().map_err(StoreError::from)?;
     Ok(())
 }
 
