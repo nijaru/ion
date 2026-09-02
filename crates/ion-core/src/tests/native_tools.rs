@@ -5,6 +5,58 @@ use super::support::*;
 // ---- Tool execution (read/write/edit/search/find/bash) unit tests ----
 
 #[tokio::test]
+async fn bash_timeout_kills_the_owned_process_group() {
+    let registry = ToolRegistry::with_cwd(".");
+    let outcome = tokio::time::timeout(
+        std::time::Duration::from_secs(2),
+        registry.execute(
+            "bash",
+            &json!({"command": "trap '' TERM; sleep 30", "timeout": 0.05}),
+            tokio_util::sync::CancellationToken::new(),
+        ),
+    )
+    .await
+    .expect("timed-out bash must settle");
+    assert!(outcome.is_error, "{outcome:?}");
+    assert!(
+        outcome.output.contains("timed out after 0.05 seconds"),
+        "{outcome:?}"
+    );
+}
+
+#[tokio::test]
+async fn bash_timeout_is_optional_and_invalid_values_are_rejected() {
+    let registry = ToolRegistry::with_cwd(".");
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    for timeout in [json!(0), json!(-1), json!("fast")] {
+        let outcome = registry
+            .execute(
+                "bash",
+                &json!({"command": "true", "timeout": timeout}),
+                cancel.clone(),
+            )
+            .await;
+        assert!(
+            outcome.is_error,
+            "invalid timeout accepted: {timeout}: {outcome:?}"
+        );
+        assert!(
+            outcome
+                .output
+                .contains("timeout must be a finite positive number"),
+            "{outcome:?}"
+        );
+    }
+
+    let outcome = registry
+        .execute("bash", &json!({"command": "printf no-timeout"}), cancel)
+        .await;
+    assert!(!outcome.is_error, "{outcome:?}");
+    assert_eq!(outcome.output, "no-timeout");
+}
+
+#[tokio::test]
 async fn read_write_edit_search_find_roundtrip() {
     let tmp = std::env::temp_dir().join(format!("ion-tool-test-{}-{}", std::process::id(), 1));
     let _ = std::fs::remove_dir_all(&tmp);

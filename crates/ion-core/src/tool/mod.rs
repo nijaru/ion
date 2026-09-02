@@ -1657,11 +1657,33 @@ impl BashTool {
         json!({
             "type": "object",
             "properties": {
-                "command": { "type": "string", "description": "Shell command to run with sh -c." }
+                "command": { "type": "string", "description": "Shell command to run with sh -c." },
+                "timeout": { "type": "number", "description": "Timeout in seconds (optional, no default timeout)." }
             },
             "required": ["command"]
         })
     }
+}
+
+const MAX_BASH_TIMEOUT_MS: u64 = 2_147_483_647;
+
+fn bash_timeout(arguments: &Value) -> Result<Option<std::time::Duration>, String> {
+    let Some(value) = arguments.get("timeout") else {
+        return Ok(None);
+    };
+    let Some(seconds) = value.as_f64() else {
+        return Err("timeout must be a finite positive number of seconds".to_owned());
+    };
+    if !seconds.is_finite() || seconds <= 0.0 {
+        return Err("timeout must be a finite positive number of seconds".to_owned());
+    }
+    if seconds * 1_000.0 > MAX_BASH_TIMEOUT_MS as f64 {
+        return Err(format!(
+            "timeout exceeds the maximum of {} seconds",
+            MAX_BASH_TIMEOUT_MS as f64 / 1_000.0
+        ));
+    }
+    Ok(Some(std::time::Duration::from_secs_f64(seconds)))
 }
 
 impl Tool for BashTool {
@@ -1695,6 +1717,10 @@ impl Tool for BashTool {
                 Some(c) => c.to_owned(),
                 None => return ToolOutcome::error("missing argument: command"),
             };
+            let timeout = match bash_timeout(&arguments) {
+                Ok(timeout) => timeout,
+                Err(error) => return ToolOutcome::error(error),
+            };
             let artifact_root = arguments
                 .get("__ion_artifact_root")
                 .and_then(Value::as_str)
@@ -1705,6 +1731,7 @@ impl Tool for BashTool {
                 self.sandbox,
                 artifact_root.as_deref(),
                 cancel,
+                timeout,
                 progress,
             )
             .await
@@ -2015,7 +2042,7 @@ async fn run_shell(
     artifact_root: Option<&Path>,
     cancel: CancellationToken,
 ) -> ToolOutcome {
-    run_shell_with_progress(cwd, command, sandbox, artifact_root, cancel, None).await
+    run_shell_with_progress(cwd, command, sandbox, artifact_root, cancel, None, None).await
 }
 
 async fn run_shell_with_progress(
@@ -2024,6 +2051,7 @@ async fn run_shell_with_progress(
     sandbox: SandboxMode,
     artifact_root: Option<&Path>,
     cancel: CancellationToken,
+    timeout: Option<std::time::Duration>,
     progress: Option<ToolProgressSender>,
 ) -> ToolOutcome {
     let mut cmd = match sandbox.command(cwd, "sh", &["-c", command]) {
@@ -2049,6 +2077,14 @@ async fn run_shell_with_progress(
         artifact_root.map(Path::to_path_buf),
         progress,
     ));
+
+    let timeout_for_wait = timeout;
+    let timeout_wait = async move {
+        match timeout_for_wait {
+            Some(duration) => tokio::time::sleep(duration).await,
+            None => std::future::pending().await,
+        }
+    };
 
     tokio::select! {
         status = process.wait() => {
@@ -2102,6 +2138,33 @@ async fn run_shell_with_progress(
             let message = collected.capture_error.map_or_else(
                 || "cancelled".to_owned(),
                 |error| format!("cancelled; output capture failed: {error}"),
+            );
+            if reaped {
+                process.disarm();
+            }
+            ToolOutcome::error(message).with_artifact(collected.artifact)
+        }
+        _ = timeout_wait => {
+            // A timeout owns the same process-group teardown as cancellation,
+            // but remains a distinct model-visible tool failure.
+            let reaped = process.kill_and_wait().await.is_ok();
+            let collected = match read_task.await {
+                Ok(collected) => collected,
+                Err(err) => CollectedOutput {
+                    output: String::new(),
+                    artifact: None,
+                    capture_error: Some(format!("output collector task failed: {err}")),
+                },
+            };
+            let message = collected.capture_error.map_or_else(
+                || match timeout {
+                    Some(duration) => format!(
+                        "command timed out after {} seconds",
+                        duration.as_secs_f64()
+                    ),
+                    None => "command timed out".to_owned(),
+                },
+                |error| format!("command timed out; output capture failed: {error}"),
             );
             if reaped {
                 process.disarm();
