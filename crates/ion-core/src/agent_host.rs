@@ -898,6 +898,14 @@ fn host_status_operation_id(status: &crate::agent::Status) -> Option<OperationId
     }
 }
 
+/// Test-only access to the model-facing observation renderer.
+#[cfg(test)]
+pub(crate) fn agent_host_render_observation_for_test(
+    observation: &crate::agent::Observation,
+) -> String {
+    render_family_observation(observation)
+}
+
 fn render_family_observation(observation: &crate::agent::Observation) -> String {
     let status = match &observation.status {
         crate::agent::Status::Admitted => "admitted".to_owned(),
@@ -917,10 +925,19 @@ fn render_family_observation(observation: &crate::agent::Observation) -> String 
             format!("finished ({operation_id}, {outcome:?})")
         }
     };
-    match &observation.result {
-        Some(result) => format!("agent {}: {status}\n\n{result}", observation.agent_id),
-        None => format!("agent {}: {status}", observation.agent_id),
-    }
+    let rendered_result = match &observation.result {
+        Some(result) => format!("\n\n{result}"),
+        None => match &observation.status {
+            // A finished agent without harvestable text completed with
+            // no final content (e.g. a reasoning-only completion). Say so
+            // explicitly so the observing model does not retry blindly.
+            crate::agent::Status::Finished { .. } => {
+                "\n\n(no final text was produced by this agent's last run)".to_owned()
+            }
+            _ => String::new(),
+        },
+    };
+    format!("agent {}: {status}{rendered_result}", observation.agent_id)
 }
 
 struct ForkContext {

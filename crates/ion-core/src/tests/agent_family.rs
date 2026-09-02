@@ -782,3 +782,88 @@ async fn family_wait_routes_to_live_separate_session_by_agent_address() {
     runtime.join().await.expect("join root");
     store.close().await.expect("close store");
 }
+
+/// Live dogfood 2026-09-01 (round 3): a lane agent whose model step
+/// completed with reasoning only (no final content) finished Completed
+/// with an empty assistant message, and `agent_status`/`agent_wait`
+/// rendered just a bare status line — indistinguishable from lost
+/// result plumbing, so the observing model retried blindly. The
+/// harvested result must stay None for empty text and the observation
+/// must state the degenerate outcome explicitly.
+#[tokio::test]
+async fn finished_agent_with_no_final_text_says_so_explicitly() {
+    #[derive(Clone)]
+    struct SilentProvider {
+        log: std::sync::Arc<std::sync::Mutex<Vec<crate::ProviderRequest>>>,
+    }
+
+    impl crate::Provider for SilentProvider {
+        fn run(
+            &self,
+            request: crate::ProviderRequest,
+            _cancel: CancellationToken,
+            out: mpsc::Sender<EngineSignal>,
+        ) -> impl Future<Output = ()> + Send {
+            let operation_id = request.operation_id;
+            let step = request.step;
+            let log = self.log.clone();
+            async move {
+                log.lock().expect("log poisoned").push(request);
+                // Reasoning-only completion: no TextDelta, straight stop.
+                let _ = out
+                    .send(EngineSignal::Completed { operation_id, step })
+                    .await;
+            }
+        }
+    }
+
+    let provider = SilentProvider {
+        log: std::sync::Arc::new(std::sync::Mutex::new(Vec::new())),
+    };
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_with_policy(
+        provider.clone(),
+        ToolCatalog::default(),
+        store.clone(),
+        permissive_policy(),
+    );
+    let family = runtime.agent_family(1).await.expect("family");
+    let agent = family
+        .admit_lane(family.root())
+        .await
+        .expect("agent admission");
+    family
+        .start(agent, "silent objective")
+        .await
+        .expect("agent start");
+
+    let status = timeout(
+        Duration::from_secs(2),
+        family.wait_one(agent, CancellationToken::new(), None),
+    )
+    .await
+    .expect("family wait timed out")
+    .expect("family wait");
+    let crate::AgentStatus::Finished { operation_id, .. } = status else {
+        panic!("expected completion without text, got {status:?}");
+    };
+    let observation = family
+        .observe_operation(agent, operation_id)
+        .await
+        .expect("observation");
+    assert_eq!(
+        observation.result, None,
+        "empty assistant text must not be harvested as a result"
+    );
+
+    // The model-facing renderer must surface the degenerate outcome.
+    let rendered = crate::agent_host::agent_host_render_observation_for_test(&observation);
+    assert!(
+        rendered.contains("no final text was produced"),
+        "renderer must state the empty outcome explicitly: {rendered}"
+    );
+
+    runtime.session().close().await.expect("close root");
+    runtime.join().await.expect("join root");
+    store.close().await.expect("close store");
+}

@@ -947,7 +947,14 @@ fn operation_result(
             .ok_or(Error::Inconsistent(agent_id))?;
         if result.is_none()
             && let crate::operation::SessionEntry::AssistantMessage { text } = &record.entry
+            && !text.is_empty()
         {
+            // An empty assistant message is not a semantic result: a
+            // reasoning-heavy completion can finish cleanly with no
+            // final content, and harvesting it as Some("") hides the
+            // degenerate outcome from the observing parent (live
+            // dogfood 2026-09-01). Keep it None so the renderer says
+            // "no result" explicitly.
             result = Some(text.clone());
         }
         cursor = record.parent;
