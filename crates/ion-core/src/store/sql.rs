@@ -293,16 +293,15 @@ fn delete_session(connection: &mut Connection, session_id: SessionId) -> Result<
     // delete-trigger-protected; the trigger is dropped for this
     // transaction's delete and recreated immediately, so origins leave
     // with their operation without weakening the invariant elsewhere.
-    let mut exists = false;
-    {
+    let exists = {
         let mut statement = tx.prepare(
             "SELECT 1 FROM sessions WHERE id = ?1 OR control_parent_session_id = ?1 LIMIT 1",
         )?;
-        exists = statement
+        statement
             .query([session_id.as_uuid().to_string()])?
             .next()?
-            .is_some();
-    }
+            .is_some()
+    };
     if !exists {
         tx.rollback().map_err(StoreError::from)?;
         return Err(StoreError::NotFound(session_id));

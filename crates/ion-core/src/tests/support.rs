@@ -24,7 +24,7 @@ pub(super) use crate::runtime::{
 };
 pub(super) use crate::store::{
     CheckpointPayload, CheckpointRecord, CommitRequest, EntryRecord, InboxRecord, SessionRecord,
-    SessionStore, SessionSummary, StoreError,
+    SessionStore, StoreError,
 };
 pub(super) use crate::tool::{
     RecoveryClass, Tool, ToolCall, ToolCatalog, ToolOutcome, ToolRegistry, ToolResult, ToolSpec,
