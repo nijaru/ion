@@ -46,6 +46,7 @@ pub async fn enable_agent_host<P>(
     make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     trusted_resources: Vec<ion_core::TrustedResource>,
     max_active_agents: usize,
+    agents_enabled: bool,
 ) -> Result<AgentHost<P>, ion_core::AgentError>
 where
     P: ion_core::Provider + 'static,
@@ -58,6 +59,7 @@ where
         None,
         trusted_resources,
         max_active_agents,
+        agents_enabled,
     )
     .await
 }
@@ -72,6 +74,7 @@ pub async fn enable_agent_host_with_model_resolver<P>(
     make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
     trusted_resources: Vec<ion_core::TrustedResource>,
     max_active_agents: usize,
+    agents_enabled: bool,
 ) -> Result<AgentHost<P>, ion_core::AgentError>
 where
     P: ion_core::Provider + 'static,
@@ -89,8 +92,14 @@ where
         },
         runtime.session_id(),
     );
-    ion_core::install_agent_host_tools(tools, runtime, Arc::clone(&family), Arc::clone(&hosted))
-        .await?;
+    ion_core::install_agent_host_tools(
+        tools,
+        runtime,
+        Arc::clone(&family),
+        Arc::clone(&hosted),
+        agents_enabled,
+    )
+    .await?;
     Ok(AgentHost { family, hosted })
 }
 
@@ -188,6 +197,30 @@ pub fn scripted_provider_factory(
 #[cfg(test)]
 mod provider_identity_tests {
     use super::*;
+
+    #[tokio::test]
+    async fn disabled_agent_host_does_not_publish_model_facing_controls() {
+        let store = ion_core::SessionStore::open_in_memory().expect("store");
+        let tools = ion_core::ToolCatalog::with_cwd("/tmp");
+        let runtime = ion_core::Runtime::start_with_policy(
+            ScriptedProvider::echo(),
+            tools.clone(),
+            store.clone(),
+            Arc::new(ion_core::DefaultPolicy),
+        );
+        let provider = Arc::new(|| ScriptedProvider::echo());
+        let agent_host =
+            enable_agent_host(&tools, &runtime, &store, provider, Vec::new(), 1, false)
+                .await
+                .expect("agent host");
+
+        assert!(!tools.specs().iter().any(|spec| spec.name == "spawn_agent"));
+
+        agent_host.close().await.expect("close agent host");
+        runtime.session().close().await.expect("close runtime");
+        runtime.join().await.expect("join runtime");
+        store.close().await.expect("close store");
+    }
 
     #[tokio::test]
     async fn raw_cli_provider_seeds_runtime_with_configured_model_identity() {

@@ -103,6 +103,10 @@ pub struct Settings {
     pub active_mcp_servers: Vec<String>,
     #[serde(default)]
     pub extensions: Vec<ExtensionConfig>,
+    /// Expose the family agent-control tools to the model-facing catalog.
+    /// Disabled by default, matching pi's opt-in subagent extension.
+    #[serde(default)]
+    enable_agents: bool,
     /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock).
     #[serde(default)]
     pub hide_thinking_block: bool,
@@ -163,6 +167,7 @@ impl Settings {
             mcp_servers: Vec::new(),
             active_mcp_servers: Vec::new(),
             extensions: Vec::new(),
+            enable_agents: false,
             hide_thinking_block: true,
         }
     }
@@ -193,6 +198,7 @@ impl Settings {
             mcp_servers: Vec::new(),
             active_mcp_servers: Vec::new(),
             extensions: Vec::new(),
+            enable_agents: false,
             hide_thinking_block: false,
         }
     }
@@ -211,6 +217,12 @@ impl Settings {
             Err(err) => return Err(format!("{}: {err}", path.display())),
         };
         toml::from_str(&text).map_err(|err| format!("{}: {err}", path.display()))
+    }
+
+    /// Whether model-facing family agent controls are enabled for this run.
+    #[must_use]
+    pub fn agents_enabled(&self) -> bool {
+        self.enable_agents
     }
 
     /// Resolve the configured provider and model. A provider prefix on the
@@ -345,6 +357,15 @@ mod tests {
             ["stealth/ox-alpha", "stealth/ox-beta"]
         );
         assert_eq!(settings.theme(), Theme::Light);
+    }
+
+    #[test]
+    fn agent_tools_are_disabled_by_default_and_explicitly_enableable() {
+        let defaults: Settings = toml::from_str("theme = \"dark\"").unwrap();
+        assert!(!defaults.agents_enabled());
+
+        let enabled: Settings = toml::from_str("enableAgents = true").unwrap();
+        assert!(enabled.agents_enabled());
     }
 
     #[test]

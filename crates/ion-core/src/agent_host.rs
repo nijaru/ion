@@ -546,9 +546,12 @@ pub async fn install_agent_host_tools<P: Provider + 'static>(
     runtime: &Runtime,
     family: Arc<crate::agent::Family>,
     hosted: Arc<HostedAgentRuntimes<P>>,
+    enabled: bool,
 ) -> Result<(), crate::agent::Error> {
-    catalog.register_structural_scope(AGENT_SCOPE, agent_host_tools(family, hosted));
-    runtime.admit_structural_scope(AGENT_SCOPE).await?;
+    if enabled {
+        catalog.register_structural_scope(AGENT_SCOPE, agent_host_tools(family, hosted));
+        runtime.admit_structural_scope(AGENT_SCOPE).await?;
+    }
     Ok(())
 }
 

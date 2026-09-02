@@ -151,6 +151,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
         store,
         policy,
         trust_project: cli.trust_project,
+        agents_enabled: settings.agents_enabled(),
     };
     let result = acp::serve(tokio::io::stdin(), tokio::io::stdout(), config).await;
     if let Err(err) = store_for_shutdown.close().await {
@@ -413,6 +414,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         make_provider_for_model,
         trusted_resources.clone(),
         4,
+        settings.agents_enabled(),
     )
     .await
     {
@@ -682,6 +684,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         Arc::clone(&make_provider),
         trusted_resources.clone(),
         4,
+        settings.agents_enabled(),
     )
     .await
     {

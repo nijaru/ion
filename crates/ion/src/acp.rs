@@ -36,6 +36,8 @@ pub struct AcpConfig<P> {
     pub store: Arc<SessionStore>,
     pub policy: Arc<dyn PolicyEngine>,
     pub trust_project: bool,
+    /// Enable model-facing family agent controls for ACP sessions.
+    pub agents_enabled: bool,
 }
 
 use ion_core::PolicyEngine;
@@ -576,6 +578,7 @@ where
         Arc::clone(&config.make_provider),
         trusted_resources,
         4,
+        config.agents_enabled,
     )
     .await
     {

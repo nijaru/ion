@@ -92,6 +92,7 @@ async fn start_agent_with_store(
         store,
         policy: Arc::new(AllowlistPolicy::new(["read"])),
         trust_project: false,
+        agents_enabled: false,
     };
     let task = tokio::spawn(async move { ion::acp::serve(server_in, server_write, config).await });
     let (read, _unused_write) = tokio::io::split(client_read);
