@@ -227,6 +227,14 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     let make_provider_for_model: Option<Arc<dyn Fn(String) -> CliProvider + Send + Sync>>;
     let model_name: Option<String>;
     let model_provider: Option<String>;
+    // Composition facts hoisted for the session-switch factory: the
+    // qualified resolver (provider-aware) and the provider-independent
+    // base material let any resumed session rebuild its own provider
+    // from its durable model reference (§14.8).
+    let mut make_qualified_provider: Option<Arc<dyn Fn(String) -> CliProvider + Send + Sync>> =
+        None;
+    let mut provider_base_material: Option<ProviderMaterial> = None;
+    let mut default_provider_label: Option<String> = None;
     let mut model_catalog = match settings.model_catalog() {
         Ok(catalog) => catalog,
         Err(err) => {
@@ -261,9 +269,12 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             ));
             let make_for_initial = Arc::clone(&make);
             make_provider = Arc::new(move || make_for_initial(initial.clone()));
-            make_provider_for_model = Some(make);
+            make_provider_for_model = Some(make.clone());
             model_name = Some(selection.model);
-            model_provider = Some(selection.provider);
+            model_provider = Some(selection.provider.clone());
+            make_qualified_provider = Some(make);
+            provider_base_material = Some(material);
+            default_provider_label = Some(selection.provider.clone());
         }
         Ok(None) => {
             // Test hook (smoke checklist): hold each scripted step open
@@ -373,74 +384,139 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     };
     let policy = policy_for(&cli.allow);
     // The TUI can grant approvals interactively (DESIGN.md §17.4);
-    // print/ACP hosts stay fail-closed.
-    let runtime = if let Some(session_id) = resume_session {
-        match Runtime::open_interactive(
-            root_provider,
-            tools.clone(),
-            (*store).clone(),
-            session_id,
-            Arc::clone(&policy),
-            trusted_resources.clone(),
-        )
-        .await
-        {
-            Ok(runtime) => runtime,
+    // print/ACP hosts stay fail-closed. The session manager owns the
+    // runtime stack for the attached session; the factory below is the
+    // single composition point for every runtime this process opens
+    // (initial and every /new /resume /clone switch).
+    let open_runtime: ion::session_manager::OpenRuntime = {
+        let tools = tools.clone();
+        let store = (*store).clone();
+        let policy = Arc::clone(&policy);
+        let trusted = trusted_resources.clone();
+        let make_provider = Arc::clone(&make_provider);
+        let make_provider_for_model = make_provider_for_model.clone();
+        let root_provider = Arc::clone(&root_provider);
+        let default_provider_label = default_provider_label
+            .clone()
+            .unwrap_or_else(|| "openrouter".to_owned());
+        let make_material = provider_base_material.clone().unwrap_or_default();
+        let make_provider_for_factory = Arc::clone(&make_provider);
+        let make_qualified = make_qualified_provider
+            .clone()
+            .unwrap_or_else(|| Arc::new(move |_model_ref: String| make_provider_for_factory()));
+        let agents_enabled = settings.agents_enabled();
+        Arc::new(move |start| {
+            let runtime_factory = |start: ion::session_manager::SessionStart| {
+                let root_provider = Arc::clone(&root_provider);
+                let tools = tools.clone();
+                let store = store.clone();
+                let policy = Arc::clone(&policy);
+                let trusted = trusted.clone();
+                let make_provider = Arc::clone(&make_provider);
+                let make_provider_for_model = make_provider_for_model.clone();
+                let default_provider_label = default_provider_label.clone();
+                let make_material = make_material.clone();
+                let make_qualified = Arc::clone(&make_qualified);
+                Box::pin(async move {
+                    let runtime = match start {
+                        ion::session_manager::SessionStart::New => Runtime::start_interactive(
+                            root_provider.clone(),
+                            tools.clone(),
+                            store.clone(),
+                            Arc::clone(&policy),
+                            trusted.clone(),
+                        ),
+                        ion::session_manager::SessionStart::Resume(session_id) => {
+                            // The durable model is authoritative (§14.8): a fresh
+                            // provider is composed for it, never the launch default.
+                            let loaded = store.load(session_id).await.map_err(|err| {
+                                ion_core::RuntimeError::OperationFailed(err.to_string())
+                            })?;
+                            let main_model = loaded.session.initial_model_ref.clone();
+                            let provider = make_cli_provider_for_model(
+                                &main_model,
+                                &default_provider_label,
+                                &make_material,
+                            );
+                            Runtime::open_interactive(
+                                ion_core::SwitchingProvider::switchable(
+                                    main_model.clone(),
+                                    provider,
+                                    Arc::clone(&make_qualified),
+                                ),
+                                tools.clone(),
+                                store.clone(),
+                                session_id,
+                                Arc::clone(&policy),
+                                trusted.clone(),
+                            )
+                            .await?
+                        }
+                    };
+                    // Hosted-agent service for this session's family; the boxed
+                    // teardown closes the stack in the manager's single order.
+                    let agent_host = ion::enable_agent_host_with_model_resolver(
+                        &tools,
+                        &runtime,
+                        &store,
+                        make_provider.clone(),
+                        make_provider_for_model.clone(),
+                        trusted.clone(),
+                        ion::AgentHostOptions {
+                            max_active_agents: 4,
+                            agents_enabled,
+                        },
+                    )
+                    .await;
+                    match agent_host {
+                        Ok(host) => Ok(ion::session_manager::OpenedRuntime {
+                            runtime,
+                            hosted_teardown: Some(Box::new(move || {
+                                Box::pin(async move { host.close().await })
+                            })),
+                        }),
+                        Err(err) => {
+                            let _ = runtime.session().close().await;
+                            let _ = runtime.join().await;
+                            Err(ion_core::RuntimeError::OperationFailed(format!(
+                                "agents: {err}"
+                            )))
+                        }
+                    }
+                })
+            };
+            runtime_factory(start)
+        })
+    };
+    let manager =
+        ion::session_manager::SessionManager::new((*store).clone(), Arc::clone(&open_runtime));
+    // The initial session opens through the same factory as every later
+    // switch: one composition point, one teardown order. The CLI's
+    // `--resume` already resolved the durable session id.
+    let initial_start = match resume_session {
+        Some(session_id) => ion::session_manager::SessionStart::Resume(session_id),
+        None => ion::session_manager::SessionStart::New,
+    };
+    let attached = match (open_runtime)(initial_start).await {
+        Ok(opened) => match manager.adopt(opened).await {
+            Ok(attached) => attached,
             Err(err) => {
                 restore_tui_startup_terminal(guard);
-                let _ = writeln!(io::stderr(), "resume: {err}");
-                if let Err(close_err) = tools.close().await {
-                    tracing::error!(error = %close_err, "failed to close the tool catalog");
-                }
-                if let Err(close_err) = store.close().await {
-                    tracing::error!(error = %close_err, "failed to close the session store");
-                }
-                return ExitCode::FAILURE;
+                let _ = writeln!(io::stderr(), "session: {err}");
+                return run_tui_cleanup_failure(tools, store).await;
             }
-        }
-    } else {
-        Runtime::start_interactive(
-            root_provider,
-            tools.clone(),
-            (*store).clone(),
-            Arc::clone(&policy),
-            trusted_resources.clone(),
-        )
-    };
-    let agent_host = match ion::enable_agent_host_with_model_resolver(
-        &tools,
-        &runtime,
-        &store,
-        Arc::clone(&make_provider),
-        make_provider_for_model,
-        trusted_resources.clone(),
-        ion::AgentHostOptions {
-            max_active_agents: 4,
-            agents_enabled: settings.agents_enabled(),
         },
-    )
-    .await
-    {
-        Ok(host) => host,
         Err(err) => {
             restore_tui_startup_terminal(guard);
-            let _ = writeln!(io::stderr(), "agents: {err}");
-            if let Err(close_err) = runtime.session().close().await {
-                tracing::error!(error = %close_err, "failed to close session after agent-host startup failure");
-            }
-            if let Err(join_err) = runtime.join().await {
-                tracing::error!(error = %join_err, "runtime join failed after agent-host startup failure");
-            }
-            if let Err(close_err) = tools.close().await {
-                tracing::error!(error = %close_err, "failed to close the tool catalog");
-            }
-            if let Err(close_err) = store.close().await {
-                tracing::error!(error = %close_err, "failed to close the session store");
-            }
-            return ExitCode::FAILURE;
+            let _ = if resume_session.is_some() {
+                writeln!(io::stderr(), "resume: {err}")
+            } else {
+                writeln!(io::stderr(), "session: {err}")
+            };
+            return run_tui_cleanup_failure(tools, store).await;
         }
     };
-    let session = runtime.session();
+    let session = attached.handle();
     let result = tui::run(
         session.clone(),
         resume_session,
@@ -455,29 +531,29 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),
         },
+        tui::SessionHost {
+            manager: Some(manager),
+            attached: Some(attached),
+        },
         guard,
     )
     .await;
     if result.is_err() {
         // The TUI died before its own close path; shut the actor down
-        // or join would await a task waiting on this very handle.
+        // or join would await a task waiting on this very handle. The
+        // attached session was consumed by tui::run's close path; only
+        // the handle fallback remains for the pre-adopt failure window.
         if let Err(err) = session.close().await {
             tracing::error!(error = %err, "failed to close the session after TUI failure");
         }
     }
 
-    // Every exit path joins the runtime and closes its owned resources once.
-    // A successful UI run is successful only when all three cleanup steps
-    // complete; an already-failed UI still reports each cleanup failure.
-    let join = runtime.join().await;
-    let agent_close = agent_host.close().await;
+    // The attached runtime stack (runtime join + hosted teardown) was
+    // closed inside tui::run via the session manager's single order;
+    // the process-owned catalog/store close last.
     let catalog_close = tools.close().await;
     let store_close = store.close().await;
     let mut cleanup_failed = false;
-    if let Err(err) = agent_close {
-        cleanup_failed = true;
-        tracing::error!(error = %err, "failed to close agent host");
-    }
     if let Err(err) = catalog_close {
         cleanup_failed = true;
         tracing::error!(error = %err, "failed to close the tool catalog");
@@ -485,10 +561,6 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     if let Err(err) = store_close {
         cleanup_failed = true;
         tracing::error!(error = %err, "failed to close the session store");
-    }
-    if let Err(err) = join {
-        cleanup_failed = true;
-        tracing::error!(error = %err, "runtime join failed");
     }
 
     match result {
@@ -499,6 +571,26 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             ExitCode::FAILURE
         }
     }
+}
+
+/// Shared close path for a run_tui startup failure after the terminal
+/// was restored: the manager/attachment never existed, so only the
+/// process-owned catalog and store close here.
+async fn run_tui_cleanup_failure(
+    tools: ion_core::ToolCatalog,
+    store: std::sync::Arc<SessionStore>,
+) -> ExitCode {
+    let mut failed = false;
+    if let Err(err) = tools.close().await {
+        failed = true;
+        tracing::error!(error = %err, "failed to close the tool catalog");
+    }
+    if let Err(err) = store.close().await {
+        failed = true;
+        tracing::error!(error = %err, "failed to close the session store");
+    }
+    let _ = failed;
+    ExitCode::FAILURE
 }
 
 /// `--model` wins; otherwise the settings default (pi-style: the

@@ -81,6 +81,22 @@ pub enum UiEffect {
     Approve,
     /// Deny the parked tool approval (§17.4).
     Deny,
+    /// Close the attached session and start a new durable one.
+    NewSession,
+    /// Close the attached session and reopen the requested durable one.
+    ResumeSession {
+        session: ion_core::SessionId,
+    },
+    /// Clone the attached session's history into a new durable session
+    /// and attach to it.
+    CloneSession,
+    /// Rename the attached session (durable, presentation-only).
+    RenameSession {
+        title: String,
+    },
+    /// Load picker rows from the store (the reducer cannot read the
+    /// store; the host resolves this into `SessionListed`).
+    RequestSessionList,
     Quit,
 }
 
@@ -109,6 +125,16 @@ pub enum UiMessage {
     CompactAccepted,
     SteerAccepted,
     SteerRejected(String),
+    /// The host delivered picker rows.
+    SessionListed(Vec<ion_core::SessionSummary>),
+    /// A session switch completed; the loop re-attaches.
+    SessionSwitched {
+        session: ion_core::SessionId,
+        title: String,
+    },
+    /// A session command failed; the draft is restored for retry.
+    SessionCommandFailed(String),
+    RenameAccepted,
 }
 
 /// The live operation presentation, derived from runtime events.
@@ -487,6 +513,27 @@ struct ModelSelector {
     saved_cursor: usize,
 }
 
+/// One session-picker row as presentation data. `summary` carries the
+/// durable identity; `label` is the rendered picker line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionRow {
+    id: ion_core::SessionId,
+    label: String,
+    title: String,
+    updated_at: u64,
+}
+
+/// Ephemeral searchable session picker, when open (mirrors ModelSelector:
+/// the composer is the filter query and the saved draft is restored on
+/// close).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionSelector {
+    rows: Vec<SessionRow>,
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
 /// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -532,6 +579,17 @@ pub struct UiState {
     model_catalog: Vec<String>,
     /// Ephemeral searchable model selector, when open.
     model_selector: Option<ModelSelector>,
+    /// Ephemeral session picker (`/resume`), when open. Rows are
+    /// host-supplied snapshots; selection returns a durable id.
+    session_selector: Option<SessionSelector>,
+    /// Durable identity of the attached session, for `/session` display
+    /// and clone/delete guards. Host-owned; the TUI never derives it.
+    session_id: Option<ion_core::SessionId>,
+    /// Durable session title for `/session` display.
+    session_title: Option<String>,
+    /// Query stashed between `/resume <q>` and the picker opening with the
+    /// host-delivered rows.
+    pending_resume_query: Option<String>,
     /// Whether settled tool rows render their output preview
     /// (ctrl+o, pi-parity app.tools.expand).
     tool_output_expanded: bool,
@@ -677,12 +735,116 @@ impl UiState {
         }
     }
 
+    fn open_session_selector(&mut self, rows: Vec<SessionRow>, query: &str) {
+        if self.session_selector.is_some() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer = query.to_owned();
+        self.cursor = self.composer.chars().count();
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        let selected = self
+            .filtered_session_rows()
+            .iter()
+            .position(|row| row.title.eq_ignore_ascii_case(query))
+            .unwrap_or(0);
+        self.session_selector = Some(SessionSelector {
+            rows,
+            selected,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_session_selector(&mut self) {
+        let Some(selector) = self.session_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_session_rows(&self) -> Vec<SessionRow> {
+        self.session_selector
+            .as_ref()
+            .map(|selector| {
+                let query = self.composer.to_lowercase();
+                selector
+                    .rows
+                    .iter()
+                    .filter(|row| fuzzy_contains(&row.label.to_lowercase(), &query))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    fn selected_session(&self) -> Option<ion_core::SessionId> {
+        let selector = self.session_selector.as_ref()?;
+        self.filtered_session_rows()
+            .get(selector.selected)
+            .map(|row| row.id)
+    }
+
+    fn move_session_selection(&mut self, delta: isize) {
+        let count = self.filtered_session_rows().len();
+        let Some(selector) = self.session_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn reset_session_selection(&mut self) {
+        let selected = self
+            .filtered_session_rows()
+            .iter()
+            .position(|row| row.title.eq_ignore_ascii_case(&self.composer))
+            .unwrap_or(0);
+        if let Some(selector) = self.session_selector.as_mut() {
+            selector.selected = selected;
+        }
+    }
+
     fn current_model_reference(&self) -> Option<String> {
         Some(format!(
             "{}/{}",
             self.model_provider.as_deref()?,
             self.model_name.as_deref()?
         ))
+    }
+
+    /// Presentation-only reset when the run loop attaches to a different
+    /// durable session: drafts, live operation state, and per-session
+    /// browsing belong to the old session and must not leak into the
+    /// new transcript. The composer draft survives only across model
+    /// switches; a session switch abandons it (the user asked for a
+    /// different conversation).
+    fn reset_for_session_switch(&mut self) {
+        self.draft.clear();
+        self.draft_thinking.clear();
+        self.draft_degraded = false;
+        self.tool_rows.clear();
+        self.status = UiStatus::Idle;
+        self.approval = None;
+        self.history_index = None;
+        self.history_stash = None;
+        self.pending_history = None;
+        self.hotkeys_visible = false;
+        self.model_selector = None;
+        self.session_selector = None;
+        self.pending_resume_query = None;
+        self.reset_composer();
     }
 
     fn reject_pending_history(&mut self) {
@@ -820,6 +982,34 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
                 .push(Line::from(format!("! {message}")).red());
             (state, None)
         }
+        UiMessage::SessionListed(summaries) => {
+            let query = state.pending_resume_query.take().unwrap_or_default();
+            let rows = summaries
+                .into_iter()
+                .map(|summary| session_row_for_picker(&summary))
+                .collect();
+            state.open_session_selector(rows, &query);
+            (state, None)
+        }
+        UiMessage::SessionSwitched { session, title } => {
+            // The loop re-attaches the runtime and resets presentation;
+            // the reducer records durable identity for /session.
+            state.session_id = Some(session);
+            state.session_title = Some(title);
+            (state, None)
+        }
+        UiMessage::SessionCommandFailed(message) => {
+            state
+                .pending_scrollback
+                .push(Line::from(format!("! {message}")).red());
+            (state, None)
+        }
+        UiMessage::RenameAccepted => {
+            state
+                .pending_scrollback
+                .push(Line::from("session renamed").dim());
+            (state, None)
+        }
     }
 }
 
@@ -862,9 +1052,51 @@ fn handle_model_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opt
     }
 }
 
+fn handle_session_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_session_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(session) = state.selected_session() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching sessions").red());
+                return (state, None);
+            };
+            state.close_session_selector();
+            (state, Some(UiEffect::ResumeSession { session }))
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_session_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_session_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_session_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_session_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
+    }
+    if state.session_selector.is_some() {
+        return handle_session_selector_key(state, key);
     }
     // A parked approval owns the keyboard (§17.4): only the decision
     // keys act; every other key is swallowed so a stray keystroke can
@@ -950,8 +1182,8 @@ fn notice(state: &mut UiState, text: &str) {
         .push(Line::from(text.to_owned()).dim());
 }
 
-/// Slash-command surface: /help, /compact, /model. Anything else is a
-/// visible unknown-command error, never a silent no-op.
+/// Slash-command surface. Anything unknown is a visible error, never a
+/// silent no-op.
 fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffect>) {
     let (name, rest) = match command.split_once(' ') {
         Some((name, rest)) => (name, rest.trim()),
@@ -962,6 +1194,11 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
                 "/model [id|number]      - pick or switch the model",
+                "/new                    - close this session and start a fresh one",
+                "/resume [query]         - pick a previous session to reopen",
+                "/name <title>           - rename this session",
+                "/session                - show this session's identity and size",
+                "/clone                  - duplicate this session's history into a new one",
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
                 "ctrl+j                  - insert a newline",
@@ -1004,6 +1241,74 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             state.open_model_selector(rest);
             (std::mem::take(state), None)
         }
+        "new" => {
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(
+                    state,
+                    "cannot start a new session while the current operation is running",
+                );
+                return (std::mem::take(state), None);
+            }
+            if state.approval.is_some() {
+                notice(state, "decide the pending approval first");
+                return (std::mem::take(state), None);
+            }
+            (std::mem::take(state), Some(UiEffect::NewSession))
+        }
+        "resume" => {
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(
+                    state,
+                    "cannot switch sessions while the current operation is running",
+                );
+                return (std::mem::take(state), None);
+            }
+            if state.approval.is_some() {
+                notice(state, "decide the pending approval first");
+                return (std::mem::take(state), None);
+            }
+            // The host resolves the list and the reducer opens the picker
+            // when the rows arrive; the query is stashed for that reopen.
+            state.pending_resume_query = (!rest.is_empty()).then(|| rest.to_owned());
+            (std::mem::take(state), Some(UiEffect::RequestSessionList))
+        }
+        "name" => {
+            if rest.is_empty() {
+                notice(state, "usage: /name <title>");
+                return (std::mem::take(state), None);
+            }
+            (
+                std::mem::take(state),
+                Some(UiEffect::RenameSession {
+                    title: rest.to_owned(),
+                }),
+            )
+        }
+        "session" => {
+            let id = state
+                .session_id
+                .map(|id| id.as_uuid().to_string())
+                .unwrap_or_else(|| "unknown".to_owned());
+            let title = state.session_title.as_deref().unwrap_or("");
+            let entries = state.history.len();
+            notice(
+                state,
+                &format!("session {id} · title: {title:?} · prompts this run: {entries}"),
+            );
+            (std::mem::take(state), None)
+        }
+        "clone" => {
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(state, "cannot clone while the current operation is running");
+                return (std::mem::take(state), None);
+            }
+            if state.approval.is_some() {
+                notice(state, "decide the pending approval first");
+                return (std::mem::take(state), None);
+            }
+            (std::mem::take(state), Some(UiEffect::CloneSession))
+        }
+        "quit" => (std::mem::take(state), Some(UiEffect::Quit)),
         other => {
             notice(state, &format!("unknown command: /{other} (try /help)"));
             (std::mem::take(state), None)
@@ -1030,10 +1335,12 @@ fn complete_composer(state: &mut UiState) {
         None => (
             "/".to_owned(),
             command.to_owned(),
-            ["compact", "help", "model"]
-                .into_iter()
-                .map(str::to_owned)
-                .collect(),
+            [
+                "clone", "compact", "help", "model", "name", "new", "resume", "session", "quit",
+            ]
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         ),
     };
     candidates.retain(|candidate| candidate.starts_with(&partial));
@@ -1061,6 +1368,55 @@ fn complete_composer(state: &mut UiState) {
         state.cursor = state.composer.chars().count();
         state.preferred_column = None;
         state.exit_history_browse();
+    }
+}
+
+/// Render one store summary as a picker row: the label is searchable
+/// (title + short id + relative recency) and carries the durable identity.
+fn session_row_for_picker(summary: &ion_core::SessionSummary) -> SessionRow {
+    let full_id = summary.id.as_uuid().to_string();
+    let short_id = &full_id[..8.min(full_id.len())];
+    let title = if summary.title.is_empty() {
+        short_id.to_owned()
+    } else {
+        summary.title.clone()
+    };
+    let age = relative_age(summary.updated_at);
+    let label = if summary.entry_count == 0 {
+        format!("{title} · {age} · empty")
+    } else {
+        format!("{title} · {age} · {} entries", summary.entry_count)
+    };
+    SessionRow {
+        id: summary.id,
+        label,
+        title,
+        updated_at: summary.updated_at,
+    }
+}
+
+/// Coarse recency for picker rows. Epoch-millisecond timestamps render as
+/// a human-relative hint, not a clock.
+fn relative_age(updated_at: u64) -> String {
+    if updated_at == 0 {
+        return "unknown age".to_owned();
+    }
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or(0);
+    let elapsed = now.saturating_sub(updated_at);
+    const MINUTE: u64 = 60_000;
+    const HOUR: u64 = 60 * MINUTE;
+    const DAY: u64 = 24 * HOUR;
+    if elapsed < MINUTE {
+        "just now".to_owned()
+    } else if elapsed < HOUR {
+        format!("{}m ago", elapsed / MINUTE)
+    } else if elapsed < DAY {
+        format!("{}h ago", elapsed / HOUR)
+    } else {
+        format!("{}d ago", elapsed / DAY)
     }
 }
 
@@ -1823,14 +2179,25 @@ fn suspend_and_rearm(
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
+/// Session-lifecycle attachment for the run loop: the manager owns
+/// runtime switching; `attached` is the current stack, consumed by the
+/// loop's close path. `None` marks a host without session switching
+/// (tests, embedded frontends).
+pub struct SessionHost {
+    pub manager: Option<crate::session_manager::SessionManager>,
+    pub attached: Option<crate::session_manager::AttachedSession>,
+}
+
 pub async fn run(
     session: SessionHandle,
     resume_session: Option<ion_core::SessionId>,
     theme: Theme,
     keymap: KeyMap,
     host: HostConfig,
+    session_host: SessionHost,
     mut terminal: TerminalSession,
 ) -> Result<(), RuntimeError> {
+    let SessionHost { manager, attached } = session_host;
     let switching_available = host.model_name.is_some();
 
     let palette = palette(theme);
@@ -1908,12 +2275,19 @@ pub async fn run(
     state.cwd_label = host.cwd_label.clone();
     state.branch = host.branch.clone();
     state.model_switching_available = switching_available;
+    state.session_id = attached
+        .as_ref()
+        .map(crate::session_manager::AttachedSession::session_id);
+    state.session_title = attached
+        .as_ref()
+        .map(crate::session_manager::AttachedSession::title)
+        .map(str::to_owned);
     if let Some(notice) = host.startup_notice {
         state
             .pending_scrollback
             .push(Line::from(format!("! {notice}")).yellow().bold());
     }
-    let (snapshot, mut events) = session.subscribe().await?;
+    let (snapshot, events) = session.subscribe().await?;
     let resume_entry_count = snapshot.reopen_entry_count.unwrap_or(0);
     // The session's durable selection is authoritative once subscribed;
     // a resumed session may have switched models in an earlier run.
@@ -1976,6 +2350,11 @@ pub async fn run(
         tokio::signal::unix::signal(tokio::signal::unix::SignalKind::from_raw(libc::SIGCONT))
             .map_err(|err| RuntimeError::OperationFailed(format!("signal setup failed: {err}")))?;
 
+    let mut attached = attached;
+    let mut session = session;
+    let mut events = events;
+    let mut resume_session = resume_session;
+
     loop {
         // Size changes are polled directly: resize events ride the same
         // fragile stream as keys.
@@ -2029,7 +2408,38 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(&session, &mut state, active_operation, effect).await;
+                            let switch = dispatch(
+                                &session,
+                                manager.as_ref(),
+                                &mut state,
+                                active_operation,
+                                effect,
+                            )
+                            .await;
+                            if let Some(switch) = switch {
+                                match switch_session(
+                                    manager.as_ref(),
+                                    &mut attached,
+                                    &mut session,
+                                    &mut events,
+                                    &mut resume_session,
+                                    &mut state,
+                                    &mut transcript,
+                                    &mut active_operation,
+                                    &palette,
+                                    switch,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        notice(
+                                            &mut state,
+                                            &format!("session switch failed: {err}"),
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     Some(Ok(InputEvent::Paste(text))) => {
@@ -2074,7 +2484,38 @@ pub async fn run(
                         let (next, effect) = update(state, UiMessage::Runtime(event));
                         state = next;
                         if let Some(effect) = effect {
-                            dispatch(&session, &mut state, active_operation, effect).await;
+                            let switch = dispatch(
+                                &session,
+                                manager.as_ref(),
+                                &mut state,
+                                active_operation,
+                                effect,
+                            )
+                            .await;
+                            if let Some(switch) = switch {
+                                match switch_session(
+                                    manager.as_ref(),
+                                    &mut attached,
+                                    &mut session,
+                                    &mut events,
+                                    &mut resume_session,
+                                    &mut state,
+                                    &mut transcript,
+                                    &mut active_operation,
+                                    &palette,
+                                    switch,
+                                )
+                                .await
+                                {
+                                    Ok(()) => {}
+                                    Err(err) => {
+                                        notice(
+                                            &mut state,
+                                            &format!("session switch failed: {err}"),
+                                        );
+                                    }
+                                }
+                            }
                         }
                     }
                     Err(RuntimeError::SubscriptionLagged) => {
@@ -2139,9 +2580,15 @@ pub async fn run(
     let finish_result = screen.finish(terminal.output());
     let flush_result = terminal.output().flush();
     let restore_result = terminal.restore();
-    let close_result = match session.close().await {
-        Ok(()) | Err(CommandError::Closed) => Ok(()),
-        Err(err) => Err(err.into()),
+    let close_result = match attached {
+        Some(attached) => match attached.close().await {
+            Ok(()) => Ok(()),
+            Err(err) => Err(err),
+        },
+        None => match session.close().await {
+            Ok(()) | Err(CommandError::Closed) => Ok(()),
+            Err(err) => Err(err.into()),
+        },
     };
 
     let mut shutdown_error = result.err();
@@ -2169,93 +2616,196 @@ pub async fn run(
     shutdown_error.map_or(Ok(()), Err)
 }
 
+/// Perform one session switch inside the run loop: close the attached
+/// stack through the manager, adopt the next session, reset all live
+/// presentation (transcript, drafts, status), and re-subscribe. Only
+/// the loop owns these locals, so the swap is one synchronous step the
+/// event stream cannot interleave.
+#[allow(clippy::too_many_arguments)]
+async fn switch_session(
+    manager: Option<&crate::session_manager::SessionManager>,
+    attached: &mut Option<crate::session_manager::AttachedSession>,
+    session: &mut SessionHandle,
+    events: &mut ion_core::EventSubscription,
+    resume_session: &mut Option<ion_core::SessionId>,
+    state: &mut UiState,
+    transcript: &mut Transcript,
+    active_operation: &mut Option<ion_core::OperationId>,
+    palette: &render::Palette,
+    switch: SessionSwitch,
+) -> Result<(), RuntimeError> {
+    let Some(manager) = manager else {
+        return Ok(());
+    };
+    let Some(current) = attached.take() else {
+        return Ok(());
+    };
+    let start = match switch {
+        SessionSwitch::New => crate::session_manager::SessionStart::New,
+        SessionSwitch::Resume(session) => crate::session_manager::SessionStart::Resume(session),
+        SessionSwitch::Clone(target) => crate::session_manager::SessionStart::Resume(target),
+    };
+    let next = manager
+        .switch(current, start)
+        .await
+        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+
+    // Adopt the new attachment and reset presentation wholesale.
+    let new_session_id = next.session_id();
+    let new_title = next.title().to_owned();
+    let handle = next.handle();
+    let (snapshot, fresh) = handle
+        .subscribe()
+        .await
+        .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    *attached = Some(next);
+    *session = handle;
+    *events = fresh;
+    *resume_session = Some(new_session_id);
+
+    state.session_id = Some(new_session_id);
+    state.session_title = Some(new_title.clone());
+    // Presentation-only state that belongs to the previous session's
+    // live operation: drafts, tool rows, status, approvals, history.
+    state.reset_for_session_switch();
+
+    transcript.clear();
+    append_snapshot_entries(
+        transcript,
+        &snapshot.entries,
+        snapshot.reopen_entry_count.unwrap_or(0),
+        *resume_session,
+        palette,
+    );
+    *active_operation = match &snapshot.operation {
+        OperationStatus::Active { operation_id, .. } => Some(*operation_id),
+        OperationStatus::Idle => None,
+    };
+    state.usage = snapshot.latest_usage;
+    if matches!(snapshot.operation, OperationStatus::Idle) {
+        state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
+    }
+    state.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
+    Ok(())
+}
+
+/// A session switch the run loop must perform by rebuilding the runtime
+/// attachment. Returned by `dispatch` when a session effect completes
+/// successfully; the reducer has already accepted the presentation side.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SessionSwitch {
+    New,
+    Resume(ion_core::SessionId),
+    Clone(ion_core::SessionId),
+}
+
 /// Execute one reducer effect against the session; acceptance and
-/// rejection return to the reducer as messages.
+/// rejection return to the reducer as messages. Session-switch effects
+/// are returned to the caller: only the run loop owns runtime
+/// lifecycle, so it performs the switch and re-attaches.
 async fn dispatch(
     session: &SessionHandle,
+    manager: Option<&crate::session_manager::SessionManager>,
     state: &mut UiState,
     active_operation: Option<ion_core::OperationId>,
     effect: UiEffect,
-) {
+) -> Option<SessionSwitch> {
     match effect {
         UiEffect::Quit => {
             state.quit_requested = true;
+            None
         }
-        UiEffect::Submit { text } => match session.submit_if_idle(text).await {
-            Ok(_) => {
-                let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
-                *state = next;
-            }
-            Err(err) => {
-                let (next, _) = update(
-                    std::mem::take(state),
-                    UiMessage::SubmitRejected(err.to_string()),
-                );
-                *state = next;
-            }
-        },
-        UiEffect::Enqueue { text } => match session.next_run(text).await {
-            Ok(_) => {
-                let (next, _) = update(std::mem::take(state), UiMessage::EnqueueAccepted);
-                *state = next;
-            }
-            Err(err) => {
-                let (next, _) = update(
-                    std::mem::take(state),
-                    UiMessage::EnqueueRejected(err.to_string()),
-                );
-                *state = next;
-            }
-        },
-        UiEffect::Compact { instructions } => match session.compact(instructions).await {
-            Ok(true) => {
-                let (next, _) = update(std::mem::take(state), UiMessage::CompactAccepted);
-                *state = next;
-            }
-            Ok(false) => {
-                for line in [
-                    "nothing to compact: compaction runs within an active operation",
-                    "run /compact while a turn is running, or rely on automatic compaction near the model window",
-                ] {
-                    notice(state, line);
+        UiEffect::Submit { text } => {
+            match session.submit_if_idle(text).await {
+                Ok(_) => {
+                    let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
+                    *state = next;
+                }
+                Err(err) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::SubmitRejected(err.to_string()),
+                    );
+                    *state = next;
                 }
             }
-            Err(err) => notice(state, &format!("compact failed: {err}")),
-        },
-        UiEffect::SwitchModel { model } => match session.switch_model(&model).await {
-            Ok(previous) => {
-                let (provider, model_name) =
-                    model_display_parts(&model, state.model_provider.as_deref());
-                state.model_provider = provider;
-                state.model_name = Some(model_name);
-                notice(state, &format!("model switched: {previous} -> {model}"));
-                let (next, _) = update(std::mem::take(state), UiMessage::ModelSwitchAccepted);
-                *state = next;
+            None
+        }
+        UiEffect::Enqueue { text } => {
+            match session.next_run(text).await {
+                Ok(_) => {
+                    let (next, _) = update(std::mem::take(state), UiMessage::EnqueueAccepted);
+                    *state = next;
+                }
+                Err(err) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::EnqueueRejected(err.to_string()),
+                    );
+                    *state = next;
+                }
             }
-            Err(err) => notice(state, &format!("model switch failed: {err}")),
-        },
-        UiEffect::Steer { text } => match session.steer(text).await {
-            Ok(()) => {
-                let (next, _) = update(std::mem::take(state), UiMessage::SteerAccepted);
-                *state = next;
+            None
+        }
+        UiEffect::Compact { instructions } => {
+            match session.compact(instructions).await {
+                Ok(true) => {
+                    let (next, _) = update(std::mem::take(state), UiMessage::CompactAccepted);
+                    *state = next;
+                }
+                Ok(false) => {
+                    for line in [
+                        "nothing to compact: compaction runs within an active operation",
+                        "run /compact while a turn is running, or rely on automatic compaction near the model window",
+                    ] {
+                        notice(state, line);
+                    }
+                }
+                Err(err) => notice(state, &format!("compact failed: {err}")),
             }
-            Err(err) => {
-                let (next, _) = update(
-                    std::mem::take(state),
-                    UiMessage::SteerRejected(err.to_string()),
-                );
-                *state = next;
+            None
+        }
+        UiEffect::SwitchModel { model } => {
+            match session.switch_model(&model).await {
+                Ok(previous) => {
+                    let (provider, model_name) =
+                        model_display_parts(&model, state.model_provider.as_deref());
+                    state.model_provider = provider;
+                    state.model_name = Some(model_name);
+                    notice(state, &format!("model switched: {previous} -> {model}"));
+                    let (next, _) = update(std::mem::take(state), UiMessage::ModelSwitchAccepted);
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("model switch failed: {err}")),
             }
-        },
+            None
+        }
+        UiEffect::Steer { text } => {
+            match session.steer(text).await {
+                Ok(()) => {
+                    let (next, _) = update(std::mem::take(state), UiMessage::SteerAccepted);
+                    *state = next;
+                }
+                Err(err) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::SteerRejected(err.to_string()),
+                    );
+                    *state = next;
+                }
+            }
+            None
+        }
         UiEffect::Approve | UiEffect::Deny => {
             let allow = matches!(effect, UiEffect::Approve);
-            let Some(operation_id) = active_operation else {
+            if let Some(operation_id) = active_operation {
+                if let Err(err) = session.decide_approval(operation_id, allow).await {
+                    notice(state, &format!("approval decision failed: {err}"));
+                }
+            } else {
                 notice(state, "approval: no active operation");
-                return;
-            };
-            if let Err(err) = session.decide_approval(operation_id, allow).await {
-                notice(state, &format!("approval decision failed: {err}"));
             }
+            None
         }
         UiEffect::Cancel => {
             if let Some(operation_id) = active_operation
@@ -2263,6 +2813,70 @@ async fn dispatch(
             {
                 notice(state, &format!("cancel failed: {err}"));
             }
+            None
+        }
+        UiEffect::RequestSessionList => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            match manager.list().await {
+                Ok(summaries) => {
+                    // The picker never offers the attached session: resuming
+                    // it is a no-op with confusing UX.
+                    let summaries = summaries
+                        .into_iter()
+                        .filter(|summary| Some(summary.id) != state.session_id)
+                        .collect::<Vec<_>>();
+                    let (next, _) =
+                        update(std::mem::take(state), UiMessage::SessionListed(summaries));
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("session list failed: {err}")),
+            }
+            None
+        }
+        UiEffect::NewSession => Some(SessionSwitch::New),
+        UiEffect::ResumeSession { session } => Some(SessionSwitch::Resume(session)),
+        UiEffect::CloneSession => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(source) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            let title = state.session_title.clone().unwrap_or_default();
+            match manager
+                .clone_session(source, &format!("{title} (clone)"))
+                .await
+            {
+                Ok(target) => Some(SessionSwitch::Clone(target)),
+                Err(err) => {
+                    notice(state, &format!("clone failed: {err}"));
+                    None
+                }
+            }
+        }
+        UiEffect::RenameSession { title } => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(session) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            match manager.rename(session, &title).await {
+                Ok(()) => {
+                    state.session_title = Some(title);
+                    let (next, _) = update(std::mem::take(state), UiMessage::RenameAccepted);
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("rename failed: {err}")),
+            }
+            None
         }
     }
 }
@@ -2456,7 +3070,8 @@ pub(crate) mod tests {
         let state = type_text(UiState::new(), "/");
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
-        assert_eq!(state.pending_scrollback.len(), 3);
+        // Every registered command is offered (Pi parity surface).
+        assert_eq!(state.pending_scrollback.len(), 9);
     }
 
     #[test]
@@ -3766,5 +4381,180 @@ mod display_surface_tests {
                 .iter()
                 .any(|line| line.to_string().contains("secret"))
         );
+    }
+}
+
+#[cfg(test)]
+mod session_command_tests {
+    use super::tests::key;
+    use super::*;
+
+    fn command(state: UiState, input: &str) -> (UiState, Option<UiEffect>) {
+        let mut state = state;
+        handle_command(&mut state, input)
+    }
+
+    #[test]
+    fn session_commands_are_dispatched_with_busy_and_approval_guards() {
+        // /new, /resume, /clone refuse while working or an approval waits.
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "running bash".to_owned(),
+        };
+        let (state, effect) = command(state, "new");
+        assert!(effect.is_none());
+        let (state, _) = command(state, "resume");
+        assert!(!state.pending_scrollback.is_empty(), "busy guard notices");
+        let (_state, effect) = command(state, "clone");
+        assert!(effect.is_none());
+
+        let mut state = UiState::new();
+        state.approval = Some(ApprovalPrompt {
+            tool: "bash".to_owned(),
+            target: None,
+        });
+        let (state, effect) = command(state, "new");
+        assert!(effect.is_none());
+        let (state, _) = command(state, "resume");
+        assert!(!state.pending_scrollback.is_empty());
+        let (_state, effect) = command(state, "clone");
+        assert!(effect.is_none());
+    }
+
+    #[test]
+    fn new_and_clone_return_session_switch_effects() {
+        let mut state = UiState::new();
+        state.session_id = Some(
+            ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000001").expect("session id"),
+        );
+        state.session_title = Some("root session".to_owned());
+        let (state, effect) = command(state, "new");
+        assert_eq!(effect, Some(UiEffect::NewSession));
+        let (_state, effect) = command(state, "clone");
+        assert_eq!(effect, Some(UiEffect::CloneSession));
+    }
+
+    #[test]
+    fn resume_requests_the_session_list_and_opens_the_picker_with_rows() {
+        let mut state = UiState::new();
+        state.session_id = Some(
+            ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000001").expect("session id"),
+        );
+        let (state, effect) = command(state, "resume");
+        assert_eq!(effect, Some(UiEffect::RequestSessionList));
+        assert!(state.session_selector.is_none(), "picker waits for rows");
+
+        // The host delivers only other sessions; the reducer opens the
+        // picker and preserves the query.
+        let summaries = vec![ion_core::SessionSummary {
+            id: ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000002").expect("id"),
+            title: "debug parser".to_owned(),
+            updated_at: 0,
+            entry_count: 4,
+        }];
+        let (state, _) = update(state, UiMessage::SessionListed(summaries));
+        assert!(state.session_selector.is_some());
+        assert_eq!(state.filtered_session_rows().len(), 1);
+
+        // Arrow + enter selects the durable id; escape restores the draft.
+        let (state, _) = update(state, key(KeyCode::Down));
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        let session = ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000002")
+            .expect("selected session");
+        assert_eq!(effect, Some(UiEffect::ResumeSession { session }));
+        assert!(state.session_selector.is_none());
+
+        let mut state = UiState::new();
+        state.composer = "draft survives".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (state, _) = command(state, "resume");
+        let (state, _) = update(
+            state,
+            UiMessage::SessionListed(vec![ion_core::SessionSummary {
+                id: ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000002").expect("id"),
+                title: "other".to_owned(),
+                updated_at: 0,
+                entry_count: 1,
+            }]),
+        );
+        let (state, _) = update(state, key(KeyCode::Esc));
+        assert_eq!(state.composer, "draft survives");
+        assert!(state.session_selector.is_none());
+    }
+
+    #[test]
+    fn name_and_session_commands_rename_and_display_identity() {
+        let mut state = UiState::new();
+        state.session_id = Some(
+            ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000003").expect("session id"),
+        );
+        state.session_title = Some("old".to_owned());
+        let (state, effect) = command(state, "name  deep dive  ");
+        assert_eq!(
+            effect,
+            Some(UiEffect::RenameSession {
+                title: "deep dive".to_owned(),
+            })
+        );
+        let (_state, effect) = command(state, "name");
+        assert_eq!(effect, None);
+
+        let mut state = UiState::new();
+        state.session_id = Some(
+            ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000003").expect("session id"),
+        );
+        state.session_title = Some("titled".to_owned());
+        let (state, _) = command(state, "session");
+        let rendered = state
+            .pending_scrollback
+            .iter()
+            .map(ToString::to_string)
+            .collect::<String>();
+        assert!(rendered.contains("titled"), "{rendered}");
+    }
+
+    #[test]
+    fn quit_command_requests_quit() {
+        let (state, effect) = command(UiState::new(), "quit");
+        assert_eq!(effect, Some(UiEffect::Quit));
+        assert!(!state.quit_requested, "dispatch sets quit, not the reducer");
+    }
+
+    #[test]
+    fn switch_reset_clears_live_state_but_keeps_display_config() {
+        let mut state = UiState::new();
+        state.draft = "partial output".to_owned();
+        state.draft_thinking = "thinking".to_owned();
+        state.tool_rows.push(ToolRow {
+            tool: "bash".to_owned(),
+            target: Some("cargo build".to_owned()),
+            state: ToolState::Running,
+            progress: None,
+            preview: None,
+        });
+        state.status = UiStatus::Working {
+            operation: "running".to_owned(),
+        };
+        state.model_catalog = vec!["provider/model".to_owned()];
+        state.model_switching_available = true;
+        state.reset_for_session_switch();
+        assert!(state.draft.is_empty());
+        assert!(state.tool_rows.is_empty());
+        assert_eq!(state.status, UiStatus::Idle);
+        assert_eq!(state.model_catalog.len(), 1, "display config survives");
+        assert!(state.model_switching_available);
+    }
+
+    #[test]
+    fn picker_row_renders_title_and_recency() {
+        let summary = ion_core::SessionSummary {
+            id: ion_core::SessionId::parse("01928fa1-0000-7000-8000-000000000004").expect("id"),
+            title: String::new(),
+            updated_at: 0,
+            entry_count: 0,
+        };
+        let row = session_row_for_picker(&summary);
+        assert!(row.label.contains("unknown age"), "{}", row.label);
+        assert!(row.label.ends_with("empty"), "{}", row.label);
     }
 }

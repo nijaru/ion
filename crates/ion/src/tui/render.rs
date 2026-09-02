@@ -337,7 +337,7 @@ const LIVE_CHROME_ROWS: usize = 5;
 const MAX_MODEL_SELECTOR_OPTIONS: usize = 2;
 
 pub(super) fn live_region_height(state: &UiState) -> usize {
-    if state.model_selector.is_some() {
+    if state.model_selector.is_some() || state.session_selector.is_some() {
         LIVE_REGION_MAX_ROWS
     } else {
         LIVE_REGION_BASE_ROWS
@@ -419,6 +419,49 @@ fn model_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec
     lines
 }
 
+fn session_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_session_rows();
+    let selected = state
+        .session_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = vec![selector_row(
+        Line::from(if query.is_empty() {
+            "select session".to_owned()
+        } else {
+            format!("select session · {query}")
+        })
+        .style(palette.system_note),
+        width,
+    )];
+    if rows.is_empty() {
+        lines.push(selector_row(
+            Line::from("  no matching sessions").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let start = selected
+            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
+            .min(rows.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
+        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(rows.len());
+        for (index, row) in rows.iter().enumerate().take(end).skip(start) {
+            let marker = if index == selected { ">" } else { " " };
+            let current = state.session_id == Some(row.id);
+            let suffix = if current { "  (current)" } else { "" };
+            lines.push(selector_row(
+                Line::from(format!("  {marker} {}{suffix}", row.label)).style(palette.system_note),
+                width,
+            ));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
 /// The live band below the committed transcript. Returns at most
 /// LIVE_REGION_MAX_ROWS rows plus the hardware cursor position relative
 /// to the band; `Screen` bottom-aligns it inside the stable virtual band.
@@ -457,7 +500,6 @@ pub(super) fn build_live_at_height(
         lines.extend(composer_rows);
         return (lines, cursor);
     }
-
     // Composer first: it is anchored to the band's bottom and owns the
     // hardware cursor. Long drafts keep the viewport around the cursor.
     let (composer_rows, composer_cursor) = limit_composer_rows(
@@ -469,6 +511,8 @@ pub(super) fn build_live_at_height(
     let mut head: Vec<Line<'static>> = Vec::new();
     if state.model_selector.is_some() {
         head.extend(model_selector_lines(state, palette, width));
+    } else if state.session_selector.is_some() {
+        head.extend(session_selector_lines(state, palette, width));
     } else if state.hotkeys_visible {
         head.extend(help::hotkey_lines(&state.keymap, palette));
     }

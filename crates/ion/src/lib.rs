@@ -5,6 +5,7 @@ pub mod acp;
 pub mod openai_codex;
 pub mod openrouter;
 pub mod print;
+pub mod session_manager;
 pub mod settings;
 pub mod tui;
 
