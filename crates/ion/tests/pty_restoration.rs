@@ -524,7 +524,7 @@ fn slash_commands_render_notices_without_runtime_calls() {
         "/model shows the provider"
     );
 
-    // /compact while idle explains itself.
+    // /compact while idle explains itself, including the path forward.
     session
         .master_write
         .write_all(b"/compact\r")
@@ -532,6 +532,13 @@ fn slash_commands_render_notices_without_runtime_calls() {
     assert!(
         session.wait_for_output("nothing to compact", std::time::Duration::from_secs(10)),
         "idle /compact explains itself"
+    );
+    assert!(
+        session.wait_for_output(
+            "automatic compaction near the model window",
+            std::time::Duration::from_secs(10),
+        ),
+        "idle /compact hint must mention the automatic path"
     );
     // ctrl+d exits from an empty, idle composer.
     session.master_write.write_all(&[0x04]).ok();

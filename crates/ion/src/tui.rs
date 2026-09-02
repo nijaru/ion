@@ -1968,10 +1968,14 @@ async fn dispatch(
                 let (next, _) = update(std::mem::take(state), UiMessage::CompactAccepted);
                 *state = next;
             }
-            Ok(false) => notice(
-                state,
-                "nothing to compact: compaction runs within an operation",
-            ),
+            Ok(false) => {
+                for line in [
+                    "nothing to compact: compaction runs within an active operation",
+                    "run /compact while a turn is running, or rely on automatic compaction near the model window",
+                ] {
+                    notice(state, line);
+                }
+            }
             Err(err) => notice(state, &format!("compact failed: {err}")),
         },
         UiEffect::SwitchModel { model } => match session.switch_model(&model).await {
@@ -2925,6 +2929,45 @@ pub(crate) mod tests {
         assert!(
             text.iter().all(|line| !line.contains("cost")),
             "cost must stay absent until a provider pricing contract exists: {text:?}"
+        );
+    }
+
+    #[test]
+    fn narrow_footer_keeps_usage_and_provider_separated() {
+        // Found live in the 2026-09-01 dogfood: at ~60 columns the
+        // usage label and the right-aligned provider/model ran
+        // together with no separator because the padding saturated
+        // to zero. The footer must keep a visible boundary (drop to
+        // an ellipsis) rather than gluing the two segments.
+        let operation_id = OperationId::generate();
+        let mut state = apply_runtime_event(
+            UiState::new(),
+            RuntimeEvent::UsageUpdate {
+                cursor: Default::default(),
+                operation_id,
+                usage: TokenUsage {
+                    input: 100,
+                    output: 20,
+                    cache_read: 60,
+                    cache_write: 4,
+                },
+            },
+        );
+        state.model_name = Some("z-ai/glm-5.3-flash".to_owned());
+        state.model_provider = Some("openrouter".to_owned());
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 60);
+        let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        let footer = text
+            .iter()
+            .find(|line| line.contains("ctx 184"))
+            .expect("usage footer line");
+        assert!(
+            footer.contains("\u{2026}"),
+            "narrow footer must elide instead of gluing segments: {footer:?}"
+        );
+        assert!(
+            !footer.ends_with(' ') && footer.chars().count() <= 60,
+            "footer must not exceed the width or trail spaces: {footer:?}"
         );
     }
 

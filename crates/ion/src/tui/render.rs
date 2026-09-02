@@ -375,6 +375,9 @@ pub(super) fn build_live(
 
     // Right-align provider/model while keeping usage on the left. The
     // assembled line ends at the same column as the rule (width - 1).
+    // At narrow widths there may not be room for both segments: keep the
+    // usage prefix and elide the provider/model with an ellipsis rather
+    // than gluing the two segments together (2026-09-01 dogfood finding).
     let content_width = width.saturating_sub(1);
     let usage_prefix = usage_label.as_deref().unwrap_or("");
     let left_width = usage_prefix.width() + usize::from(!usage_prefix.is_empty()) + 1;
@@ -382,14 +385,34 @@ pub(super) fn build_live(
         .saturating_sub(left_width)
         .saturating_sub(provider_model.width())
         .saturating_sub(1);
+    let (visible_provider, provider_width) = if pad == 0 {
+        // No room for the provider plus a separating space: show an
+        // ellipsis if even that fits inside the remaining columns.
+        let remaining = content_width.saturating_sub(left_width).saturating_sub(1);
+        if remaining >= 1 {
+            ("\u{2026}".to_owned(), 1)
+        } else {
+            (String::new(), 0)
+        }
+    } else {
+        (provider_model.clone(), provider_model.width())
+    };
+    let pad = content_width
+        .saturating_sub(left_width)
+        .saturating_sub(provider_width)
+        .saturating_sub(1);
     let usage_text = if usage_prefix.is_empty() {
         " ".to_owned()
     } else {
         format!(" {usage_prefix} ")
     };
     lines.push(
-        Line::from(format!("{usage_text}{}{}", " ".repeat(pad), provider_model))
-            .style(palette.status_segment),
+        Line::from(format!(
+            "{usage_text}{}{}",
+            " ".repeat(pad),
+            visible_provider
+        ))
+        .style(palette.status_segment),
     );
 
     (lines, cursor)
