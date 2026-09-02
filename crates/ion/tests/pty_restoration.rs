@@ -518,10 +518,10 @@ fn slash_commands_render_notices_without_runtime_calls() {
         .expect("write /model");
     assert!(
         session.wait_for_output(
-            "model: (scripted provider)",
+            "model switching unavailable (scripted provider)",
             std::time::Duration::from_secs(10)
         ),
-        "/model shows the provider"
+        "/model explains why scripted model switching is unavailable"
     );
 
     // /compact while idle explains itself, including the path forward.

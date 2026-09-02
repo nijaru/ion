@@ -28,7 +28,7 @@ struct Cli {
     #[arg(short = 'p', long = "print", value_name = "PROMPT")]
     print: Option<String>,
     /// Run against a real provider/model (e.g. desktop/qwen3.8:27b,
-    /// openai-codex/gpt-5.6-luna, or openrouter/stealth/ox-alpha) instead
+    /// openai-codex/gpt-5.6-luna, or openrouter/z-ai/glm-5.3-flash) instead
     /// of the scripted provider.
     #[arg(long = "model", value_name = "MODEL")]
     model: Option<String>,
@@ -247,10 +247,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             let make_material = material.clone();
             let make: Arc<dyn Fn(String) -> CliProvider + Send + Sync> =
                 Arc::new(move |model_ref: String| {
-                    make_cli_provider(&model_ref, &default_provider, &make_material)
+                    make_cli_provider_for_model(&model_ref, &default_provider, &make_material)
                 });
-            if !model_catalog.iter().any(|model| model == &selection.model) {
-                model_catalog.push(selection.model.clone());
+            let qualified_model = format!("{}/{}", selection.provider, selection.model);
+            if !model_catalog.iter().any(|model| model == &qualified_model) {
+                model_catalog.push(qualified_model);
             }
             let initial = selection.model.clone();
             root_provider = Arc::new(ion_core::SwitchingProvider::switchable(
@@ -528,7 +529,7 @@ fn provider_factory(
             let material = provider_material(&selection, settings)?;
             let default_provider = selection.provider.clone();
             let model_ref = selection.model.clone();
-            Arc::new(move || make_cli_provider(&model_ref, &default_provider, &material))
+            Arc::new(move || make_cli_provider_for_model(&model_ref, &default_provider, &material))
         }
         None => Arc::new(|| {
             CliProvider::Scripted(ScriptedProvider::new(vec![ScriptedMessage::text(
@@ -551,32 +552,64 @@ fn provider_material(
     selection: &ModelSelection,
     settings: &Settings,
 ) -> Result<ProviderMaterial, String> {
+    // Keep provider-independent settings in the base material so a qualified
+    // catalog entry can switch providers without silently losing the local
+    // endpoint or reasoning configuration.
+    let base = ProviderMaterial {
+        desktop_api_key: settings.desktop_api_key(),
+        desktop_base_url: settings.desktop_base_url(),
+        reasoning_effort: settings
+            .thinking_level()
+            .reasoning_effort()
+            .map(str::to_owned),
+        ..ProviderMaterial::default()
+    };
     match selection.provider.as_str() {
         "openai-codex" => Ok(ProviderMaterial {
             codex_credential: Some(CodexCredential::from_environment_or_pi()?),
-            reasoning_effort: settings
-                .thinking_level()
-                .reasoning_effort()
-                .map(str::to_owned),
-            ..ProviderMaterial::default()
+            ..base
         }),
         "openrouter" => Ok(ProviderMaterial {
             openrouter_key: Some(
                 std::env::var("OPENROUTER_API_KEY")
                     .map_err(|_| "model requires OPENROUTER_API_KEY to be set".to_owned())?,
             ),
-            ..ProviderMaterial::default()
+            ..base
         }),
-        "desktop" => Ok(ProviderMaterial {
-            // Local OpenAI-compatible servers commonly ignore bearer
-            // authentication. A key remains configurable without making
-            // the default local route depend on a secret in the environment.
-            desktop_api_key: settings.desktop_api_key(),
-            desktop_base_url: settings.desktop_base_url(),
-            ..ProviderMaterial::default()
-        }),
+        "desktop" => Ok(base),
         provider => Err(format!("unsupported provider {provider:?}")),
     }
+}
+
+/// Refresh only provider credentials when a qualified catalog entry crosses
+/// providers. Missing credentials become a model-visible unavailable
+/// provider through `make_cli_provider`; they do not get silently replaced
+/// with the launch provider.
+fn material_for_provider(base: &ProviderMaterial, provider: &str) -> ProviderMaterial {
+    let mut material = base.clone();
+    match provider {
+        "openai-codex" => {
+            material.codex_credential = CodexCredential::from_environment_or_pi().ok();
+        }
+        "openrouter" => {
+            material.openrouter_key = std::env::var("OPENROUTER_API_KEY").ok();
+        }
+        _ => {}
+    }
+    material
+}
+
+fn make_cli_provider_for_model(
+    model_ref: &str,
+    default_provider: &str,
+    base: &ProviderMaterial,
+) -> CliProvider {
+    let provider = match parse_model_reference(model_ref, default_provider) {
+        Ok(selection) => selection.provider,
+        Err(err) => return CliProvider::Unavailable(err),
+    };
+    let material = material_for_provider(base, &provider);
+    make_cli_provider(model_ref, default_provider, &material)
 }
 
 fn parse_model_reference(raw: &str, default_provider: &str) -> Result<ModelSelection, String> {
@@ -734,6 +767,29 @@ mod tests {
                 model: "qwen3.8:27b".to_owned(),
             }
         );
+    }
+
+    #[tokio::test]
+    async fn qualified_switch_keeps_desktop_material_when_crossing_providers() {
+        let settings: Settings = toml::from_str(
+            r#"
+            defaultProvider = "desktop"
+            defaultModel = "qwen3.8:27b"
+            desktopBaseUrl = "http://127.0.0.1:9000/v1"
+            "#,
+        )
+        .unwrap();
+        let selection = settings.model_selection().unwrap().unwrap();
+        let material = provider_material(&selection, &settings).unwrap();
+        match make_cli_provider_for_model("desktop/next", "openrouter", &material) {
+            CliProvider::Desktop(provider) => {
+                assert_eq!(provider.context_window().await, Some(262_144));
+            }
+            CliProvider::Scripted(_)
+            | CliProvider::OpenAICodex(_)
+            | CliProvider::OpenRouter(_)
+            | CliProvider::Unavailable(_) => panic!("expected desktop provider"),
+        }
     }
 
     #[tokio::test]

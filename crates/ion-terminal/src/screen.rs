@@ -17,7 +17,8 @@ use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
 /// A rendered frame. Rows index the WRAPPED arrays the caller builds;
-/// `committed` grows monotonically, `live` is a fixed-height band.
+/// `committed` grows monotonically, and `live` is bottom-aligned inside the
+/// screen's stable virtual live band.
 pub struct Frame<'a> {
     pub committed: &'a [Line<'a>],
     pub live: &'a [Line<'a>],
@@ -92,6 +93,14 @@ pub struct Screen {
     /// sequences between frames (perceived flicker while typing).
     cursor_shown: bool,
     cursor_at: Option<(u16, u16)>,
+    /// Virtual live-band height used to keep reversible live changes from
+    /// changing the physical scroll offset. The rendered live rows are
+    /// bottom-aligned inside this stable band.
+    live_height: Option<usize>,
+    /// Offset correction applied when a modal view changes the virtual
+    /// live-band height. It preserves the physical scroll position while
+    /// committed history continues to advance normally.
+    live_height_bias: isize,
 }
 
 impl Screen {
@@ -108,7 +117,23 @@ impl Screen {
             current: None,
             cursor_shown: false,
             cursor_at: None,
+            live_height: None,
+            live_height_bias: 0,
         }
+    }
+
+    /// Configure a stable virtual live band for an inline frontend. A
+    /// shorter frame is bottom-aligned without scrolling; the frontend may
+    /// still render fewer rows when the band has little content.
+    pub fn with_live_height(
+        width: u16,
+        origin_row: u16,
+        screen_height: u16,
+        live_height: usize,
+    ) -> Self {
+        let mut screen = Self::new(width, origin_row, screen_height);
+        screen.live_height = Some(live_height.max(1));
+        screen
     }
 
     pub fn size(&self) -> (u16, u16) {
@@ -138,6 +163,27 @@ impl Screen {
         self.current = None;
         self.cursor_shown = false;
         self.cursor_at = None;
+        self.live_height_bias = 0;
+    }
+
+    /// Change the reserved live-band height and repaint the virtual
+    /// surface. Frontends should keep this stable while editing; modal
+    /// views may reserve a larger band when they need additional rows.
+    pub fn set_live_height(&mut self, live_height: usize) {
+        let live_height = live_height.max(1);
+        let old_height = self.live_height.unwrap_or(live_height);
+        if old_height == live_height {
+            return;
+        }
+        if self.current.is_some() {
+            self.live_height_bias += old_height as isize - live_height as isize;
+        }
+        self.live_height = Some(live_height);
+        // Keep the previous surface so draw can compare the same physical
+        // rows. The bias above prevents this modal-only change from being
+        // mistaken for committed scrollback growth.
+        self.cursor_shown = false;
+        self.cursor_at = None;
     }
 
     /// Force a full repaint on the next draw without changing size.
@@ -147,6 +193,7 @@ impl Screen {
         self.current = None;
         self.cursor_shown = false;
         self.cursor_at = None;
+        self.live_height_bias = 0;
     }
 
     /// Render one frame. Lines must already be wrapped to `width`;
@@ -157,8 +204,20 @@ impl Screen {
         let mut h = self.avail() as usize;
         let w = self.width;
         let committed_rows = frame.committed.len();
-        let total = committed_rows + frame.live.len();
-        let mut offset = total.saturating_sub(h);
+        let live_height = self.live_height.unwrap_or_else(|| frame.live.len().max(1));
+        if self.live_height.is_none() {
+            self.live_height = Some(live_height);
+        }
+        let live_padding = live_height.saturating_sub(frame.live.len());
+        let total = committed_rows + live_height;
+        let base_offset = total.saturating_sub(h);
+        let mut offset = if self.live_height_bias >= 0 {
+            base_offset
+                .saturating_add(self.live_height_bias as usize)
+                .min(total)
+        } else {
+            base_offset.saturating_sub(self.live_height_bias.unsigned_abs())
+        };
 
         // A committed/live line can consume the blank rows above a
         // nonzero launch origin before the physical terminal needs to
@@ -182,21 +241,27 @@ impl Screen {
         let mut next = Surface::new(w, self.avail());
         for r in 0..h {
             let absolute = r + offset;
-            let line = if absolute < committed_rows {
-                frame.committed.get(absolute)
-            } else {
-                frame.live.get(absolute - committed_rows)
-            };
+            // Put virtual padding before the committed transcript. This
+            // keeps the actual footer/composer adjacent to the transcript
+            // instead of displaying a large idle gap below the latest
+            // notice, while preserving the stable total row count.
+            let content_absolute = absolute.checked_sub(live_padding);
+            let line = content_absolute.and_then(|absolute| {
+                if absolute < committed_rows {
+                    frame.committed.get(absolute)
+                } else {
+                    frame.live.get(absolute - committed_rows)
+                }
+            });
             if let Some(line) = line {
                 next.render_line(line.clone(), r as u16);
             }
         }
 
-        // Physical scroll tracks committed advancement only. With the
-        // live band at fixed height, offset can rise only when
-        // committed history grows, so scrolled rows are permanently
-        // finished content and the shift maps old window row r + k to
-        // new window row r.
+        // Physical scroll tracks committed advancement only. The virtual
+        // live band keeps offset stable while the actual live rows grow or
+        // shrink, so scrolled rows are permanently finished content and
+        // the shift maps old window row r + k to new window row r.
         let scrolled = offset.saturating_sub(previous_offset);
         if scrolled > 0 {
             write!(out, "\x1b[{};1H", self.screen_height)?;
@@ -232,7 +297,14 @@ impl Screen {
         let mut cursor_shown = self.cursor_shown;
         let mut cursor_at_out = self.cursor_at;
         if let Some((row, col)) = frame.cursor {
-            // Absolute wrapped row -> visible row inside the window.
+            // Absolute wrapped row -> visible row inside the window. Live
+            // rows are bottom-aligned inside the virtual band, so translate
+            // a live cursor by the same leading padding as its text.
+            let row = if row >= committed_rows {
+                row + live_padding
+            } else {
+                row
+            };
             if row >= offset {
                 let screen_row = row - offset;
                 if screen_row < h {
@@ -641,6 +713,81 @@ mod tests {
         assert!(
             !s.contains("\x1b[2;3H"),
             "cursor must not jump above the anchored window: {s:?}"
+        );
+    }
+
+    #[test]
+    fn stable_live_band_bottom_aligns_rows_and_cursor() {
+        let mut out = Vec::new();
+        let mut screen = Screen::with_live_height(40, 0, 8, 4);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[line("history")],
+                    live: &[line("status"), line("footer"), line("model")],
+                    cursor: Some((3, 3)),
+                },
+            )
+            .expect("draw");
+        let rendered = String::from_utf8(out).expect("utf8");
+        // One virtual row precedes the committed transcript, so the live
+        // cursor lands on the physical fourth row (one-based row five).
+        assert!(rendered.contains("\x1b[5;4H"), "{rendered:?}");
+        assert!(rendered.contains("history"), "{rendered:?}");
+        assert!(rendered.contains("status"), "{rendered:?}");
+        assert!(rendered.contains("model"), "{rendered:?}");
+    }
+
+    #[test]
+    fn changing_live_band_height_does_not_scroll_committed_history() {
+        let committed: Vec<Line> = (0..10).map(|i| line(&format!("c{i}"))).collect();
+        let live = [line("status"), line("composer"), line("footer")];
+        let mut out = Vec::new();
+        let mut screen = Screen::with_live_height(40, 0, 6, 7);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &committed,
+                    live: &live,
+                    cursor: Some((12, 2)),
+                },
+            )
+            .expect("draw");
+        out.clear();
+        screen.set_live_height(10);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &committed,
+                    live: &live,
+                    cursor: Some((12, 2)),
+                },
+            )
+            .expect("draw");
+        let rendered = String::from_utf8(std::mem::take(&mut out)).expect("utf8");
+        assert!(
+            !rendered.contains("\x1b[6;1H\r\n"),
+            "modal height change must not scroll history: {rendered:?}"
+        );
+        out.clear();
+        screen.set_live_height(7);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &committed,
+                    live: &live,
+                    cursor: Some((12, 2)),
+                },
+            )
+            .expect("draw");
+        let rendered = String::from_utf8(out).expect("utf8");
+        assert!(
+            !rendered.contains("\x1b[6;1H\r\n"),
+            "closing the modal height must not scroll history: {rendered:?}"
         );
     }
 

@@ -29,9 +29,9 @@ use ion_terminal::{
 mod help;
 mod render;
 pub use render::{Palette, palette};
-use render::{Transcript, append_snapshot_entries, build_live};
+use render::{Transcript, append_snapshot_entries};
 #[cfg(test)]
-use render::{entry_lines, wrap_line};
+use render::{build_live, entry_lines, wrap_line};
 
 /// Host-provided configuration for one launch. Cloneable handles;
 /// never runtime state.
@@ -101,6 +101,8 @@ pub enum UiMessage {
     /// Bracketed-paste payload; inserted at the cursor.
     Paste(String),
     SubmitAccepted,
+    /// A model switch changes runtime configuration, not the user's draft.
+    ModelSwitchAccepted,
     SubmitRejected(String),
     EnqueueAccepted,
     EnqueueRejected(String),
@@ -131,6 +133,9 @@ pub enum Action {
     SteerCurrent,
     ToggleToolOutput,
     ToggleThinking,
+    OpenModelSelector,
+    CycleModelForward,
+    CycleModelBackward,
     HistoryPrevious,
     HistoryNext,
     CursorLeft,
@@ -287,6 +292,24 @@ impl Default for KeyMap {
             KeyCode::Char('t'),
             Modifiers::CONTROL,
         );
+        bind(
+            &mut bindings,
+            Action::OpenModelSelector,
+            KeyCode::Char('l'),
+            Modifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::CycleModelForward,
+            KeyCode::Char('p'),
+            Modifiers::CONTROL,
+        );
+        bind(
+            &mut bindings,
+            Action::CycleModelBackward,
+            KeyCode::Char('p'),
+            Modifiers::CONTROL | Modifiers::SHIFT,
+        );
         KeyMap { bindings }
     }
 }
@@ -342,13 +365,17 @@ impl KeyMap {
     }
 
     fn label(&self, action: Action) -> String {
-        self.bindings
+        let labels: Vec<String> = self
+            .bindings
             .iter()
-            .find(|(bound, _, _)| *bound == action)
-            .map_or_else(
-                || "unbound".to_owned(),
-                |(_, code, modifiers)| format_key(*code, *modifiers),
-            )
+            .filter(|(bound, _, _)| *bound == action)
+            .map(|(_, code, modifiers)| format_key(*code, *modifiers))
+            .collect();
+        if labels.is_empty() {
+            "unbound".to_owned()
+        } else {
+            labels.join("/")
+        }
     }
 }
 
@@ -450,6 +477,16 @@ struct ToolRow {
     preview: Option<String>,
 }
 
+/// Ephemeral model-picker state. The runtime remains authoritative for the
+/// selected model; this only owns the filter, highlight, and editor draft
+/// saved while the picker is open.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ModelSelector {
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
 /// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -493,6 +530,8 @@ pub struct UiState {
     model_switching_available: bool,
     /// Host-provided finite model list for the slash-command selector.
     model_catalog: Vec<String>,
+    /// Ephemeral searchable model selector, when open.
+    model_selector: Option<ModelSelector>,
     /// Whether settled tool rows render their output preview
     /// (ctrl+o, pi-parity app.tools.expand).
     tool_output_expanded: bool,
@@ -562,6 +601,88 @@ impl UiState {
         self.history_index = None;
         self.history_stash = None;
         self.pending_history = None;
+    }
+
+    fn open_model_selector(&mut self, query: &str) {
+        if self.model_selector.is_some() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer = query.to_owned();
+        self.cursor = self.composer.chars().count();
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        let selected = self
+            .filtered_model_catalog()
+            .iter()
+            .position(|model| model.eq_ignore_ascii_case(query))
+            .unwrap_or(0);
+        self.model_selector = Some(ModelSelector {
+            selected,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_model_selector(&mut self) {
+        let Some(selector) = self.model_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_model_catalog(&self) -> Vec<String> {
+        let query = self.composer.to_lowercase();
+        self.model_catalog
+            .iter()
+            .filter(|model| fuzzy_contains(&model.to_lowercase(), &query))
+            .cloned()
+            .collect()
+    }
+
+    fn selected_model(&self) -> Option<String> {
+        let selector = self.model_selector.as_ref()?;
+        self.filtered_model_catalog()
+            .get(selector.selected)
+            .cloned()
+    }
+
+    fn move_model_selection(&mut self, delta: isize) {
+        let count = self.filtered_model_catalog().len();
+        let Some(selector) = self.model_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn reset_model_selection(&mut self) {
+        let selected = self
+            .filtered_model_catalog()
+            .iter()
+            .position(|model| model.eq_ignore_ascii_case(&self.composer))
+            .unwrap_or(0);
+        if let Some(selector) = self.model_selector.as_mut() {
+            selector.selected = selected;
+        }
+    }
+
+    fn current_model_reference(&self) -> Option<String> {
+        Some(format!(
+            "{}/{}",
+            self.model_provider.as_deref()?,
+            self.model_name.as_deref()?
+        ))
     }
 
     fn reject_pending_history(&mut self) {
@@ -668,6 +789,11 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.reset_composer();
             (state, None)
         }
+        UiMessage::ModelSwitchAccepted => {
+            state.hotkeys_visible = false;
+            state.model_selector = None;
+            (state, None)
+        }
         UiMessage::CompactAccepted => {
             state
                 .pending_scrollback
@@ -697,7 +823,49 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
     }
 }
 
+fn handle_model_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_model_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(model) = state.selected_model() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching models").red());
+                return (state, None);
+            };
+            state.close_model_selector();
+            (state, Some(UiEffect::SwitchModel { model }))
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_model_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_model_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_model_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_model_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    if state.model_selector.is_some() {
+        return handle_model_selector_key(state, key);
+    }
     // A parked approval owns the keyboard (§17.4): only the decision
     // keys act; every other key is swallowed so a stray keystroke can
     // never submit, quit, or edit the composer mid-decision.
@@ -793,11 +961,14 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
         "help" => {
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
-                "/model [id|number]      - list or switch the model",
+                "/model [id|number]      - pick or switch the model",
                 "enter                   - submit or queue the next operation",
                 "shift+enter             - steer the active operation",
                 "ctrl+j                  - insert a newline",
-                "tab                     - complete safe commands/models",
+                "tab                     - complete commands/models",
+                "ctrl+l                  - open the model picker",
+                "ctrl+p                  - cycle models forward",
+                "shift+ctrl+p           - cycle models backward",
                 "ctrl+o                  - toggle tool output previews",
                 "ctrl+t                  - toggle thinking blocks",
                 "ctrl+_                  - undo composer edit",
@@ -815,38 +986,23 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             )
         }
         "model" => {
-            if rest.is_empty() {
-                let shown = state
-                    .model_name
-                    .clone()
-                    .unwrap_or_else(|| "(scripted provider)".to_owned());
-                notice(state, &format!("model: {shown}"));
-                let catalog = state.model_catalog.clone();
-                for (index, model) in catalog.iter().enumerate() {
-                    let marker = if model == &shown { '*' } else { ' ' };
-                    notice(state, &format!("{marker} {}. {model}", index + 1));
-                }
-                return (std::mem::take(state), None);
-            }
             if !state.model_switching_available {
                 notice(state, "model switching unavailable (scripted provider)");
                 return (std::mem::take(state), None);
             }
-            let model = match rest.parse::<usize>() {
-                Ok(index) if index > 0 => match state.model_catalog.get(index - 1) {
-                    Some(model) => model.clone(),
-                    None => {
-                        notice(state, &format!("model selection out of range: {rest}"));
-                        return (std::mem::take(state), None);
-                    }
-                },
-                Ok(_) => {
+            if let Ok(index) = rest.parse::<usize>() {
+                if index == 0 {
                     notice(state, "model selection must start at 1");
                     return (std::mem::take(state), None);
                 }
-                Err(_) => rest.to_owned(),
-            };
-            (std::mem::take(state), Some(UiEffect::SwitchModel { model }))
+                let Some(model) = state.model_catalog.get(index - 1).cloned() else {
+                    notice(state, &format!("model selection out of range: {rest}"));
+                    return (std::mem::take(state), None);
+                };
+                return (std::mem::take(state), Some(UiEffect::SwitchModel { model }));
+            }
+            state.open_model_selector(rest);
+            (std::mem::take(state), None)
         }
         other => {
             notice(state, &format!("unknown command: /{other} (try /help)"));
@@ -884,14 +1040,13 @@ fn complete_composer(state: &mut UiState) {
     if candidates.is_empty() {
         return;
     }
-    candidates.truncate(MAX_COMPLETION_SUGGESTIONS);
     let common = common_prefix(&candidates);
     if candidates.len() == 1 {
         partial = candidates[0].clone();
     } else if common.len() > partial.len() {
         partial = common;
     } else {
-        for candidate in candidates {
+        for candidate in candidates.into_iter().take(MAX_COMPLETION_SUGGESTIONS) {
             notice(state, &format!("  {prefix}{candidate}"));
         }
         return;
@@ -907,6 +1062,13 @@ fn complete_composer(state: &mut UiState) {
         state.preferred_column = None;
         state.exit_history_browse();
     }
+}
+
+fn fuzzy_contains(candidate: &str, query: &str) -> bool {
+    let mut candidate_chars = candidate.chars();
+    query
+        .chars()
+        .all(|wanted| candidate_chars.by_ref().any(|actual| actual == wanted))
 }
 
 fn common_prefix(candidates: &[String]) -> String {
@@ -925,6 +1087,41 @@ fn common_prefix(candidates: &[String]) -> String {
         .min()
         .unwrap_or_else(|| first.chars().count());
     first.chars().take(length).collect()
+}
+
+fn model_display_parts(model: &str, fallback_provider: Option<&str>) -> (Option<String>, String) {
+    for provider in ["openai-codex", "openrouter", "desktop"] {
+        let prefix = format!("{provider}/");
+        if let Some(model) = model.strip_prefix(&prefix) {
+            return (Some(provider.to_owned()), model.to_owned());
+        }
+    }
+    (fallback_provider.map(str::to_owned), model.to_owned())
+}
+
+fn cycle_model(state: &mut UiState, delta: isize) -> Option<UiEffect> {
+    if !state.model_switching_available {
+        notice(state, "model switching unavailable (scripted provider)");
+        return None;
+    }
+    let count = state.model_catalog.len();
+    if count == 0 {
+        notice(state, "no models are configured");
+        return None;
+    }
+    let current = state.current_model_reference().and_then(|current| {
+        state
+            .model_catalog
+            .iter()
+            .position(|model| model == &current)
+    });
+    let index = current.map_or_else(
+        || if delta < 0 { count - 1 } else { 0 },
+        |index| (index as isize + delta).rem_euclid(count as isize) as usize,
+    );
+    Some(UiEffect::SwitchModel {
+        model: state.model_catalog[index].clone(),
+    })
 }
 
 fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffect>) {
@@ -971,6 +1168,25 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         Action::Undo => {
             state.undo_edit();
             (state, None)
+        }
+        Action::OpenModelSelector => {
+            if !state.model_switching_available {
+                notice(
+                    &mut state,
+                    "model switching unavailable (scripted provider)",
+                );
+            } else {
+                state.open_model_selector("");
+            }
+            (state, None)
+        }
+        Action::CycleModelForward => {
+            let effect = cycle_model(&mut state, 1);
+            (state, effect)
+        }
+        Action::CycleModelBackward => {
+            let effect = cycle_model(&mut state, -1);
+            (state, effect)
         }
         Action::ToggleToolOutput => {
             state.tool_output_expanded = !state.tool_output_expanded;
@@ -1314,7 +1530,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationFailed { message, .. } => {
-            state.flush_draft();
+            state.abandon_draft();
             state
                 .pending_scrollback
                 .push(Line::from(format!("! failed: {message}")).red());
@@ -1322,7 +1538,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationIndeterminate { message, .. } => {
-            state.flush_draft();
+            state.abandon_draft();
             state.pending_scrollback.push(
                 Line::from(format!("! indeterminate: {message}"))
                     .yellow()
@@ -1332,7 +1548,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationCancelled { .. } => {
-            state.flush_draft();
+            state.abandon_draft();
             state
                 .pending_scrollback
                 .push(Line::from("! cancelled".to_owned()).yellow());
@@ -1340,7 +1556,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::OperationApprovalRequired { tool, .. } => {
-            state.flush_draft();
+            state.abandon_draft();
             state.pending_scrollback.push(
                 Line::from(format!(
                     "! approval required: `{tool}` — rerun with --allow {tool}"
@@ -1417,8 +1633,7 @@ impl UiState {
     /// Move the live draft into scrollback as a completed assistant
     /// turn (inline scrollback pattern: completed content leaves the
     /// live viewport). Assistant lines get markdown-lite styling.
-    fn flush_draft(&mut self) {
-        flush_thinking(self);
+    fn flush_tool_rows(&mut self) {
         // Tool rows precede the text they enabled. Expanded rendering
         // includes each settled output preview (pi-parity ctrl+o).
         for row in self.tool_rows.drain(..) {
@@ -1435,6 +1650,11 @@ impl UiState {
                 }
             }
         }
+    }
+
+    fn flush_draft(&mut self) {
+        flush_thinking(self);
+        self.flush_tool_rows();
         if !self.draft.is_empty() {
             for line in self.draft.lines() {
                 // Assistant content renders plain (pi parity); blank
@@ -1455,10 +1675,26 @@ impl UiState {
         self.draft_degraded = false;
     }
 
+    /// Remove a model draft that did not reach a durable completion. Its
+    /// text is never promoted to ordinary assistant scrollback.
+    fn abandon_draft(&mut self) {
+        let had_partial = !self.draft.is_empty() || !self.draft_thinking.is_empty();
+        self.draft.clear();
+        self.draft_thinking.clear();
+        self.draft_degraded = false;
+        self.flush_tool_rows();
+        if had_partial {
+            self.pending_scrollback.push(
+                Line::from("… partial model output discarded; rerun or use /resume").yellow(),
+            );
+        }
+    }
+
     /// Rebuild live state from a fresh snapshot after an event lag
     /// (§21.4): the snapshot is authoritative for operation status;
     /// partial deltas and missed tool rows are display-only losses.
     fn resync_after_lag(&mut self, snapshot: &SessionSnapshot) {
+        self.close_model_selector();
         self.hotkeys_visible = false;
         self.status = match &snapshot.operation {
             OperationStatus::Idle => UiStatus::Idle,
@@ -1650,7 +1886,7 @@ pub async fn run(
         }
         origin = origin.saturating_sub(push);
     }
-    let mut screen = Screen::new(term_w, origin, term_h);
+    let mut screen = Screen::with_live_height(term_w, origin, term_h, render::LIVE_REGION_MAX_ROWS);
 
     // Committed transcript: restored entries, flushed turns. Committed
     // lines never change once appended (line-diff model, TERMINAL.md).
@@ -1681,10 +1917,15 @@ pub async fn run(
     let resume_entry_count = snapshot.reopen_entry_count.unwrap_or(0);
     // The session's durable selection is authoritative once subscribed;
     // a resumed session may have switched models in an earlier run.
-    // Scripted launches keep the host's display fallback.
+    // Scripted launches keep the host's display fallback. Real launches
+    // must split the durable qualified reference before rendering it or
+    // comparing it with the qualified catalog.
     state.usage = snapshot.latest_usage;
     if host.model_name.is_some() {
-        state.set_model_name(Some(snapshot.model_ref.clone()));
+        let (provider, model_name) =
+            model_display_parts(&snapshot.model_ref, state.model_provider.as_deref());
+        state.model_provider = provider;
+        state.set_model_name(Some(model_name));
     }
     if matches!(snapshot.operation, OperationStatus::Idle) {
         state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
@@ -1742,6 +1983,8 @@ pub async fn run(
             screen.resize(w, h);
             state.set_terminal_width(w as usize);
         }
+        let band_height = render::live_region_height(&state).min(screen.size().1 as usize);
+        screen.set_live_height(band_height);
         transcript.rewrap_if_needed(screen.size().0);
         // Flush completed turns into the committed transcript, then
         // draw committed history + live band as one line-diff frame
@@ -1750,7 +1993,8 @@ pub async fn run(
             let flushed = std::mem::take(&mut state.pending_scrollback);
             transcript.extend(flushed);
         }
-        let (live, live_cursor) = build_live(&state, &palette, screen.size().0 as usize);
+        let (live, live_cursor) =
+            render::build_live_at_height(&state, &palette, screen.size().0 as usize, band_height);
         let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
         terminal
             .render(
@@ -1980,9 +2224,12 @@ async fn dispatch(
         },
         UiEffect::SwitchModel { model } => match session.switch_model(&model).await {
             Ok(previous) => {
-                state.model_name = Some(model.clone());
+                let (provider, model_name) =
+                    model_display_parts(&model, state.model_provider.as_deref());
+                state.model_provider = provider;
+                state.model_name = Some(model_name);
                 notice(state, &format!("model switched: {previous} -> {model}"));
-                let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
+                let (next, _) = update(std::mem::take(state), UiMessage::ModelSwitchAccepted);
                 *state = next;
             }
             Err(err) => notice(state, &format!("model switch failed: {err}")),
@@ -2067,10 +2314,11 @@ pub(crate) mod tests {
         state = update(state, ctrl('j')).0;
         state = type_text(state, "z");
 
-        // The first logical line occupies two visual rows at width 8;
-        // Up moves to its continuation row rather than skipping the wrap.
+        // The first logical line occupies three aligned visual rows at
+        // width 8; Up moves to its continuation row rather than skipping
+        // the wrap.
         state = update(state, key(KeyCode::Up)).0;
-        assert_eq!(state.cursor, 7);
+        assert_eq!(state.cursor, 13);
         state = update(state, key(KeyCode::Down)).0;
         assert_eq!(state.cursor, 16);
     }
@@ -2101,7 +2349,7 @@ pub(crate) mod tests {
         // The continuation row has more text than the short next line. The
         // preferred column survives the round trip and returns to the end.
         state = update(state, key(KeyCode::Up)).0;
-        assert_eq!(state.cursor, 8);
+        assert_eq!(state.cursor, 14);
         state = update(state, key(KeyCode::Down)).0;
         assert_eq!(state.cursor, 17);
     }
@@ -2212,24 +2460,183 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn model_command_lists_catalog_and_selects_by_number() {
+    fn completion_considers_all_model_candidates_before_display_limit() {
+        let mut state = UiState::new();
+        state.model_catalog = (0..16)
+            .map(|index| format!("openrouter/shared-{index}"))
+            .chain(std::iter::once("openrouter/other".to_owned()))
+            .collect();
+        let state = type_text(state, "/model ");
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "/model openrouter/");
+        assert_eq!(state.pending_scrollback.len(), 0);
+    }
+
+    #[test]
+    fn model_command_opens_selector_and_arrow_enter_selects() {
         let mut state = UiState::new();
         state.model_switching_available = true;
+        state.model_provider = Some("openrouter".to_owned());
         state.model_name = Some("alpha".to_owned());
-        state.model_catalog = vec!["alpha".to_owned(), "beta".to_owned()];
+        state.model_catalog = vec!["openrouter/alpha".to_owned(), "openrouter/beta".to_owned()];
         let (state, effect) = handle_command(&mut state, "model");
         assert!(effect.is_none());
-        assert_eq!(state.pending_scrollback.len(), 3);
+        assert!(state.model_selector.is_some());
+        assert!(state.composer.is_empty());
 
-        let mut state = state;
+        let state = update(state, key(KeyCode::Down)).0;
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchModel {
+                model: "openrouter/beta".to_owned()
+            })
+        );
+        assert!(state.model_selector.is_none());
+        assert!(state.composer.is_empty());
+    }
+
+    #[test]
+    fn model_shortcuts_open_and_cycle_the_selector_catalog() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_provider = Some("openrouter".to_owned());
+        state.model_name = Some("alpha".to_owned());
+        state.model_catalog = vec![
+            "openrouter/alpha".to_owned(),
+            "openrouter/beta".to_owned(),
+            "desktop/qwen3.8:27b".to_owned(),
+        ];
+
+        let (state, effect) = update(state, ctrl('p'));
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchModel {
+                model: "openrouter/beta".to_owned()
+            })
+        );
+        assert!(state.model_selector.is_none());
+
+        let (state, effect) = update(state, ctrl('l'));
+        assert!(effect.is_none());
+        assert!(state.model_selector.is_some());
+        let (state, effect) = update(state, key(KeyCode::Down));
+        assert!(effect.is_none());
+        let (state, effect) = update(state, key(KeyCode::Down));
+        assert!(effect.is_none());
+        let (_state, effect) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchModel {
+                model: "desktop/qwen3.8:27b".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn qualified_model_display_stays_single_provider_and_id() {
+        assert_eq!(
+            model_display_parts("openrouter/z-ai/glm-5.3-flash", Some("desktop")),
+            (
+                Some("openrouter".to_owned()),
+                "z-ai/glm-5.3-flash".to_owned()
+            )
+        );
+        assert_eq!(
+            model_display_parts("local-model", Some("desktop")),
+            (Some("desktop".to_owned()), "local-model".to_owned())
+        );
+    }
+
+    #[test]
+    fn model_switch_keeps_an_unsubmitted_draft() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_provider = Some("desktop".to_owned());
+        state.model_name = Some("test".to_owned());
+        state.model_catalog = vec!["desktop/test".to_owned(), "desktop/next".to_owned()];
+        state.composer = "keep this".to_owned();
+        state.cursor = state.composer.chars().count();
+
+        let (state, effect) = update(state, ctrl('p'));
+        assert!(matches!(effect, Some(UiEffect::SwitchModel { .. })));
+        let state = update(state, UiMessage::ModelSwitchAccepted).0;
+        assert_eq!(state.composer, "keep this");
+        assert_eq!(state.cursor, 9);
+    }
+
+    #[test]
+    fn model_selector_render_keeps_title_and_navigation_hint_visible() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec![
+            "desktop/test".to_owned(),
+            "desktop/next".to_owned(),
+            "desktop/third".to_owned(),
+        ];
+        let state = update(state, ctrl('l')).0;
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 100);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("select model"), "{rendered}");
+        assert!(rendered.contains("desktop/test"), "{rendered}");
+        assert!(rendered.contains("enter"), "{rendered}");
+    }
+
+    #[test]
+    fn model_selector_stays_usable_in_a_four_row_terminal() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec!["desktop/test".to_owned(), "desktop/next".to_owned()];
+        let state = update(state, ctrl('l')).0;
+        let (lines, cursor) = render::build_live_at_height(&state, &palette(Theme::Dark), 40, 4);
+        assert!(cursor.is_some());
+        assert!(lines.len() <= 4);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("desktop/test"), "{rendered}");
+        assert!(rendered.contains("enter"), "{rendered}");
+    }
+
+    #[test]
+    fn model_selector_truncates_long_rows_without_losing_controls() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec![
+            "openrouter/provider-with-a-very-long-model-name".to_owned(),
+            "openrouter/another-long-model-name".to_owned(),
+        ];
+        let state = update(state, ctrl('l')).0;
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 24);
+        assert!(lines.len() <= render::LIVE_REGION_MAX_ROWS);
+        let rendered = lines
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("select model"), "{rendered}");
+        assert!(rendered.contains("enter"), "{rendered}");
+    }
+
+    #[test]
+    fn numeric_model_command_selects_catalog_entry() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec!["openrouter/alpha".to_owned(), "openrouter/beta".to_owned()];
         let (state, effect) = handle_command(&mut state, "model 2");
         assert_eq!(
             effect,
             Some(UiEffect::SwitchModel {
-                model: "beta".to_owned()
+                model: "openrouter/beta".to_owned()
             })
         );
-        assert_eq!(state.pending_scrollback.len(), 3);
+        assert!(state.model_selector.is_none());
     }
 
     #[test]
@@ -2296,6 +2703,12 @@ pub(crate) mod tests {
         assert_eq!(map.action_for(&ctrl_underscore), Some(Action::Undo));
         let ctrl_j = KeyEvent::new(KeyCode::Char('j'), Modifiers::CONTROL);
         assert_eq!(map.action_for(&ctrl_j), Some(Action::InsertNewline));
+        let ctrl_l = KeyEvent::new(KeyCode::Char('l'), Modifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_l), Some(Action::OpenModelSelector));
+        let ctrl_p = KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL);
+        assert_eq!(map.action_for(&ctrl_p), Some(Action::CycleModelForward));
+        let reverse_p = KeyEvent::new(KeyCode::Char('p'), Modifiers::CONTROL | Modifiers::SHIFT);
+        assert_eq!(map.action_for(&reverse_p), Some(Action::CycleModelBackward));
         assert_eq!(
             map.action_for(&KeyEvent::new(KeyCode::Tab, Modifiers::NONE)),
             Some(Action::Complete)
@@ -3100,6 +3513,68 @@ pub(crate) mod tests {
         let (row, col) = cursor.expect("cursor");
         assert_eq!(text[row], "  longer");
         assert_eq!(col as usize, 2 + "longer".width());
+    }
+
+    #[test]
+    fn live_region_keeps_a_blank_row_above_the_composer() {
+        let mut state = UiState::new();
+        state.composer = "hello".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (lines, cursor) = build_live(&state, &palette(Theme::Dark), 80);
+        assert_eq!(lines.len(), 6);
+        assert!(lines[0].to_string().trim().is_empty());
+        assert!(lines[1].to_string().starts_with('─'));
+        assert_eq!(lines[2].to_string(), "> hello");
+        assert_eq!(cursor, Some((2, 7)));
+    }
+
+    #[test]
+    fn wrapped_composer_continuations_are_indented() {
+        let mut state = UiState::new();
+        state.composer = "abcdefghijklmn".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 10);
+        assert_eq!(lines[2].to_string(), "> abcdefgh");
+        assert_eq!(lines[3].to_string(), "  ijklmn");
+    }
+
+    #[test]
+    fn live_region_keeps_a_fixed_height_as_content_changes() {
+        let mut state = UiState::new();
+        for text in ["", "one", "one\ntwo\nthree\nfour"] {
+            state.composer = text.to_owned();
+            state.cursor = text.chars().count();
+            let (lines, _) = build_live(&state, &palette(Theme::Dark), 80);
+            assert!(lines.len() <= 10);
+        }
+    }
+
+    #[test]
+    fn cancelled_partial_model_output_is_not_completed_assistant_text() {
+        let operation_id = OperationId::generate();
+        let mut state = apply_runtime_event(
+            UiState::new(),
+            RuntimeEvent::AssistantTextDelta {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+                text: "partial answer".to_owned(),
+            },
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationCancelled {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+            },
+        );
+        let rendered = state
+            .pending_scrollback
+            .iter()
+            .map(Line::to_string)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!rendered.contains("partial answer"));
+        assert!(rendered.contains("partial model output discarded"));
     }
 
     #[test]

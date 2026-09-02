@@ -20,10 +20,17 @@ pub(super) fn hotkey_lines(keymap: &KeyMap, palette: &Palette) -> Vec<Line<'stat
         ))
         .style(line_style),
         Line::from(format!(
-            "{} complete  ·  {}/{} history  ·  {} tools  ·  {} thinking",
+            "{} complete  ·  {}/{} history  ·  {}/{} models",
             keymap.label(Action::Complete),
             keymap.label(Action::HistoryPrevious),
             keymap.label(Action::HistoryNext),
+            keymap.label(Action::CycleModelForward),
+            keymap.label(Action::CycleModelBackward)
+        ))
+        .style(line_style),
+        Line::from(format!(
+            "{} picker  ·  {} tools  ·  {} thinking",
+            keymap.label(Action::OpenModelSelector),
             keymap.label(Action::ToggleToolOutput),
             keymap.label(Action::ToggleThinking)
         ))

@@ -23,7 +23,7 @@ and an optional bearer key with `ION_DESKTOP_API_KEY`, or configure
 OpenRouter instead, pass a provider/model reference:
 
 ```sh
-cargo run -p ion -- --model openrouter/stealth/ox-alpha
+cargo run -p ion -- --model openrouter/z-ai/glm-5.3-flash
 cargo run -p ion -- --model openai-codex/gpt-5.6-luna
 ```
 
@@ -43,10 +43,11 @@ For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
 
 In print mode everything else terminates the operation with an
 approval requirement instead of executing. In the TUI, `/help` lists
-the slash commands (`/compact`, `/model`); `/model` lists the host-provided
-catalog and `/model <id|number>` switches models durably at the next step
-boundary and survives restart. `ctrl+j` inserts a newline; Tab completes only
-known slash commands and catalog models.
+the slash commands (`/compact`, `/model`); `/model` opens a filtered model
+picker, while `/model <number>` switches a catalog entry directly. Selection
+is durable at the next step boundary and survives restart. `ctrl+j` inserts a
+newline; Tab completes known slash commands and catalog models. `ctrl+l` opens
+the picker, and `ctrl+p`/`shift+ctrl+p` cycle models.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
@@ -68,7 +69,8 @@ defaultModel = "qwen3.8:27b"
 desktopBaseUrl = "http://desktop:8080/v1"
 # Optional; omit when the local endpoint does not authenticate.
 # desktopApiKey = "local-only"
-# Optional finite list for the TUI's `/model` selector.
+# Optional finite list for the TUI's `/model` selector. Entries may be
+# provider-qualified (for example, "openrouter/z-ai/glm-5.3-flash").
 modelCatalog = ["qwen3.8:27b"]
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap

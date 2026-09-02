@@ -264,19 +264,36 @@ impl Settings {
     /// runtime/provider resolver remains authoritative for whether a switch
     /// can execute.
     pub fn model_catalog(&self) -> Result<Vec<String>, String> {
-        let default = self.model_selection()?.map(|selection| selection.model);
+        let default = self.model_selection()?;
+        let provider = default.as_ref().map_or_else(
+            || {
+                self.default_provider
+                    .as_deref()
+                    .unwrap_or("openai-codex")
+                    .to_owned()
+            },
+            |s| s.provider.clone(),
+        );
         let mut catalog =
             Vec::with_capacity(self.model_catalog.len() + usize::from(default.is_some()));
-        if let Some(model) = default {
-            catalog.push(model);
+        if let Some(selection) = default {
+            catalog.push(format!("{}/{}", selection.provider, selection.model));
         }
         for model in &self.model_catalog {
             let model = model.trim();
             if model.is_empty() {
                 return Err("modelCatalog entries cannot be empty".to_owned());
             }
-            if !catalog.iter().any(|candidate| candidate == model) {
-                catalog.push(model.to_owned());
+            let qualified = if ["openai-codex/", "openrouter/", "desktop/"]
+                .iter()
+                .any(|prefix| model.starts_with(prefix))
+            {
+                model.to_owned()
+            } else {
+                format!("{provider}/{model}")
+            };
+            if !catalog.iter().any(|candidate| candidate == &qualified) {
+                catalog.push(qualified);
             }
         }
         Ok(catalog)
@@ -338,23 +355,26 @@ mod tests {
     }
 
     #[test]
-    fn parses_camel_case_keys_and_strips_provider_prefix() {
+    fn parses_camel_case_keys_and_qualifies_catalog_entries() {
         let settings: Settings = toml::from_str(
             r#"
-            defaultModel = "openrouter/stealth/ox-alpha"
+            defaultModel = "openrouter/z-ai/glm-5.3-flash"
             defaultProvider = "openrouter"
-            modelCatalog = ["stealth/ox-alpha", "stealth/ox-beta"]
+            modelCatalog = ["z-ai/glm-5.3-flash", "z-ai/glm-5.3-mini"]
             theme = "light"
             "#,
         )
         .unwrap();
         assert_eq!(
             settings.model_selection().unwrap().unwrap().model,
-            "stealth/ox-alpha"
+            "z-ai/glm-5.3-flash"
         );
         assert_eq!(
             settings.model_catalog().unwrap(),
-            ["stealth/ox-alpha", "stealth/ox-beta"]
+            [
+                "openrouter/z-ai/glm-5.3-flash",
+                "openrouter/z-ai/glm-5.3-mini"
+            ]
         );
         assert_eq!(settings.theme(), Theme::Light);
     }

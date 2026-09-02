@@ -65,6 +65,35 @@ fn clone_static(line: &Line<'_>) -> Line<'static> {
 /// Wrap one styled line to `width` columns (display width, char
 /// boundaries). Styles carry over to the continuation rows.
 pub(super) fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
+    let logical_lines = split_styled_lines(line);
+    if logical_lines.len() > 1 {
+        return logical_lines
+            .iter()
+            .flat_map(|line| wrap_single_line(line, width))
+            .collect();
+    }
+    wrap_single_line(&logical_lines[0], width)
+}
+
+fn split_styled_lines(line: &Line<'_>) -> Vec<Line<'static>> {
+    let mut rows: Vec<Vec<Span<'static>>> = vec![Vec::new()];
+    for span in &line.spans {
+        let style = line.style.patch(span.style);
+        for (index, part) in span.content.split('\n').enumerate() {
+            if index > 0 {
+                rows.push(Vec::new());
+            }
+            if !part.is_empty() {
+                rows.last_mut()
+                    .expect("split line always has a current row")
+                    .push(Span::styled(part.to_owned(), style));
+            }
+        }
+    }
+    rows.into_iter().map(Line::from).collect()
+}
+
+fn wrap_single_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     let width = width.max(1);
     let total: usize = line.spans.iter().map(|s| s.content.width()).sum();
     if total <= width {
@@ -143,27 +172,79 @@ pub(super) fn wrap_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     rows
 }
 
-fn str_width(line: &Line<'_>) -> usize {
-    line.spans.iter().map(|s| s.content.width()).sum()
+#[derive(Debug, Clone)]
+struct ComposerWrappedRow {
+    line: Line<'static>,
+    source_start: usize,
+    source_end: usize,
 }
 
-fn wrapped_cursor_position(
+fn line_text(line: &Line<'_>) -> String {
+    line.spans
+        .iter()
+        .map(|span| span.content.as_ref())
+        .collect()
+}
+
+fn composer_wrapped_rows(
     logical_line: &str,
     prefix: &str,
-    wrapped: &[Line<'_>],
+    width: usize,
+) -> Vec<ComposerWrappedRow> {
+    let available = width.saturating_sub(prefix.width()).max(1);
+    let wrapped = wrap_line(&Line::from(logical_line.to_owned()), available);
+    let mut source_offset = 0;
+    wrapped
+        .into_iter()
+        .enumerate()
+        .map(|(row_index, content)| {
+            let text = line_text(&content);
+            while source_offset < logical_line.chars().count()
+                && logical_line.chars().nth(source_offset) == Some(' ')
+                && !text.starts_with(' ')
+            {
+                source_offset += 1;
+            }
+            let source_start = source_offset;
+            source_offset += text.chars().count();
+            let source_end = source_offset;
+            let row_prefix = if source_start == 0 && row_index == 0 {
+                prefix
+            } else {
+                "  "
+            };
+            let mut spans = vec![Span::raw(row_prefix.to_owned())];
+            spans.extend(content.spans);
+            ComposerWrappedRow {
+                line: Line::from(spans),
+                source_start,
+                source_end,
+            }
+        })
+        .collect()
+}
+
+fn composer_cursor_in_rows(
+    logical_line: &str,
+    rows: &[ComposerWrappedRow],
     local_cursor: usize,
+    prefix: &str,
 ) -> (usize, usize) {
-    let cursor_byte = char_offset_to_byte(logical_line, local_cursor);
-    let target_col = prefix.width() + logical_line[..cursor_byte].width();
-    let mut walked = 0;
-    for (row_index, row) in wrapped.iter().enumerate() {
-        let row_width = str_width(row);
-        if target_col <= walked + row_width {
-            return (row_index, target_col - walked);
+    for (row_index, row) in rows.iter().enumerate() {
+        if local_cursor < row.source_start {
+            return (row_index, prefix.width());
         }
-        walked += row_width;
+        if local_cursor <= row.source_end {
+            let content_start = char_offset_to_byte(logical_line, row.source_start);
+            let cursor_byte = char_offset_to_byte(logical_line, local_cursor);
+            return (
+                row_index,
+                prefix.width() + logical_line[content_start..cursor_byte].width(),
+            );
+        }
     }
-    (wrapped.len().saturating_sub(1), walked)
+    let row = rows.last().expect("composer always has one row");
+    (rows.len() - 1, row.line.width())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -187,19 +268,15 @@ pub(super) fn composer_cursor_positions(
     let mut visual_offset = 0;
     for (line_index, logical_line) in composer.split('\n').enumerate() {
         let prefix = if line_index == 0 { "> " } else { "  " };
-        let wrapped = wrap_line(&Line::from(format!("{prefix}{logical_line}")), width);
+        let wrapped = composer_wrapped_rows(logical_line, prefix, width);
         let line_length = logical_line.chars().count();
         for local_cursor in 0..=line_length {
             let (row, screen_column) =
-                wrapped_cursor_position(logical_line, prefix, &wrapped, local_cursor);
+                composer_cursor_in_rows(logical_line, &wrapped, local_cursor, prefix);
             positions.push(ComposerCursorPosition {
                 cursor: text_offset + local_cursor,
                 row: visual_offset + row,
-                column: if row == 0 {
-                    screen_column.saturating_sub(prefix.width())
-                } else {
-                    screen_column
-                },
+                column: screen_column.saturating_sub(prefix.width()),
             });
         }
         text_offset += line_length + 1;
@@ -217,45 +294,182 @@ fn composer_rows(state: &UiState, width: usize) -> (Vec<Line<'static>>, Option<(
     let mut text_offset = 0;
     for (line_index, logical_line) in state.composer.split('\n').enumerate() {
         let prefix = if line_index == 0 { "> " } else { "  " };
-        let wrapped = wrap_line(&Line::from(format!("{prefix}{logical_line}")), width);
+        let wrapped = composer_wrapped_rows(logical_line, prefix, width);
         let line_length = logical_line.chars().count();
         if state.cursor >= text_offset && state.cursor <= text_offset + line_length {
             let local_cursor = state.cursor - text_offset;
             let (row_index, screen_column) =
-                wrapped_cursor_position(logical_line, prefix, &wrapped, local_cursor);
+                composer_cursor_in_rows(logical_line, &wrapped, local_cursor, prefix);
             cursor = Some((
                 rows.len() + row_index,
                 screen_column.min(width.saturating_sub(1)) as u16,
             ));
         }
-        rows.extend(wrapped);
+        rows.extend(wrapped.into_iter().map(|row| row.line));
         text_offset += line_length + 1;
     }
     (rows, cursor)
 }
 
-/// Maximum live-band height: tool row(s), draft tail, status,
-/// composer. The band is variable-height within this cap; growth
-/// beyond the window scrolls physically (monotonic offset), shrink
-/// blanks freed rows in place — reversible edits never duplicate
-/// committed content into scrollback (TERMINAL.md, inline-first).
-const LIVE_REGION_MAX_ROWS: usize = 6;
+fn limit_composer_rows(
+    (mut rows, mut cursor): (Vec<Line<'static>>, Option<(usize, u16)>),
+    limit: usize,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let limit = limit.max(1);
+    if rows.len() > limit {
+        let cursor_row = cursor.map_or(rows.len() - 1, |(row, _)| row);
+        let start = cursor_row
+            .saturating_add(1)
+            .saturating_sub(limit)
+            .min(rows.len() - limit);
+        rows = rows.split_off(start);
+        cursor = cursor.map(|(row, column)| (row.saturating_sub(start).min(limit - 1), column));
+    }
+    (rows, cursor)
+}
 
-/// The live band below the committed transcript. Returns pre-wrapped
-/// rows (at most LIVE_REGION_MAX_ROWS) plus the hardware cursor
-/// position relative to the band; the composer occupies the last rows.
+/// Maximum virtual live-band height. `Screen` reserves this stable band;
+/// this renderer returns only the meaningful bottom-aligned rows so idle
+/// sessions do not display trailing blank space.
+pub(super) const LIVE_REGION_MAX_ROWS: usize = 10;
+const LIVE_REGION_BASE_ROWS: usize = 7;
+const LIVE_CHROME_ROWS: usize = 5;
+const MAX_MODEL_SELECTOR_OPTIONS: usize = 2;
+
+pub(super) fn live_region_height(state: &UiState) -> usize {
+    if state.model_selector.is_some() {
+        LIVE_REGION_MAX_ROWS
+    } else {
+        LIVE_REGION_BASE_ROWS
+    }
+}
+
+fn selector_row(line: Line<'static>, width: usize) -> Line<'static> {
+    wrap_line(&line, width)
+        .into_iter()
+        .next()
+        .unwrap_or_default()
+}
+
+fn compact_model_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+) -> Vec<Line<'static>> {
+    let models = state.filtered_model_catalog();
+    let selected = state
+        .model_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let selected_line = models.get(selected).map_or_else(
+        || "  no matching models".to_owned(),
+        |model| format!("  > {model}"),
+    );
+    vec![
+        selector_row(Line::from(selected_line).style(palette.system_note), width),
+        selector_row(
+            Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+            width,
+        ),
+    ]
+}
+
+fn model_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let models = state.filtered_model_catalog();
+    let selected = state
+        .model_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = vec![selector_row(
+        Line::from(if query.is_empty() {
+            "select model".to_owned()
+        } else {
+            format!("select model · {query}")
+        })
+        .style(palette.system_note),
+        width,
+    )];
+    if models.is_empty() {
+        lines.push(selector_row(
+            Line::from("  no matching models").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let start = selected
+            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
+            .min(models.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
+        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(models.len());
+        for (index, model) in models.iter().enumerate().take(end).skip(start) {
+            let marker = if index == selected { ">" } else { " " };
+            let current = state
+                .current_model_reference()
+                .is_some_and(|current| current == *model);
+            let suffix = if current { "  (current)" } else { "" };
+            lines.push(selector_row(
+                Line::from(format!("  {marker} {model}{suffix}")).style(palette.system_note),
+                width,
+            ));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
+/// The live band below the committed transcript. Returns at most
+/// LIVE_REGION_MAX_ROWS rows plus the hardware cursor position relative
+/// to the band; `Screen` bottom-aligns it inside the stable virtual band.
+#[cfg(test)]
 pub(super) fn build_live(
     state: &UiState,
     palette: &Palette,
     width: usize,
 ) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    build_live_at_height(state, palette, width, live_region_height(state))
+}
+
+/// Render the live band for the currently available terminal height. Very
+/// small terminals cannot fit the normal footer/chrome, so keep the editor
+/// and, for the picker, its selected model and controls usable instead of
+/// clipping the picker off the top of the physical window.
+pub(super) fn build_live_at_height(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    band_height: usize,
+) -> (Vec<Line<'static>>, Option<(usize, u16)>) {
+    let band_height = band_height.clamp(1, LIVE_REGION_MAX_ROWS);
+    if band_height < LIVE_CHROME_ROWS + 1 {
+        let head = if state.model_selector.is_some() {
+            compact_model_selector_lines(state, palette, width)
+        } else {
+            Vec::new()
+        };
+        let (composer_rows, composer_cursor) = limit_composer_rows(
+            composer_rows(state, width),
+            band_height.saturating_sub(head.len()).max(1),
+        );
+        let cursor = composer_cursor.map(|(row, column)| (head.len() + row, column));
+        let mut lines = head;
+        lines.extend(composer_rows);
+        return (lines, cursor);
+    }
+
     // Composer first: it is anchored to the band's bottom and owns the
-    // hardware cursor.
-    let (composer_rows, composer_cursor) = composer_rows(state, width);
+    // hardware cursor. Long drafts keep the viewport around the cursor.
+    let (composer_rows, composer_cursor) = limit_composer_rows(
+        composer_rows(state, width),
+        band_height.saturating_sub(LIVE_CHROME_ROWS),
+    );
     let composer_len = composer_rows.len();
 
     let mut head: Vec<Line<'static>> = Vec::new();
-    if state.hotkeys_visible {
+    if state.model_selector.is_some() {
+        head.extend(model_selector_lines(state, palette, width));
+    } else if state.hotkeys_visible {
         head.extend(help::hotkey_lines(&state.keymap, palette));
     }
     if let Some(latest) = state.tool_rows.last() {
@@ -314,7 +528,9 @@ pub(super) fn build_live(
 
     // Fit the head above the composer inside the band cap, keeping
     // the newest content when truncating.
-    let budget = LIVE_REGION_MAX_ROWS.saturating_sub(composer_len);
+    let budget = band_height
+        .saturating_sub(LIVE_CHROME_ROWS)
+        .saturating_sub(composer_len);
     if head.len() > budget {
         head = head.split_off(head.len() - budget);
     }
@@ -357,8 +573,9 @@ pub(super) fn build_live(
 
     let mut lines: Vec<Line<'static>> = std::mem::take(&mut head);
 
-    // Shell chrome (Go parity): a dim rule above the composer and one
-    // between the composer and the status line.
+    // Shell chrome: keep one empty row between transcript/live output and
+    // the composer, then a dim rule immediately above the editable input.
+    lines.push(Line::default());
     lines.push(separator_line(width, palette));
 
     // Cursor position within the wrapped composer rows.
