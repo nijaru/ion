@@ -413,8 +413,10 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         Arc::clone(&make_provider),
         make_provider_for_model,
         trusted_resources.clone(),
-        4,
-        settings.agents_enabled(),
+        ion::AgentHostOptions {
+            max_active_agents: 4,
+            agents_enabled: settings.agents_enabled(),
+        },
     )
     .await
     {
@@ -683,8 +685,10 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         &store,
         Arc::clone(&make_provider),
         trusted_resources.clone(),
-        4,
-        settings.agents_enabled(),
+        ion::AgentHostOptions {
+            max_active_agents: 4,
+            agents_enabled: settings.agents_enabled(),
+        },
     )
     .await
     {

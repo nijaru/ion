@@ -577,8 +577,10 @@ where
         &config.store,
         Arc::clone(&config.make_provider),
         trusted_resources,
-        4,
-        config.agents_enabled,
+        crate::AgentHostOptions {
+            max_active_agents: 4,
+            agents_enabled: config.agents_enabled,
+        },
     )
     .await
     {

@@ -72,6 +72,8 @@ desktopBaseUrl = "http://desktop:8080/v1"
 modelCatalog = ["qwen3.8:27b"]
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
+# Optional; model-facing subagent controls are disabled by default.
+# enableAgents = true
 
 [[mcpServers]]
 name = "docs"

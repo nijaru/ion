@@ -26,6 +26,15 @@ pub struct AgentHost<P> {
     hosted: Arc<ion_core::HostedAgentRuntimes<P>>,
 }
 
+/// Launch-time model-facing agent-control policy and family capacity.
+#[derive(Debug, Clone, Copy)]
+pub struct AgentHostOptions {
+    /// Maximum number of active family agents.
+    pub max_active_agents: usize,
+    /// Publish and durably admit the model-facing `agents` scope.
+    pub agents_enabled: bool,
+}
+
 impl<P> AgentHost<P> {
     #[must_use]
     pub fn family(&self) -> &Arc<ion_core::AgentFamily> {
@@ -45,8 +54,7 @@ pub async fn enable_agent_host<P>(
     store: &ion_core::SessionStore,
     make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     trusted_resources: Vec<ion_core::TrustedResource>,
-    max_active_agents: usize,
-    agents_enabled: bool,
+    options: AgentHostOptions,
 ) -> Result<AgentHost<P>, ion_core::AgentError>
 where
     P: ion_core::Provider + 'static,
@@ -58,8 +66,7 @@ where
         make_provider,
         None,
         trusted_resources,
-        max_active_agents,
-        agents_enabled,
+        options,
     )
     .await
 }
@@ -73,13 +80,12 @@ pub async fn enable_agent_host_with_model_resolver<P>(
     make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     make_provider_for_model: Option<Arc<dyn Fn(String) -> P + Send + Sync>>,
     trusted_resources: Vec<ion_core::TrustedResource>,
-    max_active_agents: usize,
-    agents_enabled: bool,
+    options: AgentHostOptions,
 ) -> Result<AgentHost<P>, ion_core::AgentError>
 where
     P: ion_core::Provider + 'static,
 {
-    let family = Arc::new(runtime.agent_family(max_active_agents).await?);
+    let family = Arc::new(runtime.agent_family(options.max_active_agents).await?);
     let hosted = ion_core::hosted_agent_runtimes(
         ion_core::HostedAgentConfig {
             store: store.clone(),
@@ -97,7 +103,7 @@ where
         runtime,
         Arc::clone(&family),
         Arc::clone(&hosted),
-        agents_enabled,
+        options.agents_enabled,
     )
     .await?;
     Ok(AgentHost { family, hosted })
@@ -208,11 +214,20 @@ mod provider_identity_tests {
             store.clone(),
             Arc::new(ion_core::DefaultPolicy),
         );
-        let provider = Arc::new(|| ScriptedProvider::echo());
-        let agent_host =
-            enable_agent_host(&tools, &runtime, &store, provider, Vec::new(), 1, false)
-                .await
-                .expect("agent host");
+        let provider = Arc::new(ScriptedProvider::echo);
+        let agent_host = enable_agent_host(
+            &tools,
+            &runtime,
+            &store,
+            provider,
+            Vec::new(),
+            AgentHostOptions {
+                max_active_agents: 1,
+                agents_enabled: false,
+            },
+        )
+        .await
+        .expect("agent host");
 
         assert!(!tools.specs().iter().any(|spec| spec.name == "spawn_agent"));
 
