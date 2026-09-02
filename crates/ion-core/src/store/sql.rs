@@ -105,6 +105,16 @@ pub(super) fn handle_command(
                     .map_err(StoreError::from)
             }));
         }
+        StoreCommand::ClearNextRun {
+            session_id,
+            lane_name,
+            reply,
+        } => {
+            let _ = reply.send(
+                check_injected(fail_next_write)
+                    .and_then(|()| clear_next_run(connection, session_id, &lane_name)),
+            );
+        }
         StoreCommand::Load { session_id, reply } => {
             let _ = reply.send(load(connection, session_id));
         }
@@ -942,6 +952,40 @@ fn queue_next_run(
         rusqlite::params![session_id.as_uuid().to_string(), now],
     )?;
     tx.commit()
+}
+
+/// Remove one lane's pending next-run input durably. Returns the cleared
+/// prompt so a frontend can restore it (pi parity: alt+up dequeue).
+fn clear_next_run(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane_name: &str,
+) -> Result<Option<String>, StoreError> {
+    let tx = connection.transaction()?;
+    let cleared: Option<String> = tx
+        .query_row(
+            "SELECT pending_prompt FROM lanes
+             WHERE session_id = ?1 AND name = ?2 AND pending_entry_id IS NOT NULL",
+            rusqlite::params![session_id.as_uuid().to_string(), lane_name],
+            |row| row.get(0),
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(other),
+        })?;
+    if cleared.is_some() {
+        tx.execute(
+            "UPDATE lanes SET
+                pending_entry_id = NULL,
+                pending_prompt = NULL,
+                updated_at = ?3
+             WHERE session_id = ?1 AND name = ?2 AND pending_entry_id IS NOT NULL",
+            rusqlite::params![session_id.as_uuid().to_string(), lane_name, now_ms(),],
+        )?;
+    }
+    tx.commit().map_err(StoreError::from)?;
+    Ok(cleared)
 }
 
 #[cfg(test)]

@@ -366,6 +366,10 @@ pub struct SessionSnapshot {
     /// The session's durable model selection; authoritative across
     /// resume (§14.8).
     pub model_ref: String,
+    /// Durable lane-owned next-run input awaiting promotion (§9.2):
+    /// the queued prompt plus its provisioned entry identity. `None`
+    /// when the lane has no pending input.
+    pub pending_next_run: Option<NextRunInput>,
     /// Most recently settled model-step usage. This is a bounded projection
     /// of the durable usage ledger for frontend resynchronization; it is not
     /// a cost estimate or a replacement for the ledger.
@@ -382,6 +386,14 @@ pub struct PendingTool {
     pub call_id: u64,
     pub tool: String,
     pub target: Option<String>,
+}
+
+/// Durable lane-owned next-run input as exposed to frontends: the
+/// provisioned entry identity plus the queued prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NextRunInput {
+    pub entry_id: crate::ids::EntryId,
+    pub prompt: String,
 }
 
 /// Live, never-durable draft state of the active operation (§21.4).
@@ -445,6 +457,13 @@ enum SessionCommand {
         lane_name: String,
         prompt: String,
         reply: oneshot::Sender<Result<crate::ids::EntryId, CommandError>>,
+    },
+    /// Remove the lane's pending next-run input and return it (pi
+    /// parity: alt+up dequeues a queued prompt back into the editor).
+    /// The cleared state is durable before the command returns.
+    DequeueNextRun {
+        lane_name: String,
+        reply: oneshot::Sender<Result<Option<String>, CommandError>>,
     },
     Steer {
         text: String,
@@ -597,6 +616,21 @@ impl SessionHandle {
             .try_send(SessionCommand::NextRun {
                 lane_name: lane_name.into(),
                 prompt: prompt.into(),
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Remove the main lane's pending next-run input and return its
+    /// prompt (pi parity: alt+up dequeues a queued prompt back to the
+    /// editor). Durable before the command returns; `Ok(None)` when no
+    /// input is queued.
+    pub async fn dequeue_next_run(&self) -> Result<Option<String>, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::DequeueNextRun {
+                lane_name: crate::session::lane::MAIN.to_owned(),
                 reply,
             })
             .map_err(command_send_error)?;
@@ -1988,6 +2022,10 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.next_run_on_lane(lane_name, prompt).await);
                 false
             }
+            SessionCommand::DequeueNextRun { lane_name, reply } => {
+                let _ = reply.send(self.dequeue_next_run(&lane_name).await);
+                false
+            }
             SessionCommand::Steer { text, reply } => {
                 let _ = reply.send(self.enqueue_steer(text).await);
                 false
@@ -2234,6 +2272,33 @@ impl<P: Provider> SessionRuntime<P> {
             .state
             .pending_next_run = Some(next_run);
         Ok(entry_id)
+    }
+
+    /// Remove the lane's pending next-run input and return its prompt
+    /// (pi parity: alt+up dequeues a queued prompt back to the editor).
+    /// The cleared state is durable before the command returns; a busy
+    /// lane keeps its queue because the active operation may finish and
+    /// promote it at any boundary.
+    async fn dequeue_next_run(&mut self, lane_name: &str) -> Result<Option<String>, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if self.lane(lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name.to_owned()));
+        }
+        let Some(pending) = self.lane_pending_next_run(lane_name) else {
+            return Ok(None);
+        };
+        let prompt = pending.prompt.clone();
+        self.store
+            .clear_next_run(self.session_id, lane_name)
+            .await
+            .map_err(persistence_command_error)?;
+        self.lane_mut(lane_name)
+            .expect("dequeued lane remains resident")
+            .state
+            .pending_next_run = None;
+        Ok(Some(prompt))
     }
 
     /// Create the durable operation only when the lane is free. A pending
@@ -3628,6 +3693,15 @@ impl<P: Provider> SessionRuntime<P> {
                 .map(|record| record.entry.clone())
                 .collect(),
             model_ref: self.main_model_ref().to_owned(),
+            pending_next_run: self
+                .main_lane()
+                .state
+                .pending_next_run
+                .as_ref()
+                .map(|next_run| NextRunInput {
+                    entry_id: next_run.entry_id,
+                    prompt: next_run.prompt.clone(),
+                }),
             latest_usage: self.main_lane_live().latest_usage,
             live: self.main_active().map(|_| LiveOperationState {
                 draft_text: self

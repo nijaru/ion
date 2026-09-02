@@ -48,7 +48,7 @@ pub use provider::{
     ScriptedProvider, SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
-    EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState,
+    EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState, NextRunInput,
     OperationSettlement, OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent,
     SessionHandle, SessionSnapshot,
 };

@@ -359,6 +359,11 @@ enum StoreCommand {
         next_run: crate::session::lane::NextRun,
         reply: oneshot::Sender<Result<(), StoreError>>,
     },
+    ClearNextRun {
+        session_id: SessionId,
+        lane_name: String,
+        reply: oneshot::Sender<Result<Option<String>, StoreError>>,
+    },
     Load {
         session_id: SessionId,
         reply: oneshot::Sender<Result<LoadedSession, StoreError>>,
@@ -781,6 +786,21 @@ impl SessionStore {
         })
         .await?;
         Ok(target)
+    }
+
+    /// Remove one lane's pending next-run input durably; returns the
+    /// cleared prompt for frontend restoration.
+    pub async fn clear_next_run(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+    ) -> Result<Option<String>, StoreError> {
+        self.request(|reply| StoreCommand::ClearNextRun {
+            session_id,
+            lane_name: lane_name.into(),
+            reply,
+        })
+        .await
     }
 
     /// Persist the newest bounded frame for an in-flight assistant effect.

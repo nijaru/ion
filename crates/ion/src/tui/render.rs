@@ -536,6 +536,14 @@ pub(super) fn build_live_at_height(
             head.push(line);
         }
     }
+    // A durable queued follow-up stays visible above the composer
+    // (pi parity: queued messages remain inspectable and restorable).
+    if let Some(queued) = &state.queued_prompt {
+        head.extend(wrap_line(
+            &Line::from(format!("queued \u{21bb} {queued}")).dim(),
+            width,
+        ));
+    }
     if !state.draft.is_empty() {
         head.extend(wrap_line(
             &Line::from(format!("ion \u{ab} {}", state.draft)),

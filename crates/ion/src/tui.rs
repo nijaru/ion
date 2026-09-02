@@ -85,6 +85,9 @@ pub enum UiEffect {
     /// $VISUAL/$EDITOR, and continue with the edited text (pi parity:
     /// app.editor.external).
     ExternalEditor,
+    /// Restore the queued next-run prompt to the composer (pi parity:
+    /// app.message.dequeue, alt+up).
+    DequeueNextRun,
     /// Close the attached session and start a new durable one.
     NewSession,
     /// Close the attached session and reopen the requested durable one.
@@ -142,6 +145,9 @@ pub enum UiMessage {
     /// The external editor returned the edited draft (empty output
     /// keeps the current composer unchanged).
     ExternalEdited(String),
+    /// The queued prompt was removed and returned to the composer
+    /// (alt+up). `None` means the queue was already empty.
+    Dequeued(Option<String>),
 }
 
 /// The live operation presentation, derived from runtime events.
@@ -188,6 +194,13 @@ pub enum Action {
     /// Cycle the kill ring after a yank (pi: tui.editor.yankPop, alt+y).
     YankPop,
     Undo,
+    /// Queue a follow-up after the active operation completes (pi:
+    /// app.message.followUp, alt+enter). Distinct from steering, which
+    /// joins at the next reasoning boundary.
+    QueueFollowUp,
+    /// Restore the queued prompt to the editor (pi:
+    /// app.message.dequeue, alt+up).
+    DequeueFollowUp,
     /// Open the composer in $VISUAL/$EDITOR (pi: app.editor.external,
     /// ctrl+g).
     ExternalEditor,
@@ -286,6 +299,8 @@ impl Default for KeyMap {
                 KeyCode::Char('g'),
                 Modifiers::CONTROL,
             ),
+            (Action::QueueFollowUp, KeyCode::Enter, Modifiers::ALT),
+            (Action::DequeueFollowUp, KeyCode::Up, Modifiers::ALT),
         ] {
             bind(&mut bindings, action, code, modifiers);
         }
@@ -687,6 +702,9 @@ pub struct UiState {
     approval: Option<ApprovalPrompt>,
     /// Most recent provider usage, retained for the footer after settlement.
     usage: Option<TokenUsage>,
+    /// The durable queued follow-up prompt, when one exists (pi parity:
+    /// queued messages stay visible above the composer).
+    queued_prompt: Option<String>,
 }
 
 impl UiState {
@@ -1031,9 +1049,12 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             (state, None)
         }
         UiMessage::EnqueueAccepted => {
+            if let Some(text) = state.pending_history.clone() {
+                state.queued_prompt = Some(text);
+            }
             state
                 .pending_scrollback
-                .push(Line::from("queued for the next operation").dim());
+                .push(Line::from("queued for the next operation (alt+up restores it)").dim());
             state.reset_composer();
             (state, None)
         }
@@ -1072,6 +1093,18 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state
                 .pending_scrollback
                 .push(Line::from("session renamed").dim());
+            (state, None)
+        }
+        UiMessage::Dequeued(prompt) => {
+            state.queued_prompt = None;
+            if let Some(prompt) = prompt {
+                state.composer = prompt;
+                state.cursor = state.composer.chars().count();
+                state.preferred_column = None;
+                state.undo_stack.clear();
+                state.last_edit = None;
+                state.reject_pending_history();
+            }
             (state, None)
         }
         UiMessage::ExternalEdited(text) => {
@@ -1611,6 +1644,26 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             // editor, and returns the edited draft as a message.
             (state, Some(UiEffect::ExternalEditor))
         }
+        Action::QueueFollowUp => {
+            // alt+enter always queues after completion, even while idle
+            // (pi parity: the follow-up queue is explicit, not implied by
+            // the working state like plain enter's queue-while-busy).
+            let text = state.composer.trim().to_owned();
+            if text.is_empty() {
+                return (state, None);
+            }
+            state.break_edit_group();
+            state.history_index = None;
+            state.history_stash = None;
+            state.history.push(text.clone());
+            state.pending_history = Some(text.clone());
+            (state, Some(UiEffect::Enqueue { text }))
+        }
+        Action::DequeueFollowUp => {
+            // Only meaningful with a queued prompt; inert otherwise (pi
+            // parity: alt+up is a no-op when the queue is empty).
+            (state, Some(UiEffect::DequeueNextRun))
+        }
         Action::OpenModelSelector => {
             if !state.model_switching_available {
                 notice(
@@ -2025,6 +2078,9 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state
                 .pending_scrollback
                 .push(Line::from(format!("> {prompt}")).style(palette.user_marker));
+            // The queued prompt became the running operation: its live
+            // presentation ends here, before the status line takes over.
+            state.queued_prompt = None;
             state.draft.clear();
             state.tool_rows.clear();
             state.usage = None;
@@ -2255,6 +2311,10 @@ impl UiState {
     fn resync_after_lag(&mut self, snapshot: &SessionSnapshot) {
         self.close_model_selector();
         self.hotkeys_visible = false;
+        self.queued_prompt = snapshot
+            .pending_next_run
+            .as_ref()
+            .map(|next_run| next_run.prompt.clone());
         self.status = match &snapshot.operation {
             OperationStatus::Idle => UiStatus::Idle,
             OperationStatus::Active { prompt, .. } => UiStatus::Working {
@@ -3002,6 +3062,16 @@ async fn dispatch(
             // arm exists only for match totality.
             None
         }
+        UiEffect::DequeueNextRun => {
+            match session.dequeue_next_run().await {
+                Ok(prompt) => {
+                    let (next, _) = update(std::mem::take(state), UiMessage::Dequeued(prompt));
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("dequeue failed: {err}")),
+            }
+            None
+        }
         UiEffect::Submit { text } => {
             match session.submit_if_idle(text).await {
                 Ok(_) => {
@@ -3641,6 +3711,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: Some(TokenUsage {
                 input: 100,
                 output: 20,
@@ -3693,6 +3764,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -3729,6 +3801,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -3764,6 +3837,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -3791,6 +3865,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -3832,6 +3907,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -3868,6 +3944,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            pending_next_run: None,
             latest_usage: None,
             live: None,
         };
@@ -4952,5 +5029,108 @@ mod editor_parity_tests {
         assert_eq!(state.composer, "replaced");
         assert_eq!(state.cursor, 8);
         assert!(state.undo_stack.is_empty(), "editor text is not undoable");
+    }
+}
+
+#[cfg(test)]
+mod queue_parity_tests {
+    use super::tests::type_text;
+    use super::*;
+    use ion_terminal::Modifiers;
+
+    fn alt(code: KeyCode) -> UiMessage {
+        UiMessage::Key(KeyEvent::new(code, Modifiers::ALT))
+    }
+
+    #[test]
+    fn alt_enter_queues_a_follow_up_even_while_idle() {
+        let state = type_text(UiState::new(), "later question");
+        let (state, effect) = update(state, alt(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::Enqueue {
+                text: "later question".to_owned()
+            })
+        );
+        assert_eq!(
+            state.history.last().map(String::as_str),
+            Some("later question")
+        );
+    }
+
+    #[test]
+    fn alt_enter_rejects_empty_text() {
+        let (_state, effect) = update(UiState::new(), alt(KeyCode::Enter));
+        assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn alt_up_dequeues_the_queued_prompt_back_to_the_editor() {
+        let mut state = type_text(UiState::new(), "first");
+        state.pending_history = Some("first".to_owned());
+        let (state, _) = update(state, UiMessage::EnqueueAccepted);
+        assert_eq!(state.queued_prompt.as_deref(), Some("first"));
+        assert!(state.composer.is_empty(), "composer cleared by enqueue");
+
+        // alt+up produces the dequeue effect; the host resolves it and the
+        // prompt returns to the editor.
+        let (state, effect) = update(state, alt(KeyCode::Up));
+        assert_eq!(effect, Some(UiEffect::DequeueNextRun));
+        let (state, _) = update(state, UiMessage::Dequeued(Some("first".to_owned())));
+        assert_eq!(state.composer, "first");
+        assert_eq!(state.cursor, 5);
+        assert!(state.queued_prompt.is_none(), "indicator cleared");
+    }
+
+    #[test]
+    fn dequeue_with_empty_queue_keeps_the_composer() {
+        let mut state = type_text(UiState::new(), "untouched");
+        state.queued_prompt = None;
+        let (state, _) = update(state, UiMessage::Dequeued(None));
+        assert_eq!(state.composer, "untouched");
+    }
+
+    #[test]
+    fn queued_prompt_is_cleared_when_the_operation_starts() {
+        let mut state = UiState::new();
+        state.queued_prompt = Some("next up".to_owned());
+        let palette = crate::tui::render::palette(crate::settings::Theme::Dark);
+        let (state, _) = update(
+            state,
+            UiMessage::Runtime(RuntimeEvent::OperationStarted {
+                cursor: ion_core::RuntimeCursor::default(),
+                operation_id: ion_core::OperationId::generate(),
+                prompt: "next up".to_owned(),
+            }),
+        );
+        assert!(
+            state.queued_prompt.is_none(),
+            "started op consumes the queue"
+        );
+        let _ = palette;
+    }
+
+    #[test]
+    fn snapshot_resync_restores_the_queued_prompt() {
+        let mut state = UiState::new();
+        let mut snapshot = ion_core::SessionSnapshot {
+            cursor: ion_core::RuntimeCursor::default(),
+            runtime_instance_id: ion_core::RuntimeInstanceId::generate(),
+            indeterminate: None,
+            latest_settlement: None,
+            reopen_entry_count: None,
+            operation: ion_core::OperationStatus::Idle,
+            entries: Vec::new(),
+            model_ref: "desktop/test".to_owned(),
+            pending_next_run: Some(ion_core::NextRunInput {
+                entry_id: ion_core::EntryId::generate(),
+                prompt: "lag-visible queue".to_owned(),
+            }),
+            latest_usage: None,
+            live: None,
+        };
+        let _ = &mut snapshot;
+        state.resync_after_lag(&snapshot);
+        assert_eq!(state.queued_prompt.as_deref(), Some("lag-visible queue"));
     }
 }

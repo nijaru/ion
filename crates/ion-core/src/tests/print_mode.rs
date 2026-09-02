@@ -422,3 +422,88 @@ async fn reopened_runtime_gets_a_new_instance_identity() {
     reopened.join().await.expect("join reopened runtime");
     let _ = std::fs::remove_dir_all(db.parent().expect("temp parent"));
 }
+
+#[tokio::test]
+async fn dequeue_next_run_restores_the_prompt_and_leaves_nothing_queued() {
+    let db = temp_db("dequeue-next-run");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![ScriptedMessage::delayed(
+            Duration::from_secs(30),
+            "active never settles",
+        )]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let (snapshot, events) = session.subscribe().await.expect("subscribe");
+    assert!(
+        snapshot.pending_next_run.is_none(),
+        "fresh session has no queued input"
+    );
+    session.submit_if_idle("active").await.expect("submit");
+    wait_for_state(&session, |state| {
+        matches!(state, OperationState::AssistantEffectPending)
+    })
+    .await;
+
+    // Empty dequeue is a visible no-op.
+    assert_eq!(
+        session.dequeue_next_run().await.expect("empty dequeue"),
+        None
+    );
+
+    let queued_entry = session.next_run("follow up").await.expect("next run");
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let pending = snapshot
+        .pending_next_run
+        .as_ref()
+        .expect("queued in snapshot");
+    assert_eq!(pending.prompt, "follow up");
+    assert_eq!(pending.entry_id, queued_entry);
+
+    // Dequeue restores the prompt and clears the durable queue.
+    assert_eq!(
+        session.dequeue_next_run().await.expect("dequeue"),
+        Some("follow up".to_owned())
+    );
+    let snapshot = session.snapshot().await.expect("snapshot after dequeue");
+    assert!(snapshot.pending_next_run.is_none(), "queue is empty again");
+
+    // Requeue still works after a dequeue: the lane accepts new input.
+    let second_entry = session.next_run("requeued").await.expect("requeue");
+    assert_ne!(second_entry, queued_entry);
+    let snapshot = session.snapshot().await.expect("snapshot after requeue");
+    assert_eq!(
+        snapshot.pending_next_run.as_ref().expect("requeued").prompt,
+        "requeued"
+    );
+
+    // Dequeued-then-requeued state must survive close/reopen untouched.
+    let session_id = runtime.session_id();
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    // Reopen promotes the requeued prompt per the durable next-run
+    // contract (§9.2): it becomes the recovered session's operation.
+    let session = runtime.session();
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let snapshot = session.snapshot().await.expect("snapshot reopened");
+        match &snapshot.operation {
+            OperationStatus::Active { prompt, .. } if prompt == "requeued" => break,
+            _ if Instant::now() < deadline => sleep(Duration::from_millis(20)).await,
+            _ => panic!("requeued prompt never promoted after reopen"),
+        }
+    }
+    session.close().await.expect("close reopened");
+    runtime.join().await.expect("join reopened");
+    let _ = events;
+}
