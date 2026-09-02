@@ -76,6 +76,11 @@ pub enum UiEffect {
     SwitchModel {
         model: String,
     },
+    /// Set the thinking level for future steps (pi parity: /thinking,
+    /// shift+tab). `None` restores the adapter default.
+    SwitchThinking {
+        thinking: Option<String>,
+    },
     Cancel,
     /// Approve the parked tool approval (§17.4).
     Approve,
@@ -175,6 +180,8 @@ pub enum Action {
     OpenModelSelector,
     CycleModelForward,
     CycleModelBackward,
+    /// Cycle the thinking level (pi: app.thinking.cycle, shift+tab).
+    CycleThinking,
     HistoryPrevious,
     HistoryNext,
     CursorLeft,
@@ -301,6 +308,7 @@ impl Default for KeyMap {
             ),
             (Action::QueueFollowUp, KeyCode::Enter, Modifiers::ALT),
             (Action::DequeueFollowUp, KeyCode::Up, Modifiers::ALT),
+            (Action::CycleThinking, KeyCode::Tab, Modifiers::SHIFT),
         ] {
             bind(&mut bindings, action, code, modifiers);
         }
@@ -658,6 +666,12 @@ pub struct UiState {
     model_catalog: Vec<String>,
     /// Ephemeral searchable model selector, when open.
     model_selector: Option<ModelSelector>,
+    /// The durable thinking-level selection for future steps (pi
+    /// parity: /thinking, shift+tab). `None` is the adapter default.
+    /// Presentation only; the lane config is authoritative.
+    thinking_level: Option<String>,
+    /// Ephemeral thinking picker, when open.
+    thinking_selector: Option<ModelSelector>,
     /// Ephemeral session picker (`/resume`), when open. Rows are
     /// host-supplied snapshots; selection returns a durable id.
     session_selector: Option<SessionSelector>,
@@ -764,6 +778,79 @@ impl UiState {
             saved_composer,
             saved_cursor,
         });
+    }
+
+    fn open_thinking_selector(&mut self, query: &str) {
+        if self.thinking_selector.is_some() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer = query.to_owned();
+        self.cursor = self.composer.chars().count();
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        let selected = THINKING_LEVELS
+            .iter()
+            .position(|level| *level == self.thinking_level.as_deref().unwrap_or(""))
+            .unwrap_or(0);
+        self.thinking_selector = Some(ModelSelector {
+            selected,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_thinking_selector(&mut self) {
+        let Some(selector) = self.thinking_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_thinking_levels(&self) -> Vec<String> {
+        let query = self.composer.to_lowercase();
+        THINKING_LEVELS
+            .iter()
+            .filter(|level| level.starts_with(&query))
+            .map(|level| (*level).to_owned())
+            .collect()
+    }
+
+    fn selected_thinking_level(&self) -> Option<String> {
+        let selector = self.thinking_selector.as_ref()?;
+        self.filtered_thinking_levels()
+            .get(selector.selected)
+            .cloned()
+    }
+
+    fn move_thinking_selection(&mut self, delta: isize) {
+        let count = self.filtered_thinking_levels().len();
+        let Some(selector) = self.thinking_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn reset_thinking_selection(&mut self) {
+        let selected = self
+            .filtered_thinking_levels()
+            .iter()
+            .position(|level| level == &self.composer.to_lowercase())
+            .unwrap_or(0);
+        if let Some(selector) = self.thinking_selector.as_mut() {
+            selector.selected = selected;
+        }
     }
 
     fn close_model_selector(&mut self) {
@@ -925,6 +1012,7 @@ impl UiState {
         self.hotkeys_visible = false;
         self.model_selector = None;
         self.session_selector = None;
+        self.thinking_selector = None;
         self.pending_resume_query = None;
         self.reset_composer();
     }
@@ -1159,6 +1247,51 @@ fn handle_model_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opt
     }
 }
 
+fn handle_thinking_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_thinking_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(level) = state.selected_thinking_level() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching thinking levels").red());
+                return (state, None);
+            };
+            state.close_thinking_selector();
+            state.thinking_level = Some(level.clone());
+            (
+                state,
+                Some(UiEffect::SwitchThinking {
+                    thinking: Some(level),
+                }),
+            )
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_thinking_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_thinking_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_thinking_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_thinking_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
 fn handle_session_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     match key.code {
         KeyCode::Esc if key.modifiers.is_empty() => {
@@ -1201,6 +1334,9 @@ fn handle_session_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, O
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
+    }
+    if state.thinking_selector.is_some() {
+        return handle_thinking_selector_key(state, key);
     }
     if state.session_selector.is_some() {
         return handle_session_selector_key(state, key);
@@ -1304,6 +1440,8 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             for line in [
                 "/compact [instructions] - summarize the active operation's context",
                 "/model [id|number]      - pick or switch the model",
+                "/thinking [level]      - pick the thinking level (off..max)",
+                "shift+tab               - cycle the thinking level",
                 "/new                    - close this session and start a fresh one",
                 "/resume [query]         - pick a previous session to reopen",
                 "/name <title>           - rename this session",
@@ -1353,6 +1491,35 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 return (std::mem::take(state), Some(UiEffect::SwitchModel { model }));
             }
             state.open_model_selector(rest);
+            (std::mem::take(state), None)
+        }
+        "thinking" => {
+            if let Ok(index) = rest.parse::<usize>() {
+                if index == 0 {
+                    notice(state, "thinking selection must start at 1");
+                    return (std::mem::take(state), None);
+                }
+                let Some(level) = THINKING_LEVELS.get(index - 1) else {
+                    notice(state, &format!("thinking selection out of range: {rest}"));
+                    return (std::mem::take(state), None);
+                };
+                let level = (*level).to_owned();
+                state.thinking_level = Some(level.clone());
+                return (
+                    std::mem::take(state),
+                    Some(UiEffect::SwitchThinking {
+                        thinking: Some(level),
+                    }),
+                );
+            }
+            if rest == "default" {
+                state.thinking_level = None;
+                return (
+                    std::mem::take(state),
+                    Some(UiEffect::SwitchThinking { thinking: None }),
+                );
+            }
+            state.open_thinking_selector(rest);
             (std::mem::take(state), None)
         }
         "new" => {
@@ -1450,7 +1617,8 @@ fn complete_composer(state: &mut UiState) {
             "/".to_owned(),
             command.to_owned(),
             [
-                "clone", "compact", "help", "model", "name", "new", "resume", "session", "quit",
+                "clone", "compact", "help", "model", "name", "new", "resume", "session",
+                "thinking", "quit",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -1569,6 +1737,9 @@ fn model_display_parts(model: &str, fallback_provider: Option<&str>) -> (Option<
     (fallback_provider.map(str::to_owned), model.to_owned())
 }
 
+/// Pi's fixed thinking vocabulary (pi: --thinking off..max).
+const THINKING_LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+
 fn cycle_model(state: &mut UiState, delta: isize) -> Option<UiEffect> {
     if !state.model_switching_available {
         notice(state, "model switching unavailable (scripted provider)");
@@ -1682,6 +1853,26 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
         Action::CycleModelBackward => {
             let effect = cycle_model(&mut state, -1);
             (state, effect)
+        }
+        Action::CycleThinking => {
+            // shift+tab cycles the pi vocabulary, wrapping; the current
+            // level is durable state so the cycle starts there.
+            let current = state
+                .thinking_level
+                .clone()
+                .unwrap_or_else(|| "off".to_owned());
+            let index = THINKING_LEVELS
+                .iter()
+                .position(|level| *level == current)
+                .unwrap_or(0);
+            let next = THINKING_LEVELS[(index + 1) % THINKING_LEVELS.len()].to_owned();
+            state.thinking_level = Some(next.clone());
+            (
+                state,
+                Some(UiEffect::SwitchThinking {
+                    thinking: Some(next),
+                }),
+            )
         }
         Action::ToggleToolOutput => {
             state.tool_output_expanded = !state.tool_output_expanded;
@@ -2613,6 +2804,7 @@ pub async fn run(
     // must split the durable qualified reference before rendering it or
     // comparing it with the qualified catalog.
     state.usage = snapshot.latest_usage;
+    state.thinking_level = snapshot.thinking.clone();
     if host.model_name.is_some() {
         let (provider, model_name) =
             model_display_parts(&snapshot.model_ref, state.model_provider.as_deref());
@@ -3024,6 +3216,7 @@ async fn switch_session(
         OperationStatus::Idle => None,
     };
     state.usage = snapshot.latest_usage;
+    state.thinking_level = snapshot.thinking.clone();
     if matches!(snapshot.operation, OperationStatus::Idle) {
         state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
     }
@@ -3060,6 +3253,16 @@ async fn dispatch(
         UiEffect::ExternalEditor => {
             // Resolved by the run loop, which owns the terminal; this
             // arm exists only for match totality.
+            None
+        }
+        UiEffect::SwitchThinking { thinking } => {
+            match session.switch_thinking(thinking.clone()).await {
+                Ok(_previous) => {
+                    let level = thinking.as_deref().unwrap_or("default");
+                    notice(state, &format!("thinking: {level}"));
+                }
+                Err(err) => notice(state, &format!("thinking switch failed: {err}")),
+            }
             None
         }
         UiEffect::DequeueNextRun => {
@@ -3428,7 +3631,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 9);
+        assert_eq!(state.pending_scrollback.len(), 10);
     }
 
     #[test]
@@ -3711,6 +3914,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: Some(TokenUsage {
                 input: 100,
@@ -3764,6 +3968,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -3801,6 +4006,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -3837,6 +4043,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -3865,6 +4072,7 @@ pub(crate) mod tests {
             operation: OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -3907,6 +4115,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -3944,6 +4153,7 @@ pub(crate) mod tests {
             },
             entries: Vec::new(),
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,
@@ -5122,6 +5332,7 @@ mod queue_parity_tests {
             operation: ion_core::OperationStatus::Idle,
             entries: Vec::new(),
             model_ref: "desktop/test".to_owned(),
+            thinking: None,
             pending_next_run: Some(ion_core::NextRunInput {
                 entry_id: ion_core::EntryId::generate(),
                 prompt: "lag-visible queue".to_owned(),
@@ -5132,5 +5343,117 @@ mod queue_parity_tests {
         let _ = &mut snapshot;
         state.resync_after_lag(&snapshot);
         assert_eq!(state.queued_prompt.as_deref(), Some("lag-visible queue"));
+    }
+}
+
+#[cfg(test)]
+mod thinking_parity_tests {
+    use super::tests::{key, type_text};
+    use super::*;
+    use ion_terminal::Modifiers;
+
+    fn shift_tab() -> UiMessage {
+        UiMessage::Key(KeyEvent::new(KeyCode::Tab, Modifiers::SHIFT))
+    }
+
+    #[test]
+    fn shift_tab_cycles_the_pi_thinking_vocabulary() {
+        let state = UiState::new();
+        let (state, effect) = update(state, shift_tab());
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchThinking {
+                thinking: Some("minimal".to_owned())
+            })
+        );
+        assert_eq!(state.thinking_level.as_deref(), Some("minimal"));
+
+        // Each press advances one level, wrapping at max.
+        let mut state = state;
+        for expected in ["low", "medium", "high", "xhigh", "max", "off", "minimal"] {
+            let (next, effect) = update(state, shift_tab());
+            assert_eq!(
+                effect,
+                Some(UiEffect::SwitchThinking {
+                    thinking: Some(expected.to_owned())
+                }),
+                "cycle reaches {expected}"
+            );
+            state = next;
+        }
+    }
+
+    #[test]
+    fn thinking_command_picks_numerically_or_opens_the_picker() {
+        let (_state, effect) = handle_command(&mut UiState::new(), "thinking 3");
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchThinking {
+                thinking: Some("low".to_owned())
+            })
+        );
+        let (_, effect) = handle_command(&mut UiState::new(), "thinking 0");
+        assert_eq!(effect, None);
+
+        let mut ui = UiState::new();
+        let (ui, _) = handle_command(&mut ui, "thinking hi");
+        assert!(ui.thinking_selector.is_some(), "picker opened with query");
+        assert!(ui.filtered_thinking_levels().contains(&"high".to_owned()));
+
+        // Arrow + enter selects.
+        let (ui, _) = update(ui, key(KeyCode::Down));
+        let (ui, effect) = update(ui, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchThinking {
+                thinking: Some("high".to_owned())
+            })
+        );
+        assert!(ui.thinking_selector.is_none());
+        assert_eq!(ui.thinking_level.as_deref(), Some("high"));
+
+        // `default` clears the selection back to the adapter default.
+        let (ui, effect) = handle_command(&mut { ui }, "thinking default");
+        assert_eq!(effect, Some(UiEffect::SwitchThinking { thinking: None }));
+        assert_eq!(ui.thinking_level, None);
+    }
+
+    #[test]
+    fn thinking_picker_esc_restores_the_draft() {
+        let mut ui = type_text(UiState::new(), "draft survives");
+        let (ui, _) = handle_command(&mut ui, "thinking");
+        let (ui, _) = update(ui, key(KeyCode::Esc));
+        assert_eq!(ui.composer, "draft survives");
+        assert!(ui.thinking_selector.is_none());
+    }
+
+    #[test]
+    fn snapshot_seeds_the_thinking_level() {
+        let mut ui = UiState::new();
+        let mut snapshot = ion_core::SessionSnapshot {
+            cursor: ion_core::RuntimeCursor::default(),
+            runtime_instance_id: ion_core::RuntimeInstanceId::generate(),
+            indeterminate: None,
+            latest_settlement: None,
+            reopen_entry_count: None,
+            operation: ion_core::OperationStatus::Idle,
+            entries: Vec::new(),
+            model_ref: "desktop/test".to_owned(),
+            thinking: Some("xhigh".to_owned()),
+            pending_next_run: None,
+            latest_usage: None,
+            live: None,
+        };
+        ui.thinking_level = snapshot.thinking.clone();
+        assert_eq!(ui.thinking_level.as_deref(), Some("xhigh"));
+        let _ = &mut snapshot;
+        // Shift+tab continues from the durable level, not from "off".
+        let (_, effect) = update(ui, shift_tab());
+        assert_eq!(
+            effect,
+            Some(UiEffect::SwitchThinking {
+                thinking: Some("max".to_owned())
+            })
+        );
     }
 }

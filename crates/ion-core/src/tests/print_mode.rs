@@ -507,3 +507,81 @@ async fn dequeue_next_run_restores_the_prompt_and_leaves_nothing_queued() {
     runtime.join().await.expect("join reopened");
     let _ = events;
 }
+
+#[tokio::test]
+async fn switch_thinking_is_durable_validated_and_applies_at_step_boundaries() {
+    let db = temp_db("switch-thinking");
+    let store = SessionStore::open(&db).expect("open store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let session_id = runtime.session_id();
+
+    // Invalid levels are refused without touching durable state.
+    let err = session
+        .switch_thinking(Some("ultra".to_owned()))
+        .await
+        .expect_err("invalid level refused");
+    assert!(err.to_string().contains("thinking"), "{err}");
+
+    // Case-insensitive normalization: "High" persists as "high".
+    let previous = session
+        .switch_thinking(Some("High".to_owned()))
+        .await
+        .expect("switch");
+    assert_eq!(previous, None);
+    let snapshot = session.snapshot().await.expect("snapshot");
+    assert_eq!(snapshot.thinking.as_deref(), Some("high"));
+
+    // Same-value switch is a no-op returning the current selection.
+    let previous = session
+        .switch_thinking(Some("high".to_owned()))
+        .await
+        .expect("idempotent switch");
+    assert_eq!(previous, Some("high".to_owned()));
+
+    // The frozen per-step ModelConfig carries the selection. Subscribe
+    // before submitting: events between submit and subscribe are lost.
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let op = session.submit_if_idle("step").await.expect("submit");
+    let _ = op;
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        recorded
+            .iter()
+            .any(|event| matches!(event, RuntimeEvent::OperationFinished { .. })),
+        "operation completed"
+    );
+
+    // Clearing restores the adapter default (None) durably.
+    let previous = session.switch_thinking(None).await.expect("clear");
+    assert_eq!(previous, Some("high".to_owned()));
+    let snapshot = session.snapshot().await.expect("snapshot after clear");
+    assert_eq!(snapshot.thinking, None);
+
+    // The selection survives close/reopen from the durable lane config.
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let runtime = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let session = runtime.session();
+    let previous = session
+        .switch_thinking(Some("low".to_owned()))
+        .await
+        .expect("switch after reopen");
+    assert_eq!(
+        previous, None,
+        "reopen restored the cleared default before this switch"
+    );
+    session.close().await.expect("close reopened");
+    runtime.join().await.expect("join reopened");
+}

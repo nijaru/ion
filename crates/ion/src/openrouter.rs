@@ -199,6 +199,11 @@ impl Provider for OpenRouterProvider {
                 "stream": true,
                 "stream_options": { "include_usage": true },
             });
+            // Pi-parity thinking level, frozen per step by the runtime
+            // (chat-completions `reasoning.effort`).
+            if let Some(effort) = request.model.thinking.clone() {
+                body["reasoning"] = serde_json::json!({ "effort": effort });
+            }
             if !request.tools.is_empty() {
                 body["tools"] = OpenRouterProvider::tool_specs(&request.tools);
             }
@@ -663,6 +668,7 @@ mod tests {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
             model: ion_core::ModelConfig {
+                thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: None,
                 capabilities: ion_core::ModelCapabilities {
@@ -784,6 +790,7 @@ mod tests {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
             model: ion_core::ModelConfig {
+                thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: None,
                 capabilities: ion_core::ModelCapabilities {

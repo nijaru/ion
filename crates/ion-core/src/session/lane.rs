@@ -71,6 +71,13 @@ impl ScopeGrant {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) struct Config {
     pub(crate) model_ref: String,
+    /// Reasoning-effort selection for future model steps on this lane
+    /// (pi-parity thinking levels: off/minimal/low/medium/high/xhigh/max).
+    /// `None` keeps the provider adapter's own default. Like `model_ref`
+    /// this is model-facing configuration, frozen into each step's
+    /// ModelConfig, never semantic history (§14.8 pattern).
+    #[serde(default)]
+    pub(crate) thinking: Option<String>,
     pub(crate) tools: ToolSelection,
     #[serde(default = "ScopeGrant::legacy_all")]
     pub(crate) scopes: ScopeGrant,
@@ -80,6 +87,7 @@ impl Config {
     pub(crate) fn new(model_ref: impl Into<String>) -> Self {
         Self {
             model_ref: model_ref.into(),
+            thinking: None,
             tools: ToolSelection::all(),
             scopes: ScopeGrant::none(),
         }

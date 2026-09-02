@@ -36,6 +36,7 @@ pub(super) const STEP: Duration = Duration::from_millis(50);
 pub(super) fn step_model() -> crate::provider::ModelConfig {
     crate::provider::ModelConfig {
         model_ref: "test-model".to_owned(),
+        thinking: None,
         context_window: None,
         capabilities: crate::provider::ModelCapabilities::default(),
     }

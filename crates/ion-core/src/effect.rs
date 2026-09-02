@@ -206,6 +206,7 @@ mod tests {
         ModelStepPlan {
             step: 7,
             model: ModelConfig {
+                thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: Some(131_072),
                 capabilities: ModelCapabilities {

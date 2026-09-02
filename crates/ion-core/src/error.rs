@@ -30,6 +30,8 @@ pub enum CommandError {
     NoPendingApproval { operation_id: OperationId },
     #[error("model {0:?} is not available from this provider")]
     UnsupportedModel(String),
+    #[error("unsupported thinking level: {0} (off/minimal/low/medium/high/xhigh/max)")]
+    UnsupportedThinking(String),
     #[error("durable write failed: {0}")]
     Persistence(String),
 }

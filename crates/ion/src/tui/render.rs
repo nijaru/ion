@@ -337,7 +337,10 @@ const LIVE_CHROME_ROWS: usize = 5;
 const MAX_MODEL_SELECTOR_OPTIONS: usize = 2;
 
 pub(super) fn live_region_height(state: &UiState) -> usize {
-    if state.model_selector.is_some() || state.session_selector.is_some() {
+    if state.model_selector.is_some()
+        || state.session_selector.is_some()
+        || state.thinking_selector.is_some()
+    {
         LIVE_REGION_MAX_ROWS
     } else {
         LIVE_REGION_BASE_ROWS
@@ -462,6 +465,45 @@ fn session_selector_lines(state: &UiState, palette: &Palette, width: usize) -> V
     lines
 }
 
+fn thinking_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let levels = state.filtered_thinking_levels();
+    let selected = state
+        .thinking_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = vec![selector_row(
+        Line::from(if query.is_empty() {
+            "select thinking".to_owned()
+        } else {
+            format!("select thinking · {query}")
+        })
+        .style(palette.system_note),
+        width,
+    )];
+    if levels.is_empty() {
+        lines.push(selector_row(
+            Line::from("  no matching levels").style(palette.system_note),
+            width,
+        ));
+    } else {
+        for (index, level) in levels.iter().enumerate() {
+            let marker = if index == selected { ">" } else { " " };
+            let current = state.thinking_level.as_deref() == Some(level.as_str());
+            let suffix = if current { "  (current)" } else { "" };
+            lines.push(selector_row(
+                Line::from(format!("  {marker} {level}{suffix}")).style(palette.system_note),
+                width,
+            ));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
 /// The live band below the committed transcript. Returns at most
 /// LIVE_REGION_MAX_ROWS rows plus the hardware cursor position relative
 /// to the band; `Screen` bottom-aligns it inside the stable virtual band.
@@ -513,6 +555,8 @@ pub(super) fn build_live_at_height(
         head.extend(model_selector_lines(state, palette, width));
     } else if state.session_selector.is_some() {
         head.extend(session_selector_lines(state, palette, width));
+    } else if state.thinking_selector.is_some() {
+        head.extend(thinking_selector_lines(state, palette, width));
     } else if state.hotkeys_visible {
         head.extend(help::hotkey_lines(&state.keymap, palette));
     }

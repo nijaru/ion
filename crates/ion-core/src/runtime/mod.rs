@@ -366,6 +366,10 @@ pub struct SessionSnapshot {
     /// The session's durable model selection; authoritative across
     /// resume (§14.8).
     pub model_ref: String,
+    /// The durable thinking-level selection for future steps; `None` is
+    /// the adapter default. Authoritative across resume like
+    /// `model_ref`.
+    pub thinking: Option<String>,
     /// Durable lane-owned next-run input awaiting promotion (§9.2):
     /// the queued prompt plus its provisioned entry identity. `None`
     /// when the lane has no pending input.
@@ -492,6 +496,14 @@ enum SessionCommand {
     Compact {
         instructions: Option<String>,
         reply: oneshot::Sender<Result<bool, CommandError>>,
+    },
+    /// Set the lane's thinking level for future model steps (pi parity:
+    /// /thinking, shift+tab). Durable before the command returns; the
+    /// active operation keeps its frozen per-step selection.
+    SwitchThinking {
+        lane_name: String,
+        thinking: Option<String>,
+        reply: oneshot::Sender<Result<Option<String>, CommandError>>,
     },
     SwitchModel {
         lane_name: String,
@@ -693,6 +705,24 @@ impl SessionHandle {
     }
 
     /// Durably select the model used by future steps on one named lane.
+    /// Set the main lane's thinking level for future model steps (pi
+    /// parity: /thinking, shift+tab). Durable before return; `None`
+    /// restores the adapter default. Returns the previous selection.
+    pub async fn switch_thinking(
+        &self,
+        thinking: Option<String>,
+    ) -> Result<Option<String>, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::SwitchThinking {
+                lane_name: crate::session::lane::MAIN.to_owned(),
+                thinking,
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
     pub async fn switch_model_on_lane(
         &self,
         lane_name: impl Into<String>,
@@ -2069,6 +2099,14 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(Ok(requested));
                 false
             }
+            SessionCommand::SwitchThinking {
+                lane_name,
+                thinking,
+                reply,
+            } => {
+                let _ = reply.send(self.switch_thinking_on_lane(lane_name, thinking).await);
+                false
+            }
             SessionCommand::SwitchModel {
                 lane_name,
                 model_ref,
@@ -2494,6 +2532,51 @@ impl<P: Provider> SessionRuntime<P> {
         Ok(previous)
     }
 
+    /// Set the lane's thinking level for future model steps (pi parity:
+    /// /thinking, shift+tab). Mirrors `switch_model_on_lane`: durable
+    /// before return, applied at the next step boundary. `None` clears
+    /// the selection back to the adapter default. Returns the previous
+    /// selection. The level is validated against the fixed pi vocabulary
+    /// so a typo cannot persist an unusable configuration.
+    async fn switch_thinking_on_lane(
+        &mut self,
+        lane_name: String,
+        thinking: Option<String>,
+    ) -> Result<Option<String>, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        if self.lane(&lane_name).is_none() {
+            return Err(CommandError::LaneNotFound(lane_name));
+        }
+        if let Some(level) = &thinking {
+            const LEVELS: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
+            if !LEVELS.contains(&level.to_lowercase().as_str()) {
+                return Err(CommandError::UnsupportedThinking(level.clone()));
+            }
+        }
+        let normalized = thinking.map(|level| level.to_lowercase());
+        let previous = self
+            .lane(&lane_name)
+            .expect("checked lane")
+            .config
+            .thinking
+            .clone();
+        if normalized == previous {
+            return Ok(previous);
+        }
+        let mut config = self.lane(&lane_name).expect("checked lane").config.clone();
+        config.thinking = normalized;
+        self.store
+            .set_lane_config(self.session_id, &lane_name, config.clone())
+            .await
+            .map_err(persistence_command_error)?;
+        self.lane_mut(&lane_name)
+            .expect("configured lane remains resident")
+            .config = config;
+        Ok(previous)
+    }
+
     async fn enqueue_steer(&mut self, text: String) -> Result<(), CommandError> {
         if self.closed {
             return Err(CommandError::Closed);
@@ -2829,8 +2912,17 @@ impl<P: Provider> SessionRuntime<P> {
                 window
             }
         };
+        let thinking = self
+            .lanes
+            .get(&lane_name)
+            .expect("operation lane exists")
+            .durable
+            .config
+            .thinking
+            .clone();
         ModelConfig {
             model_ref: selected_model_ref,
+            thinking,
             context_window,
             capabilities,
         }
@@ -3693,6 +3785,7 @@ impl<P: Provider> SessionRuntime<P> {
                 .map(|record| record.entry.clone())
                 .collect(),
             model_ref: self.main_model_ref().to_owned(),
+            thinking: self.main_lane().config.thinking.clone(),
             pending_next_run: self
                 .main_lane()
                 .state

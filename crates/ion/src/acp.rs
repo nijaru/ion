@@ -976,6 +976,7 @@ mod tests {
             entries: Vec::new(),
             reopen_entry_count: None,
             model_ref: "test-model".to_owned(),
+            thinking: None,
             pending_next_run: None,
             latest_usage: None,
             live: None,

@@ -170,7 +170,13 @@ impl Provider for OpenAICodexProvider {
         let model = self.model.clone();
         let credential = self.credential.clone();
         let endpoint = codex_endpoint(&self.base_url);
-        let reasoning_effort = self.reasoning_effort.clone();
+        // Per-step frozen thinking selection wins; the adapter default is
+        // only the fallback for lanes that never chose one (§14.8).
+        let reasoning_effort = request
+            .model
+            .thinking
+            .clone()
+            .or_else(|| self.reasoning_effort.clone());
         let client = self.client.clone();
         async move {
             if !request.model.capabilities.streaming {
@@ -693,6 +699,7 @@ mod tests {
             operation_id: OperationId::generate(),
             step: 4,
             model: ModelConfig {
+                thinking: None,
                 model_ref: "gpt-5.6-luna".to_owned(),
                 context_window: Some(CODEX_CONTEXT_WINDOW),
                 capabilities: ModelCapabilities {

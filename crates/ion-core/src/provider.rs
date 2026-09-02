@@ -72,6 +72,9 @@ impl Default for ModelCapabilities {
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ModelConfig {
     pub model_ref: String,
+    /// Reasoning-effort selection frozen for this step (pi-parity
+    /// thinking level). `None` keeps the adapter default.
+    pub thinking: Option<String>,
     pub context_window: Option<u64>,
     pub capabilities: ModelCapabilities,
 }
