@@ -343,9 +343,102 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.file_selector.is_some()
     {
         LIVE_REGION_MAX_ROWS
+    } else if state.ext_ui.dialog.is_some() {
+        // A parked dialog is modal like a picker.
+        LIVE_REGION_MAX_ROWS
     } else {
-        LIVE_REGION_BASE_ROWS
+        let widget_rows = state
+            .ext_ui
+            .widgets
+            .values()
+            .map(|widget| widget.lines.len())
+            .sum::<usize>();
+        let status_rows = usize::from(!state.ext_ui.statuses.is_empty());
+        (LIVE_REGION_BASE_ROWS + widget_rows + status_rows).min(LIVE_REGION_MAX_ROWS)
     }
+}
+
+/// The parked extension dialog as a form: message header, one line per
+/// property (focused marker + value), and the control hints.
+fn extension_dialog_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let Some(parked) = &state.ext_ui.dialog else {
+        return Vec::new();
+    };
+    let mut lines = vec![selector_row(
+        Line::from(format!(
+            "\u{2753} {} \u{00b7} {}",
+            parked.dialog.extension, parked.dialog.message
+        ))
+        .style(palette.system_note),
+        width,
+    )];
+    for (index, property) in parked.dialog.properties.iter().enumerate() {
+        let focused = index == parked.focus;
+        let label = property
+            .title
+            .clone()
+            .unwrap_or_else(|| property.name.clone());
+        let value = match (&property.kind, &parked.values[index]) {
+            (ion_core::DialogPropertyKind::Choice(variants), super::DialogValue::Choice(None)) => {
+                format!("<{label}> ({})", variants.len())
+            }
+            (
+                ion_core::DialogPropertyKind::Choice(variants),
+                super::DialogValue::Choice(Some(index)),
+            ) => variants.get(*index).cloned().unwrap_or_default(),
+            (ion_core::DialogPropertyKind::Boolean { .. }, super::DialogValue::Choice(Some(0))) => {
+                "yes".to_owned()
+            }
+            (ion_core::DialogPropertyKind::Boolean { .. }, super::DialogValue::Choice(_)) => {
+                "no".to_owned()
+            }
+            (_, super::DialogValue::Text(text)) => text.clone(),
+            _ => String::new(),
+        };
+        let marker = if focused { ">" } else { " " };
+        let required = if property.required { " *" } else { "" };
+        lines.push(selector_row(
+            Line::from(format!("{marker} {label}: {value}{required}")),
+            width,
+        ));
+    }
+    lines.push(selector_row(
+        Line::from(
+            "\u{2191}/\u{2193} pick \u{00b7} tab next \u{00b7} enter submit \u{00b7} esc decline",
+        )
+        .style(palette.status_segment),
+        width,
+    ));
+    lines
+}
+
+/// Extension widgets for one placement, in key order (registration
+/// order across peers is the map's stable key order).
+fn extension_widget_lines(state: &UiState, width: usize, below: bool) -> Vec<Line<'static>> {
+    state
+        .ext_ui
+        .widgets
+        .values()
+        .filter(|widget| widget.below == below)
+        .flat_map(|widget| widget.lines.iter().cloned())
+        .flat_map(|text| wrap_line(&Line::from(text).dim(), width))
+        .collect()
+}
+
+/// Pi parity: extension statuses render as one joined line, sorted by
+/// key, appended under the footer.
+fn extension_status_line(state: &UiState, width: usize) -> Option<Line<'static>> {
+    if state.ext_ui.statuses.is_empty() {
+        return None;
+    }
+    let joined = state
+        .ext_ui
+        .statuses
+        .values()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(" ");
+    Some(selector_row(Line::from(joined).dim(), width))
 }
 
 fn selector_row(line: Line<'static>, width: usize) -> Line<'static> {
@@ -601,8 +694,21 @@ pub(super) fn build_live_at_height(
         head.extend(thinking_selector_lines(state, palette, width));
     } else if state.file_selector.is_some() {
         head.extend(file_selector_lines(state, palette, width));
+    } else if state.ext_ui.dialog.is_some() {
+        head.extend(extension_dialog_lines(state, palette, width));
     } else if state.hotkeys_visible {
         head.extend(help::hotkey_lines(&state.keymap, palette));
+    }
+    // Extension widgets render above the composer (pi's default
+    // placement) unless an interactive surface already owns the head.
+    if state.ext_ui.dialog.is_none()
+        && state.model_selector.is_none()
+        && state.session_selector.is_none()
+        && state.thinking_selector.is_none()
+        && state.file_selector.is_none()
+        && !state.hotkeys_visible
+    {
+        head.extend(extension_widget_lines(state, width, false));
     }
     if let Some(latest) = state.tool_rows.last() {
         let preview: Option<Vec<&str>> = state.tool_output_expanded.then(|| {
@@ -730,12 +836,29 @@ pub(super) fn build_live_at_height(
     let cursor = composer_cursor.map(|(row, column)| (lines.len() + row, column));
     lines.extend(composer_rows);
 
+    // Extension widgets below the composer, after the closing rule
+    // and before the footer.
+    let below_widgets = extension_widget_lines(state, width, true);
     lines.push(separator_line(width, palette));
+    lines.extend(below_widgets);
     let footer_style = if footer_hint.is_some() {
         Style::new().yellow()
     } else {
         palette.status_segment
     };
+    // Pi setFooter replaces the built-in footer entirely.
+    if let Some(custom) = &state.ext_ui.footer {
+        for text in custom {
+            lines.push(selector_row(
+                Line::from(text.clone()).style(palette.status_segment),
+                width,
+            ));
+        }
+        if let Some(status) = extension_status_line(state, width) {
+            lines.push(status);
+        }
+        return (lines, cursor);
+    }
     lines.push(Line::from(format!(" {footer_left}")).style(footer_style));
 
     // Right-align provider/model while keeping usage on the left. The
@@ -779,6 +902,9 @@ pub(super) fn build_live_at_height(
         ))
         .style(palette.status_segment),
     );
+    if let Some(status) = extension_status_line(state, width) {
+        lines.push(status);
+    }
 
     (lines, cursor)
 }

@@ -132,7 +132,8 @@ pub struct HostConfig {
 
 /// What the reducer wants the event loop to do. Effects are the only
 /// path back into the runtime (TERMINAL.md, runtime interaction).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// No `Eq`: dialog answers carry arbitrary JSON values.
+#[derive(Debug, Clone, PartialEq)]
 pub enum UiEffect {
     Submit {
         text: String,
@@ -202,6 +203,19 @@ pub enum UiEffect {
     /// Load picker rows from the store (the reducer cannot read the
     /// store; the host resolves this into `SessionListed`).
     RequestSessionList,
+    /// Answer a parked extension dialog; the id addresses the
+    /// responder the loop registered when the dialog arrived.
+    AnswerExtensionDialog {
+        id: u64,
+        answer: ion_core::DialogAnswer,
+    },
+    /// Run one extension-registered command (`/name args`); the loop
+    /// resolves it through ExtensionService and reports the outcome as
+    /// a notice (a returned message is submitted to the session).
+    RunExtensionCommand {
+        command: String,
+        args: String,
+    },
     Quit,
 }
 
@@ -212,6 +226,173 @@ pub enum UiEffect {
 pub struct ApprovalPrompt {
     pub tool: String,
     pub target: Option<String>,
+}
+
+/// Extension UI presentation state (Phase G, pi ctx.ui parity): every
+/// contribution is keyed by its owning extension so peer death can
+/// drop exactly what that peer pushed. Data-driven end to end — the
+/// subprocess transport cannot carry closures.
+#[derive(Debug, Default, Clone, PartialEq)]
+pub struct ExtensionUiState {
+    /// Footer status texts by extension, then key (pi setStatus).
+    /// Rendered as one sorted joined line under the footer.
+    statuses: std::collections::BTreeMap<(String, String), String>,
+    /// Widget line arrays by (extension, key); insertion order is the
+    /// map's BTreeMap order (pi renders in registration order, and
+    /// sorted keys keep rerenders stable).
+    widgets: std::collections::BTreeMap<(String, String), ExtensionWidget>,
+    /// Complete footer replacement; `None` renders the built-in
+    /// footer (pi setFooter with `undefined` restores).
+    footer: Option<Vec<String>>,
+    /// The parked dialog awaiting an answer, with its editing state.
+    dialog: Option<ParkedDialog>,
+    /// Dialogs waiting behind the parked one (pi queues beyond the
+    /// first); each keeps its live responder so queue position never
+    /// stalls a peer.
+    dialog_queue: Vec<ParkedDialog>,
+    /// Extension commands with collision suffixes, as discovered.
+    commands: Vec<ion_core::ExtensionCommand>,
+}
+
+/// One widget with its placement (pi setWidget placement option).
+#[derive(Debug, Clone, PartialEq)]
+struct ExtensionWidget {
+    lines: Vec<String>,
+    below: bool,
+}
+
+/// A parked extension dialog plus its interactive state: which
+/// property the cursor is on, and the working values.
+#[derive(Debug, Clone)]
+struct ParkedDialog {
+    dialog: ion_core::ExtensionDialog,
+    /// Index into `dialog.properties`.
+    focus: usize,
+    /// Per-property working values, parallel to `properties`: enum
+    /// and boolean properties hold a choice index; text and number
+    /// properties hold the raw input string.
+    values: Vec<DialogValue>,
+    /// Loop-assigned id of the responder registered for this dialog;
+    /// the answer effect carries it back so the loop resolves the
+    /// round trip (the reducer never holds I/O handles).
+    id: u64,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+enum DialogValue {
+    /// Choice index into the property's variants, or `None` when the
+    /// user has not picked yet.
+    Choice(Option<usize>),
+    Text(String),
+}
+
+impl PartialEq for ParkedDialog {
+    fn eq(&self, other: &Self) -> bool {
+        self.dialog == other.dialog
+            && self.focus == other.focus
+            && self.values == other.values
+            && self.id == other.id
+    }
+}
+
+impl ExtensionUiState {
+    /// Apply one update from a live peer (pi setStatus/setWidget/
+    /// setFooter).
+    fn apply(&mut self, extension: &str, update: &ion_core::ExtensionUiUpdate) {
+        match update {
+            ion_core::ExtensionUiUpdate::Status { key, text } => match text {
+                Some(text) => {
+                    self.statuses
+                        .insert((extension.to_owned(), key.clone()), text.clone());
+                }
+                None => {
+                    self.statuses.remove(&(extension.to_owned(), key.clone()));
+                }
+            },
+            ion_core::ExtensionUiUpdate::Widget { key, lines, below } => match lines {
+                Some(lines) => {
+                    let mut lines = lines.clone();
+                    if lines.len() > ion_core::MAX_EXTENSION_WIDGET_LINES {
+                        lines.truncate(ion_core::MAX_EXTENSION_WIDGET_LINES);
+                        lines.push("… (widget truncated)".to_owned());
+                    }
+                    self.widgets.insert(
+                        (extension.to_owned(), key.clone()),
+                        ExtensionWidget {
+                            lines,
+                            below: *below,
+                        },
+                    );
+                }
+                None => {
+                    self.widgets.remove(&(extension.to_owned(), key.clone()));
+                }
+            },
+            ion_core::ExtensionUiUpdate::Footer { text } => {
+                self.footer = text.clone();
+            }
+        }
+    }
+
+    /// Drop every contribution one extension owns (peer death or
+    /// session switch).
+    fn drop_extension(&mut self, extension: &str) {
+        self.statuses.retain(|(owner, _), _| owner != extension);
+        self.widgets.retain(|(owner, _), _| owner != extension);
+        if self
+            .dialog
+            .as_ref()
+            .is_some_and(|parked| parked.dialog.extension == extension)
+        {
+            self.dialog = None;
+        }
+    }
+
+    /// Park a dialog; only one is interactive at a time and later
+    /// ones queue behind it (pi semantics). Choices start unselected;
+    /// text and number inputs seed from the schema defaults.
+    fn park(&mut self, dialog: ion_core::ExtensionDialog, id: u64) {
+        let parked = ParkedDialog {
+            focus: 0,
+            values: Self::seed_values(&dialog),
+            dialog,
+            id,
+        };
+        if self.dialog.is_some() {
+            self.dialog_queue.push(parked);
+        } else {
+            self.dialog = Some(parked);
+        }
+    }
+
+    /// Initial working values from the schema defaults.
+    fn seed_values(dialog: &ion_core::ExtensionDialog) -> Vec<DialogValue> {
+        dialog
+            .properties
+            .iter()
+            .map(|property| match &property.kind {
+                ion_core::DialogPropertyKind::Choice(_) => DialogValue::Choice(None),
+                ion_core::DialogPropertyKind::Boolean { .. } => DialogValue::Choice(None),
+                ion_core::DialogPropertyKind::Text { default, .. } => {
+                    DialogValue::Text(default.clone().unwrap_or_default())
+                }
+                ion_core::DialogPropertyKind::Number { default, .. } => {
+                    DialogValue::Text(default.map(|n| n.to_string()).unwrap_or_default())
+                }
+            })
+            .collect()
+    }
+
+    /// Take the parked dialog (submit or decline) and promote the
+    /// next queued one, if any.
+    fn take_dialog(&mut self) -> Option<ParkedDialog> {
+        let parked = self.dialog.take();
+        if let Some(next) = self.dialog_queue.first().cloned() {
+            self.dialog_queue.remove(0);
+            self.dialog = Some(next);
+        }
+        parked
+    }
 }
 
 /// Inputs to the reducer: runtime events, keys, resizes.
@@ -254,6 +435,18 @@ pub enum UiMessage {
     /// message; `Some(err)` reports the failure and its reason (a
     /// failed write is never silently downgraded).
     CopiedToClipboard(Option<String>),
+    /// Extension UI traffic (Phase G): pushes and peer death.
+    /// Presentation-only, like Key and Paste — the loop bridges the
+    /// ion-core hub into this message. Dialog events arrive separately
+    /// as [`UiMessage::ExtensionDialog`]: the loop owns the responder
+    /// registry and hands the reducer only the id.
+    ExtensionUi(ion_core::ExtensionUiEvent),
+    /// A dialog from an extension, with the loop-assigned responder
+    /// id. The reducer parks it (queuing behind any active dialog).
+    ExtensionDialog {
+        id: u64,
+        dialog: ion_core::ExtensionDialog,
+    },
 }
 
 /// The live operation presentation, derived from runtime events.
@@ -827,6 +1020,10 @@ pub struct UiState {
     /// fuzzy-searches project files; selection inserts an `@path`
     /// reference into the composer — the model reads the file itself).
     file_selector: Option<FileSelector>,
+    /// Extension UI presentation state (Phase G): footer statuses,
+    /// widgets, custom footer, parked dialogs, and the live command
+    /// list. All presentation-only; the ion-core hub is the source.
+    ext_ui: ExtensionUiState,
     /// Durable identity of the attached session, for `/session` display
     /// and clone/delete guards. Host-owned; the TUI never derives it.
     session_id: Option<ion_core::SessionId>,
@@ -1357,6 +1554,37 @@ impl UiState {
     }
 }
 
+/// Apply one extension UI event. Peer pushes update presentation
+/// state; dialogs park (or queue); peer death drops that extension's
+/// contributions; a parked dialog answering emits the effect the loop
+/// resolves through the shared responder.
+fn apply_extension_ui(
+    mut state: UiState,
+    event: ion_core::ExtensionUiEvent,
+) -> (UiState, Option<UiEffect>) {
+    match event {
+        ion_core::ExtensionUiEvent::Update { extension, update } => {
+            state.ext_ui.apply(&extension, &update);
+            (state, None)
+        }
+        // Dialogs never arrive here: the loop extracts the responder
+        // (it owns I/O) and sends UiMessage::ExtensionDialog instead.
+        // Matching keeps this total without holding the responder.
+        ion_core::ExtensionUiEvent::Dialog { dialog, .. } => {
+            state.ext_ui.park(dialog, 0);
+            (state, None)
+        }
+        ion_core::ExtensionUiEvent::PeerDown { extension } => {
+            state.ext_ui.drop_extension(&extension);
+            (state, None)
+        }
+        ion_core::ExtensionUiEvent::Commands { commands } => {
+            state.ext_ui.commands = commands;
+            (state, None)
+        }
+    }
+}
+
 /// Pure reducer: `update(UiState, UiMessage) -> UiState` plus
 /// at most one effect. Deterministic; no I/O.
 #[must_use]
@@ -1374,6 +1602,11 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             (state, None)
         }
         UiMessage::Runtime(event) => (apply_runtime_event(state, event), None),
+        UiMessage::ExtensionUi(event) => apply_extension_ui(state, event),
+        UiMessage::ExtensionDialog { id, dialog } => {
+            state.ext_ui.park(dialog, id);
+            (state, None)
+        }
         UiMessage::SubmitAccepted => {
             state.hotkeys_visible = false;
             state.reset_composer();
@@ -1424,9 +1657,14 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
         }
         UiMessage::SessionSwitched { session, title } => {
             // The loop re-attaches the runtime and resets presentation;
-            // the reducer records durable identity for /session.
+            // the reducer records durable identity for /session. All
+            // extension UI resets with the session (pi resetExtensionUI):
+            // widgets, statuses, and the footer belong to the runtime
+            // that pushed them, and queued dialogs would answer into a
+            // dead session's peer connections.
             state.session_id = Some(session);
             state.session_title = Some(title);
+            state.ext_ui = ExtensionUiState::default();
             (state, None)
         }
         UiMessage::CopiedToClipboard(err) => {
@@ -1650,6 +1888,190 @@ fn handle_file_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opti
     }
 }
 
+/// Keyboard interaction for the parked extension dialog. Enter
+/// submits (required properties must be answered), esc declines, tab
+/// and arrows move between properties, up/down cycles choice values,
+/// and printable text edits the focused free-text property. The
+/// parked dialog is only consumed on submit or decline — those paths
+/// promote the next queued dialog (`take_dialog`); navigation keeps
+/// the current one parked.
+fn handle_dialog_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    let Some(parked) = state.ext_ui.dialog.as_ref() else {
+        return (state, None);
+    };
+    let properties = parked.dialog.properties.clone();
+    let count = properties.len();
+    let focus = parked.focus;
+    let kind = properties.get(focus).map_or(
+        ion_core::DialogPropertyKind::Text {
+            placeholder: None,
+            default: None,
+        },
+        |property| property.kind.clone(),
+    );
+
+    // Esc declines the whole dialog: the peer sees Decline (pi dialog
+    // cancel semantics — the operation continues).
+    if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+        if let Some(parked) = state.ext_ui.take_dialog() {
+            return (
+                state,
+                Some(UiEffect::AnswerExtensionDialog {
+                    id: parked.id,
+                    answer: ion_core::DialogAnswer {
+                        values: Default::default(),
+                        declined: true,
+                    },
+                }),
+            );
+        }
+        return (state, None);
+    }
+
+    let enter = key.code == KeyCode::Enter && key.modifiers.is_empty();
+    let missing_required = |values: &[DialogValue]| {
+        properties.iter().zip(values).any(|(property, value)| {
+            property.required
+                && match value {
+                    DialogValue::Choice(index) => index.is_none(),
+                    DialogValue::Text(text) => text.trim().is_empty(),
+                }
+        })
+    };
+
+    if enter {
+        let ready = state
+            .ext_ui
+            .dialog
+            .as_ref()
+            .is_some_and(|parked| !missing_required(&parked.values));
+        if ready
+            && (count <= 1
+                || focus + 1 == count
+                || !matches!(kind, ion_core::DialogPropertyKind::Text { .. }))
+        {
+            // Submit: collect filled values; empty optional fields
+            // stay absent from the content object.
+            let Some(parked) = state.ext_ui.take_dialog() else {
+                return (state, None);
+            };
+            let mut values = std::collections::BTreeMap::new();
+            for (property, value) in properties.iter().zip(parked.values.iter()) {
+                let filled = match value {
+                    DialogValue::Choice(Some(index)) => match &property.kind {
+                        ion_core::DialogPropertyKind::Choice(variants) => variants
+                            .get(*index)
+                            .map(|variant| serde_json::Value::String(variant.clone())),
+                        ion_core::DialogPropertyKind::Boolean { .. } => {
+                            Some(serde_json::Value::Bool(*index == 0))
+                        }
+                        _ => None,
+                    },
+                    DialogValue::Text(text) if !text.trim().is_empty() => match &property.kind {
+                        ion_core::DialogPropertyKind::Number { .. } => {
+                            text.trim().parse::<f64>().ok().map(serde_json::Value::from)
+                        }
+                        _ => Some(serde_json::Value::String(text.clone())),
+                    },
+                    _ => None,
+                };
+                if let Some(value) = filled {
+                    values.insert(property.name.clone(), value);
+                }
+            }
+            return (
+                state,
+                Some(UiEffect::AnswerExtensionDialog {
+                    id: parked.id,
+                    answer: ion_core::DialogAnswer {
+                        values,
+                        declined: false,
+                    },
+                }),
+            );
+        }
+        if count > 1
+            && matches!(kind, ion_core::DialogPropertyKind::Text { .. })
+            && focus + 1 < count
+        {
+            // Enter inside a multi-property text form moves to the
+            // next field; only the last field submits.
+            if let Some(parked) = state.ext_ui.dialog.as_mut() {
+                parked.focus = focus + 1;
+            }
+            return (state, None);
+        }
+        // Enter with missing required answers: surface why nothing
+        // happened instead of silently ignoring the key.
+        state.hint = Some("answer required fields first".to_owned());
+        return (state, None);
+    }
+
+    // Tab moves between properties; shift+tab backwards.
+    if key.code == KeyCode::Tab {
+        let backward = key.modifiers.contains(Modifiers::SHIFT);
+        if let Some(parked) = state.ext_ui.dialog.as_mut() {
+            parked.focus = if backward {
+                (focus + count - 1) % count
+            } else {
+                (focus + 1) % count
+            };
+        }
+        return (state, None);
+    }
+
+    // Choice and boolean properties: up/down (and y/n for booleans)
+    // cycle the value directly.
+    let cycle = match (key.code, &key.modifiers) {
+        (KeyCode::Up, mods) if mods.is_empty() => Some(-1i64),
+        (KeyCode::Down, mods) if mods.is_empty() => Some(1),
+        (KeyCode::Char('y'), mods) if mods.is_empty() => Some(0),
+        (KeyCode::Char('n'), mods) if mods.is_empty() => Some(1),
+        _ => None,
+    };
+    if let Some(step) = cycle {
+        let variants = match &kind {
+            ion_core::DialogPropertyKind::Choice(variants) => Some(variants.clone()),
+            ion_core::DialogPropertyKind::Boolean { .. } => {
+                Some(vec!["yes".to_owned(), "no".to_owned()])
+            }
+            _ => None,
+        };
+        if let Some(variants) = variants
+            && let Some(parked) = state.ext_ui.dialog.as_mut()
+            && let DialogValue::Choice(current) = &parked.values[focus]
+        {
+            let next = match (current, step) {
+                (None, _) => Some(0usize),
+                (Some(current), 0) => Some(*current),
+                (Some(current), _) => {
+                    let moved = (*current as i64 + step).rem_euclid(variants.len() as i64);
+                    Some(moved as usize)
+                }
+            };
+            parked.values[focus] = DialogValue::Choice(next);
+            return (state, None);
+        }
+    }
+
+    // Free-text editing on the focused property.
+    if let Some(parked) = state.ext_ui.dialog.as_mut()
+        && let DialogValue::Text(text) = &mut parked.values[focus]
+    {
+        let plain = key.modifiers.is_empty();
+        match key.code {
+            KeyCode::Backspace => {
+                text.pop();
+            }
+            KeyCode::Char(ch) if plain || key.modifiers == Modifiers::SHIFT => {
+                text.push(ch);
+            }
+            _ => {}
+        }
+    }
+    (state, None)
+}
+
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
@@ -1690,6 +2112,13 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 UiEffect::Deny
             }),
         );
+    }
+    // A parked extension dialog owns the keyboard like an approval
+    // prompt (pi dialogs are modal): up/down/enter navigate and pick,
+    // tab moves between properties, esc declines. Everything else is
+    // swallowed so a stray key can never submit or edit the composer.
+    if state.ext_ui.dialog.is_some() {
+        return handle_dialog_key(state, key);
     }
     if state.hotkeys_visible {
         if (key.code == KeyCode::Char('?') && key.modifiers.is_empty())
@@ -1791,7 +2220,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
                 "alt+d · ctrl+y · alt+y  - kill word; yank; cycle the kill ring",
-                "tab                     - complete commands/models",
+                "tab                     - complete commands/models (+ext cmds)",
                 "ctrl+p · shift+ctrl+p   - cycle models forward/backward",
                 "ctrl+o · ctrl+t · ctrl+_ - tool output, thinking, undo edit",
                 "@                       - reference a file (fuzzy search)",
@@ -2081,10 +2510,8 @@ fn complete_composer(state: &mut UiState) {
             state.model_catalog.clone(),
         ),
         Some(_) => return,
-        None => (
-            "/".to_owned(),
-            command.to_owned(),
-            [
+        None => {
+            let mut candidates: Vec<String> = [
                 "clone",
                 "compact",
                 "copy",
@@ -2101,8 +2528,18 @@ fn complete_composer(state: &mut UiState) {
             ]
             .into_iter()
             .map(str::to_owned)
-            .collect(),
-        ),
+            .collect();
+            // Extension commands complete alongside built-ins; their
+            // collision suffixes (greet:2) are part of the name.
+            candidates.extend(
+                state
+                    .ext_ui
+                    .commands
+                    .iter()
+                    .map(|registered| registered.name.clone()),
+            );
+            ("/".to_owned(), command.to_owned(), candidates)
+        }
     };
     candidates.retain(|candidate| candidate.starts_with(&partial));
     if candidates.is_empty() {
@@ -2425,8 +2862,31 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
                 );
             }
             // Slash commands are frontend presentation over SessionHandle
-            // commands - never TUI-only session logic.
+            // commands - never TUI-only session logic. Extension-registered
+            // commands take priority (pi: extension commands run even
+            // during streaming, and their handlers own their outcome).
             if let Some(command) = text.strip_prefix('/') {
+                let (name, rest) = match command.split_once(' ') {
+                    Some((name, rest)) => (name, rest.trim()),
+                    None => (command, ""),
+                };
+                if state
+                    .ext_ui
+                    .commands
+                    .iter()
+                    .any(|registered| registered.name == name)
+                {
+                    state.reset_composer();
+                    state.history.push(text.clone());
+                    state.pending_history = Some(text.clone());
+                    return (
+                        state,
+                        Some(UiEffect::RunExtensionCommand {
+                            command: name.to_owned(),
+                            args: rest.to_owned(),
+                        }),
+                    );
+                }
                 state.reset_composer();
                 return handle_command(&mut state, command);
             }
@@ -4343,6 +4803,16 @@ async fn dispatch(
         }
         UiEffect::CopyToClipboard => {
             // Resolved by the run loop, which owns process access.
+            None
+        }
+        UiEffect::AnswerExtensionDialog { .. } => {
+            // Resolved by the run loop, which owns the responder
+            // registry that closes the peer round trip.
+            None
+        }
+        UiEffect::RunExtensionCommand { .. } => {
+            // Resolved by the run loop, which owns the ExtensionService
+            // (peer connection and command registry).
             None
         }
         UiEffect::ToggleFullscreen => {
@@ -7009,5 +7479,373 @@ mod shell_passthrough_tests {
         let joined = lines.join("\n");
         assert!(joined.contains("ctrl+shift+x"), "{joined}");
         assert!(!joined.contains("ctrl+x "), "{joined}");
+    }
+
+    // ----- Phase G: extension UI (ctx.ui parity) -----
+
+    fn ui_state_with_ext() -> UiState {
+        UiState::default()
+    }
+
+    fn dialog() -> ion_core::ExtensionDialog {
+        ion_core::ExtensionDialog {
+            extension: "uikit".to_owned(),
+            message: "Who should I greet?".to_owned(),
+            properties: vec![
+                ion_core::DialogProperty {
+                    name: "name".to_owned(),
+                    title: Some("Name".to_owned()),
+                    description: None,
+                    kind: ion_core::DialogPropertyKind::Text {
+                        placeholder: None,
+                        default: None,
+                    },
+                    required: true,
+                },
+                ion_core::DialogProperty {
+                    name: "style".to_owned(),
+                    title: Some("Style".to_owned()),
+                    description: None,
+                    kind: ion_core::DialogPropertyKind::Choice(vec![
+                        "casual".to_owned(),
+                        "formal".to_owned(),
+                    ]),
+                    required: true,
+                },
+            ],
+        }
+    }
+
+    fn submit(state: UiState) -> (UiState, Option<UiEffect>) {
+        update(
+            state,
+            UiMessage::Key(ion_terminal::KeyEvent::new(
+                ion_terminal::KeyCode::Enter,
+                Modifiers::NONE,
+            )),
+        )
+    }
+
+    #[test]
+    fn extension_status_and_widget_pushes_update_presentation_state() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Status {
+                    key: "uikit".to_owned(),
+                    text: Some("ready".to_owned()),
+                },
+            }),
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Widget {
+                    key: "hint".to_owned(),
+                    lines: Some(vec!["line 1".to_owned(), "line 2".to_owned()]),
+                    below: false,
+                },
+            }),
+        );
+        assert_eq!(
+            state
+                .ext_ui
+                .statuses
+                .get(&("uikit".to_owned(), "uikit".to_owned())),
+            Some(&"ready".to_owned())
+        );
+        assert_eq!(
+            state
+                .ext_ui
+                .widgets
+                .get(&("uikit".to_owned(), "hint".to_owned()))
+                .map(|widget| widget.lines.clone()),
+            Some(vec!["line 1".to_owned(), "line 2".to_owned()])
+        );
+        // Clearing pushes (None) removes the contributions.
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Status {
+                    key: "uikit".to_owned(),
+                    text: None,
+                },
+            }),
+        );
+        assert!(state.ext_ui.statuses.is_empty());
+    }
+
+    #[test]
+    fn widget_lines_are_capped_at_the_pi_maximum_with_a_marker() {
+        let state = ui_state_with_ext();
+        let lines: Vec<String> = (0..15).map(|i| format!("line {i}")).collect();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Widget {
+                    key: "flood".to_owned(),
+                    lines: Some(lines),
+                    below: false,
+                },
+            }),
+        );
+        let widget = state
+            .ext_ui
+            .widgets
+            .get(&("uikit".to_owned(), "flood".to_owned()))
+            .expect("widget stored");
+        assert_eq!(widget.lines.len(), ion_core::MAX_EXTENSION_WIDGET_LINES + 1);
+        assert_eq!(
+            widget.lines.last().map(String::as_str),
+            Some("… (widget truncated)")
+        );
+    }
+
+    #[test]
+    fn a_parked_dialog_owns_the_keyboard_and_answers_with_focused_values() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionDialog {
+                id: 7,
+                dialog: dialog(),
+            },
+        );
+        // While parked, typing goes to the dialog, not the composer.
+        let mut state = state;
+        for ch in ['A', 'd', 'a'] {
+            let (next, _) = update(
+                state,
+                UiMessage::Key(ion_terminal::KeyEvent::new(
+                    ion_terminal::KeyCode::Char(ch),
+                    Modifiers::NONE,
+                )),
+            );
+            state = next;
+        }
+        assert_eq!(state.composer, "");
+        // Tab moves to the choice field; Down picks the first variant,
+        // Down again the second.
+        for key in [
+            ion_terminal::KeyCode::Tab,
+            ion_terminal::KeyCode::Down,
+            ion_terminal::KeyCode::Down,
+        ] {
+            let (next, _) = update(
+                state,
+                UiMessage::Key(ion_terminal::KeyEvent::new(key, Modifiers::NONE)),
+            );
+            state = next;
+        }
+        // Enter on the last field submits with the focused values.
+        let (state, effect) = submit(state);
+        let Some(UiEffect::AnswerExtensionDialog { id, answer }) = effect else {
+            panic!("enter on the last field submits the dialog");
+        };
+        assert_eq!(id, 7);
+        assert!(!answer.declined);
+        assert_eq!(
+            answer.values.get("name"),
+            Some(&serde_json::json!("Ada")),
+            "typed text is the value"
+        );
+        assert_eq!(
+            answer.values.get("style"),
+            Some(&serde_json::json!("formal")),
+            "two downs picked the second variant"
+        );
+        assert!(state.ext_ui.dialog.is_none());
+    }
+
+    #[test]
+    fn dialog_required_guards_block_submit_with_a_hint() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionDialog {
+                id: 1,
+                dialog: dialog(),
+            },
+        );
+        // Enter on the FIRST field (empty text, not last) moves to the
+        // next field: form navigation, not a submit attempt.
+        let (state, effect) = submit(state);
+        assert!(effect.is_none());
+        let focus = state.ext_ui.dialog.as_ref().expect("still parked").focus;
+        assert_eq!(focus, 1);
+        // Enter on the LAST field attempts submit; the empty required
+        // name blocks it with a hint.
+        let (state, effect) = submit(state);
+        assert!(effect.is_none(), "required name is still empty");
+        assert_eq!(state.hint.as_deref(), Some("answer required fields first"));
+    }
+
+    #[test]
+    fn dialog_esc_declines_and_queued_dialogs_promote() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionDialog {
+                id: 1,
+                dialog: dialog(),
+            },
+        );
+        let mut second = dialog();
+        second.message = "Second question".to_owned();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionDialog {
+                id: 2,
+                dialog: second,
+            },
+        );
+        assert!(state.ext_ui.dialog_queue.len() == 1);
+        // Esc declines the first; the queued one becomes interactive.
+        let (state, effect) = update(
+            state,
+            UiMessage::Key(ion_terminal::KeyEvent::new(
+                ion_terminal::KeyCode::Esc,
+                Modifiers::NONE,
+            )),
+        );
+        let Some(UiEffect::AnswerExtensionDialog { id, answer }) = effect else {
+            panic!("esc answers the parked dialog");
+        };
+        assert_eq!(id, 1);
+        assert!(answer.declined);
+        let parked = state.ext_ui.dialog.as_ref().expect("queued promoted");
+        assert_eq!(parked.dialog.message, "Second question");
+        assert_eq!(parked.id, 2);
+    }
+
+    #[test]
+    fn peer_death_drops_only_that_extensions_contributions() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Status {
+                    key: "uikit".to_owned(),
+                    text: Some("ready".to_owned()),
+                },
+            }),
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "other".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Status {
+                    key: "other".to_owned(),
+                    text: Some("busy".to_owned()),
+                },
+            }),
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::PeerDown {
+                extension: "uikit".to_owned(),
+            }),
+        );
+        assert!(
+            !state
+                .ext_ui
+                .statuses
+                .contains_key(&("uikit".to_owned(), "uikit".to_owned()))
+        );
+        assert!(
+            state
+                .ext_ui
+                .statuses
+                .contains_key(&("other".to_owned(), "other".to_owned()))
+        );
+    }
+
+    #[test]
+    fn extension_commands_run_and_complete_with_tab_and_submit() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Commands {
+                commands: vec![ion_core::ExtensionCommand {
+                    name: "greet".to_owned(),
+                    description: "Greet someone".to_owned(),
+                    extension: "uikit".to_owned(),
+                }],
+            }),
+        );
+        // Tab completes /gr to /greet .
+        let mut state = state;
+        state.composer = "/gr".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (state, _) = update(
+            state,
+            UiMessage::Key(ion_terminal::KeyEvent::new(
+                ion_terminal::KeyCode::Tab,
+                Modifiers::NONE,
+            )),
+        );
+        assert_eq!(state.composer, "/greet ");
+        // Submitting dispatches the extension command effect.
+        let mut state = state;
+        state.composer = "/greet Ada".to_owned();
+        state.cursor = state.composer.chars().count();
+        let (_, effect) = submit(state);
+        let Some(UiEffect::RunExtensionCommand { command, args }) = effect else {
+            panic!("extension command dispatches");
+        };
+        assert_eq!(command, "greet");
+        assert_eq!(args, "Ada");
+    }
+
+    #[test]
+    fn session_switch_resets_all_extension_ui() {
+        let state = ui_state_with_ext();
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Footer {
+                    text: Some(vec!["custom footer".to_owned()]),
+                },
+            }),
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Update {
+                extension: "uikit".to_owned(),
+                update: ion_core::ExtensionUiUpdate::Widget {
+                    key: "hint".to_owned(),
+                    lines: Some(vec!["w".to_owned()]),
+                    below: false,
+                },
+            }),
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::ExtensionDialog {
+                id: 3,
+                dialog: dialog(),
+            },
+        );
+        let (state, _) = update(
+            state,
+            UiMessage::SessionSwitched {
+                session: ion_core::SessionId::generate(),
+                title: "next".to_owned(),
+            },
+        );
+        assert!(state.ext_ui.footer.is_none());
+        assert!(state.ext_ui.widgets.is_empty());
+        assert!(state.ext_ui.dialog.is_none());
+        assert!(state.ext_ui.dialog_queue.is_empty());
+        // The command list survives: it belongs to the extension
+        // service, not the session.
+        assert!(state.ext_ui.commands.is_empty());
     }
 }

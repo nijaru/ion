@@ -369,6 +369,10 @@ pub enum ExtensionUiEvent {
     /// it owned disappears (pi `resetExtensionUI` semantics scoped to
     /// one extension).
     PeerDown { extension: String },
+    /// The command registry changed (discovery finished or a
+    /// re-discovery replaced a set); carries the full snapshot so
+    /// frontends never reconstruct ordering themselves.
+    Commands { commands: Vec<ExtensionCommand> },
 }
 
 impl ExtensionUiEvent {
@@ -790,6 +794,12 @@ pub(crate) async fn supervise_extension_peer(
         .flatten()
         {
             register_discovered_commands(&commands, extension.clone(), discovered);
+            hub.publish(ExtensionUiEvent::Commands {
+                commands: commands
+                    .read()
+                    .expect("extension command registry poisoned")
+                    .clone(),
+            });
         }
         if rpc.is_closed() {
             service.remove_scope(&scope);
