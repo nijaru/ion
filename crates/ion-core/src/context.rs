@@ -11,7 +11,7 @@ use std::path::Path;
 use sha2::{Digest, Sha256};
 
 use crate::operation::SessionEntry;
-use crate::tool::{ToolCall, ToolSpec};
+use crate::tool::{ToolCall, ToolImage, ToolSpec};
 
 /// The small, stable system section every model step sees (DESIGN.md
 /// §14.4: no timestamps or random values in early prompt sections).
@@ -217,10 +217,15 @@ pub enum ContextMessage {
         content: String,
         tool_calls: Vec<ToolCall>,
     },
-    /// A model-visible tool result, paired by call id.
+    /// A model-visible tool result, paired by call id. Images arrive
+    /// only when the frozen model snapshot accepts image content
+    /// (DESIGN.md §14: the projection is deterministic for that
+    /// snapshot, so the gate lives at projection time).
     Tool {
         call_id: u64,
         content: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ToolImage>,
     },
 }
 
@@ -256,23 +261,32 @@ pub fn project<'a>(
     entries: impl IntoIterator<Item = &'a SessionEntry>,
     first_seq: u64,
 ) -> ContextPlan {
-    project_with_system(entries, first_seq, SYSTEM_SECTION.to_owned())
+    project_with_system(entries, first_seq, SYSTEM_SECTION.to_owned(), false)
 }
 
-/// Project entries using one stable context manifest.
+/// Project entries using one stable context manifest, gated by the
+/// frozen model snapshot's image support (pi parity: non-vision models
+/// get an explanatory note, never unsendable image parts).
 #[must_use]
-pub fn project_with_manifest<'a>(
+pub fn project_with_manifest_for_model<'a>(
     entries: impl IntoIterator<Item = &'a SessionEntry>,
     first_seq: u64,
     manifest: &ContextManifest,
+    images_supported: bool,
 ) -> ContextPlan {
-    project_with_system(entries, first_seq, manifest.system.clone())
+    project_with_system(
+        entries,
+        first_seq,
+        manifest.system.clone(),
+        images_supported,
+    )
 }
 
 fn project_with_system<'a>(
     entries: impl IntoIterator<Item = &'a SessionEntry>,
     first_seq: u64,
     system: String,
+    images_supported: bool,
 ) -> ContextPlan {
     let mut messages: Vec<ContextMessage> = Vec::new();
     for (index, entry) in entries.into_iter().enumerate() {
@@ -352,8 +366,29 @@ fn project_with_system<'a>(
             }
             SessionEntry::ToolResult { result } => {
                 let call_id = result.call_id();
-                let content = result.model_text();
-                messages.push(ContextMessage::Tool { call_id, content });
+                // Vision gate (pi parity): the frozen model snapshot
+                // decides whether image bytes enter the projection.
+                // Non-vision models see the same note pi adds, so the
+                // tool result stays truthful without unsendable parts.
+                let (content, images) = if result.images().is_empty() {
+                    (result.model_text(), Vec::new())
+                } else if images_supported {
+                    (result.model_text(), result.images().to_vec())
+                } else {
+                    (
+                        format!(
+                            "{}\n[Current model does not support images. The image \
+                             will be omitted from this request.]",
+                            result.model_text()
+                        ),
+                        Vec::new(),
+                    )
+                };
+                messages.push(ContextMessage::Tool {
+                    call_id,
+                    content,
+                    images,
+                });
             }
         }
     }

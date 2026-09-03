@@ -57,6 +57,68 @@ async fn bash_timeout_is_optional_and_invalid_values_are_rejected() {
 }
 
 #[tokio::test]
+async fn read_returns_images_for_image_files_and_notes_the_size_cap() {
+    let tmp = std::env::temp_dir().join(format!("ion-tool-img-{}-{}", std::process::id(), 2));
+    let _ = std::fs::remove_dir_all(&tmp);
+    let _ = std::fs::create_dir_all(&tmp);
+    let registry = ToolRegistry::with_cwd(&tmp);
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    // A minimal valid PNG (1x1 transparent).
+    let png: &[u8] = &[
+        0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0x0D, b'I', b'H', b'D', b'R', 0,
+        0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0, 0x1F, 0x15, 0xC4, 0x89, 0, 0, 0, 0x0D, b'I', b'D',
+        b'A', b'T', 0x78, 0xDA, 0x63, 0x64, 0x60, 0xF8, 0x5F, 0x0F, 0x00, 0x02, 0x87, 0x01, 0x80,
+        0xEB, 0x47, 0xBA, 0x92, 0, 0, 0, 0, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82,
+    ];
+    std::fs::write(tmp.join("shot.png"), png).expect("write png");
+
+    // Relative path inside the project root.
+    let out = registry
+        .execute("read", &json!({"path":"shot.png"}), cancel.clone())
+        .await;
+    assert!(!out.is_error, "{out:?}");
+    assert_eq!(out.output, "Read image file [image/png]");
+    let [image] = &out.images[..] else {
+        panic!("expected exactly one image, got {out:?}");
+    };
+    assert_eq!(image.mime_type, "image/png");
+    let decoded_len = out
+        .images
+        .iter()
+        .map(|image| crate::tool::base64_decode_len(&image.data))
+        .sum::<usize>();
+    assert_eq!(decoded_len, png.len(), "base64 must round-trip the bytes");
+
+    // An absolute path outside the root is readable: the pasted
+    // clipboard image lives in the system temp directory.
+    let abs = tmp.join("shot.png");
+    let out = registry
+        .execute(
+            "read",
+            &json!({"path": abs.to_string_lossy()}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(!out.is_error, "absolute image read failed: {out:?}");
+    assert_eq!(out.images.len(), 1);
+
+    // A truncated/garbage file with an image header is not silently
+    // misread: the magic bytes still classify it, size caps apply at
+    // the outcome level (too-large is refused).
+    let mut big = vec![0u8; 9 * 1024 * 1024];
+    big[..4].copy_from_slice(&[0x89, b'P', b'N', b'G']);
+    std::fs::write(tmp.join("big.png"), &big).expect("write big png");
+    let out = registry
+        .execute("read", &json!({"path":"big.png"}), cancel)
+        .await;
+    assert!(out.is_error, "oversized image must be refused: {out:?}");
+    assert!(out.output.contains("image too large"), "{out:?}");
+
+    let _ = std::fs::remove_dir_all(&tmp);
+}
+
+#[tokio::test]
 async fn read_write_edit_search_find_roundtrip() {
     let tmp = std::env::temp_dir().join(format!("ion-tool-test-{}-{}", std::process::id(), 1));
     let _ = std::fs::remove_dir_all(&tmp);

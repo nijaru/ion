@@ -214,6 +214,7 @@ mod tests {
                     tool_calls: true,
                     prompt_cache: true,
                     streaming: true,
+                    images: false,
                 },
             },
             plan: ContextPlan {

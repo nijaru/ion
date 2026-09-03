@@ -641,7 +641,11 @@ mod catalog_tests {
             .into_iter()
             .find(|s| s.name == "read")
             .expect("read exists");
-        assert_eq!(read.description, "Read a file's contents");
+        assert_eq!(
+            read.description,
+            "Read a file's contents. Images (png, jpg, gif, webp, bmp) are returned \
+             as image attachments the model can see; absolute paths are readable."
+        );
     }
 
     #[tokio::test]

@@ -2,6 +2,64 @@
 
 use super::support::*;
 
+#[test]
+fn vision_gate_controls_image_projection_for_tool_results() {
+    use crate::context::ContextManifest;
+    use crate::tool::ToolImage;
+
+    let call = SessionEntry::ToolResult {
+        result: crate::tool::ToolResult::Ok {
+            call_id: 1,
+            output: "Read image file [image/png]".to_owned(),
+            artifact: None,
+            images: vec![ToolImage {
+                mime_type: "image/png".to_owned(),
+                data: "aGlzdG9ncmFt".to_owned(),
+            }],
+        },
+    };
+    let entries = vec![
+        SessionEntry::UserMessage {
+            text: "look at this screenshot".to_owned(),
+        },
+        call,
+    ];
+
+    // A minimal manifest; the vision gate is the images_supported flag.
+    let manifest = ContextManifest {
+        id: "test".to_owned(),
+        system: "s".to_owned(),
+        capability_snapshot_id: "c".to_owned(),
+        resources: Vec::new(),
+    };
+
+    // Vision model: the image bytes enter the projection.
+    let vision = crate::context::project_with_manifest_for_model(&entries, 1, &manifest, true);
+    let crate::context::ContextMessage::Tool { images, .. } = &vision.messages[1] else {
+        panic!("expected a tool message: {vision:?}");
+    };
+    assert_eq!(images.len(), 1, "vision model receives the image");
+    assert_eq!(images[0].data, "aGlzdG9ncmFt");
+
+    // Non-vision model: pi's exact note replaces the unsendable parts.
+    let blind = crate::context::project_with_manifest_for_model(&entries, 1, &manifest, false);
+    let crate::context::ContextMessage::Tool {
+        content, images, ..
+    } = &blind.messages[1]
+    else {
+        panic!("expected a tool message: {blind:?}");
+    };
+    assert!(
+        images.is_empty(),
+        "non-vision model must not receive image bytes"
+    );
+    assert_eq!(
+        content,
+        "Read image file [image/png]\n[Current model does not support images. The image \
+         will be omitted from this request.]"
+    );
+}
+
 // ---- Context projection and usage ledger (DESIGN.md §32 Step 4 slice 1) ----
 
 fn plan_of(entries: &[SessionEntry]) -> crate::context::ContextPlan {
@@ -30,6 +88,7 @@ fn projector_is_deterministic_and_pairs_tool_calls() {
                 call_id: 7,
                 output: "contents".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             },
         },
     ];
@@ -41,7 +100,10 @@ fn projector_is_deterministic_and_pairs_tool_calls() {
         panic!("tool call must attach to the assistant message");
     };
     assert_eq!(tool_calls.len(), 1);
-    let crate::context::ContextMessage::Tool { call_id, content } = &first.messages[2] else {
+    let crate::context::ContextMessage::Tool {
+        call_id, content, ..
+    } = &first.messages[2]
+    else {
         panic!("tool result must project as a tool message");
     };
     assert_eq!((*call_id, content.as_str()), (7, "contents"));

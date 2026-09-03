@@ -23,7 +23,8 @@ use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
 use crate::context::{
-    CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource, project_with_manifest,
+    CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource,
+    project_with_manifest_for_model,
 };
 use crate::effect::{
     CacheExpectation, CompactionInvocation, DurableEffect, ModelStepPlan, ToolInvocation,
@@ -2929,6 +2930,7 @@ impl<P: Provider> SessionRuntime<P> {
                     call_id: 0,
                     output: output.clone(),
                     artifact: None,
+                    images: Vec::new(),
                 }
                 .display_preview();
                 let entry = SessionEntry::ShellExecution {
@@ -3379,16 +3381,17 @@ impl<P: Provider> SessionRuntime<P> {
         operation_id: OperationId,
         manifest: &ContextManifest,
     ) -> crate::context::ContextPlan {
-        let _ = self.current_model_config(operation_id).await;
+        let model = self.current_model_config(operation_id).await;
         let branch = self
             .operation_branch_records(operation_id)
             .expect("resident operation lane branch is complete");
-        project_with_manifest(
+        project_with_manifest_for_model(
             branch.iter().map(|record| &record.entry),
             branch
                 .first()
                 .map_or(self.next_entry_seq, |record| record.seq),
             manifest,
+            model.capabilities.images,
         )
     }
 
@@ -3442,12 +3445,13 @@ impl<P: Provider> SessionRuntime<P> {
         let branch = self
             .operation_branch_records(operation_id)
             .expect("resident operation lane branch is complete");
-        let mut plan = project_with_manifest(
+        let mut plan = project_with_manifest_for_model(
             branch.iter().map(|record| &record.entry),
             branch
                 .first()
                 .map_or(self.next_entry_seq, |record| record.seq),
             &manifest,
+            model.capabilities.images,
         );
         let mut content = crate::context::SUMMARIZE_INSTRUCTION.to_owned();
         if let Some(instructions) = instructions {
@@ -3961,6 +3965,7 @@ impl<P: Provider> SessionRuntime<P> {
                     call_id: call.call_id,
                     error: message,
                     artifact: None,
+                    images: Vec::new(),
                 },
             });
         } else {

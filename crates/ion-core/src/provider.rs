@@ -56,6 +56,10 @@ pub struct ModelCapabilities {
     pub prompt_cache: bool,
     /// The adapter can stream normalized deltas.
     pub streaming: bool,
+    /// The model accepts image content (pi parity: `model.input`
+    /// includes "image"). Non-vision models see a note instead of the
+    /// image bytes.
+    pub images: bool,
 }
 
 impl Default for ModelCapabilities {
@@ -65,6 +69,7 @@ impl Default for ModelCapabilities {
             tool_calls: true,
             prompt_cache: false,
             streaming: true,
+            images: false,
         }
     }
 }

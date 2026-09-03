@@ -57,6 +57,10 @@ const MODEL_SAMPLE_MAX_BYTES: usize = 12 * 1024;
 const MODEL_SAMPLE_HEAD_BYTES: usize = MODEL_SAMPLE_MAX_BYTES / 2;
 const MODEL_SAMPLE_TAIL_BYTES: usize = MODEL_SAMPLE_MAX_BYTES - MODEL_SAMPLE_HEAD_BYTES;
 const ARTIFACT_MAX_BYTES: u64 = 16 * 1024 * 1024;
+/// Hard upper bound for one model-visible image (decoded bytes). Larger
+/// images are refused rather than silently degraded; vision models
+/// re-encode to modest resolutions anyway.
+const IMAGE_MAX_BYTES: usize = 8 * 1024 * 1024;
 const OUTPUT_CHUNK_BYTES: usize = 8 * 1024;
 
 /// Bound auxiliary progress at the runtime boundary before persistence and
@@ -67,6 +71,20 @@ pub(crate) fn bounded_progress_output(output: String) -> String {
         return output;
     }
     truncate_tail(&output, MODEL_RESULT_MAX_LINES, MODEL_RESULT_MAX_BYTES).unwrap_or_default()
+}
+
+/// One model-visible image attached to a tool result (pi parity: the
+/// read tool returns image content parts). The bytes are durable
+/// semantic state — the entry is exactly what the model will see — so
+/// they live in the entry payload, bounded by IMAGE_MAX_BYTES, not in
+/// an external artifact that replay would have to re-read.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ToolImage {
+    /// Canonical image MIME type (image/png, image/jpeg, image/webp,
+    /// image/gif).
+    pub mime_type: String,
+    /// Base64-encoded image bytes as sent to the provider.
+    pub data: String,
 }
 
 /// A durable locator for raw output externalized from the model-visible
@@ -159,12 +177,18 @@ pub enum ToolResult {
     Ok {
         call_id: ToolCallId,
         output: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<ToolArtifact>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ToolImage>,
     },
     Err {
         call_id: ToolCallId,
         error: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         artifact: Option<ToolArtifact>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ToolImage>,
     },
 }
 
@@ -179,12 +203,14 @@ impl ToolResult {
                 call_id,
                 error: output,
                 artifact: outcome.artifact,
+                images: outcome.images,
             }
         } else {
             Self::Ok {
                 call_id,
                 output,
                 artifact: outcome.artifact,
+                images: outcome.images,
             }
         }
     }
@@ -202,9 +228,15 @@ impl ToolResult {
         matches!(self, Self::Ok { .. })
     }
 
-    /// The exact bounded text projected to the model, including the stable
-    /// locator for any externalized raw output.
+    /// Model-visible images attached to this result (empty for
+    /// text-only results).
     #[must_use]
+    pub fn images(&self) -> &[ToolImage] {
+        match self {
+            Self::Ok { images, .. } | Self::Err { images, .. } => images,
+        }
+    }
+
     pub fn model_text(&self) -> String {
         let (text, artifact) = match self {
             Self::Ok {
@@ -324,6 +356,7 @@ pub struct ToolOutcome {
     pub output: String,
     pub is_error: bool,
     pub artifact: Option<ToolArtifact>,
+    pub images: Vec<ToolImage>,
 }
 
 impl ToolOutcome {
@@ -333,6 +366,7 @@ impl ToolOutcome {
             output: output.into(),
             is_error: false,
             artifact: None,
+            images: Vec::new(),
         }
     }
 
@@ -342,13 +376,63 @@ impl ToolOutcome {
             output: message.into(),
             is_error: true,
             artifact: None,
+            images: Vec::new(),
         }
+    }
+
+    /// A successful read of an image file: the model sees the image
+    /// content plus a short text note (pi parity: `Read image file
+    /// [mime]`). Bytes beyond IMAGE_MAX_BYTES are refused.
+    pub fn image(mime_type: impl Into<String>, bytes: &[u8]) -> Result<Self, String> {
+        let mime_type = mime_type.into();
+        if bytes.len() > IMAGE_MAX_BYTES {
+            return Err(format!(
+                "image too large for the model context: {} bytes (max {})",
+                bytes.len(),
+                IMAGE_MAX_BYTES
+            ));
+        }
+        let data = crate::tool::base64_encode(bytes);
+        Ok(Self {
+            output: format!("Read image file [{mime_type}]"),
+            is_error: false,
+            artifact: None,
+            images: vec![ToolImage { mime_type, data }],
+        })
     }
 
     #[must_use]
     fn with_artifact(mut self, artifact: Option<ToolArtifact>) -> Self {
         self.artifact = artifact;
         self
+    }
+
+    /// Magic-byte image detection (pi parity: jpg/png/gif/webp; bmp
+    /// included for clipboard screenshots). `None` for non-images.
+    #[must_use]
+    pub fn detect_image_mime(bytes: &[u8]) -> Option<&'static str> {
+        match bytes {
+            [0x89, b'P', b'N', b'G', ..] => Some("image/png"),
+            [0xFF, 0xD8, 0xFF, ..] => Some("image/jpeg"),
+            [b'G', b'I', b'F', b'8', ..] => Some("image/gif"),
+            [
+                b'R',
+                b'I',
+                b'F',
+                b'F',
+                _,
+                _,
+                _,
+                _,
+                b'W',
+                b'E',
+                b'B',
+                b'P',
+                ..,
+            ] => Some("image/webp"),
+            [b'B', b'M', ..] => Some("image/bmp"),
+            _ => None,
+        }
     }
 }
 
@@ -985,11 +1069,39 @@ impl ToolRegistry {
     }
 }
 
-/// A short display summary of a tool call's target, derived from the
-/// raw arguments. Used where durable entries are rendered without a
-/// registry (recovered transcripts); matches what live emission shows
-/// because canonicalization preserves the file name and command text.
+/// Decoded byte length of a standard base64 string (test helper for
+/// round-trip verification).
+#[cfg(test)]
 #[must_use]
+pub fn base64_decode_len(data: &str) -> usize {
+    let pad = data.chars().rev().take_while(|&c| c == '=').count();
+    data.len() / 4 * 3 - pad
+}
+
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = *chunk.get(1).unwrap_or(&0) as u32;
+        let b2 = *chunk.get(2).unwrap_or(&0) as u32;
+        let triple = (b0 << 16) | (b1 << 8) | b2;
+        out.push(ALPHABET[(triple >> 18) as usize & 0x3F] as char);
+        out.push(ALPHABET[(triple >> 12) as usize & 0x3F] as char);
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(triple >> 6) as usize & 0x3F] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[triple as usize & 0x3F] as char
+        } else {
+            '='
+        });
+    }
+    out
+}
+
 pub fn target_from_arguments(name: &str, arguments: &Value) -> Option<String> {
     if name == "bash" {
         return arguments
@@ -1500,7 +1612,9 @@ impl Tool for ReadTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: "read".to_owned(),
-            description: "Read a file's contents".to_owned(),
+            description: "Read a file's contents. Images (png, jpg, gif, webp, bmp) are returned \
+                 as image attachments the model can see; absolute paths are readable."
+                .to_owned(),
             input_schema: Self::input_schema(),
         }
     }
@@ -1515,9 +1629,24 @@ impl Tool for ReadTool {
                 Some(p) => p.to_owned(),
                 None => return ToolOutcome::error("missing argument: path"),
             };
-            match read_secure_text(&self.cwd, Path::new(&path), false).await {
+            // Reads are non-mutating, so absolute paths outside the
+            // project root are admitted (pi parity: `read` resolves the
+            // pasted clipboard file in the system temp directory).
+            let bytes = match read_secure_bytes(&self.cwd, Path::new(&path), true).await {
+                Ok(bytes) => bytes,
+                Err(message) => return ToolOutcome::error(format!("read failed: {message}")),
+            };
+            if let Some(mime_type) = ToolOutcome::detect_image_mime(&bytes) {
+                return match ToolOutcome::image(mime_type, &bytes) {
+                    Ok(outcome) => outcome,
+                    Err(message) => ToolOutcome::error(format!("read failed: {message}")),
+                };
+            }
+            match String::from_utf8(bytes) {
                 Ok(text) => ToolOutcome::text(text),
-                Err(message) => ToolOutcome::error(format!("read failed: {message}")),
+                Err(_) => ToolOutcome::error(
+                    "read failed: file is not valid UTF-8 and not a supported image format",
+                ),
             }
         })
     }
@@ -2419,6 +2548,7 @@ mod preview_bound_tests {
             call_id: 1,
             output: output.to_owned(),
             artifact: None,
+            images: Vec::new(),
         }
     }
 
@@ -2505,6 +2635,7 @@ mod preview_bound_tests {
             call_id: 1,
             output: outcome.output,
             artifact: Some(artifact),
+            images: Vec::new(),
         };
         let model_text = result.model_text();
         assert!(model_text.len() <= MODEL_RESULT_MAX_BYTES);

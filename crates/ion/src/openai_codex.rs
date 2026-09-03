@@ -152,6 +152,7 @@ impl Provider for OpenAICodexProvider {
             tool_calls: true,
             prompt_cache: true,
             streaming: true,
+            images: false,
         }
     }
 
@@ -529,11 +530,30 @@ fn response_input(plan: &ContextPlan) -> Vec<Value> {
                     }));
                 }
             }
-            ContextMessage::Tool { call_id, content } => output.push(serde_json::json!({
-                "type": "function_call_output",
-                "call_id": format!("call_{call_id}"),
-                "output": content,
-            })),
+            ContextMessage::Tool {
+                call_id,
+                content,
+                images,
+            } => {
+                // Pi parity: images ride the function_call_output as
+                // input_image parts beside the text output.
+                let mut output_parts = vec![serde_json::json!({
+                    "type": "input_text",
+                    "text": content,
+                })];
+                output_parts.extend(images.iter().map(|image| {
+                    serde_json::json!({
+                        "type": "input_image",
+                        "detail": "auto",
+                        "image_url": format!("data:{};base64,{}", image.mime_type, image.data),
+                    })
+                }));
+                output.push(serde_json::json!({
+                    "type": "function_call_output",
+                    "call_id": format!("call_{call_id}"),
+                    "output": output_parts,
+                }));
+            }
         }
     }
     output
@@ -725,6 +745,7 @@ mod tests {
                     ContextMessage::Tool {
                         call_id: 7,
                         content: "contents".to_owned(),
+                        images: Vec::new(),
                     },
                 ],
             },

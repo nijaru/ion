@@ -381,12 +381,13 @@ impl<P: Provider> SessionRuntime<P> {
         let branch = self
             .operation_branch_records(operation_id)
             .expect("resident operation lane branch is complete");
-        let mut plan = project_with_manifest(
+        let mut plan = project_with_manifest_for_model(
             branch.iter().map(|record| &record.entry),
             branch
                 .first()
                 .map_or(self.next_entry_seq, |record| record.seq),
             &manifest,
+            model.capabilities.images,
         );
         plan.messages.push(crate::context::ContextMessage::User {
             content: crate::context::SUMMARIZE_INSTRUCTION.to_owned(),

@@ -187,6 +187,7 @@ impl Provider for CliProvider {
                 tool_calls: false,
                 prompt_cache: false,
                 streaming: false,
+                images: false,
             },
         }
     }

@@ -135,6 +135,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
                 call_id: 1,
                 output: "contents".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             },
         })
         .expect("settle 1");
@@ -151,6 +152,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
                 call_id: 1,
                 output: "contents".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             }
         }]
     );
@@ -166,6 +168,7 @@ fn provider_completed_with_tools_plans_then_admits_sequentially() {
                 call_id: 2,
                 output: "out".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             },
         })
         .expect("settle 2");
@@ -198,6 +201,7 @@ fn tool_error_is_a_model_visible_result_and_continues() {
                 call_id: 1,
                 error: "read failed".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             },
         })
         .expect("settle");
@@ -209,6 +213,7 @@ fn tool_error_is_a_model_visible_result_and_continues() {
                 call_id: 1,
                 error: "read failed".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             }
         }]
     );
@@ -339,6 +344,7 @@ fn cancel_request_sets_effects_updating_and_settles_cancelled() {
                 call_id: 1,
                 output: "raced".to_owned(),
                 artifact: None,
+                images: Vec::new(),
             },
         })
         .expect("settle");
@@ -443,6 +449,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
                 call_id: 1,
                 output: String::new(),
                 artifact: None,
+                images: Vec::new(),
             },
         },
     ] {
@@ -525,6 +532,7 @@ fn invalid_state_transition_pairs_are_typed_errors() {
                 call_id: 1,
                 output: String::new(),
                 artifact: None,
+                images: Vec::new(),
             },
         },
     ] {

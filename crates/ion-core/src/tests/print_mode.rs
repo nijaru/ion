@@ -824,11 +824,10 @@ async fn shell_marker_owns_the_branch_until_settled() {
 
     // After settlement the lane accepts work again.
     wait_for_entry(&session, "sleep 5").await;
-    let op = session
+    session
         .submit_if_idle("after")
         .await
         .expect("submit after settlement");
-    session.cancel(op).await.expect("cancel");
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }

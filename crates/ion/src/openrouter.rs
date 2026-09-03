@@ -126,6 +126,7 @@ impl Provider for OpenRouterProvider {
             tool_calls: true,
             prompt_cache: true,
             streaming: true,
+            images: false,
         }
     }
 
@@ -463,12 +464,36 @@ fn message_payloads(plan: &ContextPlan) -> Vec<serde_json::Value> {
                 }
                 out.push(message);
             }
-            ContextMessage::Tool { call_id, content } => {
+            ContextMessage::Tool {
+                call_id,
+                content,
+                images,
+            } => {
                 out.push(serde_json::json!({
                     "role": "tool",
                     "tool_call_id": format!("call_{}", call_id),
                     "content": content,
                 }));
+                // Pi parity: the chat-completions tool role is text-only,
+                // so images follow as a user message of image_url parts.
+                if !images.is_empty() {
+                    let mut parts = vec![serde_json::json!({
+                        "type": "text",
+                        "text": "Attached image(s) from tool result:",
+                    })];
+                    parts.extend(images.iter().map(|image| {
+                        serde_json::json!({
+                            "type": "image_url",
+                            "image_url": {
+                                "url": format!("data:{};base64,{}", image.mime_type, image.data),
+                            },
+                        })
+                    }));
+                    out.push(serde_json::json!({
+                        "role": "user",
+                        "content": parts,
+                    }));
+                }
             }
         }
     }

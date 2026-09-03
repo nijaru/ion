@@ -164,6 +164,11 @@ pub enum UiEffect {
     /// $VISUAL/$EDITOR, and continue with the edited text (pi parity:
     /// app.editor.external).
     ExternalEditor,
+    /// Read the system clipboard: an image is written to a temp file
+    /// and its path returned for insertion; text returns directly (pi
+    /// parity: app.clipboard.pasteImage). Resolved by the run loop,
+    /// which owns process access — the reducer does no I/O.
+    PasteClipboard,
     /// Restore the queued next-run prompt to the composer (pi parity:
     /// app.message.dequeue, alt+up).
     DequeueNextRun,
@@ -224,6 +229,10 @@ pub enum UiMessage {
     /// The external editor returned the edited draft (empty output
     /// keeps the current composer unchanged).
     ExternalEdited(String),
+    /// The clipboard read resolved: the pasted text to insert (an
+    /// image arrives as its temp file path; `None` means the clipboard
+    /// was empty or unreadable and the paste is a no-op).
+    ClipboardPasted(Option<String>),
     /// The queued prompt was removed and returned to the composer
     /// (alt+up). `None` means the queue was already empty.
     Dequeued(Option<String>),
@@ -285,6 +294,10 @@ pub enum Action {
     /// Open the composer in $VISUAL/$EDITOR (pi: app.editor.external,
     /// ctrl+g).
     ExternalEditor,
+    /// Paste from the system clipboard (pi: app.clipboard.pasteImage,
+    /// ctrl+v): an image becomes a temp file path in the composer,
+    /// which the model reads like any other file; text pastes directly.
+    PasteClipboard,
 }
 
 /// Resolved action → key bindings. Plain data owned by the UI state;
@@ -378,6 +391,11 @@ impl Default for KeyMap {
             (
                 Action::ExternalEditor,
                 KeyCode::Char('g'),
+                Modifiers::CONTROL,
+            ),
+            (
+                Action::PasteClipboard,
+                KeyCode::Char('v'),
                 Modifiers::CONTROL,
             ),
             (Action::QueueFollowUp, KeyCode::Enter, Modifiers::ALT),
@@ -1405,6 +1423,17 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.last_edit = None;
             (state, None)
         }
+        UiMessage::ClipboardPasted(payload) => {
+            // Insert at the cursor like any typed text; an image arrives
+            // as a temp file path the model can read (pi parity: the
+            // composer never embeds image bytes).
+            if let Some(text) = payload
+                && !text.is_empty()
+            {
+                insert_text(&mut state, &text, EditKind::Paste);
+            }
+            (state, None)
+        }
     }
 }
 
@@ -1720,6 +1749,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "ctrl+o · ctrl+t · ctrl+_ - tool output, thinking, undo edit",
                 "@                       - reference a file (fuzzy search)",
                 "! · !!                  - shell passthrough (send / local only)",
+                "ctrl+v                  - paste text or an image (as a file path)",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -2178,6 +2208,11 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             // The loop owns the terminal; it suspends raw mode, runs the
             // editor, and returns the edited draft as a message.
             (state, Some(UiEffect::ExternalEditor))
+        }
+        Action::PasteClipboard => {
+            // The loop reads the clipboard (image → temp file path,
+            // text → direct) and returns it as a message.
+            (state, Some(UiEffect::PasteClipboard))
         }
         Action::QueueFollowUp => {
             // alt+enter always queues after completion, even while idle
@@ -3089,6 +3124,114 @@ fn suspend_and_rearm(
 /// terminal is suspended for the child, so the editor gets a cooked
 /// screen; on return the TUI re-arms and the edited text replaces the
 /// composer wholesale. An empty result keeps the draft unchanged.
+/// Read the system clipboard for the composer (pi parity:
+/// app.clipboard.pasteImage). An image is written to a temp file and
+/// its path returned — the model reads the file like any other, so the
+/// composer never embeds image bytes; plain text pastes directly.
+/// `None` means empty or unreadable (a reflexive ctrl+v must never
+/// wedge the loop: every helper is bounded and failures degrade to a
+/// no-op paste, pi's behavior).
+fn read_clipboard_for_composer() -> Option<String> {
+    let image = read_clipboard_image_file().ok().flatten();
+    if let Some(path) = image {
+        return Some(path);
+    }
+    read_clipboard_text().ok().flatten()
+}
+
+/// Write the clipboard image to a temp file. macOS uses osascript; a
+/// Linux display session uses xclip (pi also supports wl-paste). The
+/// file is the durable handoff: the model's `read` fetches the bytes.
+fn read_clipboard_image_file() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        // `clipboard info` names the flavors cheaply; PNGf is the
+        // lossless screenshot form.
+        let info = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg("clipboard info")
+            .output()
+            .map_err(|err| format!("clipboard info: {err}"))?;
+        let info = String::from_utf8_lossy(&info.stdout).into_owned();
+        if !info.contains("PNGf") {
+            return Ok(None);
+        }
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("ion-clipboard-{}.png", uuid_v4_simple()));
+        let script = format!(
+            "set pngData to the clipboard as \u{ab}class PNGf\u{bb}\n \
+             set outFile to open for access POSIX file \"{}\" with write permission\n \
+             set eof outFile to 0\n \
+             write pngData to outFile\n \
+             close access outFile",
+            path.display()
+        );
+        let status = std::process::Command::new("osascript")
+            .arg("-e")
+            .arg(&script)
+            .output()
+            .map_err(|err| format!("clipboard write: {err}"))?;
+        if !status.status.success() {
+            return Ok(None);
+        }
+        Ok(Some(path.display().to_string()))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("ion-clipboard-{}.png", uuid_v4_simple()));
+        let status = std::process::Command::new("xclip")
+            .args(["-selection", "clipboard", "-t", "image/png", "-o"])
+            .stdout(std::fs::File::create(&path).map_err(|e| e.to_string())?)
+            .status()
+            .map_err(|err| format!("xclip: {err}"))?;
+        if !status.success() {
+            return Ok(None);
+        }
+        Ok(Some(path.display().to_string()))
+    }
+}
+
+/// The clipboard's text flavor (macOS pbpaste, Linux xclip/xsel).
+fn read_clipboard_text() -> Result<Option<String>, String> {
+    #[cfg(target_os = "macos")]
+    {
+        let out = std::process::Command::new("pbpaste")
+            .output()
+            .map_err(|err| format!("pbpaste: {err}"))?;
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        Ok((!text.is_empty()).then_some(text))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for program in [
+            ("xclip", ["-selection", "clipboard", "-o"].as_slice()),
+            ("xsel", ["--clipboard", "--output"].as_slice()),
+        ] {
+            if let Ok(out) = std::process::Command::new(program.0)
+                .args(program.1)
+                .output()
+            {
+                let text = String::from_utf8_lossy(&out.stdout).into_owned();
+                if !text.is_empty() {
+                    return Ok(Some(text));
+                }
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// A random-enough v4-shaped id for temp-file names (time + pid).
+fn uuid_v4_simple() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:x}-{:x}", nanos, std::process::id())
+}
+
 fn run_external_editor(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
@@ -3396,6 +3539,16 @@ pub async fn run(
                                         &format!("external editor failed: {err}"),
                                     ),
                                 }
+                            } else if matches!(effect, UiEffect::PasteClipboard) {
+                                // The loop owns process access: read the
+                                // clipboard (image → temp file path, text
+                                // → direct) and hand it to the reducer.
+                                let pasted = read_clipboard_for_composer();
+                                let (next, _) = update(
+                                    std::mem::take(&mut state),
+                                    UiMessage::ClipboardPasted(pasted),
+                                );
+                                state = next;
                             } else {
                                 let switch = dispatch(
                                     &session,
@@ -3709,6 +3862,10 @@ async fn dispatch(
         UiEffect::ExternalEditor => {
             // Resolved by the run loop, which owns the terminal; this
             // arm exists only for match totality.
+            None
+        }
+        UiEffect::PasteClipboard => {
+            // Resolved by the run loop, which owns process access.
             None
         }
         UiEffect::RunShell {
@@ -6268,5 +6425,36 @@ mod shell_passthrough_tests {
         state.cursor = state.composer.chars().count();
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "open do");
+    }
+
+    #[test]
+    fn clipboard_paste_inserts_text_and_reports_nothing_for_empty() {
+        let mut state = UiState::new();
+        state = update(
+            state,
+            UiMessage::ClipboardPasted(Some("pasted text".to_owned())),
+        )
+        .0;
+        assert_eq!(state.composer, "pasted text");
+        assert_eq!(state.cursor, "pasted text".chars().count());
+
+        // An image arrives as its temp file path: plain insertion.
+        let mut state = UiState::new();
+        state = type_text(state, "look at ");
+        state = update(
+            state,
+            UiMessage::ClipboardPasted(Some("/tmp/ion-clipboard-x.png".to_owned())),
+        )
+        .0;
+        assert_eq!(state.composer, "look at /tmp/ion-clipboard-x.png");
+
+        // Empty or unreadable clipboard: a no-op that never clears the
+        // draft.
+        let mut state = type_text(UiState::new(), "draft");
+        state = update(state, UiMessage::ClipboardPasted(None)).0;
+        assert_eq!(state.composer, "draft");
+        let mut state = type_text(UiState::new(), "draft");
+        state = update(state, UiMessage::ClipboardPasted(Some(String::new()))).0;
+        assert_eq!(state.composer, "draft");
     }
 }

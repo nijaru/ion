@@ -47,11 +47,13 @@ fn tool_result_classifies_ok_and_err() {
         call_id: 1,
         output: "hi".into(),
         artifact: None,
+        images: Vec::new(),
     };
     let err = ToolResult::Err {
         call_id: 2,
         error: "boom".into(),
         artifact: None,
+        images: Vec::new(),
     };
     assert_eq!(ok.call_id(), 1);
     assert!(ok.is_ok());
@@ -62,6 +64,7 @@ fn tool_result_classifies_ok_and_err() {
             call_id: 3,
             output: "x".into(),
             artifact: None,
+            images: Vec::new(),
         }
         .model_text(),
         "x"

@@ -463,6 +463,7 @@ impl<P: Provider> SessionRuntime<P> {
                                                 call_id: invocation.call_id,
                                                 output: "recovered: already applied".to_owned(),
                                                 artifact: None,
+                                                images: Vec::new(),
                                             },
                                         })
                                         .expect("settle an already-applied reconcilable effect");

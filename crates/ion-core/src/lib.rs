@@ -34,7 +34,7 @@ pub use agent_host::{
 };
 pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
-    TrustedResource, load_trusted_resources, project, project_with_manifest,
+    TrustedResource, load_trusted_resources, project, project_with_manifest_for_model,
 };
 pub use error::{CommandError, RuntimeError};
 pub use extensions::{ExtensionDef, ExtensionService};

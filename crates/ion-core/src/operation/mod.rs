@@ -855,6 +855,7 @@ impl OperationMachine {
                     call_id: call.call_id,
                     error: "user denied approval for this call".to_owned(),
                     artifact: None,
+                    images: Vec::new(),
                 },
             }],
             intents: Vec::new(),

@@ -1028,7 +1028,11 @@ fn render_fork_context(plan: &ContextPlan) -> String {
                 }
                 rendered.push('\n');
             }
-            ContextMessage::Tool { call_id, content } => {
+            ContextMessage::Tool {
+                call_id,
+                content,
+                images: _,
+            } => {
                 rendered.push_str("Tool result ");
                 rendered.push_str(&call_id.to_string());
                 rendered.push_str(":\n");
