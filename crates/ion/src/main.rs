@@ -108,66 +108,6 @@ fn git_branch() -> std::io::Result<Option<String>> {
 
 /// Format the working directory compactly without collapsing distinct
 /// paths that merely share a textual prefix with `$HOME`.
-/// Bounded workspace listing for the `@` file picker and path
-/// completion (pi parity: fd-backed fuzzy search). One breadth-first
-/// walk at launch, capped so a huge workspace still starts instantly;
-/// common build/artifact directories are skipped entirely.
-fn workspace_file_list(cwd: &Path) -> Vec<String> {
-    const MAX_FILES: usize = 2000;
-    const MAX_ENTRIES_PER_DIR: usize = 2000;
-    const SKIP_DIRS: &[&str] = &[
-        ".git",
-        "target",
-        "node_modules",
-        "dist",
-        "build",
-        "out",
-        ".venv",
-        "venv",
-        "__pycache__",
-        ".cache",
-        ".next",
-        ".turbo",
-        "vendor",
-        "deps",
-        "_build",
-    ];
-    let mut files = Vec::new();
-    let mut queue = std::collections::VecDeque::new();
-    queue.push_back((cwd.to_owned(), String::new()));
-    while let Some((dir, prefix)) = queue.pop_front() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.take(MAX_ENTRIES_PER_DIR).flatten() {
-            if files.len() >= MAX_FILES {
-                return files;
-            }
-            let name = entry.file_name();
-            let Some(name) = name.to_str() else {
-                continue;
-            };
-            let path = if prefix.is_empty() {
-                name.to_owned()
-            } else {
-                format!("{prefix}/{name}")
-            };
-            let Ok(file_type) = entry.file_type() else {
-                continue;
-            };
-            if file_type.is_dir() {
-                if name.starts_with('.') || SKIP_DIRS.contains(&name) {
-                    continue;
-                }
-                queue.push_back((entry.path(), path));
-            } else {
-                files.push(path);
-            }
-        }
-    }
-    files
-}
-
 fn display_cwd(path: &Path) -> String {
     let home = std::env::var_os("HOME").map(std::path::PathBuf::from);
     display_cwd_with_home(path, home.as_deref())
@@ -590,7 +530,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             startup_notice: store.startup_notice().map(str::to_owned),
             cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),
-            workspace_files: workspace_file_list(&cwd),
+            workspace_files: tui::workspace_file_list(&cwd),
         },
         tui::SessionHost {
             manager: Some(manager),

@@ -33,6 +33,70 @@ use render::{Transcript, append_snapshot_entries};
 #[cfg(test)]
 use render::{build_live, entry_lines, wrap_line};
 
+/// Bounded workspace listing for the `@` file picker and path
+/// completion (pi parity: fd-backed fuzzy search). One breadth-first
+/// walk at launch, capped so a huge workspace still starts instantly;
+/// common build/artifact directories are skipped entirely.
+pub fn workspace_file_list(cwd: &std::path::Path) -> Vec<String> {
+    const MAX_FILES: usize = 2000;
+    const MAX_ENTRIES_PER_DIR: usize = 2000;
+    const SKIP_DIRS: &[&str] = &[
+        ".git",
+        "target",
+        "node_modules",
+        "dist",
+        "build",
+        "out",
+        ".venv",
+        "venv",
+        "__pycache__",
+        ".cache",
+        ".next",
+        ".turbo",
+        "vendor",
+        "deps",
+        "_build",
+    ];
+    let mut files = Vec::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back((cwd.to_owned(), String::new()));
+    while let Some((dir, prefix)) = queue.pop_front() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.take(MAX_ENTRIES_PER_DIR).flatten() {
+            if files.len() >= MAX_FILES {
+                return files;
+            }
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else {
+                continue;
+            };
+            let path = if prefix.is_empty() {
+                name.to_owned()
+            } else {
+                format!("{prefix}/{name}")
+            };
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_dir() {
+                if name.starts_with('.') || SKIP_DIRS.contains(&name) {
+                    continue;
+                }
+                // Directory rows carry a trailing '/' so the '@' picker
+                // and Tab completion can keep the cursor scoped inside
+                // them (pi parity: fd lists directories with '/').
+                files.push(format!("{path}/"));
+                queue.push_back((entry.path(), path));
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    files
+}
+
 /// Host-provided configuration for one launch. Cloneable handles;
 /// never runtime state.
 #[derive(Clone)]
@@ -1798,8 +1862,109 @@ const MAX_COMPLETION_SUGGESTIONS: usize = 16;
 /// 100 per query; the picker renders a bounded window anyway).
 const MAX_FILE_SELECTOR_ROWS: usize = 100;
 
+/// Find the start of the path token ending at the cursor, if tab
+/// should complete it (pi parity: the token must look like a path —
+/// contain '/', or start with './', '../', '~/', or an '@'
+/// reference). Returns the char offset of the token start.
+fn path_token_start(composer: &str) -> Option<usize> {
+    let start = composer
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map(|(index, _)| index + 1)
+        .unwrap_or(0);
+    let token = &composer[start..];
+    // '@' references are owned by the file picker (they always open
+    // at a word start); tab completes plain path tokens.
+    let looks_like_path = token.contains('/')
+        || token.starts_with("./")
+        || token.starts_with("../")
+        || token.starts_with("~/");
+    if token.is_empty() || !looks_like_path {
+        return None;
+    }
+    Some(start)
+}
+
+/// Complete the path token at `token_start` against the host-supplied
+/// workspace rows: a single match replaces the token entirely; several
+/// matches extend the common prefix; more than one shows up to
+/// MAX_COMPLETION_SUGGESTIONS options as notices (mirrors the
+/// slash-command completion UX).
+fn complete_path_token(state: &mut UiState, token_start: usize) {
+    let token = state.composer[token_start..].to_owned();
+    // Workspace rows are repo-relative; strip a './' or '~/' anchor
+    // for matching and restore it in the completed text (pi keeps
+    // the user's anchor form).
+    let anchor = if token.starts_with("./") {
+        "./"
+    } else if token.starts_with("~/") {
+        "~/"
+    } else {
+        ""
+    };
+    let query = token.strip_prefix(anchor).unwrap_or(&token).to_owned();
+    let candidates: Vec<String> = state
+        .workspace_files
+        .iter()
+        .filter(|path| path.starts_with(query.as_str()))
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return;
+    }
+    let common = common_prefix(&candidates);
+    // A directory row matching the whole query completes to the
+    // directory (pi lists dirs first with a trailing '/'), so the
+    // cursor stays scoped for deeper completion.
+    let completed = if candidates.len() == 1 {
+        candidates[0].clone()
+    } else if candidates
+        .iter()
+        .any(|candidate| candidate == &format!("{query}/"))
+    {
+        format!("{query}/")
+    } else if common.len() > query.len() {
+        common
+    } else {
+        for candidate in candidates.iter().take(MAX_COMPLETION_SUGGESTIONS) {
+            notice(state, &format!("  {candidate}"));
+        }
+        return;
+    };
+    // Only a finished reference (single match, or the directory itself)
+    // gains a trailing space; a shared-prefix extension stays open for
+    // the next tab (pi parity: applyCompletion appends ' ' for files).
+    let is_directory = completed.ends_with('/');
+    let is_single = candidates.len() == 1;
+    let finished = if is_directory || !is_single {
+        format!("{anchor}{completed}")
+    } else {
+        format!("{anchor}{completed} ")
+    };
+    let replacement = finished;
+    let mut next = state.composer[..token_start].to_owned();
+    next.push_str(&replacement);
+    if state.composer != next {
+        state.record_edit(EditKind::Insert);
+        state.composer = next;
+        state.cursor = state.composer.chars().count();
+        state.preferred_column = None;
+        state.exit_history_browse();
+    }
+}
+
 fn complete_composer(state: &mut UiState) {
     if state.cursor != state.composer.chars().count() {
+        return;
+    }
+    // Path completion (pi parity: tab completes file paths when the
+    // token names one — contains '/', or starts with './', '../',
+    // '~/', or an '@' reference). Slash commands keep priority.
+    if !state.composer.starts_with('/')
+        && let Some(token_start) = path_token_start(&state.composer)
+    {
+        complete_path_token(state, token_start);
         return;
     }
     let Some(command) = state.composer.strip_prefix('/') else {
@@ -5994,5 +6159,114 @@ mod shell_passthrough_tests {
                 .iter()
                 .any(|line| line.to_string().contains("no matching files"))
         );
+    }
+
+    #[test]
+    fn tab_completes_path_tokens_from_workspace_rows() {
+        let mut state = UiState::new();
+        state.workspace_files = vec![
+            "crates/ion/src/main.rs".to_owned(),
+            "crates/ion/src/tui.rs".to_owned(),
+            "crates/ion/src/tui/render.rs".to_owned(),
+            "DESIGN.md".to_owned(),
+        ];
+        // Unique prefix completes fully with a trailing space.
+        let mut state = type_text(state, "read crates/ion/src/mai");
+        state.cursor = state.composer.chars().count();
+        state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "read crates/ion/src/main.rs ");
+        assert_eq!(state.cursor, state.composer.chars().count());
+
+        // Ambiguous rows with no deeper common ground: tab lists the
+        // options and leaves the token unchanged (pi shows its
+        // suggestion list rather than guessing between file and dir).
+        let mut state = UiState::new();
+        state.workspace_files = vec![
+            "crates/ion/src/tui.rs".to_owned(),
+            "crates/ion/src/tui/render.rs".to_owned(),
+        ];
+        let mut state = type_text(state, "open crates/ion/src/tui");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "open crates/ion/src/tui");
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("crates/ion/src/tui.rs"))
+        );
+
+        // A shared prefix beyond the query extends in place.
+        let mut state = UiState::new();
+        state.workspace_files = vec![
+            "crates/ion/src/main.rs".to_owned(),
+            "crates/ion/src/main_test.rs".to_owned(),
+        ];
+        let mut state = type_text(state, "open crates/ion/src/ma");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "open crates/ion/src/main");
+
+        // A './'-anchored token completes relative paths.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["DESIGN.md".to_owned()];
+        let mut state = type_text(state, "see ./DES");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "see ./DESIGN.md ");
+    }
+
+    #[test]
+    fn tab_path_completion_stays_inert_for_plain_words_and_commands() {
+        let mut state = UiState::new();
+        state.workspace_files = vec!["DESIGN.md".to_owned()];
+        // A plain word with no path shape: tab does nothing (the
+        // slash-command completer already declined it).
+        let mut state = type_text(state, "plain");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "plain");
+
+        // Slash commands keep priority over path completion.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["help.txt".to_owned()];
+        let mut state = type_text(state, "/hel");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "/help ");
+    }
+
+    #[test]
+    fn tab_path_completion_directory_rows_stay_scoped() {
+        let mut state = UiState::new();
+        state.workspace_files = vec![
+            "docs/".to_owned(),
+            "docs/design.md".to_owned(),
+            "docs/draft.md".to_owned(),
+        ];
+        // A directory row as the unique match completes with the
+        // trailing '/': the cursor stays scoped so the next tab
+        // completes inside it.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["docs/".to_owned()];
+        let mut state = type_text(state, "open docs/");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "open docs/");
+        // A file-only unique match completes with a trailing space.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["docs/design.md".to_owned(), "docs/draft.md".to_owned()];
+        let mut state = type_text(state, "open docs/desi");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "open docs/design.md ");
+        // A bare word with no path shape stays inert: tab never
+        // guesses a path from plain prose.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["docs/".to_owned()];
+        let mut state = type_text(state, "open do");
+        state.cursor = state.composer.chars().count();
+        let state = update(state, key(KeyCode::Tab)).0;
+        assert_eq!(state.composer, "open do");
     }
 }
