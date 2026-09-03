@@ -75,6 +75,11 @@ pub struct Keybindings {
     pub undo: Option<String>,
     pub toggle_tool_output: Option<String>,
     pub toggle_thinking: Option<String>,
+    /// Read the system clipboard for the composer (ctrl+v default).
+    pub paste_clipboard: Option<String>,
+    /// Copy the last assistant message to the clipboard (ctrl+x
+    /// default).
+    pub copy_last_message: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]

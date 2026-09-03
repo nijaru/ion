@@ -169,6 +169,11 @@ pub enum UiEffect {
     /// parity: app.clipboard.pasteImage). Resolved by the run loop,
     /// which owns process access — the reducer does no I/O.
     PasteClipboard,
+    /// Write the last assistant message to the system clipboard (pi
+    /// parity: app.message.copy). Resolved by the run loop; the reducer
+    /// owns no process handles. The outcome returns as
+    /// `UiMessage::CopiedToClipboard` for the confirmation notice.
+    CopyToClipboard,
     /// Restore the queued next-run prompt to the composer (pi parity:
     /// app.message.dequeue, alt+up).
     DequeueNextRun,
@@ -236,6 +241,10 @@ pub enum UiMessage {
     /// The queued prompt was removed and returned to the composer
     /// (alt+up). `None` means the queue was already empty.
     Dequeued(Option<String>),
+    /// The clipboard write resolved: `None` copied the last assistant
+    /// message; `Some(err)` reports the failure and its reason (a
+    /// failed write is never silently downgraded).
+    CopiedToClipboard(Option<String>),
 }
 
 /// The live operation presentation, derived from runtime events.
@@ -298,6 +307,10 @@ pub enum Action {
     /// ctrl+v): an image becomes a temp file path in the composer,
     /// which the model reads like any other file; text pastes directly.
     PasteClipboard,
+    /// Copy the last assistant message to the system clipboard (pi:
+    /// app.message.copy, ctrl+x). Without a message picker, pi's
+    /// fallback is the last assistant message.
+    CopyLastMessage,
 }
 
 /// Resolved action → key bindings. Plain data owned by the UI state;
@@ -396,6 +409,11 @@ impl Default for KeyMap {
             (
                 Action::PasteClipboard,
                 KeyCode::Char('v'),
+                Modifiers::CONTROL,
+            ),
+            (
+                Action::CopyLastMessage,
+                KeyCode::Char('x'),
                 Modifiers::CONTROL,
             ),
             (Action::QueueFollowUp, KeyCode::Enter, Modifiers::ALT),
@@ -549,6 +567,12 @@ impl KeyMap {
             &overrides.toggle_tool_output,
         )?;
         rebind(&mut map, Action::ToggleThinking, &overrides.toggle_thinking)?;
+        rebind(&mut map, Action::PasteClipboard, &overrides.paste_clipboard)?;
+        rebind(
+            &mut map,
+            Action::CopyLastMessage,
+            &overrides.copy_last_message,
+        )?;
         Ok(map)
     }
 
@@ -836,6 +860,10 @@ pub struct UiState {
     /// The durable queued follow-up prompt, when one exists (pi parity:
     /// queued messages stay visible above the composer).
     queued_prompt: Option<String>,
+    /// The last durably settled assistant text (pi parity: ctrl+x /
+    /// /copy copy the last assistant message). Set only when a turn
+    /// completes; partial drafts are never copied.
+    last_assistant: Option<String>,
 }
 
 impl UiState {
@@ -1217,6 +1245,7 @@ impl UiState {
     /// switches; a session switch abandons it (the user asked for a
     /// different conversation).
     fn reset_for_session_switch(&mut self) {
+        self.last_assistant = None;
         self.draft.clear();
         self.draft_thinking.clear();
         self.draft_degraded = false;
@@ -1387,6 +1416,13 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             // the reducer records durable identity for /session.
             state.session_id = Some(session);
             state.session_title = Some(title);
+            (state, None)
+        }
+        UiMessage::CopiedToClipboard(err) => {
+            match err {
+                None => notice(&mut state, "Copied last agent message to clipboard"),
+                Some(err) => notice(&mut state, &format!("copy failed: {err}")),
+            }
             (state, None)
         }
         UiMessage::SessionCommandFailed(message) => {
@@ -1750,6 +1786,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "@                       - reference a file (fuzzy search)",
                 "! · !!                  - shell passthrough (send / local only)",
                 "ctrl+v                  - paste text or an image (as a file path)",
+                "ctrl+x · /copy          - copy the last reply · /hotkeys - all keys",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -1841,6 +1878,25 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             // when the rows arrive; the query is stashed for that reopen.
             state.pending_resume_query = (!rest.is_empty()).then(|| rest.to_owned());
             (std::mem::take(state), Some(UiEffect::RequestSessionList))
+        }
+        "copy" => {
+            // pi parity: /copy copies the last assistant message; the
+            // same outcome as ctrl+x (app.message.copy).
+            if state.last_assistant.is_some() {
+                (std::mem::take(state), Some(UiEffect::CopyToClipboard))
+            } else {
+                notice(state, "No agent messages to copy yet.");
+                (std::mem::take(state), None)
+            }
+        }
+        "hotkeys" => {
+            // pi parity: a grouped binding reference rendered from the
+            // resolved keymap, so settings overrides show as bound.
+            let keymap = state.keymap.clone();
+            for line in help::hotkeys_reference_lines(&keymap) {
+                notice(state, &line);
+            }
+            (std::mem::take(state), None)
         }
         "name" => {
             if rest.is_empty() {
@@ -2011,8 +2067,8 @@ fn complete_composer(state: &mut UiState) {
             "/".to_owned(),
             command.to_owned(),
             [
-                "clone", "compact", "help", "model", "name", "new", "resume", "session",
-                "thinking", "quit",
+                "clone", "compact", "copy", "help", "hotkeys", "model", "name", "new", "resume",
+                "session", "thinking", "quit",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -2213,6 +2269,16 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
             // The loop reads the clipboard (image → temp file path,
             // text → direct) and returns it as a message.
             (state, Some(UiEffect::PasteClipboard))
+        }
+        Action::CopyLastMessage => {
+            // The last durably settled assistant turn, or pi's exact
+            // complaint when none exists yet.
+            if state.last_assistant.is_some() {
+                (state, Some(UiEffect::CopyToClipboard))
+            } else {
+                notice(&mut state, "No agent messages to copy yet.");
+                (state, None)
+            }
         }
         Action::QueueFollowUp => {
             // alt+enter always queues after completion, even while idle
@@ -2952,6 +3018,7 @@ impl UiState {
         flush_thinking(self);
         self.flush_tool_rows();
         if !self.draft.is_empty() {
+            self.last_assistant = Some(self.draft.clone());
             for line in self.draft.lines() {
                 // Assistant content renders plain (pi parity); blank
                 // lines dropped (single-newline spacing).
@@ -3192,6 +3259,61 @@ fn read_clipboard_image_file() -> Result<Option<String>, String> {
     }
 }
 
+/// Write text to the system clipboard (pi parity: app.message.copy).
+/// macOS uses pbcopy; elsewhere xclip/xsel as available. Returns Ok when
+/// one utility wrote the bytes; Err names the failure rather than
+/// silently asserting success. The user's clipboard is real user
+/// state: this is called only for the explicit copy action, never from
+/// tests.
+fn write_clipboard_text(text: &str) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        use std::io::Write;
+        let mut child = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .map_err(|err| format!("pbcopy: {err}"))?;
+        if let Some(stdin) = child.stdin.as_mut() {
+            stdin
+                .write_all(text.as_bytes())
+                .map_err(|err| format!("pbcopy stdin: {err}"))?;
+        }
+        let status = child.wait().map_err(|err| format!("pbcopy wait: {err}"))?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(format!("pbcopy exited {status}"))
+        }
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        for (program, args) in [
+            ("xclip", ["-selection", "clipboard", "-i"].as_slice()),
+            ("xsel", ["--clipboard", "--input"].as_slice()),
+        ] {
+            use std::io::Write;
+            let Ok(mut child) = std::process::Command::new(program)
+                .args(args)
+                .stdin(std::process::Stdio::piped())
+                .stdout(std::process::Stdio::null())
+                .spawn()
+            else {
+                continue;
+            };
+            let wrote = child
+                .stdin
+                .as_mut()
+                .map(|stdin| stdin.write_all(text.as_bytes()).is_ok())
+                .unwrap_or(false);
+            if wrote && child.wait().map(|status| status.success()).unwrap_or(false) {
+                return Ok(());
+            }
+        }
+        Err("no clipboard utility found (tried xclip, xsel)".to_owned())
+    }
+}
+
 /// The clipboard's text flavor (macOS pbpaste, Linux xclip/xsel).
 fn read_clipboard_text() -> Result<Option<String>, String> {
     #[cfg(target_os = "macos")]
@@ -3397,6 +3519,12 @@ pub async fn run(
     }
     let (snapshot, events) = session.subscribe().await?;
     let resume_entry_count = snapshot.reopen_entry_count.unwrap_or(0);
+    // A resumed session already has settled assistant turns; ctrl+x /
+    // /copy must find the latest one without re-reading the store.
+    state.last_assistant = snapshot.entries.iter().rev().find_map(|entry| match entry {
+        ion_core::SessionEntry::AssistantMessage { text } => Some(text.clone()),
+        _ => None,
+    });
     // The session's durable selection is authoritative once subscribed;
     // a resumed session may have switched models in an earlier run.
     // Scripted launches keep the host's display fallback. Real launches
@@ -3547,6 +3675,20 @@ pub async fn run(
                                 let (next, _) = update(
                                     std::mem::take(&mut state),
                                     UiMessage::ClipboardPasted(pasted),
+                                );
+                                state = next;
+                            } else if matches!(effect, UiEffect::CopyToClipboard) {
+                                // ctrl+x / /copy: write the last settled
+                                // assistant message. The reducer already
+                                // proved a message exists; the write's
+                                // failure reason reaches the user.
+                                let err = state
+                                    .last_assistant
+                                    .as_deref()
+                                    .and_then(|text| write_clipboard_text(text).err());
+                                let (next, _) = update(
+                                    std::mem::take(&mut state),
+                                    UiMessage::CopiedToClipboard(err),
                                 );
                                 state = next;
                             } else {
@@ -3826,6 +3968,10 @@ async fn switch_session(
     };
     state.usage = snapshot.latest_usage;
     state.thinking_level = snapshot.thinking.clone();
+    state.last_assistant = snapshot.entries.iter().rev().find_map(|entry| match entry {
+        ion_core::SessionEntry::AssistantMessage { text } => Some(text.clone()),
+        _ => None,
+    });
     if matches!(snapshot.operation, OperationStatus::Idle) {
         state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
     }
@@ -3865,6 +4011,10 @@ async fn dispatch(
             None
         }
         UiEffect::PasteClipboard => {
+            // Resolved by the run loop, which owns process access.
+            None
+        }
+        UiEffect::CopyToClipboard => {
             // Resolved by the run loop, which owns process access.
             None
         }
@@ -4268,7 +4418,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 10);
+        assert_eq!(state.pending_scrollback.len(), 12);
     }
 
     #[test]
@@ -6456,5 +6606,77 @@ mod shell_passthrough_tests {
         let mut state = type_text(UiState::new(), "draft");
         state = update(state, UiMessage::ClipboardPasted(Some(String::new()))).0;
         assert_eq!(state.composer, "draft");
+    }
+
+    #[test]
+    fn copy_last_message_requires_a_settled_turn() {
+        // Empty history: pi's exact complaint, no effect.
+        let (state, effect) = handle_action(UiState::new(), Action::CopyLastMessage);
+        assert!(effect.is_none());
+        assert_eq!(state.pending_scrollback.len(), 1);
+
+        // /copy without a turn: same guard.
+        let mut state = UiState::new();
+        let (state, effect) = handle_command(&mut state, "copy");
+        assert!(effect.is_none());
+        assert!(!state.pending_scrollback.is_empty());
+
+        // With a settled assistant turn: ctrl+x and /copy both emit
+        // the loop-resolved write, and the composer never changes.
+        let mut state = UiState::new();
+        state.last_assistant = Some("the answer".to_owned());
+        let state = type_text(state, "draft in progress");
+        let (state, effect) = handle_action(state, Action::CopyLastMessage);
+        assert_eq!(effect, Some(UiEffect::CopyToClipboard));
+        assert_eq!(state.composer, "draft in progress");
+
+        let mut state = UiState::new();
+        state.last_assistant = Some("the answer".to_owned());
+        let (state, effect) = handle_command(&mut state, "copy");
+        assert_eq!(effect, Some(UiEffect::CopyToClipboard));
+        assert!(state.composer.is_empty());
+    }
+
+    #[test]
+    fn copied_to_clipboard_message_reports_the_outcome() {
+        let state = update(UiState::new(), UiMessage::CopiedToClipboard(None)).0;
+        assert_eq!(state.pending_scrollback.len(), 1);
+        let state = update(
+            UiState::new(),
+            UiMessage::CopiedToClipboard(Some("pbcopy exited 1".to_owned())),
+        )
+        .0;
+        assert_eq!(state.pending_scrollback.len(), 1);
+    }
+
+    #[test]
+    fn hotkeys_reference_renders_from_resolved_bindings() {
+        let mut state = UiState::new();
+        let (state, _) = handle_command(&mut state, "hotkeys");
+        let rendered: String = state
+            .pending_scrollback
+            .iter()
+            .flat_map(|line| {
+                line.spans
+                    .iter()
+                    .map(|span| span.content.to_string())
+                    .collect::<Vec<_>>()
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(rendered.contains("Navigation"), "{rendered}");
+        assert!(rendered.contains("Editing"), "{rendered}");
+        assert!(rendered.contains("Other"), "{rendered}");
+        assert!(rendered.contains("ctrl+x"), "{rendered}");
+        assert!(rendered.contains("copy last reply"), "{rendered}");
+
+        // A rebound copy key shows the override, not ctrl+x.
+        let overrides: crate::settings::Keybindings =
+            toml::from_str("copyLastMessage = \"ctrl+shift+x\"").unwrap();
+        let keymap = KeyMap::from_settings(&overrides).unwrap();
+        let lines = help::hotkeys_reference_lines(&keymap);
+        let joined = lines.join("\n");
+        assert!(joined.contains("ctrl+shift+x"), "{joined}");
+        assert!(!joined.contains("ctrl+x "), "{joined}");
     }
 }
