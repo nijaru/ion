@@ -183,7 +183,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 async fn build_catalog(
     settings: &Settings,
     cli: &Cli,
-) -> Result<ion_core::ToolCatalog, std::io::Error> {
+) -> Result<(ion_core::ToolCatalog, Option<ion_core::ExtensionService>), std::io::Error> {
     let cwd = std::env::current_dir()?;
     let tools = ion_core::ToolCatalog::with_cwd_and_sandbox(cwd.clone(), settings.sandbox_mode());
     tools.set_active_mcp_servers(&settings.active_mcp_servers);
@@ -197,15 +197,16 @@ async fn build_catalog(
         ion_core::McpService::new().start_into(&defs, &tools).await;
     }
     // Project-local extension manifests load only under an explicit
-    // trust grant (§24.5).
+    // trust grant (§24.5). The service handle stays alive for the TUI
+    // (Phase G): its hub drives extension UI, its registry resolves
+    // extension commands.
     let ext_defs =
         ion::settings::load_extension_defs(settings, Some(cwd.as_path()), cli.trust_project);
-    if !ext_defs.is_empty() {
-        ion_core::ExtensionService::new()
-            .start_into(&ext_defs, &tools)
-            .await;
+    let extension_service = (!ext_defs.is_empty()).then(ion_core::ExtensionService::new);
+    if let Some(service) = &extension_service {
+        service.start_into(&ext_defs, &tools).await;
     }
-    Ok(tools)
+    Ok((tools, extension_service))
 }
 
 fn restore_tui_startup_terminal(mut terminal: ion_terminal::TerminalSession) {
@@ -367,8 +368,8 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let tools = match build_catalog(settings, cli).await {
-        Ok(tools) => tools,
+    let (tools, extension_service) = match build_catalog(settings, cli).await {
+        Ok(built) => built,
         Err(err) => {
             restore_tui_startup_terminal(guard);
             let _ = writeln!(io::stderr(), "cwd: {err}");
@@ -542,6 +543,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),
             workspace_files: tui::workspace_file_list(&cwd),
+            extension_service,
         },
         tui::SessionHost {
             manager: Some(manager),
@@ -790,7 +792,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let cwd =
         std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let tools = build_catalog(settings, cli)
+    let (tools, _extension_service) = build_catalog(settings, cli)
         .await
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {

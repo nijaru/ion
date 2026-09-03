@@ -128,6 +128,10 @@ pub struct HostConfig {
     /// transcript view starts open when Fullscreen. `/fullscreen`
     /// toggles live.
     pub launch_mode: crate::settings::TuiMode,
+    /// The extension service handle (Phase G): its hub feeds the UI
+    /// bridge and its command registry resolves `/name` dispatch.
+    /// `None` when no extension defs loaded.
+    pub extension_service: Option<ion_core::ExtensionService>,
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -446,6 +450,14 @@ pub enum UiMessage {
     ExtensionDialog {
         id: u64,
         dialog: ion_core::ExtensionDialog,
+    },
+    /// A background extension command finished (Phase G): the command
+    /// round trip cannot run inline in the key arm because its
+    /// elicitation dialogs need the loop live to park and answer — so
+    /// the loop spawns the run and delivers the result here.
+    ExtensionCommandCompleted {
+        command: String,
+        result: Result<Option<String>, String>,
     },
 }
 
@@ -1607,6 +1619,17 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.ext_ui.park(dialog, id);
             (state, None)
         }
+        UiMessage::ExtensionCommandCompleted { command, result } => match result {
+            // pi sendMessage semantics: the handler's message enters
+            // the conversation as a user turn. Not composer history —
+            // the user did not type it.
+            Ok(Some(message)) => (state, Some(UiEffect::Submit { text: message })),
+            Ok(None) => (state, None),
+            Err(err) => {
+                notice(&mut state, &format!("/{command}: {err}"));
+                (state, None)
+            }
+        },
         UiMessage::SubmitAccepted => {
             state.hotkeys_visible = false;
             state.reset_composer();
@@ -4250,6 +4273,44 @@ pub async fn run(
         }),
         _ => None,
     };
+    // Extension UI bridge (Phase G): the loop owns the hub
+    // subscription and the dialog responder registry. Dialog events are
+    // split — the responder stays here, the reducer gets the id — so
+    // the reducer never holds an I/O handle (TERMINAL.md). A missing
+    // id on answer (lag, restart) answers Decline through the shared
+    // responder's drop path in ion-core, never silently.
+    let mut ext_events = host.extension_service.as_ref().map(|service| {
+        // Extensions push UI state during startup discovery, before this
+        // loop subscribes; the hub's materialized snapshot is the
+        // authoritative seed for the current surface.
+        for event in service.ui_hub().snapshot().updates() {
+            let (next, _) = update(std::mem::take(&mut state), UiMessage::ExtensionUi(event));
+            state = next;
+        }
+        // Seed the command list already discovered before this loop
+        // started; later Commands events refresh it.
+        let (next, _) = update(
+            std::mem::take(&mut state),
+            UiMessage::ExtensionUi(ion_core::ExtensionUiEvent::Commands {
+                commands: service.commands(),
+            }),
+        );
+        state = next;
+        service.ui_hub().subscribe()
+    });
+    let mut dialog_responders: std::collections::HashMap<
+        u64,
+        std::sync::Arc<
+            tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<ion_core::DialogAnswer>>>,
+        >,
+    > = std::collections::HashMap::new();
+    let mut next_dialog_id: u64 = 0;
+    // Extension command results arrive from spawned tasks: the round
+    // trip may park an elicitation dialog that needs THIS loop live to
+    // answer it, so the run can never be awaited inline in a key arm.
+    let (command_tx, mut command_rx) =
+        tokio::sync::mpsc::channel::<(String, Result<Option<String>, String>)>(16);
+
     let mut result: Result<(), RuntimeError> = Ok(());
     // Crossterm's EventStream can terminate on transient reads (notably
     // SIGWINCH during resize). Recreate it rather than treating the
@@ -4437,6 +4498,50 @@ pub async fn run(
                                     UiMessage::CopiedToClipboard(err),
                                 );
                                 state = next;
+                            } else if let UiEffect::AnswerExtensionDialog { id, answer } =
+                                &effect
+                            {
+                                // The loop owns the responder registry:
+                                // route the answer by id and drop the
+                                // registration. A missing id (session
+                                // switch reset, lag) leaves the shared
+                                // responder's drop path to answer
+                                // Decline in ion-core — never silent.
+                                if let Some(respond) = dialog_responders.remove(id) {
+                                    let answered =
+                                        ion_core::ExtensionUiEvent::answer_dialog(&respond, answer.clone())
+                                            .await;
+                                    if !answered {
+                                        notice(
+                                            &mut state,
+                                            "dialog answer lost: extension gone",
+                                        );
+                                    }
+                                }
+                            } else if let UiEffect::RunExtensionCommand { command, args } =
+                                &effect
+                            {
+                                // Spawn the round trip: its elicitation
+                                // dialogs need this loop live to park and
+                                // answer them (awaiting inline deadlocks —
+                                // found live in tmux). The result arrives
+                                // through the command channel.
+                                if let Some(service) = host.extension_service.clone() {
+                                    let command = command.clone();
+                                    let args = args.clone();
+                                    let tx = command_tx.clone();
+                                    tokio::spawn(async move {
+                                        let result = service.run_command(&command, &args).await;
+                                        let _ = tx.send((command, result)).await;
+                                    });
+                                } else {
+                                    notice(
+                                        &mut state,
+                                        &format!(
+                                            "/{command}: no extension service connected"
+                                        ),
+                                    );
+                                }
                             } else if matches!(effect, UiEffect::ToggleFullscreen) {
                                 // /fullscreen: the loop owns the
                                 // terminal mode and the view controller.
@@ -4479,6 +4584,7 @@ pub async fn run(
                                         &mut state,
                                         &mut transcript,
                                         &mut active_operation,
+                                        &mut dialog_responders,
                                         &palette,
                                         switch,
                                     )
@@ -4537,6 +4643,73 @@ pub async fn run(
                     }
                 }
             }
+            ext_event = async {
+                match ext_events.as_mut() {
+                    Some(events) => events.recv().await,
+                    // No extension service: park forever.
+                    None => std::future::pending().await,
+                }
+            } => {
+                match ext_event {
+                    Ok(ion_core::ExtensionUiEvent::Update { .. })
+                    | Ok(ion_core::ExtensionUiEvent::PeerDown { .. })
+                    | Ok(ion_core::ExtensionUiEvent::Commands { .. }) => {
+                        let (next, _) = update(
+                            std::mem::take(&mut state),
+                            UiMessage::ExtensionUi(ext_event.unwrap()),
+                        );
+                        state = next;
+                    }
+                    Ok(ion_core::ExtensionUiEvent::Dialog {
+                        dialog,
+                        respond,
+                        ..
+                    }) => {
+                        // The loop registers the responder and hands the
+                        // reducer the id only (it owns I/O handles).
+                        next_dialog_id += 1;
+                        dialog_responders.insert(next_dialog_id, respond);
+                        let (next, _) = update(
+                            std::mem::take(&mut state),
+                            UiMessage::ExtensionDialog {
+                                id: next_dialog_id,
+                                dialog,
+                            },
+                        );
+                        state = next;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Extension UI state resyncs from pushes; a
+                        // missed PeerDown self-corrects on the next
+                        // event. Nothing else to reconstruct.
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        ext_events = None;
+                    }
+                }
+            }
+            Some((command, result)) = command_rx.recv() => {
+                let (next, effect) = update(
+                    std::mem::take(&mut state),
+                    UiMessage::ExtensionCommandCompleted { command, result },
+                );
+                state = next;
+                if let Some(effect) = effect {
+                    // The completed-command reducer emits only Submit or
+                    // Enqueue; neither can request a session switch, so
+                    // a switch here is surfaced rather than dropped.
+                    if let Some(switch) =
+                        dispatch(&session, manager.as_ref(), &mut state, active_operation, effect)
+                            .await
+                    {
+                        notice(
+                            &mut state,
+                            "unexpected session switch from extension command",
+                        );
+                        let _ = switch;
+                    }
+                }
+            }
             event = events.recv() => {
                 match event {
                     Ok(event) => {
@@ -4574,6 +4747,7 @@ pub async fn run(
                                     &mut state,
                                     &mut transcript,
                                     &mut active_operation,
+                                    &mut dialog_responders,
                                     &palette,
                                     switch,
                                 )
@@ -4703,6 +4877,12 @@ async fn switch_session(
     state: &mut UiState,
     transcript: &mut Transcript,
     active_operation: &mut Option<ion_core::OperationId>,
+    dialog_responders: &mut std::collections::HashMap<
+        u64,
+        std::sync::Arc<
+            tokio::sync::Mutex<Option<tokio::sync::oneshot::Sender<ion_core::DialogAnswer>>>,
+        >,
+    >,
     palette: &render::Palette,
     switch: SessionSwitch,
 ) -> Result<(), RuntimeError> {
@@ -4734,6 +4914,11 @@ async fn switch_session(
     *session = handle;
     *events = fresh;
     *resume_session = Some(new_session_id);
+    // Extension UI belongs to the runtime that pushed it: the reducer
+    // resets all of it (pi resetExtensionUI), and the queued dialogs'
+    // responders drop here — their peers answered through the shared
+    // decline-on-drop path in ion-core, never silently stalled.
+    dialog_responders.clear();
 
     state.session_id = Some(new_session_id);
     state.session_title = Some(new_title.clone());

@@ -43,7 +43,7 @@ pub struct ExtensionDef {
 /// The UI side is presentation-only: a hub fans typed events to
 /// frontends, and a command registry routes `/name args` back to the
 /// owning peer. Neither touches the store or the lane.
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct ExtensionService {
     hub: ExtensionUiHub,
     commands: std::sync::Arc<std::sync::RwLock<Vec<ExtensionCommand>>>,
@@ -404,6 +404,57 @@ pub struct ExtensionCommand {
     pub extension: String,
 }
 
+/// Materialized extension UI state (statuses, widgets, footer): the
+/// hub updates it on every push so a frontend attaching after the
+/// pushes — the TUI subscribes at `run()` while extensions push during
+/// startup discovery — still seeds the current surface. Broadcast
+/// never replays; the snapshot does.
+#[derive(Debug, Default, Clone)]
+pub struct ExtensionUiSnapshot {
+    pub statuses: std::collections::BTreeMap<(String, String), String>,
+    pub widgets: std::collections::BTreeMap<(String, String), (Vec<String>, bool)>,
+    /// Owning extension plus its lines; the footer is one global slot
+    /// (pi setFooter replaces, clearing restores).
+    pub footer: Option<(String, Vec<String>)>,
+}
+
+impl ExtensionUiSnapshot {
+    /// Replay the current surface as push events: a late frontend
+    /// applies these and is in sync with live subscribers.
+    #[must_use]
+    pub fn updates(&self) -> Vec<ExtensionUiEvent> {
+        let mut events = Vec::new();
+        for ((extension, key), text) in &self.statuses {
+            events.push(ExtensionUiEvent::Update {
+                extension: extension.clone(),
+                update: ExtensionUiUpdate::Status {
+                    key: key.clone(),
+                    text: Some(text.clone()),
+                },
+            });
+        }
+        for ((extension, key), (lines, below)) in &self.widgets {
+            events.push(ExtensionUiEvent::Update {
+                extension: extension.clone(),
+                update: ExtensionUiUpdate::Widget {
+                    key: key.clone(),
+                    lines: Some(lines.clone()),
+                    below: *below,
+                },
+            });
+        }
+        if let Some((extension, lines)) = &self.footer {
+            events.push(ExtensionUiEvent::Update {
+                extension: extension.clone(),
+                update: ExtensionUiUpdate::Footer {
+                    text: Some(lines.clone()),
+                },
+            });
+        }
+        events
+    }
+}
+
 /// Host-side fan-out for extension UI events. Peers push through the
 /// stdio handler; frontends subscribe. The hub never blocks on a
 /// frontend: a full ring means that frontend lags, not that the
@@ -411,6 +462,7 @@ pub struct ExtensionCommand {
 #[derive(Clone)]
 pub struct ExtensionUiHub {
     events: std::sync::Arc<tokio::sync::broadcast::Sender<ExtensionUiEvent>>,
+    state: std::sync::Arc<std::sync::RwLock<ExtensionUiSnapshot>>,
 }
 
 impl Default for ExtensionUiHub {
@@ -425,6 +477,7 @@ impl ExtensionUiHub {
         let (events, _) = tokio::sync::broadcast::channel(256);
         Self {
             events: std::sync::Arc::new(events),
+            state: std::sync::Arc::new(std::sync::RwLock::new(ExtensionUiSnapshot::default())),
         }
     }
 
@@ -434,7 +487,65 @@ impl ExtensionUiHub {
         self.events.subscribe()
     }
 
+    /// The current materialized surface for late-attaching frontends.
+    #[must_use]
+    pub fn snapshot(&self) -> ExtensionUiSnapshot {
+        self.state
+            .read()
+            .expect("extension UI snapshot poisoned")
+            .clone()
+    }
+
     pub(crate) fn publish(&self, event: ExtensionUiEvent) {
+        // Materialize pushes into the snapshot first: it is the
+        // authoritative replay surface for late frontends.
+        {
+            let mut state = self.state.write().expect("extension UI snapshot poisoned");
+            match &event {
+                ExtensionUiEvent::Update { extension, update } => match update {
+                    ExtensionUiUpdate::Status { key, text } => match text {
+                        Some(text) => {
+                            state
+                                .statuses
+                                .insert((extension.clone(), key.clone()), text.clone());
+                        }
+                        None => {
+                            state.statuses.remove(&(extension.clone(), key.clone()));
+                        }
+                    },
+                    ExtensionUiUpdate::Widget { key, lines, below } => match lines {
+                        Some(lines) => {
+                            state
+                                .widgets
+                                .insert((extension.clone(), key.clone()), (lines.clone(), *below));
+                        }
+                        None => {
+                            state.widgets.remove(&(extension.clone(), key.clone()));
+                        }
+                    },
+                    ExtensionUiUpdate::Footer { text } => match text {
+                        Some(lines) => {
+                            state.footer = Some((extension.clone(), lines.clone()));
+                        }
+                        None => {
+                            state.footer = None;
+                        }
+                    },
+                },
+                ExtensionUiEvent::PeerDown { extension } => {
+                    state.statuses.retain(|(owner, _), _| owner != extension);
+                    state.widgets.retain(|(owner, _), _| owner != extension);
+                    if state
+                        .footer
+                        .as_ref()
+                        .is_some_and(|(owner, _)| owner == extension)
+                    {
+                        state.footer = None;
+                    }
+                }
+                ExtensionUiEvent::Dialog { .. } | ExtensionUiEvent::Commands { .. } => {}
+            }
+        }
         let _ = self.events.send(event);
     }
 }
