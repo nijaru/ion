@@ -35,6 +35,8 @@ pub(super) fn hotkey_lines(keymap: &KeyMap, palette: &Palette) -> Vec<Line<'stat
             keymap.label(Action::ToggleThinking)
         ))
         .style(line_style),
+        Line::from("@ file reference (fuzzy search) · ! shell passthrough".to_owned())
+            .style(line_style),
         Line::from(format!(
             "{} clear/exit  ·  {} quit",
             keymap.label(Action::ClearComposer),

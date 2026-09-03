@@ -340,6 +340,7 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
     if state.model_selector.is_some()
         || state.session_selector.is_some()
         || state.thinking_selector.is_some()
+        || state.file_selector.is_some()
     {
         LIVE_REGION_MAX_ROWS
     } else {
@@ -465,6 +466,47 @@ fn session_selector_lines(state: &UiState, palette: &Palette, width: usize) -> V
     lines
 }
 
+fn file_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_file_rows();
+    let selected = state
+        .file_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = vec![selector_row(
+        Line::from(if query.is_empty() {
+            "reference a file".to_owned()
+        } else {
+            format!("reference a file · {query}")
+        })
+        .style(palette.system_note),
+        width,
+    )];
+    if rows.is_empty() {
+        lines.push(selector_row(
+            Line::from("  no matching files").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let start = selected
+            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
+            .min(rows.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
+        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(rows.len());
+        for (index, row) in rows.iter().enumerate().take(end).skip(start) {
+            let marker = if index == selected { ">" } else { " " };
+            lines.push(selector_row(
+                Line::from(format!("  {marker} {row}")).style(palette.system_note),
+                width,
+            ));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
 fn thinking_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
     let query = &state.composer;
     let levels = state.filtered_thinking_levels();
@@ -557,6 +599,8 @@ pub(super) fn build_live_at_height(
         head.extend(session_selector_lines(state, palette, width));
     } else if state.thinking_selector.is_some() {
         head.extend(thinking_selector_lines(state, palette, width));
+    } else if state.file_selector.is_some() {
+        head.extend(file_selector_lines(state, palette, width));
     } else if state.hotkeys_visible {
         head.extend(help::hotkey_lines(&state.keymap, palette));
     }

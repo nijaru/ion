@@ -53,6 +53,10 @@ pub struct HostConfig {
     pub startup_notice: Option<String>,
     /// Home-relative launch working directory (status line).
     pub cwd_label: Option<String>,
+    /// Bounded recursive workspace file list for the `@` picker and path
+    /// completion (pi parity: fd-backed file search). Walked once at
+    /// launch; the reducer never touches the filesystem.
+    pub workspace_files: Vec<String>,
     /// Git branch of the working directory, captured at launch.
     pub branch: Option<String>,
 }
@@ -617,6 +621,20 @@ struct SessionSelector {
     saved_cursor: usize,
 }
 
+/// Ephemeral `@` file picker (pi parity). The composer is the filter
+/// query over host-provided workspace rows; `at_offset` remembers where
+/// the `@` token began so acceptance splices `@path ` into the saved
+/// draft exactly there, replacing the typed token.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FileSelector {
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+    /// Char offset of the `@` that opened the picker within the saved
+    /// draft.
+    at_offset: usize,
+}
+
 /// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -684,6 +702,14 @@ pub struct UiState {
     /// Ephemeral session picker (`/resume`), when open. Rows are
     /// host-supplied snapshots; selection returns a durable id.
     session_selector: Option<SessionSelector>,
+    /// Host-provided bounded workspace file list for `@` references and
+    /// path completion (pi parity: fd-backed fuzzy file search). The
+    /// reducer does no filesystem I/O; the host walks once at launch.
+    workspace_files: Vec<String>,
+    /// Ephemeral `@` file picker, when open (pi parity: typing `@`
+    /// fuzzy-searches project files; selection inserts an `@path`
+    /// reference into the composer — the model reads the file itself).
+    file_selector: Option<FileSelector>,
     /// Durable identity of the attached session, for `/session` display
     /// and clone/delete guards. Host-owned; the TUI never derives it.
     session_id: Option<ion_core::SessionId>,
@@ -913,6 +939,106 @@ impl UiState {
         }
     }
 
+    fn open_file_selector(&mut self, at_offset: usize) {
+        if self.file_selector.is_some() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.file_selector = Some(FileSelector {
+            selected: 0,
+            saved_composer,
+            saved_cursor,
+            at_offset,
+        });
+    }
+
+    fn close_file_selector(&mut self) {
+        let Some(selector) = self.file_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_file_rows(&self) -> Vec<String> {
+        let query = self.composer.to_lowercase();
+        self.workspace_files
+            .iter()
+            .filter(|path| fuzzy_contains(&path.to_lowercase(), &query))
+            .take(MAX_FILE_SELECTOR_ROWS)
+            .cloned()
+            .collect()
+    }
+
+    fn selected_file_row(&self) -> Option<String> {
+        let selector = self.file_selector.as_ref()?;
+        self.filtered_file_rows().get(selector.selected).cloned()
+    }
+
+    fn move_file_selection(&mut self, delta: isize) {
+        let count = self.filtered_file_rows().len();
+        let Some(selector) = self.file_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn reset_file_selection(&mut self) {
+        let selected = self
+            .filtered_file_rows()
+            .iter()
+            .position(|path| path.eq_ignore_ascii_case(&self.composer))
+            .unwrap_or(0);
+        if let Some(selector) = self.file_selector.as_mut() {
+            selector.selected = selected;
+        }
+    }
+
+    /// Splice the selected reference into the saved draft where the `@`
+    /// token began, replacing the `@` itself (pi parity: files insert
+    /// `@path ` with the cursor after the space; directories insert
+    /// `@dir/` and keep the cursor right after it so typing continues
+    /// scoped).
+    fn accept_file_row(&mut self, path: String) {
+        let Some(selector) = self.file_selector.take() else {
+            return;
+        };
+        let saved = selector.saved_composer;
+        let char_at = |offset: usize| saved.char_indices().map(|(i, _)| i).nth(offset);
+        let insert_at = char_at(selector.at_offset).unwrap_or(saved.len());
+        let mut before: String = saved[..insert_at].to_owned();
+        let after: String = saved[insert_at..].to_owned();
+        let is_dir = path.ends_with('/');
+        let reference = format!("@{path}");
+        before.push_str(&reference);
+        if is_dir {
+            // Keep the cursor inside the token for continued scoping.
+            self.composer = format!("{before}{after}");
+            self.cursor = selector.at_offset + reference.chars().count();
+        } else {
+            before.push(' ');
+            self.composer = format!("{before}{after}");
+            self.cursor = selector.at_offset + reference.chars().count() + 1;
+        }
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
     fn open_session_selector(&mut self, rows: Vec<SessionRow>, query: &str) {
         if self.session_selector.is_some() {
             return;
@@ -1022,6 +1148,7 @@ impl UiState {
         self.model_selector = None;
         self.session_selector = None;
         self.thinking_selector = None;
+        self.file_selector = None;
         self.pending_resume_query = None;
         self.reset_composer();
     }
@@ -1340,6 +1467,49 @@ fn handle_session_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, O
     }
 }
 
+/// The `@` file picker owns the keyboard while open: the composer is
+/// the filter query over host-provided rows (pi parity: fuzzy file
+/// search). Enter splices the reference into the saved draft; esc
+/// restores it untouched.
+fn handle_file_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_file_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(path) = state.selected_file_row() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching files").red());
+                return (state, None);
+            };
+            state.accept_file_row(path);
+            (state, None)
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_file_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_file_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_file_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_file_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
@@ -1349,6 +1519,9 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     }
     if state.session_selector.is_some() {
         return handle_session_selector_key(state, key);
+    }
+    if state.file_selector.is_some() {
+        return handle_file_selector_key(state, key);
     }
     // A parked approval owns the keyboard (§17.4): only the decision
     // keys act; every other key is swallowed so a stray keystroke can
@@ -1414,10 +1587,31 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         }
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
             let mut state = state;
+            // Typing '@' at a word start opens the file picker (pi
+            // parity: fuzzy project-file search). The '@' itself is not
+            // inserted; acceptance splices the full reference in.
+            if ch == '@'
+                && state.file_selector.is_none()
+                && at_word_start(&state.composer, state.cursor)
+                && !state.workspace_files.is_empty()
+            {
+                state.open_file_selector(state.cursor);
+                return (state, None);
+            }
             insert_at_cursor(&mut state, &ch.to_string());
             (state, None)
         }
         _ => (state, None),
+    }
+}
+
+/// Whether `offset` starts a new word in `text`: at the beginning or
+/// after whitespace. The `@` picker opens only at word starts so paths
+/// inside prose stay literal.
+fn at_word_start(text: &str, offset: usize) -> bool {
+    match text.chars().take(offset).last() {
+        None => true,
+        Some(previous) => previous.is_whitespace(),
     }
 }
 
@@ -1450,26 +1644,18 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/compact [instructions] - summarize the active operation's context",
                 "/model [id|number]      - pick or switch the model",
                 "/thinking [level]      - pick the thinking level (off..max)",
-                "shift+tab               - cycle the thinking level",
-                "/new                    - close this session and start a fresh one",
-                "/resume [query]         - pick a previous session to reopen",
-                "/name <title>           - rename this session",
-                "/session                - show this session's identity and size",
-                "/clone                  - duplicate this session's history into a new one",
-                "enter                   - submit or queue the next operation",
-                "shift+enter             - steer the active operation",
-                "ctrl+j                  - insert a newline",
+                "shift+tab · ctrl+l · ctrl+p - cycle thinking, models, model picker",
+                "/new · /resume [query] · /clone - session switching",
+                "/name <title> · /session - rename; show session identity",
+                "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
-                "alt+d                   - delete the next word",
-                "ctrl+y · alt+y          - yank; alt+y cycles the kill ring",
+                "alt+d · ctrl+y · alt+y  - kill word; yank; cycle the kill ring",
                 "tab                     - complete commands/models",
-                "ctrl+l                  - open the model picker",
-                "ctrl+p                  - cycle models forward",
-                "shift+ctrl+p           - cycle models backward",
-                "ctrl+o                  - toggle tool output previews",
-                "ctrl+t                  - toggle thinking blocks",
-                "ctrl+_                  - undo composer edit",
+                "ctrl+p · shift+ctrl+p   - cycle models forward/backward",
+                "ctrl+o · ctrl+t · ctrl+_ - tool output, thinking, undo edit",
+                "@                       - reference a file (fuzzy search)",
+                "! · !!                  - shell passthrough (send / local only)",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -1607,6 +1793,10 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
 }
 
 const MAX_COMPLETION_SUGGESTIONS: usize = 16;
+
+/// Rows the `@` file picker filters over (pi caps its fd-backed list at
+/// 100 per query; the picker renders a bounded window anyway).
+const MAX_FILE_SELECTOR_ROWS: usize = 100;
 
 fn complete_composer(state: &mut UiState) {
     if state.cursor != state.composer.chars().count() {
@@ -2882,6 +3072,7 @@ pub async fn run(
     state.model_catalog = host.model_catalog.clone();
     state.thinking_visible = !host.hide_thinking_block;
     state.cwd_label = host.cwd_label.clone();
+    state.workspace_files = host.workspace_files.clone();
     state.branch = host.branch.clone();
     state.model_switching_available = switching_available;
     state.session_id = attached
@@ -5677,5 +5868,131 @@ mod shell_passthrough_tests {
         );
         assert_eq!(state.status, UiStatus::Idle);
         assert!(state.shell_output.is_empty());
+    }
+
+    #[test]
+    fn at_char_opens_the_file_picker_and_acceptance_splices_a_reference() {
+        let mut state = UiState::new();
+        state.workspace_files = vec![
+            "crates/ion/src/main.rs".to_owned(),
+            "crates/ion/src/tui.rs".to_owned(),
+            "DESIGN.md".to_owned(),
+        ];
+        // Typing '@' at a word start opens the picker without inserting
+        // the '@'; the saved draft is restored and spliced on accept.
+        let (state, _) = update(state, key(KeyCode::Char('r')));
+        let (state, _) = update(state, key(KeyCode::Char('e')));
+        let (state, _) = update(state, key(KeyCode::Char('a')));
+        let (state, _) = update(state, key(KeyCode::Char('d')));
+        let (state, _) = update(state, key(KeyCode::Char(' ')));
+        assert!(state.file_selector.is_none(), "not yet at @");
+
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        assert!(state.file_selector.is_some(), "@ opens the picker");
+        assert_eq!(state.composer, "", "composer becomes the query");
+
+        // Filter down to tui.rs, then accept.
+        let state = type_text(state, "tui");
+        assert!(state.file_selector.is_some());
+        assert_eq!(state.filtered_file_rows().len(), 1);
+        let (state, _) = update(state, key(KeyCode::Enter));
+        assert!(state.file_selector.is_none(), "accept closes the picker");
+        assert_eq!(state.composer, "read @crates/ion/src/tui.rs ");
+        assert_eq!(
+            state.cursor,
+            state.composer.chars().count(),
+            "cursor sits after the inserted reference"
+        );
+    }
+
+    #[test]
+    fn at_char_mid_word_stays_literal_and_empty_workspaces_do_not_open() {
+        // An '@' inside prose (not at a word start) is literal text.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["a.txt".to_owned()];
+        let (state, _) = update(state, key(KeyCode::Char('m')));
+        let (state, _) = update(state, key(KeyCode::Char('a')));
+        let (state, _) = update(state, key(KeyCode::Char('i')));
+        let (state, _) = update(state, key(KeyCode::Char('l')));
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        assert!(state.file_selector.is_none(), "mid-word @ is literal");
+        assert_eq!(state.composer, "mail@");
+
+        // No workspace listing: the '@' stays a plain character.
+        let (state, _) = update(
+            UiState::new(),
+            UiMessage::Key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE)),
+        );
+        assert!(state.file_selector.is_none());
+        assert_eq!(state.composer, "@");
+    }
+
+    #[test]
+    fn file_picker_escape_restores_the_draft_and_arrows_move_selection() {
+        let mut state = UiState::new();
+        state.workspace_files = vec!["DESIGN.md".to_owned(), "crates/ion/src/main.rs".to_owned()];
+        let (state, _) = update(state, key(KeyCode::Char('l')));
+        let (state, _) = update(state, key(KeyCode::Char('o')));
+        let (state, _) = update(state, key(KeyCode::Char('o')));
+        let (state, _) = update(state, key(KeyCode::Char('k')));
+        let (state, _) = update(state, key(KeyCode::Char(' ')));
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        assert!(state.file_selector.is_some());
+
+        let (state, _) = update(state, key(KeyCode::Down));
+        let (state, _) = update(state, key(KeyCode::Up));
+        let (state, _) = update(state, key(KeyCode::Esc));
+        assert!(state.file_selector.is_none());
+        assert_eq!(state.composer, "look ");
+        assert_eq!(state.cursor, "look ".chars().count());
+    }
+
+    #[test]
+    fn file_picker_directory_selection_keeps_the_cursor_scoped() {
+        let mut state = UiState::new();
+        state.workspace_files = vec!["crates/ion/src/tui.rs".to_owned(), "docs/".to_owned()];
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        assert!(state.file_selector.is_some());
+        let (state, _) = update(state, key(KeyCode::Enter));
+        // First row is the file; walk to the directory row.
+        // (rows order = workspace_files order filtered by empty query)
+        assert!(state.file_selector.is_none());
+        assert_eq!(state.composer, "@crates/ion/src/tui.rs ");
+        assert_eq!(state.cursor, state.composer.chars().count());
+
+        // Reopen and select the directory: the reference keeps the
+        // cursor directly after the trailing '/' so typing continues
+        // the scoped query.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["docs/".to_owned()];
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        let (state, _) = update(state, key(KeyCode::Enter));
+        assert!(state.file_selector.is_none());
+        assert_eq!(state.composer, "@docs/");
+        assert_eq!(
+            state.cursor,
+            "@docs/".chars().count(),
+            "directory accept leaves the cursor after the slash"
+        );
+    }
+
+    #[test]
+    fn file_picker_no_matches_reports_and_enter_is_inert() {
+        let mut state = UiState::new();
+        state.workspace_files = vec!["a.txt".to_owned()];
+        let (state, _) = update(state, key(KeyCode::Char('@')));
+        let state = type_text(state, "zzz");
+        assert!(state.filtered_file_rows().is_empty());
+        let (state, _) = update(state, key(KeyCode::Enter));
+        assert!(
+            state.file_selector.is_some(),
+            "enter with no matches keeps the picker open"
+        );
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("no matching files"))
+        );
     }
 }
