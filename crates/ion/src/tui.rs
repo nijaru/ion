@@ -26,6 +26,7 @@ use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
 };
 
+mod fullscreen;
 mod help;
 mod render;
 pub use render::{Palette, palette};
@@ -123,6 +124,10 @@ pub struct HostConfig {
     pub workspace_files: Vec<String>,
     /// Git branch of the working directory, captured at launch.
     pub branch: Option<String>,
+    /// Launch TUI mode (pi parity: --tui-mode / tuiMode): the alt-screen
+    /// transcript view starts open when Fullscreen. `/fullscreen`
+    /// toggles live.
+    pub launch_mode: crate::settings::TuiMode,
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
@@ -174,6 +179,10 @@ pub enum UiEffect {
     /// owns no process handles. The outcome returns as
     /// `UiMessage::CopiedToClipboard` for the confirmation notice.
     CopyToClipboard,
+    /// Toggle the fullscreen transcript view (pi parity:
+    /// fullscreen mode / the /fullscreen toggle). The loop owns the
+    /// alt-screen terminal mode and the view controller.
+    ToggleFullscreen,
     /// Restore the queued next-run prompt to the composer (pi parity:
     /// app.message.dequeue, alt+up).
     DequeueNextRun,
@@ -622,6 +631,8 @@ fn format_key(code: KeyCode, modifiers: Modifiers) -> String {
         KeyCode::Right => "right",
         KeyCode::Home => "home",
         KeyCode::End => "end",
+        KeyCode::PageUp => "pageUp",
+        KeyCode::PageDown => "pageDown",
         KeyCode::BackTab => "backtab",
         KeyCode::Insert => "insert",
         KeyCode::F(number) => return format!("{label}f{number}"),
@@ -1787,6 +1798,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "! · !!                  - shell passthrough (send / local only)",
                 "ctrl+v                  - paste text or an image (as a file path)",
                 "ctrl+x · /copy          - copy the last reply · /hotkeys - all keys",
+                "/fullscreen             - alt-screen transcript with search (ctrl+f)",
                 "/help                   - this list",
             ] {
                 notice(state, line);
@@ -1897,6 +1909,12 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 notice(state, &line);
             }
             (std::mem::take(state), None)
+        }
+        "fullscreen" => {
+            // pi parity: /fullscreen toggles the alt-screen transcript
+            // view. The reducer cannot own terminal modes — the loop
+            // resolves the toggle like other terminal effects.
+            (std::mem::take(state), Some(UiEffect::ToggleFullscreen))
         }
         "name" => {
             if rest.is_empty() {
@@ -2067,8 +2085,19 @@ fn complete_composer(state: &mut UiState) {
             "/".to_owned(),
             command.to_owned(),
             [
-                "clone", "compact", "copy", "help", "hotkeys", "model", "name", "new", "resume",
-                "session", "thinking", "quit",
+                "clone",
+                "compact",
+                "copy",
+                "fullscreen",
+                "help",
+                "hotkeys",
+                "model",
+                "name",
+                "new",
+                "resume",
+                "session",
+                "thinking",
+                "quit",
             ]
             .into_iter()
             .map(str::to_owned)
@@ -3344,6 +3373,187 @@ fn read_clipboard_text() -> Result<Option<String>, String> {
     }
 }
 
+/// Wrapped-row indices where user turns begin, for prompt jumps in
+/// fullscreen. User markers are the `> ` prefix lines the renderer
+/// emits; scanning the wrapped rows by prefix text is exact enough for
+/// jump targets (same strings the user sees).
+fn prompt_boundary_rows(wrapped: &[Line<'static>]) -> Vec<usize> {
+    let mut rows = Vec::new();
+    for (row, line) in wrapped.iter().enumerate() {
+        let text: String = line
+            .spans
+            .iter()
+            .map(|span| span.content.to_string())
+            .collect();
+        if text.starts_with("> ") {
+            rows.push(row);
+        }
+    }
+    rows
+}
+
+/// The result of one key while fullscreen is open: consumed by the
+/// transcript view, an exit request (the loop clears the view), or a
+/// pass-through to the inline reducer (ctrl-variants and ordinary
+/// typing keep driving the docked composer — pi parity: only
+/// unmodified navigation keys control the transcript in fullscreen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FullscreenKey {
+    Handled,
+    ExitFullscreen,
+    PassThrough,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_fullscreen_key(
+    view: &mut fullscreen::FullscreenView,
+    key: &KeyEvent,
+    state: &mut UiState,
+    transcript: &mut Transcript,
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+) -> FullscreenKey {
+    use ion_terminal::{KeyCode, Modifiers};
+
+    // Search input owns the keyboard while open (pi's search dialog).
+    // The viewport matches the draw branch: terminal rows minus the
+    // docked live band minus the pinned status line, so a scrolled-to
+    // hit is actually visible.
+    if view.searching() {
+        let (_, term_rows) = terminal.size().unwrap_or((80, 24));
+        let viewport = (term_rows as usize)
+            .saturating_sub(render::live_region_height(state).min(term_rows as usize) + 1);
+        match (key.code, key.modifiers) {
+            (KeyCode::Esc, Modifiers::NONE) => {
+                view.close_search();
+                return FullscreenKey::Handled;
+            }
+            (KeyCode::Enter, Modifiers::NONE) | (KeyCode::Char('g'), Modifiers::CONTROL) => {
+                view.search_next(true, viewport);
+                return FullscreenKey::Handled;
+            }
+            (KeyCode::Enter, Modifiers::SHIFT) | (KeyCode::Char('G'), Modifiers::SHIFT) => {
+                view.search_next(false, viewport);
+                return FullscreenKey::Handled;
+            }
+            (KeyCode::Backspace, Modifiers::NONE) => {
+                let query = view.search().query.clone();
+                let trimmed = match query.char_indices().next_back() {
+                    Some((at, _)) => query[..at].to_owned(),
+                    None => String::new(),
+                };
+                view.search_set(&trimmed, &transcript.wrapped, viewport);
+                return FullscreenKey::Handled;
+            }
+            (KeyCode::Char(ch), Modifiers::NONE) | (KeyCode::Char(ch), Modifiers::SHIFT) => {
+                let mut query = view.search().query.clone();
+                query.push(ch);
+                view.search_set(&query, &transcript.wrapped, viewport);
+                return FullscreenKey::Handled;
+            }
+            _ => return FullscreenKey::Handled,
+        }
+    }
+
+    let (_, term_rows) = terminal.size().unwrap_or((80, 24));
+    let viewport = (term_rows as usize)
+        .saturating_sub(render::live_region_height(state).min(term_rows as usize) + 1);
+    let total = transcript.wrapped.len();
+    match (key.code, key.modifiers) {
+        // Esc leaves fullscreen: restore the primary screen, print the
+        // rows that grew while fullscreen hid native scrollback, and
+        // re-anchor the inline window below them. The pre-fullscreen
+        // surface is intact under the alt screen; only the delta was
+        // invisible (pi parity: leaving fullscreen loses no output).
+        (KeyCode::Esc, Modifiers::NONE) => {
+            if let Err(err) = terminal.leave_alt_screen() {
+                notice(state, &format!("alt screen exit failed: {err}"));
+            }
+            if let Err(err) = print_fullscreen_delta(state, transcript, terminal, screen) {
+                notice(state, &format!("transcript print failed: {err}"));
+            }
+            FullscreenKey::ExitFullscreen
+        }
+        // ctrl+f opens search (pi: tui.altScreen.search).
+        (KeyCode::Char('f'), Modifiers::CONTROL) => {
+            view.open_search();
+            FullscreenKey::Handled
+        }
+        (KeyCode::Home, Modifiers::NONE) => {
+            view.jump_top();
+            FullscreenKey::Handled
+        }
+        (KeyCode::End, Modifiers::NONE) => {
+            view.jump_bottom(total, viewport);
+            FullscreenKey::Handled
+        }
+        (KeyCode::PageUp, Modifiers::NONE) => {
+            view.scroll_by(-(viewport as isize), total, viewport);
+            FullscreenKey::Handled
+        }
+        (KeyCode::PageDown, Modifiers::NONE) => {
+            view.scroll_by(viewport as isize, total, viewport);
+            FullscreenKey::Handled
+        }
+        (KeyCode::Up, Modifiers::CONTROL) => {
+            view.jump_prompt(false, total, viewport);
+            FullscreenKey::Handled
+        }
+        (KeyCode::Down, Modifiers::CONTROL) => {
+            view.jump_prompt(true, total, viewport);
+            FullscreenKey::Handled
+        }
+        _ => FullscreenKey::PassThrough,
+    }
+}
+
+/// Print the transcript rows that arrived while fullscreen was open
+/// (pi parity: leaving fullscreen must not lose output, but the
+/// pre-fullscreen surface survives the alt screen — printing the
+/// whole transcript would duplicate what the inline window still
+/// shows). Rows above the visible window print; the screen then
+/// re-anchors at the physical cursor like the launch banner path.
+fn print_fullscreen_delta(
+    state: &mut UiState,
+    transcript: &Transcript,
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+) -> std::io::Result<()> {
+    let (_columns, rows) = terminal.size().unwrap_or((80, 24));
+    // The inline window is band_height tall below the anchor; rows
+    // beyond that would scroll off it and must print. Rows inside the
+    // window would only duplicate — the inline draw renders them.
+    let viewport =
+        (rows as usize).saturating_sub(render::live_region_height(state).min(rows as usize));
+    let first_visible = transcript.wrapped.len().saturating_sub(viewport);
+    let mut printed = 0usize;
+    {
+        let mut out = std::io::stdout().lock();
+        // Raw mode has no ONLCR: explicit CR before each LF.
+        for line in transcript.wrapped.iter().take(first_visible) {
+            let text: String = line
+                .spans
+                .iter()
+                .map(|span| span.content.to_string())
+                .collect();
+            writeln!(out, "{text}\r")?;
+            printed += 1;
+        }
+        if printed > 0 {
+            writeln!(out, "— {printed} rows above printed on fullscreen exit —\r")?;
+        }
+        out.flush()?;
+    }
+    // The physical cursor sits after the printed rows; anchor there.
+    let anchor = terminal
+        .cursor_position()
+        .map_or((printed as u16).min(rows.saturating_sub(1)), |(row, _)| {
+            row.min(rows.saturating_sub(1))
+        });
+    screen.reanchor(anchor);
+    Ok(())
+}
+
 /// A random-enough v4-shaped id for temp-file names (time + pid).
 fn uuid_v4_simple() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -3428,6 +3638,18 @@ pub async fn run(
 ) -> Result<(), RuntimeError> {
     let SessionHost { manager, attached } = session_host;
     let switching_available = host.model_name.is_some();
+
+    // Fullscreen view state is loop-owned (like the Transcript): it is
+    // a projection over committed rows the reducer already settled.
+    let mut fullscreen = match host.launch_mode {
+        crate::settings::TuiMode::Regular => None,
+        crate::settings::TuiMode::Fullscreen => Some(fullscreen::FullscreenView::default()),
+    };
+    if fullscreen.is_some() {
+        terminal
+            .enter_alt_screen()
+            .map_err(|err| RuntimeError::OperationFailed(format!("alt screen failed: {err}")))?;
+    }
 
     let palette = palette(theme);
 
@@ -3609,19 +3831,62 @@ pub async fn run(
             let flushed = std::mem::take(&mut state.pending_scrollback);
             transcript.extend(flushed);
         }
-        let (live, live_cursor) =
-            render::build_live_at_height(&state, &palette, screen.size().0 as usize, band_height);
-        let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
-        terminal
-            .render(
-                &mut screen,
-                &Frame {
-                    committed: &transcript.wrapped,
-                    live: &live,
-                    cursor,
-                },
-            )
-            .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
+        if let Some(view) = fullscreen.as_mut() {
+            // Fullscreen frame (pi's fullscreen layout): the transcript
+            // scrolls in a viewport above the docked live band — the
+            // same composer/status chrome as inline — and one status
+            // line pins search/scroll hints at the bottom.
+            let (columns, rows) = terminal.size().unwrap_or((80, 24));
+            let band_height = band_height.min(rows as usize);
+            let viewport = (rows as usize).saturating_sub(band_height + 1);
+            view.clamp(transcript.wrapped.len(), viewport);
+            view.set_prompt_rows(prompt_boundary_rows(&transcript.wrapped));
+            let mut frame_rows: Vec<Line<'static>> = transcript
+                .wrapped
+                .iter()
+                .enumerate()
+                .skip(view.scroll())
+                .take(viewport)
+                .map(|(row, line)| view.render_line(line, row, &palette))
+                .collect();
+            if frame_rows.len() < viewport {
+                frame_rows.resize(viewport, Line::default());
+            }
+            let (live, live_cursor) =
+                render::build_live_at_height(&state, &palette, columns as usize, band_height);
+            let band_cursor = live_cursor.map(|(row, col)| (viewport + row, col));
+            frame_rows.extend(live);
+            let query = view.search().query.clone();
+            let status = if query.is_empty() {
+                " home/end · pageUp/Down scroll · ctrl+f search · /fullscreen exits".to_owned()
+            } else {
+                let count = view.search().matches.len();
+                format!(" search: {query} — {count} matches · enter/shift+enter cycle · esc close")
+            };
+            frame_rows.push(Line::from(status).style(palette.status_segment));
+            let out = terminal.output();
+            screen
+                .draw_fullscreen(out, &frame_rows, band_cursor)
+                .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
+        } else {
+            let (live, live_cursor) = render::build_live_at_height(
+                &state,
+                &palette,
+                screen.size().0 as usize,
+                band_height,
+            );
+            let cursor = live_cursor.map(|(row, col)| (transcript.wrapped.len() + row, col));
+            terminal
+                .render(
+                    &mut screen,
+                    &Frame {
+                        committed: &transcript.wrapped,
+                        live: &live,
+                        cursor,
+                    },
+                )
+                .map_err(|err| RuntimeError::OperationFailed(format!("draw failed: {err}")))?;
+        }
 
         if state.quit_requested {
             break;
@@ -3641,6 +3906,27 @@ pub async fn run(
                                 break;
                             }
                             continue;
+                        }
+                        // Fullscreen owns unmodified navigation keys
+                        // (pi parity: transcript bindings take precedence
+                        // over editor bindings in fullscreen); ctrl
+                        // variants keep driving the editor.
+                        if let Some(view) = fullscreen.as_mut() {
+                            match handle_fullscreen_key(
+                                view,
+                                &key,
+                                &mut state,
+                                &mut transcript,
+                                &mut terminal,
+                                &mut screen,
+                            ) {
+                                FullscreenKey::Handled => continue,
+                                FullscreenKey::ExitFullscreen => {
+                                    fullscreen = None;
+                                    continue;
+                                }
+                                FullscreenKey::PassThrough => {}
+                            }
                         }
                         let (next, effect) = update(state, UiMessage::Key(key));
                         state = next;
@@ -3691,6 +3977,29 @@ pub async fn run(
                                     UiMessage::CopiedToClipboard(err),
                                 );
                                 state = next;
+                            } else if matches!(effect, UiEffect::ToggleFullscreen) {
+                                // /fullscreen: the loop owns the
+                                // terminal mode and the view controller.
+                                if fullscreen.is_some() {
+                                    if let Err(err) = terminal.leave_alt_screen() {
+                                        notice(&mut state, &format!("alt screen exit failed: {err}"));
+                                    }
+                                    if let Err(err) = print_fullscreen_delta(
+                                        &mut state,
+                                        &transcript,
+                                        &mut terminal,
+                                        &mut screen,
+                                    ) {
+                                        notice(&mut state, &format!("transcript print failed: {err}"));
+                                    }
+                                    fullscreen = None;
+                                } else {
+                                    if let Err(err) = terminal.enter_alt_screen() {
+                                        notice(&mut state, &format!("alt screen failed: {err}"));
+                                    } else {
+                                        fullscreen = Some(fullscreen::FullscreenView::default());
+                                    }
+                                }
                             } else {
                                 let switch = dispatch(
                                     &session,
@@ -3732,9 +4041,27 @@ pub async fn run(
                         let (next, _) = update(state, UiMessage::Paste(text));
                         state = next;
                     }
-                    // Resize/focus/mouse: handled by per-frame size
-                    // polling; a successfully read event proves the
-                    // stream is healthy.
+                    Some(Ok(InputEvent::Mouse(mouse))) => {
+                        stream_recreations = 0;
+                        // In fullscreen, the wheel scrolls the
+                        // transcript (pi parity). Inline mode stays
+                        // inert: native scrollback owns the mouse.
+                        if let Some(view) = fullscreen.as_mut() {
+                            let (_, rows) = terminal.size().unwrap_or((80, 24));
+                            let viewport = (rows as usize).saturating_sub(band_height + 1);
+                            match mouse.kind() {
+                                ion_terminal::MouseKind::ScrollUp => {
+                                    view.scroll_by(-3, transcript.wrapped.len(), viewport);
+                                }
+                                ion_terminal::MouseKind::ScrollDown => {
+                                    view.scroll_by(3, transcript.wrapped.len(), viewport);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                    // Resize/focus: handled by per-frame size polling; a
+                    // successfully read event proves the stream is healthy.
                     Some(Ok(_)) => {
                         stream_recreations = 0;
                     }
@@ -4016,6 +4343,10 @@ async fn dispatch(
         }
         UiEffect::CopyToClipboard => {
             // Resolved by the run loop, which owns process access.
+            None
+        }
+        UiEffect::ToggleFullscreen => {
+            // Resolved by the run loop, which owns the terminal mode.
             None
         }
         UiEffect::RunShell {
@@ -4418,7 +4749,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 12);
+        assert_eq!(state.pending_scrollback.len(), 13);
     }
 
     #[test]

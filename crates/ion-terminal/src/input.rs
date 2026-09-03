@@ -22,6 +22,8 @@ pub enum KeyCode {
     Down,
     Home,
     End,
+    PageUp,
+    PageDown,
     Tab,
     BackTab,
     Delete,
@@ -87,10 +89,63 @@ pub struct FocusEvent {
     pub gained: bool,
 }
 
-/// Mouse input is typed at the boundary even though inline Ion does not yet
-/// claim mouse ownership. The raw event stays private to this crate.
+/// Mouse input, typed at the boundary; the raw event stays private to
+/// this crate. Fullscreen frontends decode scroll steps and clicks from
+/// this vocabulary only.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MouseEvent(event::MouseEvent);
+
+/// The application-owned mouse vocabulary a frontend needs: wheel
+/// steps and button presses with their cell position. Coordinates are
+/// 0-based cell (column, row) in the terminal viewport.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MouseKind {
+    ScrollUp,
+    ScrollDown,
+    ScrollLeft,
+    ScrollRight,
+    Press(u8),
+    Release(u8),
+    Move,
+}
+
+impl MouseEvent {
+    /// What happened, in frontend terms.
+    #[must_use]
+    pub fn kind(&self) -> MouseKind {
+        use crossterm::event::MouseButton as Button;
+        use crossterm::event::MouseEventKind as Kind;
+        match self.0.kind {
+            Kind::ScrollUp => MouseKind::ScrollUp,
+            Kind::ScrollDown => MouseKind::ScrollDown,
+            Kind::ScrollLeft => MouseKind::ScrollLeft,
+            Kind::ScrollRight => MouseKind::ScrollRight,
+            Kind::Down(button) => MouseKind::Press(match button {
+                Button::Left => 0,
+                Button::Right => 1,
+                Button::Middle => 2,
+            }),
+            Kind::Up(button) => MouseKind::Release(match button {
+                Button::Left => 0,
+                Button::Right => 1,
+                Button::Middle => 2,
+            }),
+            Kind::Drag(_) | Kind::Moved => MouseKind::Move,
+        }
+    }
+
+    /// 0-based cell column of the event.
+    #[must_use]
+    pub fn column(&self) -> u16 {
+        self.0.column
+    }
+
+    /// 0-based cell row of the event.
+    #[must_use]
+    pub fn row(&self) -> u16 {
+        self.0.row
+    }
+}
 
 /// All terminal-originated input consumed by a frontend. Stream end is
 /// `None`, not an event.
@@ -150,6 +205,8 @@ fn decode_code(code: event::KeyCode) -> KeyCode {
         event::KeyCode::Down => KeyCode::Down,
         event::KeyCode::Home => KeyCode::Home,
         event::KeyCode::End => KeyCode::End,
+        event::KeyCode::PageUp => KeyCode::PageUp,
+        event::KeyCode::PageDown => KeyCode::PageDown,
         event::KeyCode::Tab => KeyCode::Tab,
         event::KeyCode::BackTab => KeyCode::BackTab,
         event::KeyCode::Delete => KeyCode::Delete,

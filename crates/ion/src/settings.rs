@@ -82,6 +82,14 @@ pub struct Keybindings {
     pub copy_last_message: Option<String>,
 }
 
+/// Interactive TUI mode (pi parity: tuiMode setting + --tui-mode flag).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+pub enum TuiMode {
+    #[default]
+    Regular,
+    Fullscreen,
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -102,6 +110,10 @@ pub struct Settings {
     /// available on the host; it never upgrades project trust or approval.
     sandbox: Option<SandboxMode>,
     theme: Option<Theme>,
+    /// Interactive TUI mode: `"regular"` (default) or `"fullscreen"`
+    /// (pi parity: alt-screen transcript with search). The `--tui-mode`
+    /// flag overrides this at startup; `/fullscreen` toggles live.
+    tui_mode: Option<TuiMode>,
     #[serde(default)]
     pub keybindings: Keybindings,
     #[serde(default)]
@@ -173,6 +185,7 @@ impl Settings {
             default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
             theme: None,
+            tui_mode: None,
             keybindings: Keybindings::default(),
             mcp_servers: Vec::new(),
             active_mcp_servers: Vec::new(),
@@ -204,6 +217,7 @@ impl Settings {
             default_thinking_level: None,
             sandbox: None,
             theme: None,
+            tui_mode: None,
             keybindings: crate::settings::Keybindings::default(),
             mcp_servers: Vec::new(),
             active_mcp_servers: Vec::new(),
@@ -330,6 +344,11 @@ impl Settings {
 
     pub fn theme(&self) -> Theme {
         self.theme.unwrap_or(Theme::Auto)
+    }
+
+    /// Launch TUI mode: the `--tui-mode` flag overrides the setting.
+    pub fn tui_mode(&self) -> TuiMode {
+        self.tui_mode.unwrap_or_default()
     }
 
     #[must_use]

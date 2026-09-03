@@ -50,6 +50,16 @@ struct Cli {
     /// terminates the operation with ApprovalRequired (DESIGN.md §17).
     #[arg(long = "allow", value_name = "TOOLS", value_delimiter = ',')]
     allow: Vec<String>,
+    /// Interactive TUI mode: `regular` (default, inline scrollback) or
+    /// `fullscreen` (alt-screen transcript with search; pi parity).
+    #[arg(long = "tui-mode", value_enum)]
+    tui_mode: Option<TuiModeArg>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+enum TuiModeArg {
+    Regular,
+    Fullscreen,
 }
 
 #[tokio::main]
@@ -523,6 +533,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         settings.theme(),
         keymap,
         tui::HostConfig {
+            launch_mode: tui_launch_mode(cli.tui_mode, settings),
             model_name,
             model_provider,
             model_catalog,
@@ -571,6 +582,16 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             let _ = writeln!(io::stderr(), "{err}");
             ExitCode::FAILURE
         }
+    }
+}
+
+/// Resolve the launch TUI mode: the `--tui-mode` flag overrides the
+/// settings value (pi parity).
+fn tui_launch_mode(cli_mode: Option<TuiModeArg>, settings: &Settings) -> ion::settings::TuiMode {
+    match cli_mode {
+        Some(TuiModeArg::Regular) => ion::settings::TuiMode::Regular,
+        Some(TuiModeArg::Fullscreen) => ion::settings::TuiMode::Fullscreen,
+        None => settings.tui_mode(),
     }
 }
 

@@ -101,6 +101,10 @@ pub struct Screen {
     /// live-band height. It preserves the physical scroll position while
     /// committed history continues to advance normally.
     live_height_bias: isize,
+    /// Previous fullscreen (alt-screen) frame, if the frontend is in
+    /// fullscreen mode. Inline frames and fullscreen frames never
+    /// compare: entering fullscreen forces a full repaint.
+    fullscreen: Option<Surface>,
 }
 
 impl Screen {
@@ -119,6 +123,7 @@ impl Screen {
             cursor_at: None,
             live_height: None,
             live_height_bias: 0,
+            fullscreen: None,
         }
     }
 
@@ -184,6 +189,19 @@ impl Screen {
         // mistaken for committed scrollback growth.
         self.cursor_shown = false;
         self.cursor_at = None;
+    }
+
+    /// Re-anchor the window at the physical cursor row after the
+    /// frontend printed lines directly to the terminal (fullscreen
+    /// exit transcripts). The printed rows stay above the new window
+    /// like the launch banner; the window repaints fresh below them.
+    pub fn reanchor(&mut self, origin_row: u16) {
+        self.origin = origin_row.min(self.screen_height.saturating_sub(1));
+        self.current = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+        self.live_height_bias = 0;
+        self.fullscreen = None;
     }
 
     /// Force a full repaint on the next draw without changing size.
@@ -335,6 +353,61 @@ impl Screen {
         });
         self.cursor_shown = cursor_shown;
         self.cursor_at = cursor_at_out;
+        Ok(())
+    }
+
+    /// Render one fullscreen (alt-screen) frame. `rows` are the
+    /// viewport lines: the transcript slice [scroll, scroll + height)
+    /// followed by the pinned bottom chrome (search/status lines). The
+    /// fullscreen surface uses the whole terminal: origin is 0 and the
+    /// frame is compared against the previous fullscreen frame only —
+    /// inline and fullscreen surfaces never mix.
+    pub fn draw_fullscreen(
+        &mut self,
+        out: &mut impl Write,
+        rows: &[Line<'_>],
+        cursor: Option<(usize, u16)>,
+    ) -> io::Result<()> {
+        let previous = self.fullscreen.take();
+        let h = self.screen_height as usize;
+        let w = self.width;
+        let mut next = Surface::new(w, self.screen_height);
+        for (row, line) in rows.iter().take(h).enumerate() {
+            next.render_line(line.clone(), row as u16);
+        }
+        let mut painted = false;
+        for r in 0..h.min(rows.len()) as u16 {
+            let comparable = previous
+                .as_ref()
+                .is_some_and(|prev| r < prev.buffer.area.height);
+            if !comparable
+                || row_differs(
+                    &next.buffer,
+                    r,
+                    &previous.as_ref().expect("checked").buffer,
+                    r,
+                )
+            {
+                emit_buffer_row(out, &next.buffer, r, 0)?;
+                painted = true;
+            }
+        }
+        // Hardware cursor: shown only while the docked composer owns
+        // it. The cursor position is a viewport row (0-based, physical),
+        // not a scrollback-absolute row.
+        if let Some((row, col)) = cursor
+            && (row as u16) < self.screen_height
+        {
+            write!(out, "\x1b[{};{}H\x1b[?25h", row + 1, col + 1)?;
+        } else if self.cursor_shown {
+            write!(out, "\x1b[?25l")?;
+        }
+        self.cursor_shown = cursor.is_some();
+        if painted {
+            write!(out, "\x1b[0m")?;
+        }
+        out.flush()?;
+        self.fullscreen = Some(next);
         Ok(())
     }
 

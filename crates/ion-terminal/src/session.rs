@@ -8,6 +8,7 @@ use crossterm::event::{
     EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
     PushKeyboardEnhancementFlags,
 };
+use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{SynchronizedUpdate, execute, terminal};
 
 use crate::capabilities::{CapabilitySupport, TerminalCapabilities};
@@ -80,6 +81,10 @@ pub struct TerminalSession {
     keyboard_enhancement_enabled: bool,
     focus_reporting_enabled: bool,
     mouse_enabled: bool,
+    /// True while the fullscreen frontend owns the alternate screen.
+    /// Every restore path must leave it, or the user's terminal is
+    /// stranded on the alt screen after quit or crash.
+    alt_screen: bool,
 }
 
 impl TerminalSession {
@@ -97,6 +102,7 @@ impl TerminalSession {
             keyboard_enhancement_enabled: false,
             focus_reporting_enabled: false,
             mouse_enabled: false,
+            alt_screen: false,
         };
         session.activate()?;
         Ok(session)
@@ -108,6 +114,29 @@ impl TerminalSession {
 
     pub fn input(&self) -> InputStream {
         InputStream::new()
+    }
+
+    /// Enter the alternate screen and enable mouse capture for a
+    /// fullscreen frontend (pi parity: `--tui-mode fullscreen`). The
+    /// alt screen preserves native scrollback verbatim — leaving it
+    /// restores the inline frontend's exact prior surface.
+    pub fn enter_alt_screen(&mut self) -> io::Result<()> {
+        execute!(self.output, EnterAlternateScreen, EnableMouseCapture)?;
+        self.mouse_enabled = true;
+        self.alt_screen = true;
+        self.restored = false;
+        Ok(())
+    }
+
+    /// Leave the alternate screen and release mouse capture. The inline
+    /// surface repaints from its own frame state; nothing from the
+    /// fullscreen viewport survives into scrollback unless the caller
+    /// prints it.
+    pub fn leave_alt_screen(&mut self) -> io::Result<()> {
+        execute!(self.output, DisableMouseCapture, LeaveAlternateScreen)?;
+        self.mouse_enabled = false;
+        self.alt_screen = false;
+        Ok(())
     }
 
     pub fn size(&self) -> io::Result<(u16, u16)> {
@@ -145,6 +174,17 @@ impl TerminalSession {
             return Ok(());
         }
         let mut first_error = None;
+        // A fullscreen frontend crashed without leaving the alt screen:
+        // exiting it restores the primary surface, and scrollback,
+        // before the ordinary teardown. Never disable mouse first here —
+        // LeaveAlternateScreen implies the capture off on most
+        // terminals; emitting both keeps explicit ordering.
+        if self.mouse_enabled {
+            match execute!(self.output, DisableMouseCapture) {
+                Ok(()) => self.mouse_enabled = false,
+                Err(err) => first_error = Some(err),
+            }
+        }
         if self.keyboard_enhancement_enabled {
             match execute!(self.output, PopKeyboardEnhancementFlags) {
                 Ok(()) => self.keyboard_enhancement_enabled = false,
@@ -170,6 +210,13 @@ impl TerminalSession {
             && first_error.is_none()
         {
             first_error = Some(err);
+        }
+        if self.alt_screen {
+            match execute!(self.output, LeaveAlternateScreen) {
+                Ok(()) => self.alt_screen = false,
+                Err(err) if first_error.is_none() => first_error = Some(err),
+                Err(_) => {}
+            }
         }
         if let Err(err) = terminal::disable_raw_mode()
             && first_error.is_none()
