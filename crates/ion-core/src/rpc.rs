@@ -43,9 +43,16 @@ pub(crate) struct PeerDef {
 }
 
 /// Ion's shared MCP client identity and negotiated legacy protocol version.
+/// Form elicitation is declared so peers know they may ask the user
+/// questions (extension dialogs; pi ctx.ui parity).
 pub(crate) fn client_info() -> ClientInfo {
+    let mut capabilities = ClientCapabilities::default();
+    capabilities.elicitation = Some(
+        rmcp::model::ElicitationCapability::new()
+            .with_form(rmcp::model::FormElicitationCapability::new()),
+    );
     ClientInfo::new(
-        ClientCapabilities::default(),
+        capabilities,
         Implementation::new("ion", env!("CARGO_PKG_VERSION")),
     )
     .with_protocol_version(ProtocolVersion::V_2025_11_25)
@@ -61,12 +68,32 @@ impl StdioRpc {
         timeout: Duration,
         on_closed: CloseHandler,
     ) -> Result<Self, String> {
+        // rmcp implements ClientHandler for ClientInfo itself: the
+        // identity is the handler, so the negotiated version (2025-11-25)
+        // and the declared elicitation capability always reach the peer.
+        // The () default would negotiate LATEST and change the protocol.
+        Self::spawn_with_handler(def, timeout, on_closed, client_info).await
+    }
+
+    /// Spawn with a custom client handler: the extension UI handler
+    /// receives `ion/ui/*` notifications and elicitation dialogs. The
+    /// handler's `get_info` supplies the negotiated identity, so the
+    /// caller's extension handler builds on `client_info()`.
+    pub(crate) async fn spawn_with_handler<S>(
+        def: &PeerDef,
+        timeout: Duration,
+        on_closed: CloseHandler,
+        handler: S,
+    ) -> Result<Self, String>
+    where
+        S: rmcp::ClientHandler + Send + Sync + 'static,
+    {
         let command = Command::new(&def.command).configure(|command| {
             command.args(&def.args);
         });
         let transport = TokioChildProcess::new(command)
             .map_err(|err| format!("spawn {}: {err}", def.command))?;
-        let client = tokio::time::timeout(timeout, client_info.serve(transport))
+        let client = tokio::time::timeout(timeout, handler.serve(transport))
             .await
             .map_err(|_| format!("initialize {} timed out", def.command))?
             .map_err(|err| format!("initialize {}: {err}", def.command))?;
@@ -130,6 +157,21 @@ impl StdioRpc {
     #[must_use]
     pub(crate) fn is_closed(&self) -> bool {
         self.closed.load(Ordering::Acquire)
+    }
+
+    /// Send one custom host→peer request and return the raw result
+    /// value. Extension command discovery and invocation ride this
+    /// channel (`ion/commands/list`, `ion/command/run`).
+    pub(crate) async fn send_raw(
+        &self,
+        request: rmcp::model::ClientRequest,
+    ) -> Result<Value, String> {
+        match self.client.send_request(request).await {
+            Ok(rmcp::model::ServerResult::CustomResult(result)) => Ok(result.0),
+            Ok(rmcp::model::ServerResult::EmptyResult(_)) => Ok(Value::Null),
+            Ok(_) => Err("peer returned an unsupported custom response".to_owned()),
+            Err(err) => Err(format!("custom request failed: {err}")),
+        }
     }
 
     /// List all tools through the official MCP client API.
@@ -197,6 +239,20 @@ impl Drop for StdioRpc {
     fn drop(&mut self) {
         self.shutdown.cancel();
     }
+}
+
+/// Spawn an extension peer with a custom client handler (UI channel).
+/// Same lifecycle contract as [`StdioRpc::spawn`].
+pub(crate) async fn spawn_with_handler<S>(
+    def: &PeerDef,
+    timeout: Duration,
+    on_closed: CloseHandler,
+    handler: S,
+) -> Result<StdioRpc, String>
+where
+    S: rmcp::ClientHandler + Send + Sync + 'static,
+{
+    StdioRpc::spawn_with_handler(def, timeout, on_closed, handler).await
 }
 
 /// Handshake and discovery timeouts: a slow peer delays startup once,
@@ -320,7 +376,10 @@ pub(crate) async fn supervise_tool_peer<F>(
     }
 }
 
-async fn schedule_restart(
+/// Restart scheduling shared by both supervision loops. The failure
+/// counter belongs to the caller's loop iteration state: three
+/// attempts, exponential backoff, then the capability circuit opens.
+pub(crate) async fn schedule_restart(
     name: &str,
     lifetime: &CancellationToken,
     failures: &mut u32,

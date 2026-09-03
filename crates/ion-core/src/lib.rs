@@ -37,7 +37,11 @@ pub use context::{
     TrustedResource, load_trusted_resources, project, project_with_manifest_for_model,
 };
 pub use error::{CommandError, RuntimeError};
-pub use extensions::{ExtensionDef, ExtensionService};
+pub use extensions::{
+    DialogAnswer, DialogProperty, DialogPropertyKind, ExtensionCommand, ExtensionDef,
+    ExtensionDialog, ExtensionService, ExtensionUiEvent, ExtensionUiHub, ExtensionUiUpdate,
+    MAX_EXTENSION_WIDGET_LINES,
+};
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
