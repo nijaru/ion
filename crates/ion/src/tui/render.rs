@@ -16,6 +16,10 @@ pub struct Palette {
     pub separator: Style,
     pub status_segment: Style,
     pub composer: Style,
+    /// Picker highlight: selected row, cursor, and current marker.
+    /// Unselected rows render as plain text — never dim — so pickers
+    /// stop reading as grayed out (pi: accent rows, muted badges).
+    pub selector_selected: Style,
 }
 
 /// `Auto` follows the terminal preference, which has no portable query
@@ -34,6 +38,7 @@ pub fn palette(theme: Theme) -> Palette {
             separator: Style::new().dark_gray(),
             status_segment: Style::new().dim(),
             composer: Style::new(),
+            selector_selected: Style::new().cyan(),
         },
         Theme::Light => Palette {
             status_idle: Style::new().dark_gray(),
@@ -47,6 +52,7 @@ pub fn palette(theme: Theme) -> Palette {
             separator: Style::new().dark_gray(),
             status_segment: Style::new().dark_gray(),
             composer: Style::new(),
+            selector_selected: Style::new().blue(),
         },
     }
 }
@@ -334,7 +340,9 @@ fn limit_composer_rows(
 pub(super) const LIVE_REGION_MAX_ROWS: usize = 10;
 const LIVE_REGION_BASE_ROWS: usize = 7;
 const LIVE_CHROME_ROWS: usize = 5;
-const MAX_MODEL_SELECTOR_OPTIONS: usize = 2;
+/// Visible picker window (pi parity: maxVisible 10). Shared by all
+/// four pickers; the old value of 2 showed a keyhole of the catalog.
+const MAX_SELECTOR_OPTIONS: usize = 10;
 
 pub(super) fn live_region_height(state: &UiState) -> usize {
     if state.model_selector.is_some()
@@ -448,6 +456,84 @@ fn selector_row(line: Line<'static>, width: usize) -> Line<'static> {
         .unwrap_or_default()
 }
 
+/// Accent `→` cursor on the selected picker row, blank otherwise.
+fn picker_cursor(selected: bool, palette: &Palette) -> Span<'static> {
+    if selected {
+        Span::styled("→ ", palette.selector_selected)
+    } else {
+        Span::raw("  ")
+    }
+}
+
+/// Accent `✓` when the row is the live value (pi: currentMarker),
+/// blank otherwise. Always accent, even on unselected rows, so the
+/// current value reads at a glance.
+fn picker_current_marker(current: bool, palette: &Palette) -> Span<'static> {
+    if current {
+        Span::styled("✓ ", palette.selector_selected)
+    } else {
+        Span::raw("  ")
+    }
+}
+
+/// The row label: accent when selected, plain text otherwise.
+fn picker_label(label: String, selected: bool, palette: &Palette) -> Span<'static> {
+    if selected {
+        Span::styled(label, palette.selector_selected)
+    } else {
+        Span::raw(label)
+    }
+}
+
+/// A dim trailing badge (`[provider]`, `· default`).
+fn picker_badge(badge: String, palette: &Palette) -> Span<'static> {
+    Span::styled(badge, palette.system_note)
+}
+
+/// Window `[start, end)` of `len` picker items around `selected`,
+/// fitting a `max_rows` section (header + footer hint = 2 chrome).
+/// Returns the window plus whether the list is scrolled (the header
+/// then carries the `(position/total)` indicator — the live band has
+/// no room for a separate scroll line).
+fn picker_window(selected: usize, len: usize, max_rows: usize) -> (usize, usize, bool) {
+    let room = max_rows.saturating_sub(2);
+    if len <= room {
+        return (0, len, false);
+    }
+    if room == 0 {
+        return (0, 0, true);
+    }
+    let window = MAX_SELECTOR_OPTIONS.min(room).max(1);
+    let start = selected
+        .saturating_sub(window / 2)
+        .min(len.saturating_sub(window));
+    let end = (start + window).min(len);
+    (start, end, true)
+}
+
+/// Section header: `title · query · (position/total)`. The scroll
+/// position merges into the header because the live band cannot fit
+/// pi's separate scroll line alongside the options.
+fn picker_header(
+    title: &str,
+    query: &str,
+    selected: usize,
+    len: usize,
+    scrolled: bool,
+    palette: &Palette,
+    width: usize,
+) -> Line<'static> {
+    let mut header = title.to_owned();
+    if !query.is_empty() {
+        header.push_str(" · ");
+        header.push_str(query);
+    }
+    if scrolled {
+        header.push_str(&format!(" · ({}/{})", selected + 1, len));
+    }
+    selector_row(Line::from(header).style(palette.system_note), width)
+}
+
 fn compact_model_selector_lines(
     state: &UiState,
     palette: &Palette,
@@ -458,12 +544,28 @@ fn compact_model_selector_lines(
         .model_selector
         .as_ref()
         .map_or(0, |selector| selector.selected);
+    let current = state.current_model_reference();
     let selected_line = models.get(selected).map_or_else(
-        || "  no matching models".to_owned(),
-        |model| format!("  > {model}"),
+        || Line::from("  no matching models").style(palette.system_note),
+        |model| {
+            let is_current = current.as_deref() == Some(model.as_str());
+            let (provider, id) = match model.split_once('/') {
+                Some((provider, id)) => (Some(provider), id),
+                None => (None, model.as_str()),
+            };
+            let mut spans = vec![
+                picker_cursor(true, palette),
+                picker_current_marker(is_current, palette),
+                picker_label(id.to_owned(), true, palette),
+            ];
+            if let Some(provider) = provider {
+                spans.push(picker_badge(format!(" [{provider}]"), palette));
+            }
+            Line::from(spans)
+        },
     );
     vec![
-        selector_row(Line::from(selected_line).style(palette.system_note), width),
+        selector_row(selected_line, width),
         selector_row(
             Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
             width,
@@ -471,42 +573,67 @@ fn compact_model_selector_lines(
     ]
 }
 
-fn model_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+fn model_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
     let query = &state.composer;
     let models = state.filtered_model_catalog();
     let selected = state
         .model_selector
         .as_ref()
         .map_or(0, |selector| selector.selected);
-    let mut lines = vec![selector_row(
-        Line::from(if query.is_empty() {
-            "select model".to_owned()
-        } else {
-            format!("select model · {query}")
-        })
-        .style(palette.system_note),
-        width,
-    )];
+    let current = state.current_model_reference();
+    let mut lines = Vec::new();
     if models.is_empty() {
+        lines.push(picker_header(
+            "select model",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
         lines.push(selector_row(
             Line::from("  no matching models").style(palette.system_note),
             width,
         ));
     } else {
-        let start = selected
-            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
-            .min(models.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
-        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(models.len());
+        let (start, end, scrolled) = picker_window(selected, models.len(), max_rows);
+        lines.push(picker_header(
+            "select model",
+            query,
+            selected,
+            models.len(),
+            scrolled,
+            palette,
+            width,
+        ));
         for (index, model) in models.iter().enumerate().take(end).skip(start) {
-            let marker = if index == selected { ">" } else { " " };
-            let current = state
-                .current_model_reference()
-                .is_some_and(|current| current == *model);
-            let suffix = if current { "  (current)" } else { "" };
-            lines.push(selector_row(
-                Line::from(format!("  {marker} {model}{suffix}")).style(palette.system_note),
-                width,
-            ));
+            let is_selected = index == selected;
+            let is_current = current.as_deref() == Some(model.as_str());
+            let is_default = state.default_model_reference.as_deref() == Some(model.as_str());
+            // Catalog entries are qualified `provider/model`; the row
+            // shows the bare id with the provider as a dim badge (pi).
+            let (provider, id) = match model.split_once('/') {
+                Some((provider, id)) => (Some(provider), id),
+                None => (None, model.as_str()),
+            };
+            let mut spans = vec![
+                picker_cursor(is_selected, palette),
+                picker_current_marker(is_current, palette),
+                picker_label(id.to_owned(), is_selected, palette),
+            ];
+            if let Some(provider) = provider {
+                spans.push(picker_badge(format!(" [{provider}]"), palette));
+            }
+            if is_default {
+                spans.push(picker_badge(" · default".to_owned(), palette));
+            }
+            lines.push(selector_row(Line::from(spans), width));
         }
     }
     lines.push(selector_row(
@@ -516,38 +643,53 @@ fn model_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec
     lines
 }
 
-fn session_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+fn session_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
     let query = &state.composer;
     let rows = state.filtered_session_rows();
     let selected = state
         .session_selector
         .as_ref()
         .map_or(0, |selector| selector.selected);
-    let mut lines = vec![selector_row(
-        Line::from(if query.is_empty() {
-            "select session".to_owned()
-        } else {
-            format!("select session · {query}")
-        })
-        .style(palette.system_note),
-        width,
-    )];
+    let mut lines = Vec::new();
     if rows.is_empty() {
+        lines.push(picker_header(
+            "select session",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
         lines.push(selector_row(
             Line::from("  no matching sessions").style(palette.system_note),
             width,
         ));
     } else {
-        let start = selected
-            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
-            .min(rows.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
-        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(rows.len());
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            "select session",
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
         for (index, row) in rows.iter().enumerate().take(end).skip(start) {
-            let marker = if index == selected { ">" } else { " " };
-            let current = state.session_id == Some(row.id);
-            let suffix = if current { "  (current)" } else { "" };
+            let is_selected = index == selected;
+            let is_current = state.session_id == Some(row.id);
             lines.push(selector_row(
-                Line::from(format!("  {marker} {}{suffix}", row.label)).style(palette.system_note),
+                Line::from(vec![
+                    picker_cursor(is_selected, palette),
+                    picker_current_marker(is_current, palette),
+                    picker_label(row.label.clone(), is_selected, palette),
+                ]),
                 width,
             ));
         }
@@ -559,36 +701,51 @@ fn session_selector_lines(state: &UiState, palette: &Palette, width: usize) -> V
     lines
 }
 
-fn file_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+fn file_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
     let query = &state.composer;
     let rows = state.filtered_file_rows();
     let selected = state
         .file_selector
         .as_ref()
         .map_or(0, |selector| selector.selected);
-    let mut lines = vec![selector_row(
-        Line::from(if query.is_empty() {
-            "reference a file".to_owned()
-        } else {
-            format!("reference a file · {query}")
-        })
-        .style(palette.system_note),
-        width,
-    )];
+    let mut lines = Vec::new();
     if rows.is_empty() {
+        lines.push(picker_header(
+            "reference a file",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
         lines.push(selector_row(
             Line::from("  no matching files").style(palette.system_note),
             width,
         ));
     } else {
-        let start = selected
-            .saturating_sub(MAX_MODEL_SELECTOR_OPTIONS / 2)
-            .min(rows.len().saturating_sub(MAX_MODEL_SELECTOR_OPTIONS));
-        let end = (start + MAX_MODEL_SELECTOR_OPTIONS).min(rows.len());
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            "reference a file",
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
         for (index, row) in rows.iter().enumerate().take(end).skip(start) {
-            let marker = if index == selected { ">" } else { " " };
+            let is_selected = index == selected;
             lines.push(selector_row(
-                Line::from(format!("  {marker} {row}")).style(palette.system_note),
+                Line::from(vec![
+                    picker_cursor(is_selected, palette),
+                    picker_label(row.clone(), is_selected, palette),
+                ]),
                 width,
             ));
         }
@@ -600,34 +757,53 @@ fn file_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<
     lines
 }
 
-fn thinking_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+fn thinking_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
     let query = &state.composer;
     let levels = state.filtered_thinking_levels();
     let selected = state
         .thinking_selector
         .as_ref()
         .map_or(0, |selector| selector.selected);
-    let mut lines = vec![selector_row(
-        Line::from(if query.is_empty() {
-            "select thinking".to_owned()
-        } else {
-            format!("select thinking · {query}")
-        })
-        .style(palette.system_note),
-        width,
-    )];
+    let mut lines = Vec::new();
     if levels.is_empty() {
+        lines.push(picker_header(
+            "select thinking",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
         lines.push(selector_row(
             Line::from("  no matching levels").style(palette.system_note),
             width,
         ));
     } else {
-        for (index, level) in levels.iter().enumerate() {
-            let marker = if index == selected { ">" } else { " " };
-            let current = state.thinking_level.as_deref() == Some(level.as_str());
-            let suffix = if current { "  (current)" } else { "" };
+        let (start, end, scrolled) = picker_window(selected, levels.len(), max_rows);
+        lines.push(picker_header(
+            "select thinking",
+            query,
+            selected,
+            levels.len(),
+            scrolled,
+            palette,
+            width,
+        ));
+        for (index, level) in levels.iter().enumerate().take(end).skip(start) {
+            let is_selected = index == selected;
+            let is_current = state.thinking_level.as_deref() == Some(level.as_str());
             lines.push(selector_row(
-                Line::from(format!("  {marker} {level}{suffix}")).style(palette.system_note),
+                Line::from(vec![
+                    picker_cursor(is_selected, palette),
+                    picker_current_marker(is_current, palette),
+                    picker_label(level.clone(), is_selected, palette),
+                ]),
                 width,
             ));
         }
@@ -686,14 +862,19 @@ pub(super) fn build_live_at_height(
     let composer_len = composer_rows.len();
 
     let mut head: Vec<Line<'static>> = Vec::new();
+    // Pickers size themselves to the head budget so the section
+    // header always survives the band truncation below.
+    let head_budget = band_height
+        .saturating_sub(LIVE_CHROME_ROWS)
+        .saturating_sub(composer_len);
     if state.model_selector.is_some() {
-        head.extend(model_selector_lines(state, palette, width));
+        head.extend(model_selector_lines(state, palette, width, head_budget));
     } else if state.session_selector.is_some() {
-        head.extend(session_selector_lines(state, palette, width));
+        head.extend(session_selector_lines(state, palette, width, head_budget));
     } else if state.thinking_selector.is_some() {
-        head.extend(thinking_selector_lines(state, palette, width));
+        head.extend(thinking_selector_lines(state, palette, width, head_budget));
     } else if state.file_selector.is_some() {
-        head.extend(file_selector_lines(state, palette, width));
+        head.extend(file_selector_lines(state, palette, width, head_budget));
     } else if state.ext_ui.dialog.is_some() {
         head.extend(extension_dialog_lines(state, palette, width));
     } else if state.hotkeys_visible {
@@ -1161,5 +1342,140 @@ fn push_entry_lines(
         ion_core::SessionEntry::Compaction { summary, .. } => {
             out.push(Line::from(format!("• compacted: {summary}")).style(palette.system_note));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::settings::Theme;
+    use ratatui::style::Style;
+
+    fn dark() -> Palette {
+        palette(Theme::Dark)
+    }
+
+    fn text(line: &Line<'_>) -> String {
+        line.spans.iter().map(|s| s.content.as_ref()).collect()
+    }
+
+    #[test]
+    fn model_selector_row_grammar() {
+        let palette = dark();
+        let mut state = UiState::new();
+        state.model_catalog = vec![
+            "openrouter/alpha".to_owned(),
+            "openrouter/beta".to_owned(),
+            "openrouter/gamma".to_owned(),
+        ];
+        state.model_provider = Some("openrouter".to_owned());
+        state.model_name = Some("beta".to_owned());
+        state.default_model_reference = Some("openrouter/gamma".to_owned());
+        state.open_model_selector("");
+        let lines = model_selector_lines(&state, &palette, 80, 16);
+        assert_eq!(lines.len(), 5);
+        // Selected row: accent cursor, blank current slot, accent id,
+        // dim provider badge. The bare id shows; provider is a badge.
+        let row = &lines[1];
+        assert_eq!(text(row), "→   alpha [openrouter]");
+        assert_eq!(row.spans[0].style, palette.selector_selected);
+        assert_eq!(row.spans[1].style, Style::default());
+        assert_eq!(row.spans[2].style, palette.selector_selected);
+        assert_eq!(row.spans[3].style, palette.system_note);
+        // Current row, now also selected: accent cursor, accent mark,
+        // accent id, dim badge.
+        state.move_model_selection(1);
+        let lines = model_selector_lines(&state, &palette, 80, 16);
+        let row = &lines[2];
+        assert_eq!(text(row), "→ ✓ beta [openrouter]");
+        assert_eq!(row.spans[0].style, palette.selector_selected);
+        assert_eq!(row.spans[1].style, palette.selector_selected);
+        assert_eq!(row.spans[2].style, palette.selector_selected);
+        assert_eq!(row.spans[3].style, palette.system_note);
+        // Settings default carries a dim badge on its own row.
+        let row = &lines[3];
+        assert_eq!(text(row), "    gamma [openrouter] · default");
+        assert_eq!(row.spans[4].style, palette.system_note);
+    }
+
+    #[test]
+    fn model_selector_windows_ten_with_scroll_position() {
+        let palette = dark();
+        let mut state = UiState::new();
+        state.model_catalog = (0..12)
+            .map(|index| format!("openrouter/model-{index:02}"))
+            .collect();
+        state.open_model_selector("");
+        let lines = model_selector_lines(&state, &palette, 80, 13);
+        assert_eq!(lines.len(), 12);
+        // No room for a separate scroll line in the live band: the
+        // header carries the position instead.
+        assert_eq!(text(&lines[0]), "select model · (1/12)");
+        assert_eq!(text(&lines[11]), "  ↑/↓ · enter · esc");
+    }
+
+    #[test]
+    fn model_selector_keeps_header_and_hint_on_a_tight_budget() {
+        let palette = dark();
+        let mut state = UiState::new();
+        state.model_catalog = (0..12)
+            .map(|index| format!("openrouter/model-{index:02}"))
+            .collect();
+        state.open_model_selector("");
+        // The live band only fits four section rows: header, two
+        // options, navigation hint. The title and position survive —
+        // the old fixed window silently lost the title here.
+        let lines = model_selector_lines(&state, &palette, 80, 4);
+        assert_eq!(lines.len(), 4);
+        assert_eq!(text(&lines[0]), "select model · (1/12)");
+        assert_eq!(text(&lines[3]), "  ↑/↓ · enter · esc");
+    }
+
+    #[test]
+    fn other_pickers_share_the_grammar() {
+        let palette = dark();
+        // Thinking: the cursor starts on the current level, marked
+        // and accent; other rows are plain text (never dim).
+        let mut state = UiState::new();
+        state.thinking_level = Some("high".to_owned());
+        state.open_thinking_selector("");
+        let lines = thinking_selector_lines(&state, &palette, 80, 16);
+        let current = lines
+            .iter()
+            .find(|line| text(line).contains("high"))
+            .expect("high level listed");
+        assert_eq!(text(current), "→ ✓ high");
+        assert_eq!(current.spans[0].style, palette.selector_selected);
+        assert_eq!(current.spans[2].style, palette.selector_selected);
+        let other = lines
+            .iter()
+            .find(|line| text(line).contains("low"))
+            .expect("low level listed");
+        assert_eq!(other.spans[2].style, Style::default());
+        assert!(!text(other).contains("(current)"));
+        // Files: plain labels, accent selection, no dim wash.
+        let mut state = UiState::new();
+        state.workspace_files = vec!["src/main.rs".to_owned(), "README.md".to_owned()];
+        state.open_file_selector(0);
+        let lines = file_selector_lines(&state, &palette, 80, 16);
+        assert_eq!(text(&lines[1]), "→ src/main.rs");
+        assert_eq!(lines[1].spans[1].style, palette.selector_selected);
+        assert_eq!(text(&lines[2]), "  README.md");
+        assert_eq!(lines[2].spans[1].style, Style::default());
+        // Sessions: current session marked, selection accent.
+        let mut state = UiState::new();
+        let id = ion_core::SessionId::generate();
+        state.session_id = Some(id);
+        state.open_session_selector(
+            vec![SessionRow {
+                id,
+                label: "first".to_owned(),
+                title: "first".to_owned(),
+                updated_at: 0,
+            }],
+            "",
+        );
+        let lines = session_selector_lines(&state, &palette, 80, 16);
+        assert_eq!(text(&lines[1]), "→ ✓ first");
     }
 }

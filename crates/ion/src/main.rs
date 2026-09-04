@@ -538,6 +538,11 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             model_name,
             model_provider,
             model_catalog,
+            default_model: settings
+                .model_selection()
+                .ok()
+                .flatten()
+                .map(|selection| format!("{}/{}", selection.provider, selection.model)),
             hide_thinking_block: settings.hide_thinking_block,
             startup_notice: store.startup_notice().map(str::to_owned),
             cwd_label: Some(display_cwd(&cwd)),

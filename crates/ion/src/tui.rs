@@ -111,6 +111,9 @@ pub struct HostConfig {
     /// Host-provided finite model list shown by `/model` and selectable by
     /// number. Provider APIs do not need to enumerate models.
     pub model_catalog: Vec<String>,
+    /// Qualified `provider/model` settings default for the selector's
+    /// `· default` badge (pi parity).
+    pub default_model: Option<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
     /// One-time store/startup notice (e.g. archived old-schema
@@ -1013,6 +1016,10 @@ pub struct UiState {
     model_switching_available: bool,
     /// Host-provided finite model list for the slash-command selector.
     model_catalog: Vec<String>,
+    /// Qualified `provider/model` settings default, for the selector's
+    /// `· default` badge (pi parity). Distinct from the live model:
+    /// `--model` or a past switch can move current away from default.
+    default_model_reference: Option<String>,
     /// Ephemeral searchable model selector, when open.
     model_selector: Option<ModelSelector>,
     /// The durable thinking-level selection for future steps (pi
@@ -4277,6 +4284,7 @@ pub async fn run(
     state.set_model_name(host.model_name.clone());
     state.model_provider = host.model_provider.clone();
     state.model_catalog = host.model_catalog.clone();
+    state.default_model_reference = host.default_model.clone();
     state.thinking_visible = !host.hide_thinking_block;
     state.cwd_label = host.cwd_label.clone();
     state.workspace_files = host.workspace_files.clone();
@@ -5671,7 +5679,7 @@ pub(crate) mod tests {
             .collect::<Vec<_>>()
             .join("\n");
         assert!(rendered.contains("select model"), "{rendered}");
-        assert!(rendered.contains("desktop/test"), "{rendered}");
+        assert!(rendered.contains("test [desktop]"), "{rendered}");
         assert!(rendered.contains("enter"), "{rendered}");
     }
 
@@ -5689,7 +5697,7 @@ pub(crate) mod tests {
             .map(Line::to_string)
             .collect::<Vec<_>>()
             .join("\n");
-        assert!(rendered.contains("desktop/test"), "{rendered}");
+        assert!(rendered.contains("test [desktop]"), "{rendered}");
         assert!(rendered.contains("enter"), "{rendered}");
     }
 
