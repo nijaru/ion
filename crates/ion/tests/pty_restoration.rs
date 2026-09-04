@@ -232,51 +232,70 @@ impl PtySession {
         self.output.lock().expect("output lock").len()
     }
 
-    fn saw_since(&self, offset: usize, needle: &str) -> bool {
+    /// Length in STRIPPED text space (ANSI removed): offsets for
+    /// `saw_spinner_since` must live in the same space as the text
+    /// they slice, and cursor-addressed diff output is mostly escape
+    /// sequences, so raw byte offsets drift arbitrarily far ahead.
+    fn stripped_len(&self) -> usize {
         let buffer = self.output.lock().expect("output lock");
-        let text = strip_ansi(&String::from_utf8_lossy(
-            &buffer[offset.min(buffer.len())..],
-        ));
-        text.contains(needle)
+        strip_ansi(&String::from_utf8_lossy(&buffer)).len()
     }
 
-    /// Wait for a fresh active footer after the caller submitted a turn.
+    /// Braille spinner frames (pi Loader default); the only source is
+    /// the composer rule while working.
+    fn is_spinner_frame(c: char) -> bool {
+        matches!(c, '⠋' | '⠙' | '⠹' | '⠸' | '⠼' | '⠴' | '⠦' | '⠧' | '⠇' | '⠏')
+    }
+
+    /// Wait for a fresh active turn after the caller submitted one.
     /// Checking from an output offset avoids matching an earlier turn's
-    /// `thinking` frame in the append-only PTY capture.
+    /// spinner frame in the append-only PTY capture.
     fn wait_for_active_since(&self, offset: usize, timeout: std::time::Duration) -> bool {
-        self.wait_for_since(offset, "● thinking", timeout)
-    }
-
-    fn wait_for_since(&self, offset: usize, needle: &str, timeout: std::time::Duration) -> bool {
+        // Active = a spinner frame reached the PTY (composer rule).
         let deadline = std::time::Instant::now() + timeout;
         while std::time::Instant::now() < deadline {
-            if self.saw_since(offset, needle) {
+            if self.saw_spinner_since(offset) {
                 return true;
             }
             std::thread::sleep(std::time::Duration::from_millis(25));
         }
-        self.saw_since(offset, needle)
+        self.saw_spinner_since(offset)
     }
 
-    /// Wait until the newest footer has no active-operation marker.
-    /// This is the PTY-visible completion boundary; streamed model text
-    /// alone is not evidence that `OperationFinished` was handled.
-    fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
-        let deadline = std::time::Instant::now() + timeout;
-        while std::time::Instant::now() < deadline {
-            if self.latest_footer_is_idle() {
-                return true;
-            }
-            std::thread::sleep(std::time::Duration::from_millis(25));
-        }
-        self.latest_footer_is_idle()
-    }
-
-    fn latest_footer_is_idle(&self) -> bool {
+    fn saw_spinner_since(&self, offset: usize) -> bool {
         let buffer = self.output.lock().expect("output lock");
         let text = strip_ansi(&String::from_utf8_lossy(&buffer));
-        text.rfind("ion ")
-            .is_some_and(|start| !text[start..].contains("● "))
+        text.get(offset.min(text.len())..)
+            .is_some_and(|tail| tail.chars().any(Self::is_spinner_frame))
+    }
+
+    /// Stripped-space offset for `saw_spinner_since` (see `stripped_len`).
+    fn spinner_offset(&self) -> usize {
+        self.stripped_len()
+    }
+
+    /// Wait until the operation settles: the spinner tick redraws every
+    /// 80ms while working and halts on settle, so 500ms of PTY silence
+    /// after output started is the completion boundary. (The capture is
+    /// cursor-addressed diff output, not screen text, so no line parse
+    /// can identify the newest composer rule.) A wedged renderer also
+    /// goes quiet — the storm assertions after this check interactivity
+    /// and would catch that.
+    fn wait_for_idle(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut last_len = self.output_len();
+        let mut quiet_since = std::time::Instant::now();
+        while std::time::Instant::now() < deadline {
+            let len = self.output_len();
+            if len != last_len {
+                last_len = len;
+                quiet_since = std::time::Instant::now();
+            } else if quiet_since.elapsed() > std::time::Duration::from_millis(500) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        false
     }
 
     /// Match against the raw byte stream (for escape sequences).
@@ -611,7 +630,7 @@ fn resize_storm_survives_and_stays_interactive() {
         session.wait_for_output("ion v", std::time::Duration::from_secs(15)),
         "TUI idle banner never appeared"
     );
-    let before_first = session.output_len();
+    let before_first = session.spinner_offset();
     session.master_write.write_all(b"hello\r").expect("submit");
     assert!(
         session.wait_for_active_since(before_first, std::time::Duration::from_secs(15)),
@@ -640,7 +659,7 @@ fn resize_storm_survives_and_stays_interactive() {
     // and then its idle transition; a historical response string is not
     // evidence that the second operation completed.
     let alive = session.child.try_wait().expect("try_wait").is_none();
-    let before_second = session.output_len();
+    let before_second = session.spinner_offset();
     session.master_write.write_all(b"second\r").expect("second");
     assert!(
         session.wait_for_active_since(before_second, std::time::Duration::from_secs(15)),

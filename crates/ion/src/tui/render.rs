@@ -1109,12 +1109,9 @@ pub(super) fn build_live_at_height(
     };
     if let Some(hint) = &footer_hint {
         footer_left = hint.clone();
-    } else if let UiStatus::Working { operation } = &state.status {
-        if !footer_left.is_empty() {
-            footer_left.push_str("  ");
-        }
-        footer_left.push_str(&format!("\u{25cf} {operation}"));
     }
+    // Working status lives in the composer rule above (pi 0.85); the
+    // footer keeps cwd/branch plus model, never a second copy.
     let provider_model = match &state.model_name {
         Some(model) => match &state.model_provider {
             Some(provider) => format!("({provider}) {model}"),
@@ -1137,9 +1134,10 @@ pub(super) fn build_live_at_height(
     let mut lines: Vec<Line<'static>> = std::mem::take(&mut head);
 
     // Shell chrome: keep one empty row between transcript/live output and
-    // the composer, then a dim rule immediately above the editable input.
+    // the composer, then the composer rule immediately above the editable
+    // input (working status embeds here, pi 0.85 top-border grammar).
     lines.push(Line::default());
-    lines.push(separator_line(width, palette));
+    lines.push(composer_rule(state, width, palette));
 
     // Cursor position within the wrapped composer rows.
     let cursor = composer_cursor.map(|(row, column)| (lines.len() + row, column));
@@ -1278,6 +1276,61 @@ pub(super) fn tool_row_line(
 /// Dim full-width rule used as shell chrome above/below the live band.
 pub(super) fn separator_line(width: usize, palette: &Palette) -> Line<'static> {
     Line::from("\u{2500}".repeat(width.saturating_sub(1).max(1))).style(palette.separator)
+}
+
+/// Pi 0.85 braille frames (`Loader` default), shared with the composer rule.
+const SPINNER_FRAMES: [char; 10] = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+/// Pi `Loader` default interval: 80ms per frame.
+const SPINNER_FRAME_MS: u128 = 80;
+
+/// Current spinner frame from wall-clock time (no state: the run loop
+/// reticks while working and every frame renders fresh).
+fn spinner_frame() -> char {
+    let ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or(0);
+    SPINNER_FRAMES[(ms / SPINNER_FRAME_MS % SPINNER_FRAMES.len() as u128) as usize]
+}
+
+/// The composer top rule. Idle: the plain dim rule. Working: pi's
+/// embedded status (`── ⠋ operation ──…`), spinner-only when the
+/// operation text cannot fit, plain rule when even that cannot.
+pub(super) fn composer_rule(state: &UiState, width: usize, palette: &Palette) -> Line<'static> {
+    let width = width.max(1);
+    let operation = match &state.status {
+        UiStatus::Working { operation } => Some(operation.clone()),
+        UiStatus::Idle => None,
+    };
+    let Some(operation) = operation else {
+        return separator_line(width, palette);
+    };
+    let rule = palette.separator;
+    let spin = palette.status_working;
+    let frame = spinner_frame().to_string();
+    // Full form: `── ⠋ operation ` plus at least one dash.
+    let full_prefix = format!("── {frame} {operation} ");
+    if full_prefix.width() < width {
+        let mut spans = vec![
+            Span::styled("── ".to_owned(), rule),
+            Span::styled(frame, spin),
+            Span::styled(format!(" {operation} "), rule),
+        ];
+        let fill = width - full_prefix.width();
+        spans.push(Span::styled("\u{2500}".repeat(fill), rule));
+        return Line::from(spans);
+    }
+    // Narrow form: spinner only (`── ⠋ ` plus at least one dash).
+    let narrow_prefix = format!("── {frame} ");
+    if narrow_prefix.width() < width {
+        let fill = width - narrow_prefix.width();
+        return Line::from(vec![
+            Span::styled("── ".to_owned(), rule),
+            Span::styled(frame, spin),
+            Span::styled(format!(" {}", "\u{2500}".repeat(fill)), rule),
+        ]);
+    }
+    separator_line(width, palette)
 }
 
 /// Committed transcript with its wrapped projection cached per width:

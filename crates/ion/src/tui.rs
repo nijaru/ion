@@ -4858,6 +4858,16 @@ pub async fn run(
                     break;
                 }
             }
+            // Spinner tick (pi 0.85 Loader, 80ms): armed only while
+            // working, so idle runs sleep with zero wakeups. The loop
+            // redraws at the top; the frame comes from wall-clock time.
+            () = async {
+                if matches!(state.status, UiStatus::Working { .. }) {
+                    tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {}
             _ = sigcont.recv() => {
                 // External continue after a stop we did not observe:
                 // make sure modes and surface are live again.
@@ -6795,6 +6805,26 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn composer_rule_stays_plain_while_idle() {
+        let state = UiState::new();
+        let line = render::composer_rule(&state, 40, &palette(Theme::Dark));
+        assert_eq!(line.to_string(), "─".repeat(39));
+    }
+
+    #[test]
+    fn composer_rule_falls_back_to_spinner_only_when_narrow() {
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "running a very long operation name".to_owned(),
+        };
+        let line = render::composer_rule(&state, 12, &palette(Theme::Dark));
+        let text = line.to_string();
+        assert!(text.starts_with("── "), "{text:?}");
+        assert!(!text.contains("running"), "{text:?}");
+        assert_eq!(text.width(), 12);
+    }
+
+    #[test]
     fn live_region_carries_status_and_composer_cursor() {
         let mut state = UiState::new();
         state.composer = "hello world".to_owned();
@@ -6805,8 +6835,21 @@ pub(crate) mod tests {
         let (lines, cursor) = build_live(&state, &palette(Theme::Dark), 40);
         let text: Vec<String> = lines.iter().map(|l| l.to_string()).collect();
         assert!(text.iter().any(|l| l.contains("hello world")), "{text:?}");
+        // Working status embeds in the composer rule (pi 0.85 top-border
+        // grammar), never in the footer: spinner frame plus operation.
+        let rule = text
+            .iter()
+            .find(|l| l.contains("running bash"))
+            .expect("{text:?}");
+        assert!(rule.starts_with("── "), "{rule:?}");
         assert!(
-            text.iter().any(|l| l.contains("● running bash")),
+            ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏']
+                .iter()
+                .any(|f| rule.contains(*f)),
+            "{rule:?}"
+        );
+        assert!(
+            !text.iter().any(|l| l.contains("● running bash")),
             "{text:?}"
         );
         // cursor sits at the end of the typed text on the composer row
