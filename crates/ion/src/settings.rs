@@ -7,13 +7,14 @@ use std::path::PathBuf;
 use ion_core::SandboxMode;
 use serde::Deserialize;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Theme {
     Light,
     Dark,
     /// Follow the terminal's light/dark preference (pi's "light/dark");
     /// resolution currently maps to the dark palette.
+    #[default]
     #[serde(rename = "light/dark")]
     Auto,
 }

@@ -28,6 +28,7 @@ use ion_terminal::{
 
 mod fullscreen;
 mod help;
+mod markdown;
 mod render;
 pub use render::{Palette, palette};
 use render::{Transcript, append_snapshot_entries};
@@ -977,6 +978,10 @@ pub struct UiState {
     /// Terminal width used to map wrapped composer rows for vertical motion.
     /// The render loop refreshes this before drawing and handling input.
     terminal_width: Option<usize>,
+    /// Display theme seeding markdown/scrollback styling. The reducer
+    /// owns it so flush paths style without a palette parameter; run()
+    /// seeds it from host config (default Auto resolves dark).
+    theme: Theme,
     /// Submitted prompts, oldest first; up/down navigates.
     history: Vec<String>,
     /// Position in `history` while browsing; None edits the live
@@ -3514,45 +3519,6 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
     state
 }
 
-/// Markdown-lite inline styling for assistant scrollback: `**bold**`
-/// and `` `code` `` spans; unmatched markers stay literal. Headers
-/// (leading #) render bold. No block structure — the viewport wraps
-/// plain lines.
-fn markdown_line(line: &str) -> Line<'static> {
-    let mut spans = Vec::new();
-    let mut rest = line;
-    if let Some(after) = rest.strip_prefix('#') {
-        let after = after.trim_start();
-        spans.push(Span::from(format!("## {after}")).bold());
-        return Line::from(spans);
-    }
-    while let Some(start) = rest.find(['`', '*']) {
-        let marker = rest[start..].chars().next().expect("find matched");
-        let token = if marker == '`' { "`" } else { "**" };
-        let Some(end) = rest[start + token.len()..].find(token) else {
-            break;
-        };
-        let (plain, styled, tail) = (
-            &rest[..start],
-            &rest[start + token.len()..start + token.len() + end],
-            &rest[start + token.len() + end + token.len()..],
-        );
-        if !plain.is_empty() {
-            spans.push(Span::from(plain.to_owned()));
-        }
-        spans.push(if marker == '`' {
-            Span::from(styled.to_owned()).cyan()
-        } else {
-            Span::from(styled.to_owned()).bold()
-        });
-        rest = tail;
-    }
-    if !rest.is_empty() || spans.is_empty() {
-        spans.push(Span::from(rest.to_owned()));
-    }
-    Line::from(spans)
-}
-
 /// Move accumulated reasoning into scrollback as a dim italic block.
 /// Hidden thinking is dropped, matching pi's hideThinkingBlock.
 fn flush_thinking(state: &mut UiState) {
@@ -3560,11 +3526,13 @@ fn flush_thinking(state: &mut UiState) {
         return;
     }
     if state.thinking_visible {
-        for line in state.draft_thinking.lines() {
-            state
-                .pending_scrollback
-                .push(Line::from(format!("✻ {line}")).dim().italic());
-        }
+        let width = state.terminal_width.unwrap_or(80);
+        let pal = palette(state.theme);
+        state.pending_scrollback.extend(markdown::render_thinking(
+            &state.draft_thinking,
+            &pal,
+            width,
+        ));
     }
     state.draft_thinking.clear();
 }
@@ -3604,14 +3572,12 @@ impl UiState {
         self.flush_tool_rows();
         if !self.draft.is_empty() {
             self.last_assistant = Some(self.draft.clone());
-            for line in self.draft.lines() {
-                // Assistant content renders plain (pi parity); blank
-                // lines dropped (single-newline spacing).
-                if line.trim().is_empty() {
-                    continue;
-                }
-                self.pending_scrollback.push(markdown_line(line.trim_end()));
-            }
+            // Full markdown render, pre-wrapped with hanging indents
+            // (downstream Transcript wrapping is identity).
+            let width = self.terminal_width.unwrap_or(80);
+            let pal = palette(self.theme);
+            self.pending_scrollback
+                .extend(markdown::render(&self.draft, &pal, width));
             if self.draft_degraded {
                 self.pending_scrollback.push(
                     Line::from("… truncated by display lag; full text: ion --resume").yellow(),
@@ -4286,6 +4252,7 @@ pub async fn run(
     state.model_catalog = host.model_catalog.clone();
     state.default_model_reference = host.default_model.clone();
     state.thinking_visible = !host.hide_thinking_block;
+    state.theme = theme;
     state.cwd_label = host.cwd_label.clone();
     state.workspace_files = host.workspace_files.clone();
     state.branch = host.branch.clone();
@@ -5746,18 +5713,35 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn markdown_lite_styles_bold_and_code() {
-        let line = markdown_line("use **bold** and `code` here");
-        let text: Vec<String> = line.spans.iter().map(|s| s.content.to_string()).collect();
+    fn full_markdown_renders_blocks_in_flush() {
+        let lines = markdown::render(
+            "use **bold** and `code` here",
+            &render::palette(Theme::Dark),
+            80,
+        );
+        let text: Vec<String> = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(text, vec!["use ", "bold", " and ", "code", " here"]);
-        assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
-        assert_eq!(line.spans[3].style.fg, Some(Color::Cyan));
+        assert!(
+            lines[0].spans[1]
+                .style
+                .add_modifier
+                .contains(Modifier::BOLD)
+        );
+        assert_eq!(lines[0].spans[3].style.fg, Some(Color::Cyan));
     }
 
     #[test]
-    fn markdown_lite_leaves_unmatched_markers_literal() {
-        let line = markdown_line("a * b and c` d");
-        let text: String = line.spans.iter().map(|s| s.content.to_string()).collect();
+    fn full_markdown_leaves_unmatched_markers_literal() {
+        let lines = markdown::render("a * b and c` d", &render::palette(Theme::Dark), 80);
+        let text: String = lines[0]
+            .spans
+            .iter()
+            .map(|s| s.content.to_string())
+            .collect();
         assert_eq!(text, "a * b and c` d");
     }
 
@@ -6261,6 +6245,7 @@ pub(crate) mod tests {
                 },
             }],
             &pal,
+            80,
         );
         let colors: Vec<Option<Color>> = lines.iter().map(|l| l.style.fg).collect();
         // ---/+++ headers dim (fg None), hunk cyan, -/+ red/green,
@@ -6287,6 +6272,7 @@ pub(crate) mod tests {
                 },
             }],
             &pal,
+            80,
         );
         assert!(
             prose
@@ -6681,11 +6667,11 @@ pub(crate) mod tests {
             .iter()
             .position(|line| line.to_string() == marker)
             .expect("resume marker");
-        let history_lines = entry_lines(&entries[..2], &palette);
+        let history_lines = entry_lines(&entries[..2], &palette, 40);
         assert_eq!(marker_index, history_lines.len());
         assert_eq!(
             transcript.raw[marker_index + 1..],
-            entry_lines(&entries[2..], &palette)
+            entry_lines(&entries[2..], &palette, 40)
         );
     }
 
@@ -6694,7 +6680,7 @@ pub(crate) mod tests {
         let entries = [ion_core::SessionEntry::AssistantMessage {
             text: "a".repeat(100),
         }];
-        let lines = entry_lines(&entries, &render::palette(Theme::Dark));
+        let lines = entry_lines(&entries, &render::palette(Theme::Dark), 120);
         assert_eq!(
             lines.len(),
             1,

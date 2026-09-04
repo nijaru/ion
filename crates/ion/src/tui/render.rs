@@ -105,24 +105,109 @@ fn wrap_single_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
     if total <= width {
         return vec![clone_static(line)];
     }
-    // Flatten to (grapheme, style) so a break decision can look back for
-    // a word boundary without per-span bookkeeping.
-    let mut items: Vec<(String, ratatui::style::Style)> = Vec::new();
+    assemble_rows(wrap_graphemes(flatten_spans(line), width, &[], &[]))
+}
+
+/// Flatten a line to style-tagged graphemes for the greedy breaker.
+fn flatten_spans(line: &Line<'_>) -> Vec<(String, ratatui::style::Style)> {
+    let mut items = Vec::new();
     for span in &line.spans {
         for grapheme in span.content.graphemes(true) {
             items.push((grapheme.to_owned(), span.style));
         }
     }
-    let mut rows: Vec<Line<'static>> = Vec::new();
+    items
+}
+
+/// Wrap one styled line with affixes: `first` seeds the first row,
+/// `cont` seeds every continuation row (markdown hanging indents and
+/// quote borders). Each affix counts against its row's budget, and
+/// break decisions never split inside an affix. Empty logical lines
+/// render as the trimmed first affix alone so quote borders stay
+/// continuous across blank lines.
+pub(super) fn wrap_affixed(
+    line: &Line<'_>,
+    width: usize,
+    first: &[(String, ratatui::style::Style)],
+    cont: &[(String, ratatui::style::Style)],
+) -> Vec<Line<'static>> {
+    let width = width.max(1);
+    let mut out = Vec::new();
+    for logical in split_styled_lines(line) {
+        if logical.spans.is_empty() {
+            out.push(prefix_only_row(first));
+            continue;
+        }
+        out.extend(assemble_rows(wrap_graphemes(
+            flatten_spans(&logical),
+            width,
+            first,
+            cont,
+        )));
+    }
+    if out.is_empty() {
+        out.push(Line::from(String::new()));
+    }
+    out
+}
+
+/// A row of affix alone (blank source line inside a quote or list
+/// item): trailing spaces trimmed so `│ ` renders as `│`.
+fn prefix_only_row(first: &[(String, ratatui::style::Style)]) -> Line<'static> {
+    let mut rows = assemble_rows(vec![first.to_vec()]);
+    let mut row = rows.pop().unwrap_or_else(|| Line::from(String::new()));
+    trim_row_end(&mut row);
+    row
+}
+
+fn trim_row_end(row: &mut Line<'static>) {
+    while row
+        .spans
+        .last()
+        .is_some_and(|span| span.content.ends_with(' '))
+    {
+        let last = row.spans.len() - 1;
+        let mut content = row.spans[last].content.to_string();
+        while content.ends_with(' ') {
+            content.pop();
+        }
+        if content.is_empty() {
+            row.spans.pop();
+        } else {
+            row.spans[last].content = std::borrow::Cow::Owned(content);
+        }
+    }
+}
+
+/// Greedy word wrap over flattened graphemes. The first row is
+/// seeded with `first`, every later row with `cont`; each seed
+/// counts against its row's budget. Returns style-tagged rows for
+/// `assemble_rows`.
+fn wrap_graphemes(
+    mut items: Vec<(String, ratatui::style::Style)>,
+    width: usize,
+    first: &[(String, ratatui::style::Style)],
+    cont: &[(String, ratatui::style::Style)],
+) -> Vec<Vec<(String, ratatui::style::Style)>> {
+    let first_width: usize = first.iter().map(|(g, _)| g.width()).sum();
+    let cont_width: usize = cont.iter().map(|(g, _)| g.width()).sum();
+    let mut rows = Vec::new();
+    let mut is_first = true;
     while !items.is_empty() {
+        let (seed, seed_width) = if is_first {
+            (first, first_width)
+        } else {
+            (cont, cont_width)
+        };
+        let budget = width.saturating_sub(seed_width).max(1);
         // Greedy fill; prefer breaking after the last space when the
         // row overflows so words are not split mid-token.
-        let mut taken_width = 0usize;
+        let mut taken_width = seed_width;
         let mut take = 0usize;
         let mut last_space: Option<usize> = None;
         for (i, (grapheme, _)) in items.iter().enumerate() {
             let gw = grapheme.width();
-            if taken_width + gw > width {
+            if taken_width + gw > budget {
                 break;
             }
             taken_width += gw;
@@ -144,11 +229,11 @@ fn wrap_single_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
                 word_width += items[rest].0.width();
                 rest += 1;
             }
-            if word_width >= width {
+            if word_width >= budget {
                 last_space = None;
             }
         }
-        let mut row_items: Vec<(String, ratatui::style::Style)> = if take == items.len() {
+        let chunk: Vec<(String, ratatui::style::Style)> = if take == items.len() {
             std::mem::take(&mut items)
         } else if let Some(break_at) = last_space {
             items.drain(..break_at).collect()
@@ -156,9 +241,22 @@ fn wrap_single_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
             // Unbreakable overflow (long path/URL): hard-break.
             items.drain(..take.max(1)).collect()
         };
+        let mut row_items: Vec<(String, ratatui::style::Style)> = seed.to_vec();
+        row_items.extend(chunk);
         while row_items.last().map(|(g, _)| g == " ").unwrap_or(false) {
             row_items.pop();
         }
+        rows.push(row_items);
+        is_first = false;
+    }
+    rows
+}
+
+/// Merge adjacent same-style graphemes back into spans, one `Line`
+/// per row. Shared by the plain and prefixed wrappers.
+fn assemble_rows(rows: Vec<Vec<(String, ratatui::style::Style)>>) -> Vec<Line<'static>> {
+    let mut out: Vec<Line<'static>> = Vec::new();
+    for row_items in rows {
         let mut spans: Vec<Span> = Vec::new();
         for (text, style) in row_items {
             match spans.last_mut() {
@@ -170,12 +268,12 @@ fn wrap_single_line(line: &Line<'_>, width: usize) -> Vec<Line<'static>> {
                 _ => spans.push(Span::styled(text, style)),
             }
         }
-        rows.push(Line::from(spans));
+        out.push(Line::from(spans));
     }
-    if rows.is_empty() {
-        rows.push(Line::from(String::new()));
+    if out.is_empty() {
+        out.push(Line::from(String::new()));
     }
-    rows
+    out
 }
 
 #[derive(Debug, Clone)]
@@ -928,10 +1026,21 @@ pub(super) fn build_live_at_height(
         ));
     }
     if !state.draft.is_empty() {
-        head.extend(wrap_line(
-            &Line::from(format!("ion \u{ab} {}", state.draft)),
-            width,
-        ));
+        // Streaming markdown render (tail-capped, fence-resynced);
+        // the first row carries the assistant prefix. Pre-wrapped
+        // lines make the band wrap identity unless the prefix itself
+        // overflows a full row.
+        let mut rows = super::markdown::render_live(&state.draft, palette, width);
+        if rows.is_empty() {
+            rows.push(Line::from("ion » "));
+        } else {
+            let mut first = rows.remove(0);
+            first.spans.insert(0, Span::raw("ion » "));
+            rows.insert(0, first);
+        }
+        for row in rows {
+            head.extend(wrap_line(&row, width));
+        }
     } else if let Some(last) = state
         .draft_thinking
         .lines()
@@ -1188,6 +1297,12 @@ impl Transcript {
         }
     }
 
+    /// Current wrap width: markdown pre-wraps to this so the push
+    /// wrap below stays identity.
+    fn width(&self) -> usize {
+        self.width.max(1) as usize
+    }
+
     fn push(&mut self, line: Line<'static>) {
         self.wrapped.extend(wrap_line(&line, self.width as usize));
         self.raw.push(line);
@@ -1228,22 +1343,24 @@ pub(super) fn append_snapshot_entries(
     } else {
         0
     };
-    transcript.extend(entry_lines(&entries[..boundary], palette));
+    let width = transcript.width();
+    transcript.extend(entry_lines(&entries[..boundary], palette, width));
     if let Some(session_id) = resume_session {
         transcript.push(
             Line::from(format!("— resumed session {session_id} —")).style(palette.system_note),
         );
     }
-    transcript.extend(entry_lines(&entries[boundary..], palette));
+    transcript.extend(entry_lines(&entries[boundary..], palette, width));
 }
 
 pub(super) fn entry_lines(
     entries: &[ion_core::SessionEntry],
     palette: &Palette,
+    width: usize,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for entry in entries {
-        push_entry_lines(entry, &mut out, palette);
+        push_entry_lines(entry, &mut out, palette, width);
     }
     out
 }
@@ -1252,6 +1369,7 @@ fn push_entry_lines(
     entry: &ion_core::SessionEntry,
     out: &mut Vec<Line<'static>>,
     palette: &Palette,
+    width: usize,
 ) {
     match entry {
         // User turns carry the composer prompt marker in faint text;
@@ -1270,13 +1388,9 @@ fn push_entry_lines(
             }
         }
         ion_core::SessionEntry::AssistantMessage { text } => {
-            let total = text.lines().count();
-            for (i, logical_line) in text.split('\n').enumerate() {
-                if logical_line.is_empty() && (i == 0 || i + 1 == total) {
-                    continue;
-                }
-                out.push(Line::from(logical_line.to_owned()).style(palette.assistant));
-            }
+            // Full markdown render, pre-wrapped with hanging indents
+            // (Transcript wrapping below stays identity).
+            out.extend(super::markdown::render(text, palette, width.max(1)));
         }
         ion_core::SessionEntry::ShellExecution {
             command,
