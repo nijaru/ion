@@ -36,6 +36,26 @@ struct Cli {
     /// TUI instead of starting a new one.
     #[arg(long = "resume")]
     resume: bool,
+    /// Continue the most recent persisted session (alias for --resume).
+    #[arg(short = 'c', long = "continue")]
+    continue_session: bool,
+    /// Open a specific persisted session by id (exact or unique prefix).
+    /// Rejected with --resume/--continue/--fork/--no-session.
+    #[arg(long = "session", value_name = "ID")]
+    session: Option<String>,
+    /// Display title for a newly created session (fresh, --fork, or
+    /// ephemeral). Rejected when opening an existing session.
+    #[arg(short = 'n', long = "name", value_name = "NAME")]
+    name: Option<String>,
+    /// Fork a persisted session (id or unique prefix) into a new session
+    /// and open the fork. Rejected with --session/--resume/--continue/
+    /// --no-session.
+    #[arg(long = "fork", value_name = "ID")]
+    fork: Option<String>,
+    /// Ephemeral run: in-memory store, nothing persisted. Rejected with
+    /// every session-selection flag.
+    #[arg(long = "no-session")]
+    no_session: bool,
     /// Serve the Agent Client Protocol (v1) on stdio instead of
     /// running the TUI or print mode.
     #[arg(long = "acp")]
@@ -101,6 +121,89 @@ fn policy_for(allow: &[String]) -> Arc<dyn ion_core::PolicyEngine> {
         Arc::new(ion_core::DefaultPolicy)
     } else {
         Arc::new(ion_core::AllowlistPolicy::new(allow.to_vec()))
+    }
+}
+
+/// How the interactive TUI opens its first session (CLI flags
+/// resolved against the store; forks are cloned before open).
+enum InitialSession {
+    /// Fresh session, optionally titled with --name.
+    New { title: Option<String> },
+    /// Existing session (resume/continue/session id/fork clone).
+    Resume(ion_core::SessionId),
+}
+
+/// Reject contradictory session flags before the terminal, store, or
+/// runtime exists. Pure: unit-tested below.
+fn validate_session_flags(cli: &Cli) -> Result<(), String> {
+    if cli.no_session {
+        let mut conflicts = Vec::new();
+        if cli.session.is_some() {
+            conflicts.push("--session");
+        }
+        if cli.continue_session || cli.resume {
+            conflicts.push("--continue/--resume");
+        }
+        if cli.fork.is_some() {
+            conflicts.push("--fork");
+        }
+        if !conflicts.is_empty() {
+            return Err(format!(
+                "--no-session cannot be combined with {}",
+                conflicts.join(", ")
+            ));
+        }
+        return Ok(());
+    }
+    if cli.fork.is_some() {
+        let mut conflicts = Vec::new();
+        if cli.session.is_some() {
+            conflicts.push("--session");
+        }
+        if cli.continue_session || cli.resume {
+            conflicts.push("--continue/--resume");
+        }
+        if !conflicts.is_empty() {
+            return Err(format!(
+                "--fork cannot be combined with {}",
+                conflicts.join(", ")
+            ));
+        }
+    }
+    if cli.session.is_some() && (cli.continue_session || cli.resume) {
+        return Err("--session cannot be combined with --continue/--resume".to_owned());
+    }
+    if cli.name.is_some() && (cli.continue_session || cli.resume || cli.session.is_some()) {
+        return Err("--name only applies to newly created sessions".to_owned());
+    }
+    Ok(())
+}
+
+/// Match a session argument against durable sessions (pi `--session`
+/// semantics): exact display id (`session-<uuid>`) or bare UUID first,
+/// then unique prefix over the display form or the UUID part, so both
+/// `session-1111…` and `1111…` work. Pure over a snapshot.
+fn match_session_id(
+    sessions: &[ion_core::SessionSummary],
+    arg: &str,
+) -> Result<ion_core::SessionId, String> {
+    if let Some(found) = sessions.iter().find(|s| s.id.to_string() == arg) {
+        return Ok(found.id);
+    }
+    if let Some(id) = ion_core::SessionId::parse(arg) {
+        if sessions.iter().any(|s| s.id == id) {
+            return Ok(id);
+        }
+        return Err(format!("no session matching {arg:?}"));
+    }
+    let mut prefixed = sessions.iter().filter(|s| {
+        let display = s.id.to_string();
+        display.starts_with(arg) || display["session-".len()..].starts_with(arg)
+    });
+    match (prefixed.next(), prefixed.next()) {
+        (Some(only), None) => Ok(only.id),
+        (None, _) => Err(format!("no session matching {arg:?}")),
+        (Some(_), Some(_)) => Err(format!("ambiguous session prefix {arg:?}; use the full id")),
     }
 }
 
@@ -209,6 +312,23 @@ async fn build_catalog(
     Ok((tools, extension_service))
 }
 
+/// TUI startup failure after the terminal guard exists: restore the
+/// terminal, report, close the store, exit. Usage errors (bad flags,
+/// unknown sessions) exit 2; infrastructure failures exit 1.
+async fn abort_tui_startup(
+    guard: ion_terminal::TerminalSession,
+    store: &SessionStore,
+    message: String,
+    code: u8,
+) -> ExitCode {
+    restore_tui_startup_terminal(guard);
+    let _ = writeln!(io::stderr(), "{message}");
+    if let Err(close_err) = store.close().await {
+        tracing::error!(error = %close_err, "failed to close the session store");
+    }
+    ExitCode::from(code)
+}
+
 fn restore_tui_startup_terminal(mut terminal: ion_terminal::TerminalSession) {
     let restore_error = terminal.restore().err();
     drop(terminal);
@@ -228,6 +348,12 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::from(2);
         }
     };
+    // Session flags are validated just as early: contradictions must
+    // fail before any durable state exists.
+    if let Err(err) = validate_session_flags(cli) {
+        let _ = writeln!(io::stderr(), "{err}");
+        return ExitCode::from(2);
+    }
 
     // The runtime owns model selection: /model <id> commits a durable
     // change through SessionHandle::switch_model and applies at the
@@ -324,7 +450,12 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let store = match SessionStore::open(default_db_path()) {
+    let store = match if cli.no_session {
+        // Ephemeral run: nothing reaches the durable database.
+        SessionStore::open_in_memory()
+    } else {
+        SessionStore::open(default_db_path())
+    } {
         Ok(store) => Arc::new(store),
         Err(err) => {
             restore_tui_startup_terminal(guard);
@@ -334,28 +465,73 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     };
     // The startup notice is rendered inside the transcript (HostConfig):
     // stderr here is already raw-mode and would corrupt the screen.
-    let resume_session = if cli.resume {
+    //
+    // CLI session selection resolves before any runtime exists: latest
+    // for --continue/--resume, id-or-unique-prefix for --session, clone
+    // first for --fork. Flag validation already ran; resolution failures
+    // below are usage errors (exit 2), store failures exit 1.
+    let initial = if cli.no_session {
+        InitialSession::New {
+            title: cli.name.clone(),
+        }
+    } else if let Some(arg) = cli.fork.as_deref() {
+        let sessions = match store.list_sessions().await {
+            Ok(sessions) => sessions,
+            Err(err) => return abort_tui_startup(guard, &store, format!("store: {err}"), 1).await,
+        };
+        let source = match match_session_id(&sessions, arg) {
+            Ok(id) => id,
+            Err(err) => return abort_tui_startup(guard, &store, err, 2).await,
+        };
+        let source_title = sessions
+            .iter()
+            .find(|s| s.id == source)
+            .map(|s| s.title.clone())
+            .unwrap_or_default();
+        let title = cli.name.clone().unwrap_or_else(|| {
+            if source_title.is_empty() {
+                format!("Fork of {}", &source.to_string()[..8])
+            } else {
+                format!("Fork of {source_title}")
+            }
+        });
+        match store.clone_session(source, &title).await {
+            Ok(id) => InitialSession::Resume(id),
+            Err(err) => return abort_tui_startup(guard, &store, format!("store: {err}"), 1).await,
+        }
+    } else if let Some(arg) = cli.session.as_deref() {
+        let sessions = match store.list_sessions().await {
+            Ok(sessions) => sessions,
+            Err(err) => return abort_tui_startup(guard, &store, format!("store: {err}"), 1).await,
+        };
+        match match_session_id(&sessions, arg) {
+            Ok(id) => InitialSession::Resume(id),
+            Err(err) => return abort_tui_startup(guard, &store, err, 2).await,
+        }
+    } else if cli.resume || cli.continue_session {
         match store.latest_session().await {
-            Ok(Some(id)) => Some(id),
+            Ok(Some(id)) => InitialSession::Resume(id),
             Ok(None) => {
-                restore_tui_startup_terminal(guard);
-                let _ = writeln!(io::stderr(), "no persisted session to resume");
-                if let Err(close_err) = store.close().await {
-                    tracing::error!(error = %close_err, "failed to close the session store");
-                }
-                return ExitCode::from(2);
+                return abort_tui_startup(
+                    guard,
+                    &store,
+                    "no persisted session to resume".to_owned(),
+                    2,
+                )
+                .await;
             }
             Err(err) => {
-                restore_tui_startup_terminal(guard);
-                let _ = writeln!(io::stderr(), "store: {err}");
-                if let Err(close_err) = store.close().await {
-                    tracing::error!(error = %close_err, "failed to close the session store");
-                }
-                return ExitCode::FAILURE;
+                return abort_tui_startup(guard, &store, format!("store: {err}"), 1).await;
             }
         }
     } else {
-        None
+        InitialSession::New {
+            title: cli.name.clone(),
+        }
+    };
+    let resume_session = match initial {
+        InitialSession::New { .. } => None,
+        InitialSession::Resume(id) => Some(id),
     };
     let cwd = match std::env::current_dir() {
         Ok(cwd) => cwd,
@@ -503,20 +679,35 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         ion::session_manager::SessionManager::new((*store).clone(), Arc::clone(&open_runtime));
     // The initial session opens through the same factory as every later
     // switch: one composition point, one teardown order. The CLI's
-    // `--resume` already resolved the durable session id.
+    // session flags already resolved the durable session id; --name
+    // titles a fresh session before adopt reads the title back.
+    let new_title = match &initial {
+        InitialSession::New { title } => title.clone(),
+        InitialSession::Resume(_) => None,
+    };
     let initial_start = match resume_session {
         Some(session_id) => ion::session_manager::SessionStart::Resume(session_id),
         None => ion::session_manager::SessionStart::New,
     };
     let attached = match (open_runtime)(initial_start).await {
-        Ok(opened) => match manager.adopt(opened).await {
-            Ok(attached) => attached,
-            Err(err) => {
-                restore_tui_startup_terminal(guard);
-                let _ = writeln!(io::stderr(), "session: {err}");
-                return run_tui_cleanup_failure(tools, store).await;
+        Ok(opened) => {
+            if let Some(title) = new_title {
+                let session_id = opened.runtime.session_id();
+                if let Err(err) = store.rename_session(session_id, &title).await {
+                    restore_tui_startup_terminal(guard);
+                    let _ = writeln!(io::stderr(), "session: {err}");
+                    return run_tui_cleanup_failure(tools, store).await;
+                }
             }
-        },
+            match manager.adopt(opened).await {
+                Ok(attached) => attached,
+                Err(err) => {
+                    restore_tui_startup_terminal(guard);
+                    let _ = writeln!(io::stderr(), "session: {err}");
+                    return run_tui_cleanup_failure(tools, store).await;
+                }
+            }
+        }
         Err(err) => {
             restore_tui_startup_terminal(guard);
             let _ = if resume_session.is_some() {
@@ -794,6 +985,19 @@ fn make_cli_provider(
 }
 
 async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(), RuntimeError> {
+    // Session selection is an interactive-TUI concept; failing here
+    // beats silently ignoring the flags. Only --no-session carries
+    // over (an ephemeral one-shot run).
+    if cli.session.is_some()
+        || cli.continue_session
+        || cli.resume
+        || cli.fork.is_some()
+        || cli.name.is_some()
+    {
+        return Err(RuntimeError::OperationFailed(
+            "session flags (--session/--continue/--resume/--fork/--name) apply to the interactive TUI, not --print".to_owned(),
+        ));
+    }
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let cwd =
         std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
@@ -811,7 +1015,11 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
             return Err(RuntimeError::OperationFailed(err));
         }
     };
-    let store = match SessionStore::open(default_db_path()) {
+    let store = match if cli.no_session {
+        SessionStore::open_in_memory()
+    } else {
+        SessionStore::open(default_db_path())
+    } {
         Ok(store) => store,
         Err(err) => {
             if let Err(close_err) = tools.close().await {
@@ -951,5 +1159,109 @@ mod tests {
             display_cwd_with_home(Path::new("/Users/test"), Some(home)),
             "~"
         );
+    }
+}
+
+#[cfg(test)]
+mod session_flag_tests {
+    use super::*;
+
+    fn cli() -> Cli {
+        Cli {
+            print: None,
+            model: None,
+            resume: false,
+            continue_session: false,
+            session: None,
+            name: None,
+            fork: None,
+            no_session: false,
+            acp: false,
+            trust_project: false,
+            allow: Vec::new(),
+            tui_mode: None,
+        }
+    }
+
+    fn summaries() -> Vec<ion_core::SessionSummary> {
+        let id = |s: &str| ion_core::SessionId::parse(s).expect("fixed test uuid");
+        vec![
+            ion_core::SessionSummary {
+                id: id("11111111-1111-1111-1111-111111111111"),
+                title: "first".to_owned(),
+                updated_at: 1,
+                entry_count: 1,
+            },
+            ion_core::SessionSummary {
+                id: id("11111111-2222-2222-2222-222222222222"),
+                title: "second".to_owned(),
+                updated_at: 2,
+                entry_count: 1,
+            },
+        ]
+    }
+
+    #[test]
+    fn empty_flags_validate() {
+        assert!(validate_session_flags(&cli()).is_ok());
+    }
+
+    #[test]
+    fn fork_rejects_session_selection_flags() {
+        let mut c = cli();
+        c.fork = Some("abc".to_owned());
+        assert!(validate_session_flags(&c).is_ok());
+        c.session = Some("abc".to_owned());
+        assert!(validate_session_flags(&c).is_err());
+        c.session = None;
+        c.resume = true;
+        assert!(validate_session_flags(&c).is_err());
+    }
+
+    #[test]
+    fn no_session_rejects_everything_session_shaped() {
+        let mut c = cli();
+        c.no_session = true;
+        assert!(validate_session_flags(&c).is_ok());
+        c.name = Some("ephemeral".to_owned());
+        assert!(
+            validate_session_flags(&c).is_ok(),
+            "naming an ephemeral run is fine"
+        );
+        c.fork = Some("abc".to_owned());
+        assert!(validate_session_flags(&c).is_err());
+    }
+
+    #[test]
+    fn name_rejected_when_opening_existing_sessions() {
+        let mut c = cli();
+        c.name = Some("x".to_owned());
+        assert!(validate_session_flags(&c).is_ok());
+        c.resume = true;
+        assert!(validate_session_flags(&c).is_err());
+        c.resume = false;
+        c.session = Some("abc".to_owned());
+        assert!(validate_session_flags(&c).is_err());
+    }
+
+    #[test]
+    fn session_match_prefers_exact_then_unique_prefix() {
+        let all = summaries();
+        let full = "11111111-1111-1111-1111-111111111111";
+        let expect = ion_core::SessionId::parse(full).unwrap();
+        assert_eq!(match_session_id(&all, full).unwrap(), expect);
+        assert_eq!(
+            match_session_id(&all, &format!("session-{full}")).unwrap(),
+            expect
+        );
+        assert_eq!(match_session_id(&all, "11111111-1111").unwrap(), expect);
+    }
+
+    #[test]
+    fn session_match_reports_unknown_and_ambiguous() {
+        let all = summaries();
+        assert!(match_session_id(&all, "9999").is_err());
+        let err = match_session_id(&all, "11111111").unwrap_err();
+        assert!(err.contains("ambiguous"), "unexpected: {err}");
     }
 }
