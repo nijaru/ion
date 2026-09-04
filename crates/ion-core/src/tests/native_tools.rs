@@ -359,3 +359,72 @@ async fn bash_cancel_kills_long_running_command() {
     assert!(outcome.is_error);
     assert_eq!(outcome.output, "cancelled");
 }
+
+// ---- Edit diff hunks (display payload + model verification) ----
+
+#[test]
+fn edit_diff_hunk_positions_context_and_headers() {
+    let original = "one\ntwo\nthree\nfour\nfive\n";
+    let diff = crate::tool::edit_diff_hunk("f.txt", original, "three", "THREE", 1, 60)
+        .expect("hunk resolves");
+    let lines: Vec<&str> = diff.lines().collect();
+    assert_eq!(lines[0], "--- f.txt");
+    assert_eq!(lines[1], "+++ f.txt");
+    assert_eq!(lines[2], "@@ -2,3 +2,3 @@");
+    assert_eq!(&lines[3..], &[" two", "-three", "+THREE", " four"]);
+}
+
+#[test]
+fn edit_diff_hunk_clamps_context_at_file_edges() {
+    let original = "one\ntwo\n";
+    let diff =
+        crate::tool::edit_diff_hunk("f.txt", original, "one", "ONE", 3, 60).expect("hunk resolves");
+    let lines: Vec<&str> = diff.lines().collect();
+    assert_eq!(lines[2], "@@ -1,2 +1,2 @@");
+    assert_eq!(&lines[3..], &["-one", "+ONE", " two"]);
+}
+
+#[test]
+fn edit_diff_hunk_truncates_with_a_truthful_marker() {
+    let original = (1..=20)
+        .map(|n| format!("line {n}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let diff = crate::tool::edit_diff_hunk("f.txt", &original, "line 10", "LINE", 0, 1)
+        .expect("hunk resolves");
+    let lines: Vec<&str> = diff.lines().collect();
+    // 3 headers + 1 kept body line + 1 truncation marker.
+    assert_eq!(lines.len(), 5);
+    assert_eq!(lines[3], "-line 10");
+    assert_eq!(lines[4], "… (1 more line)", "got: {}", lines[4]);
+}
+
+#[test]
+fn edit_diff_hunk_is_none_when_old_str_is_absent() {
+    assert!(
+        crate::tool::edit_diff_hunk("f.txt", "abc", "zzz", "x", 3, 60).is_none(),
+        "absent old_str must not produce an empty diff"
+    );
+}
+
+#[tokio::test]
+async fn edit_outcome_carries_the_hunk_instead_of_a_constant() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    std::fs::write(root.path().join("note.txt"), "hello world\n").expect("seed file");
+    let registry = ToolRegistry::with_cwd(root.path());
+    let out = registry
+        .execute(
+            "edit",
+            &json!({"path":"note.txt","old_str":"world","new_str":"ion"}),
+            CancellationToken::new(),
+        )
+        .await;
+    assert!(!out.is_error, "edit failed: {out:?}");
+    assert!(
+        out.output.starts_with("--- note.txt\n+++ note.txt\n@@ "),
+        "got: {}",
+        out.output
+    );
+    assert!(out.output.contains("-hello world"), "got: {}", out.output);
+    assert!(out.output.contains("+hello ion"), "got: {}", out.output);
+}

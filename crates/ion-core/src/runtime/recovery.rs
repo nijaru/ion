@@ -568,11 +568,17 @@ impl<P: Provider> SessionRuntime<P> {
                             .tool_registry
                             .clone();
                         let target = target_summary_registry(&tools, &call.name, &call.arguments);
+                        let preview = if call.name == "edit" {
+                            edit_approval_preview(&tools, &call.arguments).await
+                        } else {
+                            None
+                        };
                         self.emit(RuntimeEvent::ApprovalPending {
                             cursor: RuntimeCursor::default(),
                             operation_id: call.operation_id,
                             tool: call.name.clone(),
                             target,
+                            preview,
                         });
                         info!(operation = %call.operation_id, tool = %call.name, "re-surfaced a parked approval after process loss");
                     } else {

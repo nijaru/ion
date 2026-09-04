@@ -778,6 +778,25 @@ pub(super) fn build_live_at_height(
             Style::new().yellow(),
         ));
         head.extend(wrap_line(&Line::from(spans), width));
+        // A proposed-change preview (currently `edit` hunks) renders
+        // below the prompt in diff colors, capped so the composer
+        // keeps its rows; the band budget truncates older head first.
+        if let Some(preview) = &prompt.preview {
+            const APPROVAL_PREVIEW_MAX_LINES: usize = 10;
+            let preview_lines: Vec<&str> = preview.lines().collect();
+            for line in preview_lines.iter().take(APPROVAL_PREVIEW_MAX_LINES) {
+                head.extend(wrap_line(&diff_line(line), width));
+            }
+            let omitted = preview_lines
+                .len()
+                .saturating_sub(APPROVAL_PREVIEW_MAX_LINES);
+            if omitted > 0 {
+                head.extend(wrap_line(
+                    &Line::from(format!("  … ({omitted} more lines)")).dim(),
+                    width,
+                ));
+            }
+        }
     }
 
     // Fit the head above the composer inside the band cap, keeping
@@ -907,6 +926,33 @@ pub(super) fn build_live_at_height(
     }
 
     (lines, cursor)
+}
+
+/// A unified diff hunk parses as one when some line opens a hunk
+/// header (`@@ … @@`). Detection is whole-block: a single leading
+/// `-`/`+` in prose never triggers diff coloring.
+#[must_use]
+pub(super) fn is_unified_diff(text: &str) -> bool {
+    text.lines().any(|line| line.starts_with("@@ "))
+}
+
+/// One diff body line in terminal-native colors (pi's diff rows:
+/// removed red, added green, hunk header cyan, context dim). The
+/// `---`/`+++` file headers render dim.
+#[must_use]
+pub(super) fn diff_line(line: &str) -> Line<'static> {
+    let style = if line.starts_with("@@ ") {
+        Style::new().cyan()
+    } else if line.starts_with("+++") || line.starts_with("---") {
+        Style::new().dim()
+    } else if line.starts_with('+') {
+        Style::new().green()
+    } else if line.starts_with('-') {
+        Style::new().red()
+    } else {
+        Style::new().dim()
+    };
+    Line::from(line.to_owned()).style(style)
 }
 
 /// One tool line (pi style): bold tool name, dim target, red failure
@@ -1081,8 +1127,20 @@ fn push_entry_lines(
             out.push(Line::from(format!("• {} → {target}", call.name)).style(palette.tool_row));
         }
         ion_core::SessionEntry::ToolResult { result } => {
-            if result.is_ok() {
-                for logical_line in result.model_text().split('\n') {
+            let text = result.model_text();
+            // Settled edit hunks render in diff colors (the outcome
+            // carries the unified hunk); other output stays dim.
+            // Detection is whole-block so prose `-`/`+` lines never
+            // misrender.
+            if result.is_ok() && is_unified_diff(&text) {
+                for logical_line in text.split('\n') {
+                    if logical_line.is_empty() {
+                        continue;
+                    }
+                    out.push(diff_line(logical_line));
+                }
+            } else if result.is_ok() {
+                for logical_line in text.split('\n') {
                     if logical_line.is_empty() {
                         continue;
                     }
@@ -1092,6 +1150,11 @@ fn push_entry_lines(
                 out.push(
                     Line::from(format!("\u{2717} {}", result.model_text()))
                         .style(palette.tool_error),
+                );
+            }
+            for image in result.images() {
+                out.push(
+                    Line::from(format!("  [image {}]", image.mime_type)).style(palette.system_note),
                 );
             }
         }

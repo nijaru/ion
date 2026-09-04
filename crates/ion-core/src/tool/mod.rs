@@ -1536,7 +1536,11 @@ async fn read_secure_bytes(
     Ok(bytes)
 }
 
-async fn read_secure_text(cwd: &Path, path: &Path, allow_absolute: bool) -> Result<String, String> {
+pub(crate) async fn read_secure_text(
+    cwd: &Path,
+    path: &Path,
+    allow_absolute: bool,
+) -> Result<String, String> {
     let bytes = read_secure_bytes(cwd, path, allow_absolute).await?;
     String::from_utf8(bytes).map_err(|err| format!("file is not valid UTF-8: {err}"))
 }
@@ -1705,6 +1709,89 @@ impl Tool for WriteTool {
 
 // ---- edit ----
 
+/// Bounded unified hunk describing one edit's old→new replacement.
+///
+/// The hunk is both model verification (the edit outcome carries it
+/// instead of a dead `"edited"` constant) and display payload
+/// (frontends color `-`/`+` lines; pi renders the same shape in its
+/// diff rows). Line-oriented like a real unified diff: a mid-line
+/// string replacement shows its enclosing lines as removed/added.
+/// Pure: the caller supplies the current file content, so the
+/// approval preview and the settled outcome share one implementation.
+/// Returns `None` when `old_str` is absent — the caller owns the
+/// not-found error, never a silent empty diff.
+pub(crate) fn edit_diff_hunk(
+    path: &str,
+    original: &str,
+    old_str: &str,
+    new_str: &str,
+    context: usize,
+    max_lines: usize,
+) -> Option<String> {
+    let offset = original.find(old_str)?;
+    let end = offset + old_str.len();
+    // Expand the replaced byte range to its enclosing lines. The
+    // probe is the last replaced byte (a trailing newline belongs to
+    // the line it terminates); an empty replacement overlaps the line
+    // containing the insertion point.
+    let line_start_byte = original[..offset].rfind('\n').map_or(0, |i| i + 1);
+    let probe = if end > offset { end - 1 } else { offset };
+    let line_end_byte = original[probe..]
+        .find('\n')
+        .map_or(original.len(), |i| probe + i);
+    let old_block: Vec<&str> = original[line_start_byte..line_end_byte].lines().collect();
+    // Splice the replacement between the overlapped line's surviving
+    // prefix and suffix so the added block is the lines the file
+    // will actually contain.
+    let prefix = &original[line_start_byte..offset];
+    let suffix = &original[end..line_end_byte];
+    let new_text = format!("{prefix}{new_str}{suffix}");
+    let new_block: Vec<&str> = new_text.lines().collect();
+    let original_lines: Vec<&str> = original.lines().collect();
+    // 1-based number of the first overlapped line.
+    let change_start = original[..line_start_byte].matches('\n').count() + 1;
+    let change_idx = change_start - 1;
+    let before_start = change_start.saturating_sub(context).max(1);
+    let before: &[&str] = &original_lines
+        [(before_start - 1).min(original_lines.len())..change_idx.min(original_lines.len())];
+    let after_first = change_idx + old_block.len();
+    let after_end = (after_first + context).min(original_lines.len());
+    let after: &[&str] = if after_first < original_lines.len() {
+        &original_lines[after_first..after_end]
+    } else {
+        &[]
+    };
+    let hunk_old_count = before.len() + old_block.len() + after.len();
+    let hunk_new_count = before.len() + new_block.len() + after.len();
+    let mut body = Vec::with_capacity(hunk_old_count + new_block.len());
+    for line in before {
+        body.push(format!(" {line}"));
+    }
+    for line in &old_block {
+        body.push(format!("-{line}"));
+    }
+    for line in &new_block {
+        body.push(format!("+{line}"));
+    }
+    for line in after {
+        body.push(format!(" {line}"));
+    }
+    let mut out = vec![
+        format!("--- {path}"),
+        format!("+++ {path}"),
+        format!("@@ -{before_start},{hunk_old_count} +{before_start},{hunk_new_count} @@"),
+    ];
+    if body.len() > max_lines {
+        let omitted = body.len() - max_lines;
+        out.extend(body.into_iter().take(max_lines));
+        let noun = if omitted == 1 { "line" } else { "lines" };
+        out.push(format!("… ({omitted} more {noun})"));
+    } else {
+        out.extend(body);
+    }
+    Some(out.join("\n"))
+}
+
 pub struct EditTool {
     cwd: Arc<Path>,
 }
@@ -1758,6 +1845,11 @@ impl Tool for EditTool {
             if !original.contains(&old_str) {
                 return ToolOutcome::error("old_str not found in file");
             }
+            // The outcome carries the bounded unified hunk: model
+            // verification and the frontend's diff payload in one. The
+            // contains-check above guarantees the hunk resolves.
+            let diff = edit_diff_hunk(&path, &original, &old_str, &new_str, 3, 60)
+                .unwrap_or_else(|| format!("edited {path}"));
             let updated = original.replacen(&old_str, &new_str, 1);
             match write_secure_bytes(
                 &self.cwd,
@@ -1767,7 +1859,7 @@ impl Tool for EditTool {
             )
             .await
             {
-                Ok(()) => ToolOutcome::text("edited"),
+                Ok(()) => ToolOutcome::text(diff),
                 Err(message) => ToolOutcome::error(message),
             }
         })

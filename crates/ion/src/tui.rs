@@ -230,6 +230,9 @@ pub enum UiEffect {
 pub struct ApprovalPrompt {
     pub tool: String,
     pub target: Option<String>,
+    /// Bounded proposed-change preview (`edit` hunks); rendered in
+    /// diff colors below the prompt.
+    pub preview: Option<String>,
 }
 
 /// Extension UI presentation state (Phase G, pi ctx.ui parity): every
@@ -3359,10 +3362,19 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
         RuntimeEvent::ThinkingDelta { text, .. } => {
             state.draft_thinking.push_str(&text);
         }
-        RuntimeEvent::ApprovalPending { tool, target, .. } => {
+        RuntimeEvent::ApprovalPending {
+            tool,
+            target,
+            preview,
+            ..
+        } => {
             // The operation is live but parked; the draft stays put and
             // the prompt owns the band until the decision arrives.
-            state.approval = Some(ApprovalPrompt { tool, target });
+            state.approval = Some(ApprovalPrompt {
+                tool,
+                target,
+                preview,
+            });
             state.status = UiStatus::Working {
                 operation: "awaiting approval".to_owned(),
             };
@@ -3523,9 +3535,16 @@ impl UiState {
                 None,
             ));
             if self.tool_output_expanded {
+                // Settled edit hunks keep their diff colors in the
+                // expanded block; detection is whole-preview so prose
+                // never misrenders.
+                let diff = row.preview.as_deref().is_some_and(render::is_unified_diff);
                 for line in row.preview.iter().flat_map(|p| p.lines()) {
-                    self.pending_scrollback
-                        .push(Line::from(format!("  {line}")).dark_gray());
+                    self.pending_scrollback.push(if diff {
+                        render::diff_line(line)
+                    } else {
+                        Line::from(format!("  {line}")).dark_gray()
+                    });
                 }
             }
         }
@@ -3588,6 +3607,8 @@ impl UiState {
         };
         // A parked approval is durable state, not a live event (§17.4):
         // it must be reconstructable from the snapshot alone.
+        // The preview is display-only and recomputed on the next live
+        // park; a restored prompt decides on tool+target alone.
         self.approval = match &snapshot.operation {
             OperationStatus::Active {
                 state: OperationState::ApprovalPending { call, .. },
@@ -3595,6 +3616,7 @@ impl UiState {
             } => Some(ApprovalPrompt {
                 tool: call.name.clone(),
                 target: None,
+                preview: None,
             }),
             _ => None,
         };
@@ -4270,7 +4292,8 @@ pub async fn run(
         OperationStatus::Idle => None,
     };
     // A parked approval is durable state: re-surface it at launch so a
-    // resume never strands a waiting decision (§17.4).
+    // resume never strands a waiting decision (§17.4). The preview is
+    // display-only and recomputed on the next live park.
     state.approval = match &snapshot.operation {
         OperationStatus::Active {
             state: OperationState::ApprovalPending { call, .. },
@@ -4278,6 +4301,7 @@ pub async fn run(
         } => Some(ApprovalPrompt {
             tool: call.name.clone(),
             target: None,
+            preview: None,
         }),
         _ => None,
     };
@@ -5946,6 +5970,9 @@ pub(crate) mod tests {
             Some(ApprovalPrompt {
                 tool: "bash".to_owned(),
                 target: None,
+                // Snapshot restore carries no preview: the prompt
+                // decides on tool+target; the next live park fills it.
+                preview: None,
             })
         );
 
@@ -5969,6 +5996,7 @@ pub(crate) mod tests {
             state.approval = Some(ApprovalPrompt {
                 tool: "bash".to_owned(),
                 target: Some("echo hi".to_owned()),
+                preview: None,
             });
             state
         };
@@ -6025,6 +6053,7 @@ pub(crate) mod tests {
                 operation_id,
                 tool: "bash".to_owned(),
                 target: Some("echo hi".to_owned()),
+                preview: None,
             },
         );
         assert_eq!(
@@ -6032,6 +6061,7 @@ pub(crate) mod tests {
             Some(ApprovalPrompt {
                 tool: "bash".to_owned(),
                 target: Some("echo hi".to_owned()),
+                preview: None,
             })
         );
 
@@ -6052,6 +6082,7 @@ pub(crate) mod tests {
         state.approval = Some(ApprovalPrompt {
             tool: "bash".to_owned(),
             target: None,
+            preview: None,
         });
         state = apply_runtime_event(
             state,
@@ -6062,6 +6093,108 @@ pub(crate) mod tests {
         );
         assert!(state.approval.is_none());
         assert_eq!(state.status, UiStatus::Idle);
+    }
+
+    #[test]
+    fn approval_preview_threads_into_the_prompt() {
+        let operation_id = OperationId::generate();
+        let preview = "--- f.txt\n+++ f.txt\n@@ -2,3 +2,3 @@\n two\n-three\n+THREE".to_owned();
+        let state = apply_runtime_event(
+            UiState::new(),
+            RuntimeEvent::ApprovalPending {
+                cursor: RuntimeCursor::default(),
+                operation_id,
+                tool: "edit".to_owned(),
+                target: Some("f.txt".to_owned()),
+                preview: Some(preview.clone()),
+            },
+        );
+        assert_eq!(
+            state.approval,
+            Some(ApprovalPrompt {
+                tool: "edit".to_owned(),
+                target: Some("f.txt".to_owned()),
+                preview: Some(preview),
+            })
+        );
+    }
+
+    #[test]
+    fn unified_diff_detection_is_whole_block() {
+        assert!(render::is_unified_diff(
+            "--- a\n+++ b\n@@ -1,1 +1,1 @@\n-x\n+y"
+        ));
+        assert!(!render::is_unified_diff("- just a dash list\n- another"));
+        assert!(!render::is_unified_diff("use a-b and c+d here"));
+        assert!(!render::is_unified_diff(""));
+    }
+
+    #[test]
+    fn resume_renders_settled_edit_hunks_in_diff_colors() {
+        use ion_core::{SessionEntry, ToolResult};
+        let pal = palette(Theme::Dark);
+        let diff = "--- f.txt\n+++ f.txt\n@@ -1,2 +1,2 @@\n-one\n+ONE\n two";
+        let lines = render::entry_lines(
+            &[SessionEntry::ToolResult {
+                result: ToolResult::Ok {
+                    call_id: 1,
+                    output: diff.to_owned(),
+                    artifact: None,
+                    images: Vec::new(),
+                },
+            }],
+            &pal,
+        );
+        let colors: Vec<Option<Color>> = lines.iter().map(|l| l.style.fg).collect();
+        // ---/+++ headers dim (fg None), hunk cyan, -/+ red/green,
+        // context dim.
+        assert_eq!(
+            colors,
+            vec![
+                None,
+                None,
+                Some(Color::Cyan),
+                Some(Color::Red),
+                Some(Color::Green),
+                None
+            ]
+        );
+        // Prose output stays uniformly dim: no @@ header, no coloring.
+        let prose = render::entry_lines(
+            &[SessionEntry::ToolResult {
+                result: ToolResult::Ok {
+                    call_id: 1,
+                    output: "- a dash list\n- items".to_owned(),
+                    artifact: None,
+                    images: Vec::new(),
+                },
+            }],
+            &pal,
+        );
+        assert!(
+            prose
+                .iter()
+                .all(|l| l.style.fg.is_none() || l.style.fg == pal.system_note.fg)
+        );
+    }
+
+    #[test]
+    fn diff_lines_carry_terminal_native_colors() {
+        use ratatui::style::Color;
+        assert_eq!(render::diff_line("-old").style.fg, Some(Color::Red));
+        assert_eq!(render::diff_line("+new").style.fg, Some(Color::Green));
+        assert_eq!(
+            render::diff_line("@@ -1,1 +1,1 @@").style.fg,
+            Some(Color::Cyan)
+        );
+        assert_eq!(render::diff_line("--- f").style.fg, None);
+        // Context lines render dim, not unstyled.
+        let ctx = render::diff_line(" same");
+        assert!(
+            ctx.style
+                .add_modifier
+                .contains(ratatui::style::Modifier::DIM)
+        );
     }
 
     #[test]
@@ -6183,6 +6316,7 @@ pub(crate) mod tests {
         state.approval = Some(ApprovalPrompt {
             tool: "bash".to_owned(),
             target: None,
+            preview: None,
         });
         let (state, _) = update(state, UiMessage::Paste("must not enter".to_owned()));
         assert!(state.composer.is_empty());
@@ -6777,6 +6911,7 @@ mod session_command_tests {
         state.approval = Some(ApprovalPrompt {
             tool: "bash".to_owned(),
             target: None,
+            preview: None,
         });
         let (state, effect) = command(state, "new");
         assert!(effect.is_none());

@@ -626,3 +626,57 @@ async fn allowlist_policy_admits_bash_and_denial_is_model_visible() {
     });
     assert!(denied, "policy denial must be model-visible: {loaded:?}");
 }
+
+#[tokio::test]
+async fn parked_edit_carries_a_diff_preview_for_the_approval_prompt() {
+    let root = tempfile::tempdir().expect("root tempdir");
+    std::fs::write(root.path().join("target.txt"), "alpha\nbeta\ngamma\n").expect("seed file");
+    // Edit is outside the allowlist, so the interactive runtime parks
+    // for a decision instead of executing.
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = Runtime::start_interactive(
+        ScriptedProvider::new(vec![ScriptedMessage::tool(
+            "edit",
+            json!({"path":"target.txt","old_str":"beta","new_str":"BETA"}),
+        )]),
+        ToolCatalog::with_cwd(root.path()),
+        store.clone(),
+        Arc::new(AllowlistPolicy::new(["read"])),
+        Vec::new(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    let mut preview = None;
+    let mut parked_operation = None;
+    for _ in 0..40 {
+        let event = timeout(Duration::from_secs(2), events.recv())
+            .await
+            .expect("approval park timed out");
+        if let RuntimeEvent::ApprovalPending {
+            tool,
+            preview: p,
+            operation_id,
+            ..
+        } = event.expect("event")
+        {
+            assert_eq!(tool, "edit");
+            preview = p;
+            parked_operation = Some(operation_id);
+            break;
+        }
+    }
+    let preview = preview.expect("parked edit must carry a preview");
+    assert!(preview.contains("-beta"), "removed line missing: {preview}");
+    assert!(preview.contains("+BETA"), "added line missing: {preview}");
+    assert!(preview.contains("@@ "), "hunk header missing: {preview}");
+    // Declining leaves the file untouched: the preview was display-only.
+    session
+        .decide_approval(parked_operation.expect("parked operation"), false)
+        .await
+        .expect("decline the parked edit");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let content = std::fs::read_to_string(root.path().join("target.txt")).expect("read back");
+    assert_eq!(content, "alpha\nbeta\ngamma\n");
+}

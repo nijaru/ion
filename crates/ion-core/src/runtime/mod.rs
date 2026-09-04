@@ -177,6 +177,27 @@ fn bounded_frame_text(text: &str) -> String {
 /// One-line display summary of a call's canonical target (best
 /// effort; None when canonicalization fails — the denial surfaces
 /// elsewhere).
+/// Best-effort proposed-change preview for an `edit` awaiting
+/// approval: a bounded unified hunk against the file's current
+/// content, sharing the settled outcome's implementation. Display-only
+/// and read-only; `None` when the arguments are unusable or the file
+/// cannot be read (the denial surfaces through the normal path).
+async fn edit_approval_preview(
+    tools: &ToolRegistry,
+    arguments: &serde_json::Value,
+) -> Option<String> {
+    let path = arguments.get("path")?.as_str()?;
+    let old_str = arguments.get("old_str")?.as_str()?;
+    let new_str = arguments
+        .get("new_str")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let original = crate::tool::read_secure_text(tools.cwd(), std::path::Path::new(path), false)
+        .await
+        .ok()?;
+    crate::tool::edit_diff_hunk(path, &original, old_str, new_str, 3, 24)
+}
+
 fn target_summary_registry(
     tools: &ToolRegistry,
     name: &str,
@@ -316,6 +337,12 @@ pub enum RuntimeEvent {
         tool: String,
         /// Short canonical-target summary for display (path or command).
         target: Option<String>,
+        /// Bounded proposed-change preview for display only (currently
+        /// a unified hunk for `edit`, computed against the file's
+        /// current content; `None` for other tools or when the file
+        /// cannot be read). Never semantic: the decision re-resolves
+        /// the call against live state.
+        preview: Option<String>,
     },
     SessionClosed {
         cursor: RuntimeCursor,
@@ -3803,11 +3830,20 @@ impl<P: Provider> SessionRuntime<P> {
                 staged.state_seq += 1;
                 self.install_active(staged);
                 let target = target_summary_registry(&step_tools, &call.name, &call.arguments);
+                // Display-only proposed change for `edit` (bounded hunk
+                // against current content); other tools park with target
+                // alone, as before.
+                let preview = if call.name == "edit" {
+                    edit_approval_preview(&step_tools, &call.arguments).await
+                } else {
+                    None
+                };
                 self.emit(RuntimeEvent::ApprovalPending {
                     cursor: RuntimeCursor::default(),
                     operation_id: call.operation_id,
                     tool: call.name.clone(),
                     target,
+                    preview,
                 });
                 info!(tool = %call.name, "approval requested; parking the operation");
                 return true;
