@@ -2099,6 +2099,48 @@ fn handle_dialog_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEf
 }
 
 fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    // App-level quit keys stay live above transient UI (pi parity:
+    // app.exit is never swallowed by a picker). Selectors and the
+    // hotkeys overlay save/restore the composer, so closing them
+    // first loses nothing; the normal quit/clear logic then runs and
+    // always says what it did. Scoped to transient UI only: the
+    // approval prompt and extension dialogs stay modal (a durable
+    // decision is pending there).
+    let transient_open = state.model_selector.is_some()
+        || state.thinking_selector.is_some()
+        || state.session_selector.is_some()
+        || state.file_selector.is_some()
+        || state.hotkeys_visible;
+    if transient_open && let Some(action) = state.keymap.action_for(&key) {
+        match action {
+            Action::Quit => {
+                state.close_model_selector();
+                state.close_thinking_selector();
+                state.close_session_selector();
+                state.close_file_selector();
+                state.hotkeys_visible = false;
+                return handle_action(state, action);
+            }
+            // Cancel the picker (pi's select.cancel): close it and
+            // keep the restored draft — closing a picker never
+            // destroys text. An empty restore arms the double-press
+            // exit; a restored draft is left for the normal rules
+            // (the hint never promises what the next press won't do).
+            Action::ClearComposer => {
+                state.close_model_selector();
+                state.close_thinking_selector();
+                state.close_session_selector();
+                state.close_file_selector();
+                state.hotkeys_visible = false;
+                if state.composer.is_empty() {
+                    state.hint = Some("ctrl+c again to exit".to_owned());
+                    state.last_clear = Some(std::time::Instant::now());
+                }
+                return (state, None);
+            }
+            _ => {}
+        }
+    }
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
     }
@@ -5437,6 +5479,73 @@ pub(crate) mod tests {
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
         assert_eq!(state.pending_scrollback.len(), 13);
+    }
+
+    #[test]
+    fn quit_keys_stay_live_with_a_selector_open() {
+        // The reported "can't quit": selectors swallowed ctrl+d and
+        // ctrl+c, and /quit became filter text. Quit keys now close
+        // transient UI first, then run the normal logic.
+        let with_selector = || {
+            let mut state = UiState::new();
+            state.open_model_selector("");
+            assert!(state.model_selector.is_some());
+            state
+        };
+        // ctrl+d on an empty idle composer quits straight out of the
+        // selector (no state worth protecting; composer restores).
+        let (state, effect) = update(with_selector(), ctrl('d'));
+        assert!(state.model_selector.is_none());
+        assert_eq!(effect, Some(UiEffect::Quit));
+        assert!(state.quit_requested);
+        // ctrl+d while busy closes the selector and says why it
+        // cannot quit instead of dying silent.
+        let mut busy = with_selector();
+        busy.status = UiStatus::Working {
+            operation: "busy".to_owned(),
+        };
+        let (state, effect) = update(busy, ctrl('d'));
+        assert!(state.model_selector.is_none());
+        assert_eq!(effect, None);
+        assert_eq!(
+            state.hint.as_deref(),
+            Some("ctrl+d exits only when idle — /quit works now")
+        );
+        // ctrl+c closes the selector and arms the double-press exit;
+        // the pre-selector draft restores untouched.
+        let mut drafted = UiState::new();
+        drafted.composer = "keep me".to_owned();
+        drafted.cursor = 7;
+        drafted.open_model_selector("");
+        let (state, effect) = update(drafted, ctrl('c'));
+        assert!(state.model_selector.is_none());
+        assert_eq!(effect, None);
+        assert_eq!(state.composer.as_str(), "keep me");
+        assert!(state.hint.is_none(), "no promise the next press won't keep");
+        // The restored draft follows the normal rules: this press
+        // clears it, the next arms, the next quits.
+        let (state, effect) = update(state, ctrl('c'));
+        assert_eq!(effect, None);
+        assert!(state.composer.is_empty());
+        let (state, effect) = update(state, ctrl('c'));
+        assert_eq!(effect, None);
+        assert_eq!(state.hint.as_deref(), Some("ctrl+c again to exit"));
+        let (_, effect) = update(state, ctrl('c'));
+        assert_eq!(effect, Some(UiEffect::Quit));
+        // Empty restore arms immediately: two presses exit.
+        let (state, _) = update(with_selector(), ctrl('c'));
+        assert_eq!(state.hint.as_deref(), Some("ctrl+c again to exit"));
+        let (_, effect) = update(state, ctrl('c'));
+        assert_eq!(effect, Some(UiEffect::Quit));
+    }
+
+    #[test]
+    fn quit_keys_close_the_hotkeys_overlay() {
+        let mut state = UiState::new();
+        state.hotkeys_visible = true;
+        let (state, effect) = update(state, ctrl('d'));
+        assert!(!state.hotkeys_visible);
+        assert_eq!(effect, Some(UiEffect::Quit));
     }
 
     #[test]
