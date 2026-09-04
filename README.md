@@ -35,7 +35,11 @@ For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
 | Command | Behavior |
 | :--- | :--- |
 | `ion` | Interactive TUI (new session) |
-| `ion --resume` | Reopen the most recent persisted session |
+| `ion --resume` / `ion -c` | Reopen the most recent persisted session |
+| `ion --session <id>` | Open a session by id (exact or unique prefix) |
+| `ion --fork <id>` | Fork a session into a new one and open the fork |
+| `ion --name <name>` | Title a new session (fresh, fork, or ephemeral) |
+| `ion --no-session` | Ephemeral TUI run: nothing persisted |
 | `ion -p "prompt"` | Run one prompt in print mode and exit |
 | `ion --acp` | Serve Agent Client Protocol v1 on stdio |
 | `ion --allow bash,write` | Print mode: tools that may run without approval |
