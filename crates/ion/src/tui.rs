@@ -2717,12 +2717,17 @@ fn handle_action(mut state: UiState, action: Action) -> (UiState, Option<UiEffec
                 (state, Some(UiEffect::Cancel))
             }
         }
-        // Pi parity: ctrl+d exits only from an empty, idle composer.
+        // Pi parity: ctrl+d exits only from an empty, idle composer;
+        // a refusal always explains itself so quit is never silent.
         Action::Quit => {
             if state.composer.is_empty() && matches!(state.status, UiStatus::Idle) {
                 state.quit_requested = true;
                 (state, Some(UiEffect::Quit))
+            } else if !state.composer.is_empty() {
+                state.hint = Some("ctrl+d exits only from an empty composer".to_owned());
+                (state, None)
             } else {
+                state.hint = Some("ctrl+d exits only when idle — /quit works now".to_owned());
                 (state, None)
             }
         }
@@ -4147,7 +4152,10 @@ pub async fn run(
             env!("CARGO_PKG_VERSION")
         )
     } else {
-        format!("ion v{}", env!("CARGO_PKG_VERSION"))
+        format!(
+            "ion v{} — enter sends; ctrl+c twice or /quit exits",
+            env!("CARGO_PKG_VERSION")
+        )
     };
     {
         let out = terminal.output();
@@ -6265,6 +6273,12 @@ pub(crate) mod tests {
         let (state, effect) = update(state, ctrl('d'));
         assert_eq!(effect, None);
         assert!(!state.quit_requested);
+        // Refusals explain themselves: the hint names the guard and the
+        // always-available exit so quit is never silent.
+        assert_eq!(
+            state.hint.as_deref(),
+            Some("ctrl+d exits only from an empty composer")
+        );
         let mut state = state;
         state.composer.clear();
         state.status = UiStatus::Working {
@@ -6272,6 +6286,10 @@ pub(crate) mod tests {
         };
         let (state, effect) = update(state, ctrl('d'));
         assert_eq!(effect, None);
+        assert_eq!(
+            state.hint.as_deref(),
+            Some("ctrl+d exits only when idle — /quit works now")
+        );
         let mut state = state;
         state.status = UiStatus::Idle;
         let (_, effect) = update(state, ctrl('d'));
