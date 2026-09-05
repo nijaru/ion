@@ -140,6 +140,31 @@ pub struct Settings {
     /// which pi defaults to true).
     #[serde(default = "hide_thinking_block_default")]
     pub hide_thinking_block: bool,
+    /// Transient provider-failure retry (pi-parity `settings.retry`).
+    #[serde(default)]
+    retry: RetrySettings,
+}
+
+/// `[retry]`: pi's `settings.retry` grammar. Defaults mirror pi's
+/// enabled / 3 retries / 2s exponential base.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Default)]
+pub struct RetrySettings {
+    pub enabled: Option<bool>,
+    pub max_retries: Option<u32>,
+    pub base_delay_ms: Option<u64>,
+}
+
+impl RetrySettings {
+    /// Resolve into the core policy, filling unset keys with pi's
+    /// defaults (enabled, 3 retries, 2000ms base).
+    #[must_use]
+    pub fn resolve(&self) -> ion_core::RetryPolicy {
+        ion_core::RetryPolicy {
+            enabled: self.enabled.unwrap_or(true),
+            max_retries: self.max_retries.unwrap_or(3),
+            base_delay_ms: self.base_delay_ms.unwrap_or(2000),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -180,6 +205,13 @@ impl From<McpServerConfig> for ion_core::ServerDef {
 }
 
 impl Settings {
+    /// The resolved transient-failure retry policy for runtime
+    /// composition.
+    #[must_use]
+    pub fn retry_policy(&self) -> ion_core::RetryPolicy {
+        self.retry.resolve()
+    }
+
     /// Compiled-in defaults, mirroring the maintainer's pi settings.
     /// Used only when no settings file exists; a file that omits a key
     /// means the key is unset.
@@ -200,6 +232,7 @@ impl Settings {
             extensions: Vec::new(),
             enable_agents: false,
             hide_thinking_block: true,
+            retry: RetrySettings::default(),
         }
     }
     pub fn path() -> Option<PathBuf> {
@@ -232,6 +265,7 @@ impl Settings {
             extensions: Vec::new(),
             enable_agents: false,
             hide_thinking_block: false,
+            retry: RetrySettings::default(),
         }
     }
 
@@ -583,4 +617,34 @@ pub fn load_extension_defs(
 struct ProjectExtensions {
     #[serde(default)]
     extensions: Vec<ExtensionConfig>,
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn retry_defaults_match_pi() {
+        let policy = Settings::empty().retry_policy();
+        assert!(policy.enabled);
+        assert_eq!(policy.max_retries, 3);
+        assert_eq!(policy.base_delay_ms, 2000);
+    }
+
+    #[test]
+    fn retry_settings_override_and_disable() {
+        let settings: Settings = toml::from_str(
+            r#"
+            [retry]
+            enabled = false
+            max_retries = 5
+            base_delay_ms = 500
+            "#,
+        )
+        .expect("parse retry table");
+        let policy = settings.retry_policy();
+        assert!(!policy.enabled);
+        assert_eq!(policy.max_retries, 5);
+        assert_eq!(policy.base_delay_ms, 500);
+    }
 }

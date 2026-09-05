@@ -202,6 +202,22 @@ pub fn scripted_provider_factory(
     Arc::new(move || CliProvider::Scripted(ScriptedProvider::new(script.clone())))
 }
 
+/// Transport-level error text with the root cause unwrapped: reqwest's
+/// Display is generic (`error sending request for url (…)`), which
+/// hides whether the failure was a refused connection, a DNS miss, or
+/// a timeout — the detail transient-retry classification and users
+/// both need.
+#[must_use]
+pub fn transport_error_text(err: &reqwest::Error) -> String {
+    let mut root = err.to_string();
+    let mut source = std::error::Error::source(err);
+    while let Some(cause) = source {
+        root = cause.to_string();
+        source = cause.source();
+    }
+    format!("{err} ({root})")
+}
+
 #[cfg(test)]
 mod provider_identity_tests {
     use super::*;

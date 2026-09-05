@@ -302,6 +302,18 @@ pub enum RuntimeEvent {
         step: u64,
         usage: TokenUsage,
     },
+    /// A transient provider failure was classified retryable: the next
+    /// attempt starts after `delay_ms`. Display-only; the durable step
+    /// stays open and the failed attempt's partial output is already
+    /// discarded (partial output never becomes content).
+    RetryScheduled {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        message: String,
+    },
     OperationFinished {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -369,6 +381,7 @@ impl RuntimeEvent {
             | Self::OperationIndeterminate { operation_id, .. }
             | Self::OperationCancelled { operation_id, .. }
             | Self::OperationApprovalRequired { operation_id, .. }
+            | Self::RetryScheduled { operation_id, .. }
             | Self::ApprovalPending { operation_id, .. } => Some(*operation_id),
             Self::ShellStarted { .. }
             | Self::ShellOutput { .. }
@@ -392,6 +405,7 @@ impl RuntimeEvent {
             | Self::OperationIndeterminate { cursor, .. }
             | Self::OperationCancelled { cursor, .. }
             | Self::OperationApprovalRequired { cursor, .. }
+            | Self::RetryScheduled { cursor, .. }
             | Self::ApprovalPending { cursor, .. }
             | Self::ShellStarted { cursor, .. }
             | Self::ShellOutput { cursor, .. }
@@ -982,6 +996,8 @@ struct Composition<P> {
     fork_source: Option<(SessionId, Option<EntryId>)>,
     trusted_resources: Vec<TrustedResource>,
     effect_gate: Option<Arc<EffectGate>>,
+    /// Transient provider-failure retry (pi's `settings.retry`).
+    retry: crate::provider::RetryPolicy,
     /// Host-selected workspace identity. A reopened session uses the
     /// persisted value instead, so process cwd cannot silently change it.
     cwd: Option<String>,
@@ -1001,6 +1017,7 @@ impl<P: Provider> Composition<P> {
             fork_source: None,
             trusted_resources: Vec::new(),
             effect_gate: None,
+            retry: crate::provider::RetryPolicy::default(),
             cwd: None,
             defer_loaded_start: false,
         }
@@ -1019,6 +1036,7 @@ impl<P: Provider> Composition<P> {
         let artifact_root = self.store.artifact_root();
         let trusted_resources = self.trusted_resources;
         let effect_gate = self.effect_gate;
+        let retry = self.retry;
         let cwd = loaded
             .as_ref()
             .map(|loaded| loaded.session.cwd.clone())
@@ -1048,6 +1066,7 @@ impl<P: Provider> Composition<P> {
                     parent: self.parent,
                     fork_source: self.fork_source,
                     defer_loaded_start: deferred_loaded_start,
+                    retry,
                 },
                 rx,
                 loaded,
@@ -1155,10 +1174,32 @@ impl Runtime {
         policy: Arc<dyn PolicyEngine>,
         trusted_resources: Vec<TrustedResource>,
     ) -> Self {
+        Self::start_interactive_with_retry(
+            provider,
+            tools,
+            store,
+            policy,
+            trusted_resources,
+            crate::provider::RetryPolicy::default(),
+        )
+    }
+
+    /// `start_interactive` with an explicit transient-failure retry
+    /// policy (pi's `settings.retry`).
+    #[must_use]
+    pub fn start_interactive_with_retry(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+        retry: crate::provider::RetryPolicy,
+    ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.interactive_approvals = true;
         composition.trusted_resources = trusted_resources;
+        composition.retry = retry;
         composition.spawn(SessionId::generate(), None)
     }
 
@@ -1285,6 +1326,29 @@ impl Runtime {
         policy: Arc<dyn PolicyEngine>,
         trusted_resources: Vec<TrustedResource>,
     ) -> Result<Self, RuntimeError> {
+        Self::open_interactive_with_retry(
+            provider,
+            tools,
+            store,
+            session_id,
+            policy,
+            trusted_resources,
+            crate::provider::RetryPolicy::default(),
+        )
+        .await
+    }
+
+    /// `open_interactive` with an explicit transient-failure retry
+    /// policy (pi's `settings.retry`).
+    pub async fn open_interactive_with_retry(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        session_id: SessionId,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+        retry: crate::provider::RetryPolicy,
+    ) -> Result<Self, RuntimeError> {
         let loaded = store
             .load(session_id)
             .await
@@ -1293,6 +1357,7 @@ impl Runtime {
         composition.policy = policy;
         composition.interactive_approvals = true;
         composition.trusted_resources = trusted_resources;
+        composition.retry = retry;
         composition.defer_loaded_start = true;
         Ok(composition.spawn(session_id, Some(loaded)))
     }
@@ -1379,7 +1444,7 @@ impl Runtime {
 /// model's window (14.7.4)? Conservative substring match over the
 /// common provider phrasings; unknown phrasings fail visibly instead
 /// of triggering a speculative compaction.
-fn is_context_overflow(message: &str) -> bool {
+pub(crate) fn is_context_overflow(message: &str) -> bool {
     let lowered = message.to_lowercase();
     lowered.contains("context length")
         || lowered.contains("context window")
@@ -1535,6 +1600,7 @@ struct SessionDeps<P> {
     /// Explicit history lineage; independent from control parentage.
     fork_source: Option<(SessionId, Option<EntryId>)>,
     defer_loaded_start: bool,
+    retry: crate::provider::RetryPolicy,
 }
 
 struct SessionRuntime<P> {
@@ -1564,6 +1630,8 @@ struct SessionRuntime<P> {
     /// The running passthrough's cancel token, when one is in flight.
     shell_cancel: Option<tokio_util::sync::CancellationToken>,
     cancel_root: CancellationToken,
+    /// Transient provider-failure retry policy (pi `settings.retry`).
+    retry: crate::provider::RetryPolicy,
     tracker: TaskTracker,
     cursor: RuntimeCursor,
     /// Full canonical conversation tree in global durable sequence order.
@@ -1638,6 +1706,7 @@ impl<P: Provider> SessionRuntime<P> {
             parent,
             fork_source,
             defer_loaded_start,
+            retry,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -1684,6 +1753,7 @@ impl<P: Provider> SessionRuntime<P> {
             shell_rx,
             shell_cancel: None,
             cancel_root: CancellationToken::new(),
+            retry,
             tracker: TaskTracker::new(),
             cursor: RuntimeCursor::default(),
             tree_entries: Vec::new(),
@@ -4487,7 +4557,8 @@ fn signal_operation_id(signal: &EngineSignal) -> OperationId {
         | EngineSignal::Completed { operation_id, .. }
         | EngineSignal::Failed { operation_id, .. }
         | EngineSignal::Cancelled { operation_id, .. }
-        | EngineSignal::ProviderExited { operation_id, .. } => *operation_id,
+        | EngineSignal::ProviderExited { operation_id, .. }
+        | EngineSignal::RetryScheduled { operation_id, .. } => *operation_id,
     }
 }
 
@@ -4500,7 +4571,8 @@ fn signal_step(signal: &EngineSignal) -> u64 {
         | EngineSignal::Completed { step, .. }
         | EngineSignal::Failed { step, .. }
         | EngineSignal::Cancelled { step, .. }
-        | EngineSignal::ProviderExited { step, .. } => *step,
+        | EngineSignal::ProviderExited { step, .. }
+        | EngineSignal::RetryScheduled { step, .. } => *step,
     }
 }
 
@@ -4518,6 +4590,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::OperationIndeterminate { cursor: slot, .. }
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
         | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
+        | RuntimeEvent::RetryScheduled { cursor: slot, .. }
         | RuntimeEvent::ApprovalPending { cursor: slot, .. }
         | RuntimeEvent::ShellStarted { cursor: slot, .. }
         | RuntimeEvent::ShellOutput { cursor: slot, .. }
@@ -4535,6 +4608,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ToolProgress { .. } => "tool_progress",
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::UsageUpdate { .. } => "usage_update",
+        RuntimeEvent::RetryScheduled { .. } => "retry_scheduled",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",

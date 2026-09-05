@@ -3518,6 +3518,29 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                     .saturating_add(steps.cache_write),
             };
         }
+        RuntimeEvent::RetryScheduled {
+            attempt,
+            max_attempts,
+            delay_ms,
+            message,
+            ..
+        } => {
+            // The failed attempt's partial output never becomes content:
+            // drop the accumulated draft (the runtime already cleared
+            // its own). The failure reason lands in scrollback; the
+            // status keeps pi's countdown grammar so it survives narrow
+            // rules.
+            state.draft.clear();
+            state.draft_thinking.clear();
+            state.draft_degraded = false;
+            state
+                .pending_scrollback
+                .push(Line::from(format!("! retrying: {message}")).yellow());
+            let seconds = delay_ms.div_ceil(1000);
+            state.status = UiStatus::Working {
+                operation: format!("retrying ({attempt}/{max_attempts}) in {seconds}s"),
+            };
+        }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
             state.approval = None;
@@ -7208,6 +7231,41 @@ mod display_surface_tests {
         let state = update(state, settled(Some("hello\nworld".to_owned()))).0;
         let row = state.tool_rows.last().expect("row");
         assert_eq!(row.preview.as_deref(), Some("hello\nworld"));
+    }
+
+    #[test]
+    fn retry_scheduled_discards_the_partial_draft_and_counts_down() {
+        let state = started(UiState::new());
+        let mut state = state;
+        state.draft = "partial output".to_owned();
+        state.draft_thinking = "partial thought".to_owned();
+        let state = apply_runtime_event(
+            state,
+            RuntimeEvent::RetryScheduled {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                attempt: 1,
+                max_attempts: 3,
+                delay_ms: 2000,
+                message: "provider returned 429".to_owned(),
+            },
+        );
+        // Partial output never becomes content: the draft is dropped.
+        assert!(state.draft.is_empty());
+        assert!(state.draft_thinking.is_empty());
+        // The failure reason lands in scrollback.
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("provider returned 429"))
+        );
+        match state.status {
+            UiStatus::Working { operation } => {
+                assert_eq!(operation, "retrying (1/3) in 2s");
+            }
+            UiStatus::Idle => panic!("retry keeps the operation working"),
+        }
     }
 
     #[test]

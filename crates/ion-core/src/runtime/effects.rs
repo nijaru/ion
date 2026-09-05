@@ -28,11 +28,9 @@ impl<P: Provider> SessionRuntime<P> {
         };
         debug!(%operation_id, step, model = %model.model_ref, "starting model step effect");
         let terminal = self.engine_tx.clone();
+        let retry = self.retry.clone();
         self.tracker.spawn(async move {
-            provider.run(request, cancel, out.clone()).await;
-            let _ = terminal
-                .send(EngineSignal::ProviderExited { operation_id, step })
-                .await;
+            crate::provider::run_with_retry(provider, request, cancel, out, retry, terminal).await;
         });
     }
 
@@ -231,6 +229,31 @@ impl<P: Provider> SessionRuntime<P> {
                     Transition::ProviderCompleted { text, tool_calls }
                 };
                 self.settle_model_step(operation_id, transition).await;
+            }
+            EngineSignal::RetryScheduled {
+                attempt,
+                max_attempts,
+                delay_ms,
+                message,
+                ..
+            } => {
+                // The failed attempt's partial buffers are discarded
+                // before the next attempt streams (partial model output
+                // is never completed assistant content); the effect
+                // stays open and the step counter is unchanged.
+                let live = self.live_mut(operation_id);
+                let live = live.expect("resident operation has live execution state");
+                live.draft_text.clear();
+                live.draft_thinking.clear();
+                live.draft_usage = None;
+                self.emit(RuntimeEvent::RetryScheduled {
+                    cursor: RuntimeCursor::default(),
+                    operation_id,
+                    attempt,
+                    max_attempts,
+                    delay_ms,
+                    message,
+                });
             }
             EngineSignal::Failed { message, .. } => {
                 let cancel_requested = self
@@ -529,6 +552,10 @@ impl<P: Provider> SessionRuntime<P> {
             }
             EngineSignal::ThinkingDelta { .. } => return,
             EngineSignal::ToolCallCompleted { .. } | EngineSignal::UsageUpdate { .. } => return,
+            // Retries never apply to compaction steps (the wrapper only
+            // retries model-step requests), but a raced signal must not
+            // panic: treat it as a failed generation.
+            EngineSignal::RetryScheduled { .. } => Transition::CompactionFailed,
         };
         let applied = staged
             .machine

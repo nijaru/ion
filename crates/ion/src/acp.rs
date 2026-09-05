@@ -450,7 +450,11 @@ where
             RuntimeEvent::ApprovalPending { tool, .. } => {
                 return TurnStop::ApprovalRequired(tool);
             }
-            RuntimeEvent::OperationStarted { .. } | RuntimeEvent::SessionClosed { .. } => {}
+            // Retry notices are progress, not completion: the turn
+            // continues when the next attempt settles.
+            RuntimeEvent::RetryScheduled { .. }
+            | RuntimeEvent::OperationStarted { .. }
+            | RuntimeEvent::SessionClosed { .. } => {}
         }
     }
 }

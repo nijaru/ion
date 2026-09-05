@@ -16,7 +16,7 @@ pub(super) use crate::operation::{
 };
 pub(super) use crate::policy::{AllowlistPolicy, PolicyEngine};
 pub(super) use crate::provider::{
-    EngineSignal, Provider, ProviderRequest, ScriptedMessage, ScriptedProvider,
+    EngineSignal, Provider, ProviderRequest, RetryPolicy, ScriptedMessage, ScriptedProvider,
 };
 pub(super) use crate::runtime::{
     EffectBoundary, EffectGate, OperationStatus, Runtime, RuntimeEvent, SaturatedHandle,
@@ -93,6 +93,7 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::ToolProgress { .. } => "tool_progress",
             RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::UsageUpdate { .. } => "usage_update",
+            RuntimeEvent::RetryScheduled { .. } => "retry_scheduled",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
             RuntimeEvent::OperationFailed { .. } => "operation_failed",
             RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",

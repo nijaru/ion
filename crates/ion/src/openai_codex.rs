@@ -267,7 +267,10 @@ impl Provider for OpenAICodexProvider {
                     match response {
                         Ok(response) => response,
                         Err(err) => {
-                            send_failed(&out, operation_id, step, &format!("provider request failed: {err}")).await;
+                            send_failed(&out, operation_id, step, &format!(
+                                "provider request failed: {}",
+                                crate::transport_error_text(&err)
+                            )).await;
                             return;
                         }
                     }
@@ -301,7 +304,10 @@ impl Provider for OpenAICodexProvider {
                     chunk = stream.next() => match chunk {
                         Some(Ok(bytes)) => bytes,
                         Some(Err(err)) => {
-                            send_failed(&out, operation_id, step, &format!("provider stream failed: {err}")).await;
+                            send_failed(&out, operation_id, step, &format!(
+                                "provider stream failed: {}",
+                                crate::transport_error_text(&err)
+                            )).await;
                             return;
                         }
                         None => break,

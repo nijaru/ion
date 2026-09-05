@@ -592,8 +592,10 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             .clone()
             .unwrap_or_else(|| Arc::new(move |_model_ref: String| make_provider_for_factory()));
         let agents_enabled = settings.agents_enabled();
+        let retry = settings.retry_policy();
         Arc::new(move |start| {
             let runtime_factory = |start: ion::session_manager::SessionStart| {
+                let retry = retry.clone();
                 let root_provider = Arc::clone(&root_provider);
                 let tools = tools.clone();
                 let store = store.clone();
@@ -606,13 +608,16 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 let make_qualified = Arc::clone(&make_qualified);
                 Box::pin(async move {
                     let runtime = match start {
-                        ion::session_manager::SessionStart::New => Runtime::start_interactive(
-                            root_provider.clone(),
-                            tools.clone(),
-                            store.clone(),
-                            Arc::clone(&policy),
-                            trusted.clone(),
-                        ),
+                        ion::session_manager::SessionStart::New => {
+                            Runtime::start_interactive_with_retry(
+                                root_provider.clone(),
+                                tools.clone(),
+                                store.clone(),
+                                Arc::clone(&policy),
+                                trusted.clone(),
+                                retry.clone(),
+                            )
+                        }
                         ion::session_manager::SessionStart::Resume(session_id) => {
                             // The durable model is authoritative (§14.8): a fresh
                             // provider is composed for it, never the launch default.
@@ -625,7 +630,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                                 &default_provider_label,
                                 &make_material,
                             );
-                            Runtime::open_interactive(
+                            Runtime::open_interactive_with_retry(
                                 ion_core::SwitchingProvider::switchable(
                                     main_model.clone(),
                                     provider,
@@ -636,6 +641,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                                 session_id,
                                 Arc::clone(&policy),
                                 trusted.clone(),
+                                retry.clone(),
                             )
                             .await?
                         }

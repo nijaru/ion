@@ -249,7 +249,10 @@ impl Provider for OpenRouterProvider {
                             let _ = out.send(EngineSignal::Failed {
                                 operation_id,
                                 step,
-                                message: format!("provider request failed: {err}"),
+                                message: format!(
+                                    "provider request failed: {}",
+                                    crate::transport_error_text(&err)
+                                ),
                             }).await;
                             return;
                         }
@@ -288,7 +291,10 @@ impl Provider for OpenRouterProvider {
                             let _ = out.send(EngineSignal::Failed {
                                 operation_id,
                                 step,
-                                message: format!("provider stream failed: {err}"),
+                                message: format!(
+                                    "provider stream failed: {}",
+                                    crate::transport_error_text(&err)
+                                ),
                             }).await;
                             return;
                         }

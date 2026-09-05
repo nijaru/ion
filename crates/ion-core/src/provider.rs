@@ -114,6 +114,206 @@ impl ModelPricing {
     }
 }
 
+/// Bounded retry for transient provider failures (pi-parity
+/// `settings.retry`: enabled, 3 attempts, 2s exponential base).
+/// Retries wrap the raw provider stream, never the settled operation:
+/// a retried attempt replaces the failed stream's draft, and the final
+/// terminal signal settles the step exactly once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RetryPolicy {
+    pub enabled: bool,
+    pub max_retries: u32,
+    /// Base delay in ms; per-attempt delay is `base * 2^(attempt-1)`.
+    pub base_delay_ms: u64,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            max_retries: 3,
+            base_delay_ms: 2000,
+        }
+    }
+}
+
+impl RetryPolicy {
+    /// Per-attempt backoff delay: `base * 2^(attempt-1)`
+    /// (attempt is 1-indexed), saturating like the counters.
+    #[must_use]
+    pub fn delay_ms(&self, attempt: u32) -> u64 {
+        self.base_delay_ms
+            .saturating_mul(1_u64 << (attempt - 1).min(63))
+    }
+}
+
+/// Run one model step with bounded transient-failure retry (pi's
+/// `retryAssistantCall`). Each attempt runs the provider against a
+/// fresh attempt channel; every signal forwards live to `out` except a
+/// retryable terminal `Failed`, which becomes a non-terminal
+/// `RetryScheduled` for the runtime (the sole mutation authority: it
+/// clears the failed attempt's partial draft before the next attempt
+/// runs). Non-retryable failures, exhausted budgets, cancels, and
+/// completions forward unchanged. The exit sentinel is emitted exactly
+/// once, after the loop ends.
+///
+/// Context overflow bypasses retry: the runtime's compaction path owns
+/// that classification at settlement, and a retry would only burn the
+/// same overflowing request again.
+pub(crate) async fn run_with_retry<P: Provider>(
+    provider: Arc<P>,
+    request: ProviderRequest,
+    cancel: CancellationToken,
+    out: mpsc::Sender<EngineSignal>,
+    retry: RetryPolicy,
+    terminal: mpsc::Sender<EngineSignal>,
+) {
+    let max_attempts = if retry.enabled { retry.max_retries } else { 0 };
+    let mut attempt = 0_u32;
+    loop {
+        let (attempt_tx, mut attempt_rx) = mpsc::channel::<EngineSignal>(64);
+        {
+            let request = request.clone();
+            let cancel = cancel.clone();
+            let provider = Arc::clone(&provider);
+            tokio::spawn(async move {
+                provider.run(request, cancel, attempt_tx).await;
+            });
+        }
+        let mut failure: Option<String> = None;
+        while let Some(signal) = attempt_rx.recv().await {
+            match signal {
+                EngineSignal::Failed { message, .. }
+                    if attempt < max_attempts
+                        && is_retryable_provider_error(&message)
+                        && !super::runtime::is_context_overflow(&message)
+                        && !cancel.is_cancelled() =>
+                {
+                    failure = Some(message);
+                }
+                signal => {
+                    let _ = out.send(signal).await;
+                }
+            }
+        }
+        let (operation_id, step) = (request.operation_id, request.step);
+        let Some(message) = failure else {
+            let _ = terminal
+                .send(EngineSignal::ProviderExited { operation_id, step })
+                .await;
+            return;
+        };
+        attempt += 1;
+        let delay = std::time::Duration::from_millis(retry.delay_ms(attempt));
+        let _ = out
+            .send(EngineSignal::RetryScheduled {
+                operation_id,
+                step,
+                attempt,
+                max_attempts,
+                delay_ms: delay.as_millis() as u64,
+                message,
+            })
+            .await;
+        let slept = tokio::select! {
+            () = cancel.cancelled() => false,
+            () = tokio::time::sleep(delay) => true,
+        };
+        if !slept {
+            // Cancel during backoff lands as a cancelled step, matching
+            // pi's abort normalization: a retry interrupted mid-wait
+            // never continues as a partial turn.
+            let _ = out
+                .send(EngineSignal::Cancelled { operation_id, step })
+                .await;
+            let _ = terminal
+                .send(EngineSignal::ProviderExited { operation_id, step })
+                .await;
+            return;
+        }
+    }
+}
+
+/// Quota/billing exhaustion patterns: deterministic account limits
+/// that no amount of waiting clears (pi's
+/// NON_RETRYABLE_PROVIDER_LIMIT_ERROR_PATTERN).
+#[must_use]
+pub fn is_non_retryable_limit_error(message: &str) -> bool {
+    let lowered = message.to_lowercase();
+    [
+        "gousagelimiterror",
+        "freeusagelimiterror",
+        "monthly usage limit reached",
+        "available balance",
+        "insufficient_quota",
+        "out of budget",
+        "quota exceeded",
+        "billing",
+    ]
+    .iter()
+    .any(|pattern| lowered.contains(pattern))
+}
+
+/// Transient provider/transport failures worth retrying (pi's
+/// RETRYABLE_PROVIDER_ERROR_PATTERN: overload, 429/5xx throttles,
+/// network and stream drops).
+#[must_use]
+pub fn is_retryable_provider_error(message: &str) -> bool {
+    if is_non_retryable_limit_error(message) {
+        return false;
+    }
+    let lowered = message.to_lowercase();
+    [
+        "overloaded",
+        "rate limit",
+        "rate-limit",
+        "ratelimit",
+        "too many requests",
+        "429",
+        "500",
+        "502",
+        "503",
+        "504",
+        "524",
+        "service unavailable",
+        "server error",
+        "internal error",
+        "provider returned error",
+        "network error",
+        "connection error",
+        "connection refused",
+        "connection lost",
+        "other side closed",
+        "fetch failed",
+        "getaddrinfo",
+        "enotfound",
+        "eai_again",
+        "upstream connect",
+        "reset before headers",
+        "socket hang up",
+        "socket connection was closed",
+        "timed out",
+        "timed-out",
+        "timeout",
+        "terminated",
+        "websocket closed",
+        "websocket error",
+        "stream ended before",
+        "ended without",
+        "retry delay",
+        "you can retry your request",
+        "try your request again",
+        "please retry your request",
+        "resourceexhausted",
+        // Rust/reqwest transport wording (the root-cause unwrap keeps
+        // the specific OS error in the message; this catches adapters
+        // that only format the generic Display).
+        "error sending request",
+    ]
+    .iter()
+    .any(|pattern| lowered.contains(pattern))
+}
+
 /// What one model step asks the provider: the operation it belongs to,
 /// the projected input, and the frozen model/capability snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -182,6 +382,19 @@ pub enum EngineSignal {
     ProviderExited {
         operation_id: OperationId,
         step: u64,
+    },
+    /// A transient failure was classified retryable and the next
+    /// attempt is scheduled after `delay_ms` (the engine's bounded
+    /// retry, pi's `retryAssistantCall`). Non-terminal: the runtime
+    /// clears the failed attempt's partial draft and keeps the step
+    /// open; the exit sentinel still ends the step exactly once.
+    RetryScheduled {
+        operation_id: OperationId,
+        step: u64,
+        attempt: u32,
+        max_attempts: u32,
+        delay_ms: u64,
+        message: String,
     },
 }
 
@@ -449,6 +662,13 @@ impl ScriptedMessage {
             arguments,
         }
     }
+
+    #[must_use]
+    pub fn fail(message: impl Into<String>) -> Self {
+        Self::Fail {
+            message: message.into(),
+        }
+    }
 }
 
 /// A provider adapter that plays a scripted transcript across successive
@@ -653,5 +873,65 @@ mod token_usage_tests {
             cache_write: u64::MAX,
         };
         assert_eq!(usage.context_tokens(), u64::MAX);
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::{RetryPolicy, is_non_retryable_limit_error, is_retryable_provider_error};
+
+    #[test]
+    fn retry_defaults_match_pi() {
+        let policy = RetryPolicy::default();
+        assert!(policy.enabled);
+        assert_eq!(policy.max_retries, 3);
+        assert_eq!(policy.base_delay_ms, 2000);
+    }
+
+    #[test]
+    fn backoff_doubles_per_attempt_and_saturates() {
+        let policy = RetryPolicy::default();
+        assert_eq!(policy.delay_ms(1), 2000);
+        assert_eq!(policy.delay_ms(2), 4000);
+        assert_eq!(policy.delay_ms(3), 8000);
+        // Exponents past 63 saturate instead of panicking.
+        let _ = policy.delay_ms(70);
+    }
+
+    #[test]
+    fn transient_provider_errors_are_retryable() {
+        assert!(is_retryable_provider_error(
+            "provider returned 429: rate limit exceeded"
+        ));
+        assert!(is_retryable_provider_error("503 Service Unavailable"));
+        assert!(is_retryable_provider_error(
+            "provider request failed: connection refused"
+        ));
+        assert!(is_retryable_provider_error(
+            "stream ended before message_stop"
+        ));
+        assert!(is_retryable_provider_error("request timed out"));
+    }
+
+    #[test]
+    fn quota_and_billing_errors_fail_fast() {
+        assert!(!is_retryable_provider_error(
+            "OpenAI: insufficient_quota, billing hard limit reached"
+        ));
+        assert!(!is_retryable_provider_error("quota exceeded for this key"));
+        assert!(!is_non_retryable_limit_error("transient 503, not a limit"));
+        assert!(is_non_retryable_limit_error("monthly usage limit reached"));
+    }
+
+    #[test]
+    fn overflow_messages_are_not_mistaken_for_quota_limits() {
+        // Overflow is handled by the runtime's compaction path via the
+        // explicit `is_context_overflow` check, not by this classifier;
+        // it must never be classified as a deterministic account limit,
+        // which would hide it from that path.
+        assert!(!is_non_retryable_limit_error("context length exceeded"));
+        assert!(!is_non_retryable_limit_error(
+            "prompt is too long: too many tokens"
+        ));
     }
 }

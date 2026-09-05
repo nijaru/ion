@@ -523,3 +523,128 @@ async fn close_while_operating_suspends_instead_of_cancelling() {
     );
     runtime.join().await.expect("join");
 }
+
+// ---- Transient-failure retry (pi settings.retry parity) ----
+
+#[tokio::test]
+async fn retryable_failures_retry_until_success_and_discard_partial_output() {
+    // Attempt 1 streams partial text, then fails retryably; attempt 2
+    // continues the scripted cursor and completes. The operation must
+    // finish with only the retried attempt's text as content.
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::text("partial that must vanish"),
+        ScriptedMessage::fail("provider returned 429: rate limit exceeded"),
+        ScriptedMessage::text("final answer"),
+    ]);
+    let runtime = Runtime::start_interactive_with_retry(
+        provider,
+        ToolRegistry::default(),
+        SessionStore::open_in_memory().expect("in-memory store"),
+        permissive_policy(),
+        Vec::new(),
+        RetryPolicy {
+            enabled: true,
+            max_retries: 3,
+            base_delay_ms: 1,
+        },
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFinished { .. })
+    ));
+    assert!(recorded.iter().any(|e| matches!(
+        e,
+        RuntimeEvent::RetryScheduled { attempt: 1, max_attempts: 3, message, .. }
+            if message.contains("429")
+    )));
+    // The retried attempt's text is the only content delta set.
+    assert_eq!(
+        texts(&recorded),
+        vec![
+            "partial that must vanish".to_owned(),
+            "final answer".to_owned()
+        ]
+    );
+    let snapshot = session.snapshot().await.expect("snapshot");
+    let assistant_text: Vec<&str> = snapshot
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::AssistantMessage { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(assistant_text, vec!["final answer"]);
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn exhausted_retries_settle_the_last_failure() {
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::fail("503 service unavailable"),
+        ScriptedMessage::fail("503 service unavailable"),
+        ScriptedMessage::fail("503 service unavailable"),
+        ScriptedMessage::fail("503 service unavailable"),
+    ]);
+    let runtime = Runtime::start_interactive_with_retry(
+        provider,
+        ToolRegistry::default(),
+        SessionStore::open_in_memory().expect("in-memory store"),
+        permissive_policy(),
+        Vec::new(),
+        RetryPolicy {
+            enabled: true,
+            max_retries: 2,
+            base_delay_ms: 1,
+        },
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+
+    // max_retries: 2 → two RetryScheduled events, then the final failure.
+    let retries = recorded
+        .iter()
+        .filter(|e| matches!(e, RuntimeEvent::RetryScheduled { .. }))
+        .count();
+    assert_eq!(retries, 2);
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFailed { message, .. }) if message.contains("503")
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn non_retryable_failures_fail_fast_without_retry() {
+    let provider = ScriptedProvider::new(vec![
+        ScriptedMessage::fail("insufficient_quota: billing limit reached"),
+        ScriptedMessage::text("must never stream"),
+    ]);
+    let runtime = start_runtime(provider, ToolRegistry::default());
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    let recorded = collect_until_terminal(&mut events).await.expect("collect");
+
+    assert!(
+        recorded
+            .iter()
+            .all(|e| !matches!(e, RuntimeEvent::RetryScheduled { .. }))
+    );
+    assert!(matches!(
+        recorded.last(),
+        Some(RuntimeEvent::OperationFailed { message, .. })
+            if message.contains("insufficient_quota")
+    ));
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}

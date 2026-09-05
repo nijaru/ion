@@ -49,7 +49,8 @@ pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
     EngineSignal, ModelCapabilities, ModelConfig, ModelPricing, Provider, ProviderRequest,
-    ScriptedMessage, ScriptedProvider, SwitchingProvider, TokenUsage,
+    RetryPolicy, ScriptedMessage, ScriptedProvider, SwitchingProvider, TokenUsage,
+    is_non_retryable_limit_error, is_retryable_provider_error,
 };
 pub use runtime::{
     EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState, NextRunInput,
