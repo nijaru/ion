@@ -94,6 +94,7 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::ToolSettled { .. } => "tool_settled",
             RuntimeEvent::UsageUpdate { .. } => "usage_update",
             RuntimeEvent::RetryScheduled { .. } => "retry_scheduled",
+            RuntimeEvent::CacheMiss { .. } => "cache_miss",
             RuntimeEvent::OperationFinished { .. } => "operation_finished",
             RuntimeEvent::OperationFailed { .. } => "operation_failed",
             RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",

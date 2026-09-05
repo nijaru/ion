@@ -117,6 +117,9 @@ pub struct HostConfig {
     pub default_model: Option<String>,
     /// Seed for ctrl+t (pi-parity hideThinkingBlock).
     pub hide_thinking_block: bool,
+    /// Print a notice when a settled turn re-bills previously cached
+    /// prompt tokens (pi-parity showCacheMissNotices).
+    pub show_cache_miss_notices: bool,
     /// One-time store/startup notice (e.g. archived old-schema
     /// database) rendered once into the transcript.
     pub startup_notice: Option<String>,
@@ -1019,6 +1022,9 @@ pub struct UiState {
     /// Whether reasoning renders at all (ctrl+t; seeded by the
     /// hideThinkingBlock setting).
     thinking_visible: bool,
+    /// Whether cache-miss notices print at settle (pi's
+    /// showCacheMissNotices).
+    show_cache_miss_notices: bool,
     /// Whether /model <id> can switch (host provided a switch handle).
     model_switching_available: bool,
     /// Host-provided finite model list for the slash-command selector.
@@ -1084,6 +1090,10 @@ pub struct UiState {
     /// Lines queued for scrollback: flushed above the inline viewport
     /// when the composer redraws.
     pending_scrollback: Vec<Line<'static>>,
+    /// Cache-miss notice for the running operation, printed after the
+    /// assistant text at settle (pi prints it after the message that
+    /// paid for it).
+    pending_cache_miss: Option<String>,
     quit_requested: bool,
     /// Previous ctrl+c press, for the double-press exit (pi parity).
     last_clear: Option<std::time::Instant>,
@@ -3541,6 +3551,35 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 operation: format!("retrying ({attempt}/{max_attempts}) in {seconds}s"),
             };
         }
+        RuntimeEvent::CacheMiss {
+            missed_tokens,
+            missed_cost_micro_usd,
+            model_changed,
+            ..
+        } => {
+            // Pi prints the notice after the assistant message that
+            // paid for it; flush_draft prints it after the text at
+            // settle. Pi's display threshold: 20k tokens or $0.10.
+            // Multi-step operations keep the last step's miss: steps
+            // in one operation share one assistant turn here.
+            if state.show_cache_miss_notices
+                && (missed_tokens >= 20_000 || missed_cost_micro_usd >= 100_000)
+            {
+                let tokens = render::format_tokens(missed_tokens);
+                let cost = if missed_cost_micro_usd >= 10_000 {
+                    format!(" (~${:.2})", missed_cost_micro_usd as f64 / 1e6)
+                } else {
+                    String::new()
+                };
+                let label = if model_changed {
+                    "Cache miss after model switch"
+                } else {
+                    "Cache miss"
+                };
+                state.pending_cache_miss =
+                    Some(format!("{label}: {tokens} tokens re-billed{cost}"));
+            }
+        }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
             state.approval = None;
@@ -3706,6 +3745,11 @@ impl UiState {
             }
             self.draft.clear();
         }
+        // The cache-miss notice follows the assistant message that paid
+        // for it (pi renders it inline after that message).
+        if let Some(notice) = self.pending_cache_miss.take() {
+            self.pending_scrollback.push(Line::from(notice).yellow());
+        }
         self.draft_degraded = false;
     }
 
@@ -3716,6 +3760,8 @@ impl UiState {
         self.draft.clear();
         self.draft_thinking.clear();
         self.draft_degraded = false;
+        // No assistant message printed: the miss notice has no anchor.
+        self.pending_cache_miss = None;
         self.flush_tool_rows();
         if had_partial {
             self.pending_scrollback.push(
@@ -4375,6 +4421,7 @@ pub async fn run(
     state.model_catalog = host.model_catalog.clone();
     state.default_model_reference = host.default_model.clone();
     state.thinking_visible = !host.hide_thinking_block;
+    state.show_cache_miss_notices = host.show_cache_miss_notices;
     state.theme = theme;
     state.cwd_label = host.cwd_label.clone();
     state.workspace_files = host.workspace_files.clone();
@@ -8748,5 +8795,117 @@ mod shell_passthrough_tests {
         // The command list survives: it belongs to the extension
         // service, not the session.
         assert!(state.ext_ui.commands.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod cache_miss_tests {
+    use super::*;
+    use ion_core::{OperationId, RuntimeCursor};
+
+    #[test]
+    fn cache_miss_notice_prints_after_the_assistant_text_when_enabled() {
+        let mut state = UiState::new();
+        state.show_cache_miss_notices = true;
+        state.draft = "answer text".to_owned();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::CacheMiss {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                missed_tokens: 28_000,
+                missed_cost_micro_usd: 80_000,
+                model_changed: false,
+            },
+        );
+        state.flush_draft();
+        // Notice follows the message that paid for it.
+        let text: Vec<String> = state
+            .pending_scrollback
+            .iter()
+            .map(|l| l.to_string())
+            .collect();
+        let answer_at = text
+            .iter()
+            .position(|l| l.contains("answer text"))
+            .expect("assistant text flushed");
+        let notice_at = text
+            .iter()
+            .position(|l| l.contains("Cache miss: 28k tokens re-billed"))
+            .expect("cache miss notice");
+        assert!(notice_at > answer_at);
+    }
+
+    #[test]
+    fn cache_miss_notice_hidden_when_disabled() {
+        let mut state = UiState::new();
+        state.show_cache_miss_notices = false;
+        state.draft = "answer".to_owned();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::CacheMiss {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                missed_tokens: 28_000,
+                missed_cost_micro_usd: 80_000,
+                model_changed: false,
+            },
+        );
+        state.flush_draft();
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .all(|l| !l.to_string().contains("Cache miss"))
+        );
+    }
+
+    #[test]
+    fn small_cache_misses_stay_below_the_display_threshold() {
+        let mut state = UiState::new();
+        state.show_cache_miss_notices = true;
+        state.draft = "answer".to_owned();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::CacheMiss {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                missed_tokens: 5_000,
+                missed_cost_micro_usd: 100,
+                model_changed: false,
+            },
+        );
+        state.flush_draft();
+        // 5k tokens with no cost is below pi's 20k/$0.10 threshold.
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .all(|l| !l.to_string().contains("Cache miss"))
+        );
+    }
+
+    #[test]
+    fn model_switch_labels_the_miss() {
+        let mut state = UiState::new();
+        state.show_cache_miss_notices = true;
+        state.draft = "answer".to_owned();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::CacheMiss {
+                cursor: RuntimeCursor::default(),
+                operation_id: OperationId::generate(),
+                missed_tokens: 28_000,
+                missed_cost_micro_usd: 80_000,
+                model_changed: true,
+            },
+        );
+        state.flush_draft();
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|l| l.to_string().contains("Cache miss after model switch"))
+        );
     }
 }

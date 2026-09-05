@@ -143,6 +143,11 @@ pub struct Settings {
     /// Transient provider-failure retry (pi-parity `settings.retry`).
     #[serde(default)]
     retry: RetrySettings,
+    /// Print a notice when a settled turn re-bills prompt tokens that
+    /// the previous turn had cached (pi-parity showCacheMissNotices,
+    /// which pi defaults to false).
+    #[serde(default)]
+    show_cache_miss_notices: bool,
 }
 
 /// `[retry]`: pi's `settings.retry` grammar. Defaults mirror pi's
@@ -212,6 +217,13 @@ impl Settings {
         self.retry.resolve()
     }
 
+    /// Whether cache-miss notices print at settle (pi's
+    /// showCacheMissNotices, default false).
+    #[must_use]
+    pub fn show_cache_miss_notices(&self) -> bool {
+        self.show_cache_miss_notices
+    }
+
     /// Compiled-in defaults, mirroring the maintainer's pi settings.
     /// Used only when no settings file exists; a file that omits a key
     /// means the key is unset.
@@ -233,6 +245,7 @@ impl Settings {
             enable_agents: false,
             hide_thinking_block: true,
             retry: RetrySettings::default(),
+            show_cache_miss_notices: false,
         }
     }
     pub fn path() -> Option<PathBuf> {
@@ -266,6 +279,7 @@ impl Settings {
             enable_agents: false,
             hide_thinking_block: false,
             retry: RetrySettings::default(),
+            show_cache_miss_notices: false,
         }
     }
 

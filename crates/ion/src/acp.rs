@@ -450,9 +450,11 @@ where
             RuntimeEvent::ApprovalPending { tool, .. } => {
                 return TurnStop::ApprovalRequired(tool);
             }
-            // Retry notices are progress, not completion: the turn
-            // continues when the next attempt settles.
+            // Retry notices and cache-miss notices are progress, not
+            // completion: the turn continues when the next attempt
+            // settles.
             RuntimeEvent::RetryScheduled { .. }
+            | RuntimeEvent::CacheMiss { .. }
             | RuntimeEvent::OperationStarted { .. }
             | RuntimeEvent::SessionClosed { .. } => {}
         }

@@ -314,6 +314,21 @@ pub enum RuntimeEvent {
         delay_ms: u64,
         message: String,
     },
+    /// Prompt tokens that a settled step re-billed instead of reading
+    /// from cache (pi's cache-stats miss detection). Display-only and
+    /// never persisted: it is derived at settlement from the previous
+    /// step's usage baseline.
+    CacheMiss {
+        cursor: RuntimeCursor,
+        operation_id: OperationId,
+        missed_tokens: u64,
+        /// Estimated extra cost in micro-dollars (billed rate minus
+        /// cache-read rate on the missed tokens).
+        missed_cost_micro_usd: u64,
+        /// True when the billing model changed since the baseline step;
+        /// a model switch legitimately invalidates the prompt cache.
+        model_changed: bool,
+    },
     OperationFinished {
         cursor: RuntimeCursor,
         operation_id: OperationId,
@@ -382,6 +397,7 @@ impl RuntimeEvent {
             | Self::OperationCancelled { operation_id, .. }
             | Self::OperationApprovalRequired { operation_id, .. }
             | Self::RetryScheduled { operation_id, .. }
+            | Self::CacheMiss { operation_id, .. }
             | Self::ApprovalPending { operation_id, .. } => Some(*operation_id),
             Self::ShellStarted { .. }
             | Self::ShellOutput { .. }
@@ -406,6 +422,7 @@ impl RuntimeEvent {
             | Self::OperationCancelled { cursor, .. }
             | Self::OperationApprovalRequired { cursor, .. }
             | Self::RetryScheduled { cursor, .. }
+            | Self::CacheMiss { cursor, .. }
             | Self::ApprovalPending { cursor, .. }
             | Self::ShellStarted { cursor, .. }
             | Self::ShellOutput { cursor, .. }
@@ -1526,6 +1543,10 @@ struct LaneResidency {
     last_context_tokens: Option<u64>,
     last_prefix_fingerprint: Option<String>,
     latest_usage: Option<TokenUsage>,
+    /// Model ref that produced `latest_usage`: the cache-miss baseline
+    /// pairs prompt size with the model that billed it, so a model
+    /// switch can label its own misses (pi's cache-stats).
+    latest_usage_model: Option<String>,
     context_window: Option<u64>,
     model_capabilities: Option<(String, ModelCapabilities)>,
     /// Cached per-model published pricing, resolved once per model
@@ -1812,12 +1833,25 @@ impl<P: Provider> SessionRuntime<P> {
             return;
         }
         {
+            // The baseline model for cache-miss labeling after a reopen:
+            // the durable model is the billing model of the last settled
+            // step (selection is idle-only).
+            let baseline_model = latest_usage.map(|_| {
+                self.lanes
+                    .get(crate::session::lane::MAIN)
+                    .expect("checked main lane")
+                    .durable
+                    .config
+                    .model_ref
+                    .clone()
+            });
             let live = &mut self
                 .lanes
                 .get_mut(crate::session::lane::MAIN)
                 .expect("checked main lane")
                 .live;
             live.latest_usage = latest_usage;
+            live.latest_usage_model = baseline_model;
             live.last_context_tokens = last_context_tokens;
         }
         let Some(main_branch) = self.lane_branch_records(crate::session::lane::MAIN) else {
@@ -4591,6 +4625,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::OperationCancelled { cursor: slot, .. }
         | RuntimeEvent::OperationApprovalRequired { cursor: slot, .. }
         | RuntimeEvent::RetryScheduled { cursor: slot, .. }
+        | RuntimeEvent::CacheMiss { cursor: slot, .. }
         | RuntimeEvent::ApprovalPending { cursor: slot, .. }
         | RuntimeEvent::ShellStarted { cursor: slot, .. }
         | RuntimeEvent::ShellOutput { cursor: slot, .. }
@@ -4609,6 +4644,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ToolSettled { .. } => "tool_settled",
         RuntimeEvent::UsageUpdate { .. } => "usage_update",
         RuntimeEvent::RetryScheduled { .. } => "retry_scheduled",
+        RuntimeEvent::CacheMiss { .. } => "cache_miss",
         RuntimeEvent::OperationFinished { .. } => "operation_finished",
         RuntimeEvent::OperationFailed { .. } => "operation_failed",
         RuntimeEvent::OperationIndeterminate { .. } => "operation_indeterminate",

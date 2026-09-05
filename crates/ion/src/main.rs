@@ -741,6 +741,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                 .flatten()
                 .map(|selection| format!("{}/{}", selection.provider, selection.model)),
             hide_thinking_block: settings.hide_thinking_block,
+            show_cache_miss_notices: settings.show_cache_miss_notices(),
             startup_notice: store.startup_notice().map(str::to_owned),
             cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),

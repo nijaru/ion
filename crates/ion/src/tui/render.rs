@@ -2,7 +2,7 @@ use super::*;
 use unicode_width::UnicodeWidthChar as _;
 
 /// Compact token count (pi footer grammar): `28k`, `1.2M`, `950`.
-fn format_tokens(tokens: u64) -> String {
+pub(super) fn format_tokens(tokens: u64) -> String {
     if tokens >= 1_000_000 {
         format!("{:.1}M", tokens as f64 / 1_000_000.0)
     } else if tokens >= 10_000 {

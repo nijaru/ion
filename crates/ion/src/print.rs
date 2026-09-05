@@ -113,8 +113,10 @@ impl<W: Write> PrintFrontend<W> {
                     return Err(RuntimeError::Command(CommandError::Closed));
                 }
                 RuntimeEvent::OperationStarted { .. } => {}
-                // Retry notices are progress, not completion.
+                // Retry and cache-miss notices are progress, not
+                // completion.
                 RuntimeEvent::RetryScheduled { .. } => {}
+                RuntimeEvent::CacheMiss { .. } => {}
             }
         }
     }

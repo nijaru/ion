@@ -338,3 +338,103 @@ async fn cache_expectation_records_cold_start_then_stable_prefix_reuse() {
     assert_eq!(fingerprints[0], fingerprints[1]);
     let _ = store.load(session_id).await.expect("load");
 }
+
+// ---- Cache-miss detection (pi cache-stats parity) ----
+
+#[tokio::test]
+async fn second_turn_cache_miss_emits_the_rebilled_prompt_tokens() {
+    // Turn 1 reports a cache write: prompt 30k becomes the baseline.
+    // Turn 2 re-bills 28k of it at input rates with only 2k cache-read:
+    // a 28k-token miss. Turn 1 ends with a non-retryable failure so the
+    // script splits into two provider runs (text alone would drain the
+    // whole script in one run); usage still settles with the failed
+    // step, setting the baseline.
+    let runtime = start_runtime(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 5_000,
+                output: 10,
+                cache_read: 0,
+                cache_write: 25_000,
+            }),
+            ScriptedMessage::fail("insufficient_quota: ends turn one"),
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 28_000,
+                output: 10,
+                cache_read: 2_000,
+                cache_write: 0,
+            }),
+            ScriptedMessage::text("second"),
+        ]),
+        ToolRegistry::default(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("one").await.expect("submit");
+    let first = collect_until_terminal(&mut events).await.expect("collect");
+    // First turn has no baseline: no miss can be counted yet.
+    assert!(
+        first
+            .iter()
+            .all(|e| !matches!(e, RuntimeEvent::CacheMiss { .. }))
+    );
+
+    session.submit_if_idle("two").await.expect("submit");
+    let second = collect_until_terminal(&mut events).await.expect("collect");
+    let misses: Vec<_> = second
+        .iter()
+        .filter_map(|e| match e {
+            RuntimeEvent::CacheMiss {
+                missed_tokens,
+                model_changed,
+                ..
+            } => Some((*missed_tokens, *model_changed)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        misses,
+        vec![(28_000, false)],
+        "missed = min(prev prompt, prompt) - cache_read"
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn small_misses_stay_below_the_noise_floor() {
+    let runtime = start_runtime(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 2_000,
+                output: 1,
+                cache_read: 0,
+                cache_write: 0,
+            }),
+            ScriptedMessage::fail("insufficient_quota: ends turn one"),
+            // Second turn re-bills 900 tokens: below the 1024 noise
+            // floor, never worth reporting.
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 1_100,
+                output: 1,
+                cache_read: 1_100,
+                cache_write: 0,
+            }),
+            ScriptedMessage::text("second"),
+        ]),
+        ToolRegistry::default(),
+    );
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("one").await.expect("submit");
+    let _ = collect_until_terminal(&mut events).await.expect("collect");
+    session.submit_if_idle("two").await.expect("submit");
+    let second = collect_until_terminal(&mut events).await.expect("collect");
+    assert!(
+        second
+            .iter()
+            .all(|e| !matches!(e, RuntimeEvent::CacheMiss { .. }))
+    );
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}

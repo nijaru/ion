@@ -326,6 +326,14 @@ impl<P: Provider> SessionRuntime<P> {
             .apply(transition)
             .expect("model-step settlement while AssistantEffectPending");
         let frame_effect_id = staged.open_effect.as_ref().map(|effect| effect.id);
+        // The settled step's billing model: model selection is idle-only,
+        // so the owning lane's current selection is the model that
+        // billed this step. Cache-miss detection pairs the baseline
+        // with the model that billed it.
+        let step_model_ref = self
+            .operation_lane_name(operation_id)
+            .and_then(|lane| self.lanes.get(lane))
+            .map(|lane| lane.durable.config.model_ref.clone());
         let settled = staged
             .open_effect
             .take()
@@ -388,9 +396,59 @@ impl<P: Provider> SessionRuntime<P> {
                 .usage_totals
                 .cache_write
                 .saturating_add(usage.cache_write);
-            self.operation_lane_live_mut(operation_id)
-                .expect("resident operation has an owning lane")
-                .latest_usage = Some(usage);
+            let lane_live = self
+                .operation_lane_live_mut(operation_id)
+                .expect("resident operation has an owning lane");
+            // Cache-miss detection (pi cache-stats): prompt tokens that
+            // the previous step billed and this step re-billed at input
+            // rates instead of reading from cache. Below the 1k noise
+            // floor or without a prior baseline there is nothing to
+            // report.
+            let baseline = lane_live
+                .latest_usage
+                .zip(lane_live.latest_usage_model.clone());
+            if let Some((prev, prev_model)) = baseline {
+                let prompt = usage.input + usage.cache_read + usage.cache_write;
+                let prev_prompt = prev.input + prev.cache_read + prev.cache_write;
+                let cache_activity = usage.cache_read + usage.cache_write > 0
+                    || prev.cache_read + prev.cache_write > 0;
+                let missed = prompt.min(prev_prompt).saturating_sub(usage.cache_read);
+                if prompt > 0 && cache_activity && missed > 1024 {
+                    let model_changed = step_model_ref
+                        .as_deref()
+                        .map(|model| model != prev_model)
+                        .unwrap_or(false);
+                    // Extra cost: missed tokens billed at the paid rate
+                    // (input or cache-write) minus the cache-read rate.
+                    let pricing = lane_live.model_pricing;
+                    let paid = usage.input + usage.cache_write;
+                    let paid_micro = usage
+                        .input
+                        .saturating_mul(pricing.map(|p| p.input as u64).unwrap_or(0))
+                        + usage
+                            .cache_write
+                            .saturating_mul(pricing.map(|p| p.cache_write as u64).unwrap_or(0));
+                    let read_micro = usage
+                        .cache_read
+                        .saturating_mul(pricing.map(|p| p.cache_read as u64).unwrap_or(0));
+                    let paid_rate = paid_micro.checked_div(paid).unwrap_or(0);
+                    let read_rate = read_micro.checked_div(usage.cache_read).unwrap_or(0);
+                    let missed_cost_micro =
+                        missed.saturating_mul(paid_rate.saturating_sub(read_rate));
+                    self.emit(RuntimeEvent::CacheMiss {
+                        cursor: RuntimeCursor::default(),
+                        operation_id,
+                        missed_tokens: missed,
+                        missed_cost_micro_usd: missed_cost_micro,
+                        model_changed,
+                    });
+                }
+            }
+            let lane_live = self
+                .operation_lane_live_mut(operation_id)
+                .expect("resident operation has an owning lane");
+            lane_live.latest_usage = Some(usage);
+            lane_live.latest_usage_model = step_model_ref;
         }
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
@@ -592,6 +650,22 @@ impl<P: Provider> SessionRuntime<P> {
         staged.state_seq += 1;
         self.emit_terminal_state_for(operation_id, &applied.state.clone());
         self.install_active(staged);
+        // A successful compaction legitimately changes the context: the
+        // next step's prompt is new content, not re-billed content, so
+        // the cache-miss baseline must not count it (pi cache-stats
+        // resets `prev` on compaction entries). A failed generation
+        // leaves the old context and baseline intact.
+        if applied
+            .entries
+            .iter()
+            .any(|entry| matches!(entry, SessionEntry::Compaction { .. }))
+        {
+            let lane_live = self
+                .operation_lane_live_mut(operation_id)
+                .expect("resident operation has an owning lane");
+            lane_live.latest_usage = None;
+            lane_live.latest_usage_model = None;
+        }
         self.advance(operation_id).await;
     }
 
