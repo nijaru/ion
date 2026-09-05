@@ -908,7 +908,9 @@ struct EditSnapshot {
 const MAX_UNDO_ENTRIES: usize = 128;
 
 /// One started tool effect: its display label plus the bounded output
-/// preview from settlement (rendered only while expanded).
+/// preview from settlement. Collapsed settles print the first
+/// [`render::TOOL_PREVIEW_LINES`] lines plus the expand hint; expanded
+/// settles print everything.
 #[derive(Debug, Clone)]
 struct ToolRow {
     tool: String,
@@ -3599,18 +3601,37 @@ impl UiState {
                 row.state,
                 None,
             ));
-            if self.tool_output_expanded {
-                // Settled edit hunks keep their diff colors in the
-                // expanded block; detection is whole-preview so prose
-                // never misrenders.
-                let diff = row.preview.as_deref().is_some_and(render::is_unified_diff);
-                for line in row.preview.iter().flat_map(|p| p.lines()) {
-                    self.pending_scrollback.push(if diff {
-                        render::diff_line(line)
-                    } else {
-                        Line::from(format!("  {line}")).dark_gray()
-                    });
+            if let Some(preview) = row.preview.as_deref() {
+                // Collapsed settles print the pi preview grammar (first
+                // TOOL_PREVIEW_LINES lines plus the expand hint); expanded
+                // settles print everything. Settled edit hunks keep their
+                // diff colors in both; detection is whole-preview so
+                // prose never misrenders.
+                let diff = render::is_unified_diff(preview);
+                let lines: Vec<&str> = preview.split('\n').collect();
+                let shown = if self.tool_output_expanded {
+                    lines.as_slice()
+                } else {
+                    &lines[..lines.len().min(render::TOOL_PREVIEW_LINES)]
+                };
+                let mut block: Vec<Line<'static>> = shown
+                    .iter()
+                    .map(|line| {
+                        if diff {
+                            render::diff_line(line)
+                        } else {
+                            Line::from(format!("  {line}")).dark_gray()
+                        }
+                    })
+                    .collect();
+                let remaining = lines.len() - shown.len();
+                if remaining > 0 {
+                    block.push(
+                        Line::from(format!("  ... ({remaining} more lines, ctrl+o to expand)"))
+                            .dark_gray(),
+                    );
                 }
+                self.pending_scrollback.extend(block);
             }
         }
     }
@@ -4385,6 +4406,7 @@ pub async fn run(
         resume_entry_count,
         resume_session,
         &palette,
+        state.tool_output_expanded,
     );
     let mut active_operation: Option<ion_core::OperationId> = match snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(operation_id),
@@ -4919,6 +4941,7 @@ pub async fn run(
                                     resume_entry_count,
                                     resume_session,
                                     &palette,
+                                    state.tool_output_expanded,
                                 );
                             }
                             Err(err) => {
@@ -5074,6 +5097,7 @@ async fn switch_session(
         snapshot.reopen_entry_count.unwrap_or(0),
         *resume_session,
         palette,
+        state.tool_output_expanded,
     );
     *active_operation = match &snapshot.operation {
         OperationStatus::Active { operation_id, .. } => Some(*operation_id),
@@ -6380,6 +6404,7 @@ pub(crate) mod tests {
             }],
             &pal,
             80,
+            false,
         );
         let colors: Vec<Option<Color>> = lines.iter().map(|l| l.style.fg).collect();
         // ---/+++ headers dim (fg None), hunk cyan, -/+ red/green,
@@ -6407,11 +6432,48 @@ pub(crate) mod tests {
             }],
             &pal,
             80,
+            false,
         );
         assert!(
             prose
                 .iter()
                 .all(|l| l.style.fg.is_none() || l.style.fg == pal.system_note.fg)
+        );
+    }
+
+    #[test]
+    fn replay_collapses_long_tool_output_under_the_current_toggle() {
+        use ion_core::{SessionEntry, ToolResult};
+        let pal = palette(Theme::Dark);
+        let long: String = (1..=15)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let entries = [SessionEntry::ToolResult {
+            result: ToolResult::Ok {
+                call_id: 1,
+                output: long,
+                artifact: None,
+                images: Vec::new(),
+            },
+        }];
+
+        // Collapsed replay: cap plus hint, no line 15.
+        let collapsed = render::entry_lines(&entries, &pal, 80, false);
+        let text: Vec<String> = collapsed.iter().map(|l| l.to_string()).collect();
+        assert!(
+            text.iter()
+                .any(|l| l.contains("... (5 more lines, ctrl+o to expand)"))
+        );
+        assert!(text.iter().all(|l| !l.contains("15")));
+
+        // Expanded replay: everything, no hint.
+        let expanded = render::entry_lines(&entries, &pal, 80, true);
+        let text: Vec<String> = expanded.iter().map(|l| l.to_string()).collect();
+        assert!(text.iter().any(|l| l.contains("15")));
+        assert!(
+            text.iter()
+                .all(|l| !l.contains("more lines, ctrl+o to expand"))
         );
     }
 
@@ -6889,7 +6951,14 @@ pub(crate) mod tests {
         ];
         let mut transcript = Transcript::new(40);
         let palette = render::palette(Theme::Dark);
-        append_snapshot_entries(&mut transcript, &entries, 2, Some(session_id), &palette);
+        append_snapshot_entries(
+            &mut transcript,
+            &entries,
+            2,
+            Some(session_id),
+            &palette,
+            false,
+        );
 
         let marker = format!("— resumed session {session_id} —");
         let marker_index = transcript
@@ -6897,11 +6966,11 @@ pub(crate) mod tests {
             .iter()
             .position(|line| line.to_string() == marker)
             .expect("resume marker");
-        let history_lines = entry_lines(&entries[..2], &palette, 40);
+        let history_lines = entry_lines(&entries[..2], &palette, 40, false);
         assert_eq!(marker_index, history_lines.len());
         assert_eq!(
             transcript.raw[marker_index + 1..],
-            entry_lines(&entries[2..], &palette, 40)
+            entry_lines(&entries[2..], &palette, 40, false)
         );
     }
 
@@ -6910,7 +6979,7 @@ pub(crate) mod tests {
         let entries = [ion_core::SessionEntry::AssistantMessage {
             text: "a".repeat(100),
         }];
-        let lines = entry_lines(&entries, &render::palette(Theme::Dark), 120);
+        let lines = entry_lines(&entries, &render::palette(Theme::Dark), 120, false);
         assert_eq!(
             lines.len(),
             1,
@@ -7169,17 +7238,17 @@ mod display_surface_tests {
         let state = started(UiState::new());
         let state = update(state, settled(Some("hello\nworld".to_owned()))).0;
 
-        // Collapsed (default): label only.
+        // Collapsed (default): short previews print in full.
         let mut collapsed = state.clone();
         collapsed.flush_draft();
         assert!(
             collapsed
                 .pending_scrollback
                 .iter()
-                .all(|line| !line.to_string().contains("world"))
+                .any(|line| line.to_string().contains("world"))
         );
 
-        // Expanded: preview lines follow the label.
+        // Expanded: preview lines follow the label too.
         let expanded = update(state, ctrl('o')).0;
         let mut expanded_state = expanded;
         expanded_state.flush_draft();
@@ -7188,6 +7257,70 @@ mod display_surface_tests {
                 .pending_scrollback
                 .iter()
                 .any(|line| line.to_string().contains("world"))
+        );
+    }
+
+    #[test]
+    fn settled_long_previews_collapse_to_the_pi_grammar() {
+        let state = started(UiState::new());
+        let long: String = (1..=15)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let state = update(state, settled(Some(long))).0;
+
+        // Collapsed (default): first 10 lines plus the expand hint;
+        // lines 11-15 wait behind the toggle.
+        let mut collapsed = state.clone();
+        collapsed.flush_draft();
+        let text: Vec<String> = collapsed
+            .pending_scrollback
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert!(text.iter().any(|l| l.contains("10")));
+        assert!(
+            text.iter()
+                .any(|l| l.contains("... (5 more lines, ctrl+o to expand)")),
+            "collapsed long preview must carry the pi expand hint: {text:?}"
+        );
+        assert!(text.iter().all(|l| !l.contains("15")));
+
+        // Expanded: everything prints, no hint.
+        let expanded = update(state, ctrl('o')).0;
+        let mut expanded_state = expanded;
+        expanded_state.flush_draft();
+        let text: Vec<String> = expanded_state
+            .pending_scrollback
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert!(text.iter().any(|l| l.contains("15")));
+        assert!(
+            text.iter()
+                .all(|l| !l.contains("more lines, ctrl+o to expand"))
+        );
+    }
+
+    #[test]
+    fn settled_ten_line_previews_print_without_the_expand_hint() {
+        let state = started(UiState::new());
+        let exactly_ten: String = (1..=10)
+            .map(|i| i.to_string())
+            .collect::<Vec<_>>()
+            .join("\n");
+        let state = update(state, settled(Some(exactly_ten))).0;
+        let mut collapsed = state;
+        collapsed.flush_draft();
+        let text: Vec<String> = collapsed
+            .pending_scrollback
+            .iter()
+            .map(|line| line.to_string())
+            .collect();
+        assert!(text.iter().any(|l| l.contains("10")));
+        assert!(
+            text.iter()
+                .all(|l| !l.contains("more lines, ctrl+o to expand"))
         );
     }
 

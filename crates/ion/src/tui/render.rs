@@ -521,6 +521,10 @@ fn limit_composer_rows(
 /// this renderer returns only the meaningful bottom-aligned rows so idle
 /// sessions do not display trailing blank space.
 pub(super) const LIVE_REGION_MAX_ROWS: usize = 10;
+
+/// Lines of a settled tool-output preview shown while collapsed
+/// (pi's FALLBACK_PREVIEW_LINES).
+pub(super) const TOOL_PREVIEW_LINES: usize = 10;
 const LIVE_REGION_BASE_ROWS: usize = 7;
 const LIVE_CHROME_ROWS: usize = 5;
 /// Visible picker window (pi parity: maxVisible 10). Shared by all
@@ -1394,6 +1398,32 @@ pub(super) fn tool_row_line(
     Line::from(spans)
 }
 
+/// Settled tool-output preview: the first [`TOOL_PREVIEW_LINES`] lines
+/// plus pi's collapse hint when more remain (`FALLBACK_PREVIEW_LINES`
+/// grammar from tool-execution.js). Inline scrollback cannot expand
+/// retroactively; the hint names the toggle that changes the next
+/// settle, and resume/fullscreen replay re-renders under the current
+/// toggle.
+pub(super) fn tool_preview_lines(preview: &str, expanded: bool) -> Vec<Line<'static>> {
+    let lines: Vec<&str> = preview.split('\n').collect();
+    let (shown, remaining) = if expanded {
+        (lines.as_slice(), 0)
+    } else {
+        let shown = &lines[..lines.len().min(TOOL_PREVIEW_LINES)];
+        (shown, lines.len() - shown.len())
+    };
+    let mut out: Vec<Line<'static>> = shown
+        .iter()
+        .map(|line| Line::from(format!("  {line}")).dark_gray())
+        .collect();
+    if remaining > 0 {
+        out.push(
+            Line::from(format!("  ... ({remaining} more lines, ctrl+o to expand)")).dark_gray(),
+        );
+    }
+    out
+}
+
 /// Dim full-width rule used as shell chrome above/below the live band.
 pub(super) fn separator_line(width: usize, palette: &Palette) -> Line<'static> {
     Line::from("\u{2500}".repeat(width.saturating_sub(1).max(1))).style(palette.separator)
@@ -1511,6 +1541,7 @@ pub(super) fn append_snapshot_entries(
     resume_entry_count: usize,
     resume_session: Option<ion_core::SessionId>,
     palette: &Palette,
+    expanded_tool_output: bool,
 ) {
     let boundary = if resume_session.is_some() {
         resume_entry_count.min(entries.len())
@@ -1518,23 +1549,34 @@ pub(super) fn append_snapshot_entries(
         0
     };
     let width = transcript.width();
-    transcript.extend(entry_lines(&entries[..boundary], palette, width));
+    transcript.extend(entry_lines(
+        &entries[..boundary],
+        palette,
+        width,
+        expanded_tool_output,
+    ));
     if let Some(session_id) = resume_session {
         transcript.push(
             Line::from(format!("— resumed session {session_id} —")).style(palette.system_note),
         );
     }
-    transcript.extend(entry_lines(&entries[boundary..], palette, width));
+    transcript.extend(entry_lines(
+        &entries[boundary..],
+        palette,
+        width,
+        expanded_tool_output,
+    ));
 }
 
 pub(super) fn entry_lines(
     entries: &[ion_core::SessionEntry],
     palette: &Palette,
     width: usize,
+    expanded_tool_output: bool,
 ) -> Vec<Line<'static>> {
     let mut out = Vec::new();
     for entry in entries {
-        push_entry_lines(entry, &mut out, palette, width);
+        push_entry_lines(entry, &mut out, palette, width, expanded_tool_output);
     }
     out
 }
@@ -1544,6 +1586,7 @@ fn push_entry_lines(
     out: &mut Vec<Line<'static>>,
     palette: &Palette,
     width: usize,
+    expanded_tool_output: bool,
 ) {
     match entry {
         // User turns carry the composer prompt marker in faint text;
@@ -1597,11 +1640,11 @@ fn push_entry_lines(
         }
         ion_core::SessionEntry::ToolResult { result } => {
             let text = result.model_text();
-            // Settled edit hunks render in diff colors (the outcome
-            // carries the unified hunk); other output stays dim.
-            // Detection is whole-block so prose `-`/`+` lines never
-            // misrender.
             if result.is_ok() && is_unified_diff(&text) {
+                // Settled edit hunks render in diff colors (the outcome
+                // carries the unified hunk); other output stays dim.
+                // Detection is whole-block so prose `-`/`+` lines never
+                // misrender.
                 for logical_line in text.split('\n') {
                     if logical_line.is_empty() {
                         continue;
@@ -1609,12 +1652,14 @@ fn push_entry_lines(
                     out.push(diff_line(logical_line));
                 }
             } else if result.is_ok() {
-                for logical_line in text.split('\n') {
-                    if logical_line.is_empty() {
-                        continue;
-                    }
-                    out.push(Line::from(format!("  {logical_line}")).style(palette.system_note));
-                }
+                // Replay uses the live collapse grammar: the same
+                // preview cap and hint as a settle, under the current
+                // toggle, so resumed sessions match fresh turns.
+                out.extend(
+                    tool_preview_lines(&text, expanded_tool_output)
+                        .into_iter()
+                        .map(|line| line.style(palette.system_note)),
+                );
             } else {
                 out.push(
                     Line::from(format!("\u{2717} {}", result.model_text()))
