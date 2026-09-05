@@ -91,6 +91,12 @@ pub enum TuiMode {
     Fullscreen,
 }
 
+/// Pi hides model reasoning blocks by default; an omitted key must do
+/// the same so an empty or partial settings file matches pi behavior.
+fn hide_thinking_block_default() -> bool {
+    true
+}
+
 #[derive(Debug, Clone, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Settings {
@@ -130,8 +136,9 @@ pub struct Settings {
     /// Disabled by default, matching pi's opt-in subagent extension.
     #[serde(default)]
     enable_agents: bool,
-    /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock).
-    #[serde(default)]
+    /// Hide reasoning output in the TUI (pi-parity hideThinkingBlock,
+    /// which pi defaults to true).
+    #[serde(default = "hide_thinking_block_default")]
     pub hide_thinking_block: bool,
 }
 
@@ -407,6 +414,17 @@ mod tests {
             ]
         );
         assert_eq!(settings.theme(), Theme::Light);
+    }
+
+    #[test]
+    fn thinking_is_hidden_by_default_and_explicitly_showable() {
+        let defaults: Settings = toml::from_str("theme = \"dark\"").unwrap();
+        assert!(defaults.hide_thinking_block);
+        let empty: Settings = toml::from_str("").unwrap();
+        assert!(empty.hide_thinking_block);
+
+        let shown: Settings = toml::from_str("hideThinkingBlock = false").unwrap();
+        assert!(!shown.hide_thinking_block);
     }
 
     #[test]
