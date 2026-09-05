@@ -5024,6 +5024,27 @@ pub enum SessionSwitch {
 /// rejection return to the reducer as messages. Session-switch effects
 /// are returned to the caller: only the run loop owns runtime
 /// lifecycle, so it performs the switch and re-attaches.
+///
+/// A stuck runtime round trip must degrade to a loud notice, never a
+/// frozen TUI: `dispatch` runs inline in the run loop, so an
+/// ever-pending `submit_if_idle` wedges all input (observed live:
+/// prompt echo, then no spinner, dead keys, idle process).
+async fn bounded_submit(
+    session: &SessionHandle,
+    text: String,
+) -> Result<ion_core::OperationId, String> {
+    const SUBMIT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+    match tokio::time::timeout(SUBMIT_TIMEOUT, session.submit_if_idle(text)).await {
+        Ok(Ok(id)) => Ok(id),
+        Ok(Err(err)) => Err(err.to_string()),
+        Err(_) => Err(
+            "submit timed out after 30s: the runtime did not admit the prompt; \
+             input stays live — wait or retry, and report a repeated stall"
+                .to_owned(),
+        ),
+    }
+}
+
 async fn dispatch(
     session: &SessionHandle,
     manager: Option<&crate::session_manager::SessionManager>,
@@ -5094,16 +5115,13 @@ async fn dispatch(
             None
         }
         UiEffect::Submit { text } => {
-            match session.submit_if_idle(text).await {
+            match bounded_submit(session, text).await {
                 Ok(_) => {
                     let (next, _) = update(std::mem::take(state), UiMessage::SubmitAccepted);
                     *state = next;
                 }
                 Err(err) => {
-                    let (next, _) = update(
-                        std::mem::take(state),
-                        UiMessage::SubmitRejected(err.to_string()),
-                    );
+                    let (next, _) = update(std::mem::take(state), UiMessage::SubmitRejected(err));
                     *state = next;
                 }
             }
