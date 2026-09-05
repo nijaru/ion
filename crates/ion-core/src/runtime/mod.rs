@@ -40,7 +40,8 @@ use crate::operation::{
 };
 use crate::policy::{DefaultPolicy, PolicyDecision, PolicyEngine};
 use crate::provider::{
-    EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, TokenUsage,
+    EngineSignal, ModelCapabilities, ModelConfig, ModelPricing, Provider, ProviderRequest,
+    TokenUsage,
 };
 use crate::store::{
     AssistantFrame, CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord,
@@ -293,10 +294,12 @@ pub enum RuntimeEvent {
     },
     /// Provider-reported usage for the current model step. This is a
     /// display event; the durable usage row is still committed only with
-    /// model-step settlement.
+    /// model-step settlement. `step` identifies the model step so a
+    /// frontend can replace (not re-add) a replayed usage event.
     UsageUpdate {
         cursor: RuntimeCursor,
         operation_id: OperationId,
+        step: u64,
         usage: TokenUsage,
     },
     OperationFinished {
@@ -462,6 +465,15 @@ pub struct SessionSnapshot {
     /// of the durable usage ledger for frontend resynchronization; it is not
     /// a cost estimate or a replacement for the ledger.
     pub latest_usage: Option<TokenUsage>,
+    /// Session-lifetime token totals from the durable usage ledger
+    /// (pi-parity footer stats): the cumulative `↑ ↓ R W` figures.
+    pub usage_totals: TokenUsage,
+    /// Published per-million-token pricing for the session's current
+    /// model (pi-parity cost footer). `None` hides the cost segment.
+    pub model_pricing: Option<ModelPricing>,
+    /// Cached context-window hint for the session's current model;
+    /// `None` hides the context-percentage segment.
+    pub context_window: Option<u64>,
     /// Live draft of the active operation (§21.4): present iff an
     /// operation is running. A lagged subscriber reconstructs its view
     /// from this instead of guessing from partial deltas.
@@ -1451,6 +1463,9 @@ struct LaneResidency {
     latest_usage: Option<TokenUsage>,
     context_window: Option<u64>,
     model_capabilities: Option<(String, ModelCapabilities)>,
+    /// Cached per-model published pricing, resolved once per model
+    /// selection like `model_capabilities`.
+    model_pricing: Option<ModelPricing>,
 }
 
 struct ResidentLane {
@@ -1594,6 +1609,10 @@ struct SessionRuntime<P> {
     /// Durable entry count at the reopen boundary for frontend resume
     /// markers. This is presentation metadata, not session authority.
     reopen_entry_count: Option<usize>,
+    /// Session-lifetime token totals from the durable usage ledger
+    /// (pi-parity footer stats). Maintained in memory as settled usage
+    /// commits; reloaded exactly at reopen.
+    usage_totals: TokenUsage,
 }
 
 impl<P: Provider> SessionRuntime<P> {
@@ -1682,6 +1701,7 @@ impl<P: Provider> SessionRuntime<P> {
             loaded,
             defer_loaded_start,
             reopen_entry_count: None,
+            usage_totals: TokenUsage::default(),
         }
     }
 
@@ -1695,6 +1715,7 @@ impl<P: Provider> SessionRuntime<P> {
             cache_read: usage.cache_read_tokens,
             cache_write: usage.cache_write_tokens,
         });
+        self.usage_totals = loaded.usage_totals;
         let last_context_tokens = latest_usage.map(TokenUsage::context_tokens);
         let assistant_frames = loaded.assistant_frames;
         let max_seq = loaded
@@ -3338,6 +3359,24 @@ impl<P: Provider> SessionRuntime<P> {
                 capabilities
             }
         };
+        // Pricing refreshes with the model selection, exactly like
+        // capabilities; the footer cost reads this cache.
+        let pricing = match self
+            .lane_live(&lane_name)
+            .expect("operation lane residency exists")
+            .model_pricing
+        {
+            Some(pricing) => Some(pricing),
+            None => {
+                let pricing = self.provider.pricing_for(&selected_model_ref).await;
+                if pricing.is_some() {
+                    self.lane_live_mut(&lane_name)
+                        .expect("operation lane residency exists")
+                        .model_pricing = pricing;
+                }
+                pricing
+            }
+        };
         let context_window = match self
             .lane_live(&lane_name)
             .expect("operation lane residency exists")
@@ -3365,6 +3404,7 @@ impl<P: Provider> SessionRuntime<P> {
             thinking,
             context_window,
             capabilities,
+            pricing,
         }
     }
 
@@ -4248,6 +4288,9 @@ impl<P: Provider> SessionRuntime<P> {
                     prompt: next_run.prompt.clone(),
                 }),
             latest_usage: self.main_lane_live().latest_usage,
+            usage_totals: self.usage_totals,
+            model_pricing: self.main_lane_live().model_pricing,
+            context_window: self.main_lane_live().context_window,
             live: self.main_active().map(|_| LiveOperationState {
                 draft_text: self
                     .main_live()

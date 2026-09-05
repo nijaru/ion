@@ -39,6 +39,7 @@ pub(super) fn step_model() -> crate::provider::ModelConfig {
         thinking: None,
         context_window: None,
         capabilities: crate::provider::ModelCapabilities::default(),
+        pricing: None,
     }
 }
 

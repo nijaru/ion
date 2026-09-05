@@ -209,6 +209,7 @@ mod tests {
                 thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: Some(131_072),
+                pricing: None,
                 capabilities: ModelCapabilities {
                     reasoning: true,
                     tool_calls: true,

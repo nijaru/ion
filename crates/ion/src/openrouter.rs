@@ -130,6 +130,29 @@ impl Provider for OpenRouterProvider {
         }
     }
 
+    /// Published per-million-token prices (pi-ai openrouter.json).
+    /// Free models publish explicit zero prices; unknown models stay
+    /// `None` so the cost footer hides instead of guessing.
+    async fn pricing(&self) -> Option<ion_core::ModelPricing> {
+        match self.model.as_str() {
+            "z-ai/glm-5.3-flash" => Some(ion_core::ModelPricing {
+                input: 75_000,
+                output: 250_000,
+                cache_read: 15_000,
+                cache_write: 0,
+            }),
+            "poolside/laguna-xs-2.1:free" | "poolside/laguna-s-2.1:free" => {
+                Some(ion_core::ModelPricing {
+                    input: 0,
+                    output: 0,
+                    cache_read: 0,
+                    cache_write: 0,
+                })
+            }
+            _ => None,
+        }
+    }
+
     /// Fetch the model's `context_length` from the models endpoint
     /// once, lazily; any failure degrades to unknown (§14.8).
     async fn context_window(&self) -> Option<u64> {
@@ -696,6 +719,7 @@ mod tests {
                 thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: None,
+                pricing: None,
                 capabilities: ion_core::ModelCapabilities {
                     reasoning: true,
                     ..ion_core::ModelCapabilities::default()
@@ -818,6 +842,7 @@ mod tests {
                 thinking: None,
                 model_ref: "test/model".to_owned(),
                 context_window: None,
+                pricing: None,
                 capabilities: ion_core::ModelCapabilities {
                     reasoning: true,
                     ..ion_core::ModelCapabilities::default()

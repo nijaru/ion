@@ -48,8 +48,8 @@ pub use operation::{OperationOutcome, OperationState, SessionEntry};
 pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
 pub use process::SandboxMode;
 pub use provider::{
-    EngineSignal, ModelCapabilities, ModelConfig, Provider, ProviderRequest, ScriptedMessage,
-    ScriptedProvider, SwitchingProvider, TokenUsage,
+    EngineSignal, ModelCapabilities, ModelConfig, ModelPricing, Provider, ProviderRequest,
+    ScriptedMessage, ScriptedProvider, SwitchingProvider, TokenUsage,
 };
 pub use runtime::{
     EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState, NextRunInput,

@@ -20,6 +20,7 @@ use uuid::Uuid;
 
 use crate::ids::{AgentId, EffectId, EntryId, InboxId, OperationId, SessionId};
 use crate::operation::{InboxKind, OperationState, SessionEntry};
+use crate::provider::TokenUsage;
 use crate::tool::RecoveryClass;
 
 const STORE_CAPACITY: usize = 64;
@@ -266,6 +267,9 @@ pub struct LoadedSession {
     /// Most recently committed model-step usage, loaded for runtime-owned
     /// frontend resynchronization without exposing the store to a frontend.
     pub(crate) latest_usage: Option<UsageRow>,
+    /// Session-lifetime token totals from the durable usage ledger
+    /// (pi-parity footer stats). Saturating sum over settled rows.
+    pub(crate) usage_totals: TokenUsage,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -418,6 +422,12 @@ enum StoreCommand {
     Usage {
         session_id: SessionId,
         reply: oneshot::Sender<Result<Vec<UsageRow>, StoreError>>,
+    },
+    /// Session-lifetime token totals from the durable usage ledger
+    /// (pi-parity footer stats). One aggregate read, not row history.
+    UsageTotals {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<TokenUsage, StoreError>>,
     },
     UpsertAssistantFrame {
         frame: AssistantFrame,
@@ -782,6 +792,13 @@ impl SessionStore {
     #[cfg(test)]
     pub(crate) async fn usage(&self, session_id: SessionId) -> Result<Vec<UsageRow>, StoreError> {
         self.request(|reply| StoreCommand::Usage { session_id, reply })
+            .await
+    }
+
+    /// Session-lifetime token totals from the durable usage ledger
+    /// (pi-parity footer stats). Saturating sum over all settled rows.
+    pub async fn usage_totals(&self, session_id: SessionId) -> Result<TokenUsage, StoreError> {
+        self.request(|reply| StoreCommand::UsageTotals { session_id, reply })
             .await
     }
 

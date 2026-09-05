@@ -1092,6 +1092,24 @@ pub struct UiState {
     approval: Option<ApprovalPrompt>,
     /// Most recent provider usage, retained for the footer after settlement.
     usage: Option<TokenUsage>,
+    /// Session-lifetime token totals (pi-parity footer `↑ ↓ R W`).
+    usage_totals: TokenUsage,
+    /// Published per-million-token pricing for the current model;
+    /// `None` hides the footer cost segment.
+    model_pricing: Option<ion_core::ModelPricing>,
+    /// Cached context-window hint for the current model; `None` hides
+    /// the footer context-percentage segment.
+    context_window: Option<u64>,
+    /// When the running operation started (submit → settle interval
+    /// for the per-turn `⏱ s · tok/s` line).
+    turn_started: Option<std::time::Instant>,
+    /// Tokens generated this turn for the per-turn throughput figure:
+    /// snapshot usage minus the totals at turn start.
+    turn_start_totals: TokenUsage,
+    /// Per-step usage for the running operation, keyed by model-step
+    /// number so a replayed step replaces its contribution instead of
+    /// double-counting (the footer stays exact under stream retries).
+    turn_steps: std::collections::BTreeMap<u64, TokenUsage>,
     /// The durable queued follow-up prompt, when one exists (pi parity:
     /// queued messages stay visible above the composer).
     queued_prompt: Option<String>,
@@ -3405,6 +3423,10 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.draft.clear();
             state.tool_rows.clear();
             state.usage = None;
+            // Per-turn stats baseline (pi `⏱ s · tok/s`): measure from
+            // operation start and count the tokens this turn adds.
+            state.turn_started = Some(std::time::Instant::now());
+            state.turn_start_totals = state.usage_totals;
             state.status = UiStatus::Working {
                 operation: "thinking".to_owned(),
             };
@@ -3466,13 +3488,39 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
                 row.preview = preview;
             }
         }
-        RuntimeEvent::UsageUpdate { usage, .. } => {
+        RuntimeEvent::UsageUpdate { step, usage, .. } => {
             state.usage = Some(usage);
+            // Per-step replacement keeps the footer exact when a step's
+            // stream is retried and replays its final usage event.
+            state.turn_steps.insert(step, usage);
+            let steps: TokenUsage =
+                state
+                    .turn_steps
+                    .values()
+                    .fold(TokenUsage::default(), |acc, u| TokenUsage {
+                        input: acc.input.saturating_add(u.input),
+                        output: acc.output.saturating_add(u.output),
+                        cache_read: acc.cache_read.saturating_add(u.cache_read),
+                        cache_write: acc.cache_write.saturating_add(u.cache_write),
+                    });
+            state.usage_totals = TokenUsage {
+                input: state.turn_start_totals.input.saturating_add(steps.input),
+                output: state.turn_start_totals.output.saturating_add(steps.output),
+                cache_read: state
+                    .turn_start_totals
+                    .cache_read
+                    .saturating_add(steps.cache_read),
+                cache_write: state
+                    .turn_start_totals
+                    .cache_write
+                    .saturating_add(steps.cache_write),
+            };
         }
         RuntimeEvent::OperationFinished { .. } => {
             state.flush_draft();
             state.approval = None;
             state.status = UiStatus::Idle;
+            state.push_turn_stats();
         }
         RuntimeEvent::OperationFailed { message, .. } => {
             state.abandon_draft();
@@ -3567,6 +3615,34 @@ impl UiState {
         }
     }
 
+    /// Per-turn stats line (pi / pi-tps parity: `⏱ 4.5s · 52.3 tok/s`),
+    /// printed to scrollback when the operation settles. Timing spans
+    /// submit → settle; throughput divides the turn's output tokens.
+    /// Skipped when no usage event arrived (scripted/unknown models).
+    fn push_turn_stats(&mut self) {
+        let Some(started) = self.turn_started.take() else {
+            return;
+        };
+        let steps: TokenUsage = self
+            .turn_steps
+            .values()
+            .fold(TokenUsage::default(), |acc, u| TokenUsage {
+                input: acc.input.saturating_add(u.input),
+                output: acc.output.saturating_add(u.output),
+                cache_read: acc.cache_read.saturating_add(u.cache_read),
+                cache_write: acc.cache_write.saturating_add(u.cache_write),
+            });
+        if steps.output == 0 {
+            return;
+        }
+        let elapsed = started.elapsed().as_secs_f64().max(f64::EPSILON);
+        let tps = steps.output as f64 / elapsed;
+        self.pending_scrollback.push(
+            Line::from(format!("\u{23f1} {:.1}s · {:.1} tok/s", elapsed, tps))
+                .style(palette(self.theme).system_note),
+        );
+    }
+
     fn flush_draft(&mut self) {
         flush_thinking(self);
         self.flush_tool_rows();
@@ -3639,6 +3715,9 @@ impl UiState {
         // Restore the runtime-owned projection of the latest durable usage;
         // frontend resynchronization never reads the store directly.
         self.usage = snapshot.latest_usage;
+        self.usage_totals = snapshot.usage_totals;
+        self.model_pricing = snapshot.model_pricing;
+        self.context_window = snapshot.context_window;
         // A terminal settlement is relevant to the reconstructed foreground
         // only while main is idle. During a newer active operation the retained
         // settlement belongs to an earlier turn and must not be re-announced.
@@ -4283,6 +4362,9 @@ pub async fn run(
     // must split the durable qualified reference before rendering it or
     // comparing it with the qualified catalog.
     state.usage = snapshot.latest_usage;
+    state.usage_totals = snapshot.usage_totals;
+    state.model_pricing = snapshot.model_pricing;
+    state.context_window = snapshot.context_window;
     state.thinking_level = snapshot.thinking.clone();
     if host.model_name.is_some() {
         let (provider, model_name) =
@@ -4998,6 +5080,9 @@ async fn switch_session(
         OperationStatus::Idle => None,
     };
     state.usage = snapshot.latest_usage;
+    state.usage_totals = snapshot.usage_totals;
+    state.model_pricing = snapshot.model_pricing;
+    state.context_window = snapshot.context_window;
     state.thinking_level = snapshot.thinking.clone();
     state.last_assistant = snapshot.entries.iter().rev().find_map(|entry| match entry {
         ion_core::SessionEntry::AssistantMessage { text } => Some(text.clone()),
@@ -5856,6 +5941,9 @@ pub(crate) mod tests {
                 cache_read: 60,
                 cache_write: 4,
             }),
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: Some(ion_core::LiveOperationState {
                 draft_text: "authoritative draft".to_owned(),
                 draft_thinking: "reasoning so far".to_owned(),
@@ -5905,6 +5993,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let mut state = UiState::new();
@@ -5943,6 +6034,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let mut state = UiState::new();
@@ -5980,6 +6074,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let mut state = UiState::new();
@@ -6009,6 +6106,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         state.resync_after_lag(&snapshot);
@@ -6052,6 +6152,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         state.resync_after_lag(&snapshot);
@@ -6090,6 +6193,9 @@ pub(crate) mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let mut state = UiState::new();
@@ -6562,13 +6668,96 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn usage_event_reaches_the_footer_without_inventing_cost() {
+    fn turn_stats_line_lands_on_settle_only_with_usage() {
+        let operation_id = OperationId::generate();
+        let mut state = UiState::new();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationStarted {
+                cursor: Default::default(),
+                operation_id,
+                prompt: "hi".to_owned(),
+            },
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationFinished {
+                cursor: Default::default(),
+                operation_id,
+            },
+        );
+        // No usage event: no fabricated stats line.
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .all(|line| !line.to_string().contains("tok/s"))
+        );
+
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationStarted {
+                cursor: Default::default(),
+                operation_id,
+                prompt: "again".to_owned(),
+            },
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::UsageUpdate {
+                cursor: Default::default(),
+                operation_id,
+                step: 1,
+                usage: TokenUsage {
+                    input: 50,
+                    output: 100,
+                    cache_read: 0,
+                    cache_write: 0,
+                },
+            },
+        );
+        // Same step replayed (stream retry): totals replace, not add.
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::UsageUpdate {
+                cursor: Default::default(),
+                operation_id,
+                step: 1,
+                usage: TokenUsage {
+                    input: 50,
+                    output: 100,
+                    cache_read: 0,
+                    cache_write: 0,
+                },
+            },
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::OperationFinished {
+                cursor: Default::default(),
+                operation_id,
+            },
+        );
+        let stats = state
+            .pending_scrollback
+            .iter()
+            .map(|line| line.to_string())
+            .find(|line| line.contains("tok/s"))
+            .expect("settle prints the turn stats line");
+        assert!(stats.contains("\u{23f1}"), "{stats}");
+        // Totals after one turn: exactly one step, not doubled.
+        assert_eq!(state.usage_totals.output, 100);
+    }
+
+    #[test]
+    fn usage_event_reaches_the_footer_with_published_cost() {
         let operation_id = OperationId::generate();
         let state = apply_runtime_event(
             UiState::new(),
             RuntimeEvent::UsageUpdate {
                 cursor: Default::default(),
                 operation_id,
+                step: 1,
                 usage: TokenUsage {
                     input: 100,
                     output: 20,
@@ -6580,13 +6769,14 @@ pub(crate) mod tests {
         let (lines, _) = build_live(&state, &palette(Theme::Dark), 120);
         let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
         assert!(
-            text.iter()
-                .any(|line| line.contains("ctx 184 · in 100 · out 20 · cache 60/4")),
+            text.iter().any(|line| line.contains("↑100 ↓20 R60 W4")),
             "{text:?}"
         );
+        // With no pricing the cost segment stays hidden — never a
+        // guessed cost. With published pricing the exact cost shows.
         assert!(
-            text.iter().all(|line| !line.contains("cost")),
-            "cost must stay absent until a provider pricing contract exists: {text:?}"
+            text.iter().all(|line| !line.contains('$')),
+            "cost hidden while pricing is unknown: {text:?}"
         );
     }
 
@@ -6603,6 +6793,7 @@ pub(crate) mod tests {
             RuntimeEvent::UsageUpdate {
                 cursor: Default::default(),
                 operation_id,
+                step: 1,
                 usage: TokenUsage {
                     input: 100,
                     output: 20,
@@ -6613,20 +6804,31 @@ pub(crate) mod tests {
         );
         state.model_name = Some("z-ai/glm-5.3-flash".to_owned());
         state.model_provider = Some("openrouter".to_owned());
-        let (lines, _) = build_live(&state, &palette(Theme::Dark), 60);
+        // 40 columns: the compact stats plus the provider cannot both
+        // fit, so the footer must elide (`…`) instead of gluing.
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 40);
         let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
         let footer = text
             .iter()
-            .find(|line| line.contains("ctx 184"))
+            .find(|line| line.contains("↑100"))
             .expect("usage footer line");
         assert!(
             footer.contains("\u{2026}"),
             "narrow footer must elide instead of gluing segments: {footer:?}"
         );
         assert!(
-            !footer.ends_with(' ') && footer.chars().count() <= 60,
+            !footer.ends_with(' ') && footer.chars().count() <= 40,
             "footer must not exceed the width or trail spaces: {footer:?}"
         );
+        // At a comfortable width both segments render whole, compact
+        // (pi grammar now): `↑100 ↓20 R60 W4 CH93.8%` + provider.
+        let (lines, _) = build_live(&state, &palette(Theme::Dark), 100);
+        let text: Vec<String> = lines.iter().map(|line| line.to_string()).collect();
+        let footer = text
+            .iter()
+            .find(|line| line.contains("↑100 ↓20 R60 W4 CH93.8%"))
+            .expect("full stats footer at 100 cols");
+        assert!(footer.contains("(openrouter) z-ai/glm-5.3-flash"));
     }
 
     #[test]
@@ -7428,6 +7630,9 @@ mod queue_parity_tests {
                 prompt: "lag-visible queue".to_owned(),
             }),
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let _ = &mut snapshot;
@@ -7532,6 +7737,9 @@ mod thinking_parity_tests {
             thinking: Some("xhigh".to_owned()),
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         ui.thinking_level = snapshot.thinking.clone();

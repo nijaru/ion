@@ -20,7 +20,7 @@ use crate::ids::OperationId;
 use crate::tool::{ToolCall, ToolSpec};
 
 /// Token accounting for one model step (DESIGN.md §27.2).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TokenUsage {
     /// Fresh input tokens, excluding the cache-read/write buckets below.
     /// The four fields are disjoint and may be summed for context accounting.
@@ -82,6 +82,36 @@ pub struct ModelConfig {
     pub thinking: Option<String>,
     pub context_window: Option<u64>,
     pub capabilities: ModelCapabilities,
+    /// Per-million-token pricing for the current model step, when the
+    /// provider publishes it (pi-parity cost footer). `None` hides the
+    /// cost segment instead of guessing.
+    pub pricing: Option<ModelPricing>,
+}
+
+/// Per-million-token USD prices for one model (pi-ai catalog values).
+/// Prices are exact integer micro-dollars so durable model configs keep
+/// `Eq` semantics (floats are rejected by the derives) and comparisons
+/// stay deterministic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct ModelPricing {
+    /// Micro-dollars per one million input tokens ($0.075 → 75_000).
+    pub input: u32,
+    pub output: u32,
+    pub cache_read: u32,
+    pub cache_write: u32,
+}
+
+impl ModelPricing {
+    /// USD cost of one model step from its token usage, saturating like
+    /// the token counters (provider data is external input).
+    pub fn cost_usd(self, usage: TokenUsage) -> f64 {
+        let micro = self.input as u64 * usage.input
+            + self.output as u64 * usage.output
+            + self.cache_read as u64 * usage.cache_read
+            + self.cache_write as u64 * usage.cache_write;
+        // micro-dollars per million tokens → dollars: divide by 1e6.
+        micro as f64 / 1e12
+    }
 }
 
 /// What one model step asks the provider: the operation it belongs to,
@@ -211,6 +241,26 @@ pub trait Provider: Send + Sync + 'static {
             }
         }
     }
+
+    /// Published per-million-token pricing for an exact model id.
+    /// `None` means unknown: the cost footer hides the cost segment
+    /// instead of guessing (adapters must not invent prices).
+    fn pricing_for(&self, model_ref: &str) -> impl Future<Output = Option<ModelPricing>> + Send {
+        let supported = self.supports_model(model_ref);
+        async move {
+            if supported {
+                self.pricing().await
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Pricing for the provider's fixed model. Adapters without published
+    /// prices keep the default `None`.
+    fn pricing(&self) -> impl Future<Output = Option<ModelPricing>> + Send {
+        std::future::ready(None)
+    }
 }
 
 impl<P: Provider> Provider for Arc<P> {
@@ -245,6 +295,14 @@ impl<P: Provider> Provider for Arc<P> {
 
     async fn capabilities_for(&self, model_ref: &str) -> ModelCapabilities {
         (**self).capabilities_for(model_ref).await
+    }
+
+    async fn pricing_for(&self, model_ref: &str) -> Option<ModelPricing> {
+        (**self).pricing_for(model_ref).await
+    }
+
+    async fn pricing(&self) -> Option<ModelPricing> {
+        (**self).pricing().await
     }
 }
 

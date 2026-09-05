@@ -192,7 +192,7 @@ impl<P: Provider> SessionRuntime<P> {
                         .await;
                 }
             }
-            EngineSignal::UsageUpdate { usage, .. } => {
+            EngineSignal::UsageUpdate { step, usage, .. } => {
                 self.operation_lane_live_mut(operation_id)
                     .expect("resident operation has an owning lane")
                     .last_context_tokens = Some(usage.context_tokens());
@@ -202,6 +202,7 @@ impl<P: Provider> SessionRuntime<P> {
                 self.emit(RuntimeEvent::UsageUpdate {
                     cursor: RuntimeCursor::default(),
                     operation_id,
+                    step,
                     usage,
                 });
             }
@@ -354,6 +355,16 @@ impl<P: Provider> SessionRuntime<P> {
         self.next_entry_seq = new_entry_seq;
         staged.state_seq += 1;
         if let Some(usage) = settled_usage {
+            self.usage_totals.input = self.usage_totals.input.saturating_add(usage.input);
+            self.usage_totals.output = self.usage_totals.output.saturating_add(usage.output);
+            self.usage_totals.cache_read = self
+                .usage_totals
+                .cache_read
+                .saturating_add(usage.cache_read);
+            self.usage_totals.cache_write = self
+                .usage_totals
+                .cache_write
+                .saturating_add(usage.cache_write);
             self.operation_lane_live_mut(operation_id)
                 .expect("resident operation has an owning lane")
                 .latest_usage = Some(usage);

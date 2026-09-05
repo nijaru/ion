@@ -157,6 +157,9 @@ pub(super) fn handle_command(
         StoreCommand::Usage { session_id, reply } => {
             let _ = reply.send(usage_rows(connection, session_id));
         }
+        StoreCommand::UsageTotals { session_id, reply } => {
+            let _ = reply.send(usage_totals(connection, session_id));
+        }
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
         }
@@ -593,6 +596,33 @@ fn usage_rows(
         .query_map([session_id.as_uuid().to_string()], usage_row)?
         .collect::<Result<Vec<_>, rusqlite::Error>>()?;
     Ok(rows)
+}
+
+fn usage_totals(connection: &Connection, session_id: SessionId) -> Result<TokenUsage, StoreError> {
+    let mut statement = connection.prepare(
+        "SELECT COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0), COALESCE(SUM(cache_write_tokens), 0)
+         FROM usage WHERE session_id = ?1",
+    )?;
+    let (input, output, cache_read, cache_write) =
+        statement.query_row([session_id.as_uuid().to_string()], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+            ))
+        })?;
+    // SQLite INTEGER is i64; provider counters are u64. A sum that
+    // overflows i64 saturates at the u64 boundary the same way the
+    // in-memory counters do (§14.4) rather than wrapping silently.
+    let saturate = |sum: i64| u64::try_from(sum.max(0)).unwrap_or(u64::MAX);
+    Ok(TokenUsage {
+        input: saturate(input),
+        output: saturate(output),
+        cache_read: saturate(cache_read),
+        cache_write: saturate(cache_write),
+    })
 }
 
 fn check_injected(flag: &AtomicBool) -> Result<(), StoreError> {
@@ -2455,6 +2485,8 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         )
         .optional()?;
 
+    let usage_totals = usage_totals(connection, session_id)?;
+
     Ok(LoadedSession {
         session,
         agents,
@@ -2464,6 +2496,7 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<LoadedSession,
         assistant_frames,
         tool_progress,
         latest_usage,
+        usage_totals,
     })
 }
 

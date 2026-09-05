@@ -1017,6 +1017,9 @@ mod tests {
             thinking: None,
             pending_next_run: None,
             latest_usage: None,
+            usage_totals: ion_core::TokenUsage::default(),
+            model_pricing: None,
+            context_window: None,
             live: None,
         };
         let stop = stop_after_resubscribe(&snapshot, target, true)

@@ -1,6 +1,66 @@
 use super::*;
 use unicode_width::UnicodeWidthChar as _;
 
+/// Compact token count (pi footer grammar): `28k`, `1.2M`, `950`.
+fn format_tokens(tokens: u64) -> String {
+    if tokens >= 1_000_000 {
+        format!("{:.1}M", tokens as f64 / 1_000_000.0)
+    } else if tokens >= 10_000 {
+        format!("{}k", tokens / 1_000)
+    } else if tokens >= 1_000 {
+        format!("{:.1}k", tokens as f64 / 1_000.0)
+    } else {
+        tokens.to_string()
+    }
+}
+
+/// The usage stats label (pi footer grammar): cumulative
+/// `↑in ↓out R cache-read W cache-write CH hit-rate $cost ctx%`.
+/// Segments hide — never guess — when their data is unknown: no
+/// pricing contract drops `$`, and the context window hides without a
+/// hint. The label is absent before the first usage event.
+fn footer_stats_label(state: &UiState) -> Option<String> {
+    let totals = state.usage_totals;
+    if totals.input == 0 && totals.output == 0 {
+        return None;
+    }
+    let mut parts = vec![
+        format!("\u{2191}{}", format_tokens(totals.input)),
+        format!("\u{2193}{}", format_tokens(totals.output)),
+    ];
+    if totals.cache_read > 0 {
+        parts.push(format!("R{}", format_tokens(totals.cache_read)));
+    }
+    if totals.cache_write > 0 {
+        parts.push(format!("W{}", format_tokens(totals.cache_write)));
+    }
+    // Cache hit rate (pi `CH%`): reads over all cache-eligible input.
+    let cache_eligible = totals.cache_read.saturating_add(totals.cache_write);
+    if cache_eligible > 0 {
+        let hit = totals.cache_read as f64 / cache_eligible as f64 * 100.0;
+        parts.push(format!("CH{hit:.1}%"));
+    }
+    if let Some(pricing) = state.model_pricing {
+        let cost = pricing.cost_usd(totals);
+        if cost > 0.0 {
+            parts.push(format!("${cost:.3}"));
+        }
+    }
+    // Context usage percentage against the window hint when known.
+    if let (Some(window), Some(usage)) = (state.context_window, state.usage)
+        && window > 0
+    {
+        let ctx = usage
+            .input
+            .saturating_add(usage.output)
+            .saturating_add(usage.cache_read)
+            .saturating_add(usage.cache_write);
+        let pct = ctx as f64 / window as f64 * 100.0;
+        parts.push(format!("{pct:.1}%/{}", format_tokens(window)));
+    }
+    Some(parts.join(" "))
+}
+
 /// Truncate to a display width, appending `…` when anything was cut.
 /// Single-line summaries (approval targets) must never wrap the card
 /// open under budget pressure.
@@ -1190,17 +1250,7 @@ pub(super) fn build_live_at_height(
         },
         None => "(scripted)".to_owned(),
     };
-    let usage_label = state.usage.map(|usage| {
-        let context = usage
-            .input
-            .saturating_add(usage.output)
-            .saturating_add(usage.cache_read)
-            .saturating_add(usage.cache_write);
-        format!(
-            "ctx {context} · in {} · out {} · cache {}/{}",
-            usage.input, usage.output, usage.cache_read, usage.cache_write
-        )
-    });
+    let usage_label = footer_stats_label(state);
 
     let mut lines: Vec<Line<'static>> = std::mem::take(&mut head);
 

@@ -156,6 +156,34 @@ impl Provider for OpenAICodexProvider {
         }
     }
 
+    /// Published per-million-token prices (pi-ai openai-codex.json,
+    /// base tier — the sub-272k tier). Subscription-backed models
+    /// would show `(sub)` in pi; without subscription data the base
+    /// price is the honest floor.
+    async fn pricing(&self) -> Option<ion_core::ModelPricing> {
+        match self.model.as_str() {
+            "gpt-5.6-luna" => Some(ion_core::ModelPricing {
+                input: 200_000,
+                output: 1_200_000,
+                cache_read: 20_000,
+                cache_write: 250_000,
+            }),
+            "gpt-5.6-sol" => Some(ion_core::ModelPricing {
+                input: 5_000_000,
+                output: 30_000_000,
+                cache_read: 500_000,
+                cache_write: 6_250_000,
+            }),
+            "gpt-5.6-terra" => Some(ion_core::ModelPricing {
+                input: 2_000_000,
+                output: 12_000_000,
+                cache_read: 200_000,
+                cache_write: 2_500_000,
+            }),
+            _ => None,
+        }
+    }
+
     async fn context_window(&self) -> Option<u64> {
         Some(CODEX_CONTEXT_WINDOW)
     }
@@ -722,6 +750,7 @@ mod tests {
                 thinking: None,
                 model_ref: "gpt-5.6-luna".to_owned(),
                 context_window: Some(CODEX_CONTEXT_WINDOW),
+                pricing: None,
                 capabilities: ModelCapabilities {
                     reasoning: true,
                     ..ModelCapabilities::default()
