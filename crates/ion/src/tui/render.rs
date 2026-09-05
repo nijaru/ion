@@ -1,4 +1,29 @@
 use super::*;
+use unicode_width::UnicodeWidthChar as _;
+
+/// Truncate to a display width, appending `…` when anything was cut.
+/// Single-line summaries (approval targets) must never wrap the card
+/// open under budget pressure.
+fn truncate_to_width(text: &str, max_width: usize) -> String {
+    if max_width == 0 {
+        return String::new();
+    }
+    if text.width() <= max_width {
+        return text.to_owned();
+    }
+    let mut out = String::new();
+    let mut width = 0;
+    for ch in text.chars() {
+        let w = ch.width().unwrap_or(0);
+        if width + w + 1 > max_width {
+            break;
+        }
+        out.push(ch);
+        width += w;
+    }
+    out.push('…');
+    out
+}
 
 /// Colors for the live viewport, chosen once from the theme setting.
 /// Scrollback styling stays theme-independent (dim/red/yellow read on
@@ -451,6 +476,11 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         LIVE_REGION_MAX_ROWS
     } else if state.ext_ui.dialog.is_some() {
         // A parked dialog is modal like a picker.
+        LIVE_REGION_MAX_ROWS
+    } else if state.approval.is_some() {
+        // A parked approval is modal too: the card needs its header,
+        // target, and decision line visible together, never truncated
+        // to a blind `y approve · n deny` tail.
         LIVE_REGION_MAX_ROWS
     } else {
         let widget_rows = state
@@ -1054,39 +1084,80 @@ pub(super) fn build_live_at_height(
     }
 
     // The parked approval prompt sits at the band bottom, right above
-    // the composer, and owns the keyboard while visible (§17.4).
+    // the composer, and owns the keyboard while visible (§17.4). The
+    // card is atomic: the tool header and the decision line always
+    // render, and only the preview middle shrinks under budget
+    // pressure. A multi-line target used to glue `y approve · n deny`
+    // onto the last command line, so budget truncation kept the tail
+    // and dropped the tool identity — a blind approval.
     if let Some(prompt) = &state.approval {
-        let mut spans = vec![Span::styled(
+        let header = Line::from(Span::styled(
             format!("\u{26a0} approve `{}`", prompt.tool),
             Style::new().yellow().bold(),
-        )];
-        if let Some(target) = &prompt.target {
-            spans.push(Span::styled(format!(" {target}"), Style::new().yellow()));
-        }
-        spans.push(Span::styled(
+        ));
+        let header_lines = wrap_line(&header, width);
+        let decision = Line::from(Span::styled(
             "  y approve \u{00b7} n deny",
             Style::new().yellow(),
         ));
-        head.extend(wrap_line(&Line::from(spans), width));
-        // A proposed-change preview (currently `edit` hunks) renders
-        // below the prompt in diff colors, capped so the composer
-        // keeps its rows; the band budget truncates older head first.
-        if let Some(preview) = &prompt.preview {
-            const APPROVAL_PREVIEW_MAX_LINES: usize = 10;
-            let preview_lines: Vec<&str> = preview.lines().collect();
-            for line in preview_lines.iter().take(APPROVAL_PREVIEW_MAX_LINES) {
-                head.extend(wrap_line(&diff_line(line), width));
+        let decision_lines = wrap_line(&decision, width);
+        // The target is a one-line summary; a multi-line command keeps
+        // its first line here and spills the rest into the capped
+        // preview below, so the header can never scroll away from the
+        // decision.
+        let mut target_first: Option<Line<'static>> = None;
+        let mut middle: Vec<&str> = Vec::new();
+        if let Some(target) = &prompt.target {
+            let mut lines = target.lines();
+            if let Some(first) = lines.next() {
+                target_first = Some(Line::from(Span::styled(
+                    format!("  {}", truncate_to_width(first, width.saturating_sub(2))),
+                    Style::new().yellow(),
+                )));
             }
-            let omitted = preview_lines
-                .len()
-                .saturating_sub(APPROVAL_PREVIEW_MAX_LINES);
-            if omitted > 0 {
-                head.extend(wrap_line(
-                    &Line::from(format!("  … ({omitted} more lines)")).dim(),
-                    width,
-                ));
-            }
+            middle.extend(lines);
         }
+        // A proposed-change preview (currently `edit` hunks) renders
+        // below the target in diff colors; the band budget truncates
+        // this middle first.
+        if let Some(preview) = &prompt.preview {
+            middle.extend(preview.lines());
+        }
+        const APPROVAL_PREVIEW_MAX_LINES: usize = 10;
+        let budget_now = band_height
+            .saturating_sub(LIVE_CHROME_ROWS)
+            .saturating_sub(composer_len);
+        let fixed = header_lines.len() + usize::from(target_first.is_some()) + decision_lines.len();
+        // Make room for the fixed card frame by dropping the oldest
+        // head lines first.
+        if head.len() + fixed > budget_now {
+            let drop = (head.len() + fixed).saturating_sub(budget_now);
+            head.drain(..drop.min(head.len()));
+        }
+        // The preview middle then takes whatever budget remains (up
+        // to its cap); the header, target summary, and decision line
+        // always survive, so an approval is never blind.
+        let mut take = middle.len().min(APPROVAL_PREVIEW_MAX_LINES);
+        let mut note = middle.len() > take;
+        while head.len() + fixed + take + usize::from(note) > budget_now && take > 0 {
+            take -= 1;
+            note = middle.len() > take;
+        }
+        let omitted = middle.len().saturating_sub(take);
+        head.extend(header_lines);
+        if let Some(line) = target_first {
+            head.push(line);
+        }
+        for line in middle.iter().take(take) {
+            head.extend(wrap_line(&diff_line(line), width));
+        }
+        if omitted > 0 {
+            head.extend(wrap_line(
+                &Line::from(format!("  … ({omitted} more lines)")).dim(),
+                width,
+            ));
+        }
+        head.extend(decision_lines);
     }
 
     // Fit the head above the composer inside the band cap, keeping
@@ -1644,5 +1715,92 @@ mod tests {
         );
         let lines = session_selector_lines(&state, &palette, 80, 16);
         assert_eq!(text(&lines[1]), "→ ✓ first");
+    }
+
+    #[test]
+    fn parked_approval_expands_the_live_band() {
+        let mut state = UiState::new();
+        let idle = live_region_height(&state);
+        state.approval = Some(ApprovalPrompt {
+            tool: "bash".to_owned(),
+            target: Some("echo hi".to_owned()),
+            preview: None,
+        });
+        assert_eq!(live_region_height(&state), LIVE_REGION_MAX_ROWS);
+        assert!(live_region_height(&state) > idle);
+    }
+
+    fn band_text(lines: &[Line<'_>]) -> Vec<String> {
+        lines.iter().map(text).collect()
+    }
+
+    #[test]
+    fn approval_card_survives_a_multiline_target_on_a_tight_budget() {
+        let palette = dark();
+        let mut state = UiState::new();
+        state.approval = Some(ApprovalPrompt {
+            tool: "bash".to_owned(),
+            target: Some("cat > story.txt <<'EOF'\nline one\nline two\nEOF".to_owned()),
+            preview: None,
+        });
+        // Band 10, chrome 5, one composer row: budget 4. The fixed
+        // frame (header + target summary + decision) takes 3; the
+        // three spilled command lines shrink to an omission note.
+        // The old layout glued the decision onto the last command
+        // line, so truncation kept `EOF  y approve · n deny` and lost
+        // the tool identity — a blind approval.
+        let (lines, _) = build_live_at_height(&state, &palette, 80, 10);
+        let rendered = band_text(&lines);
+        let header = rendered
+            .iter()
+            .position(|line| line.contains("approve `bash`"))
+            .expect("tool header renders");
+        let target = rendered
+            .iter()
+            .position(|line| line.contains("cat > story.txt"))
+            .expect("target summary renders");
+        let decision = rendered
+            .iter()
+            .position(|line| line.contains("y approve · n deny"))
+            .expect("decision renders on its own line");
+        assert!(header < target && target < decision);
+        assert_eq!(rendered[decision], "  y approve · n deny");
+        assert!(rendered.iter().any(|line| line.contains("(3 more lines)")));
+        assert!(!rendered.iter().any(|line| line == "line one"));
+    }
+
+    #[test]
+    fn approval_card_orders_header_target_preview_decision() {
+        let palette = dark();
+        let mut state = UiState::new();
+        state.approval = Some(ApprovalPrompt {
+            tool: "edit".to_owned(),
+            target: Some("notes.txt".to_owned()),
+            preview: Some("- old\n+ new".to_owned()),
+        });
+        let (lines, _) = build_live_at_height(&state, &palette, 80, 10);
+        let rendered = band_text(&lines);
+        let header = rendered
+            .iter()
+            .position(|line| line.contains("approve `edit`"))
+            .expect("tool header renders");
+        let target = rendered
+            .iter()
+            .position(|line| line.contains("notes.txt"))
+            .expect("target renders");
+        let decision = rendered
+            .iter()
+            .position(|line| line.contains("y approve · n deny"))
+            .expect("decision renders");
+        assert!(header < target && target < decision);
+    }
+
+    #[test]
+    fn truncate_to_width_keeps_display_cells() {
+        assert_eq!(truncate_to_width("echo hi", 80), "echo hi");
+        assert_eq!(truncate_to_width("echo hi", 7), "echo hi");
+        assert_eq!(truncate_to_width("echo hi", 6), "echo …");
+        assert_eq!(truncate_to_width("", 4), "");
+        assert_eq!(truncate_to_width("anything", 0), "");
     }
 }
