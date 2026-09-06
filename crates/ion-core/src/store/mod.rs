@@ -552,6 +552,12 @@ enum StoreCommand {
         session_id: SessionId,
         reply: oneshot::Sender<Result<String, StoreError>>,
     },
+    /// The main lane's session record and ancestor-chain entries for
+    /// the HTML export (`/export <path>.html`, `/share`).
+    ExportEntries {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<(SessionRecord, Vec<SessionEntry>), StoreError>>,
+    },
     /// Import a JSONL export into a new durable session (`/import`).
     /// The reply is the new session id.
     ImportSession {
@@ -942,6 +948,16 @@ impl SessionStore {
     /// export (`/export`, pi parity). The host writes the file.
     pub async fn export_session(&self, session_id: SessionId) -> Result<String, StoreError> {
         self.request(|reply| StoreCommand::ExportSession { session_id, reply })
+            .await
+    }
+
+    /// The main lane's session record and ancestor-chain entries for
+    /// the HTML export (`/export <path>.html`, `/share`).
+    pub async fn export_entries(
+        &self,
+        session_id: SessionId,
+    ) -> Result<(SessionRecord, Vec<SessionEntry>), StoreError> {
+        self.request(|reply| StoreCommand::ExportEntries { session_id, reply })
             .await
     }
 

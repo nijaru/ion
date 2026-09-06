@@ -166,6 +166,9 @@ pub(super) fn handle_command(
         StoreCommand::ExportSession { session_id, reply } => {
             let _ = reply.send(export_session(connection, session_id));
         }
+        StoreCommand::ExportEntries { session_id, reply } => {
+            let _ = reply.send(export_entries(connection, session_id));
+        }
         StoreCommand::ImportSession { contents, reply } => {
             let _ = reply.send(import_session(connection, contents));
         }
@@ -918,31 +921,14 @@ fn session_stats(
 /// (pi's /export): a session header line followed by parent-chained
 /// entry lines. Only the main lane's path is exported, exactly like
 /// pi exports the current branch.
-fn export_session(connection: &Connection, session_id: SessionId) -> Result<String, StoreError> {
-    let loaded = load(connection, session_id)?;
+/// The main lane's ancestor path, oldest-first (the walk shared by
+/// the JSONL export, the HTML export, and fork_before).
+fn main_lane_path(loaded: &crate::store::LoadedSession) -> Result<Vec<&EntryRecord>, StoreError> {
     let main = loaded
         .lanes
         .iter()
         .find(|lane| lane.name == crate::session::lane::MAIN)
         .ok_or_else(|| StoreError::Sqlite("main lane missing".to_owned()))?;
-    let thinking = main.config.thinking.clone();
-    let header = crate::store::ExportedEntry {
-        kind: "session".to_owned(),
-        id: session_id.as_uuid().to_string(),
-        parent_id: None,
-        timestamp: now_ms(),
-        session: Some(crate::store::ExportedSession {
-            flavor: "ion".to_owned(),
-            cwd: loaded.session.cwd.clone(),
-            title: loaded.session.title.clone(),
-            initial_model_ref: loaded.session.initial_model_ref.clone(),
-            thinking,
-        }),
-        entry: None,
-    };
-    let mut lines = vec![serde_json::to_string(&header).expect("header serializes")];
-    // Walk the ancestor path from the main-lane leaf (inclusive),
-    // mirroring fork_before's chain walk.
     let by_id: std::collections::HashMap<EntryId, &EntryRecord> = loaded
         .entries
         .iter()
@@ -958,7 +944,35 @@ fn export_session(connection: &Connection, session_id: SessionId) -> Result<Stri
         cursor = record.parent;
     }
     path.reverse();
-    for record in path {
+    Ok(path)
+}
+
+fn export_session(connection: &Connection, session_id: SessionId) -> Result<String, StoreError> {
+    let loaded = load(connection, session_id)?;
+    let thinking = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .ok_or_else(|| StoreError::Sqlite("main lane missing".to_owned()))?
+        .config
+        .thinking
+        .clone();
+    let header = crate::store::ExportedEntry {
+        kind: "session".to_owned(),
+        id: session_id.as_uuid().to_string(),
+        parent_id: None,
+        timestamp: now_ms(),
+        session: Some(crate::store::ExportedSession {
+            flavor: "ion".to_owned(),
+            cwd: loaded.session.cwd.clone(),
+            title: loaded.session.title.clone(),
+            initial_model_ref: loaded.session.initial_model_ref.clone(),
+            thinking,
+        }),
+        entry: None,
+    };
+    let mut lines = vec![serde_json::to_string(&header).expect("header serializes")];
+    for record in main_lane_path(&loaded)? {
         let line = crate::store::ExportedEntry {
             kind: entry_kind(&record.entry).to_owned(),
             id: record.id.as_uuid().to_string(),
@@ -972,6 +986,20 @@ fn export_session(connection: &Connection, session_id: SessionId) -> Result<Stri
         lines.push(serde_json::to_string(&line).expect("line serializes"));
     }
     Ok(lines.join("\n") + "\n")
+}
+
+/// The main lane's session record and ancestor-chain entries for
+/// the HTML export (`/export <path>.html`, `/share`).
+fn export_entries(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<(SessionRecord, Vec<SessionEntry>), StoreError> {
+    let loaded = load(connection, session_id)?;
+    let entries = main_lane_path(&loaded)?
+        .into_iter()
+        .map(|record| record.entry.clone())
+        .collect();
+    Ok((loaded.session, entries))
 }
 
 /// Import a JSONL export into a new durable session (pi's /import).

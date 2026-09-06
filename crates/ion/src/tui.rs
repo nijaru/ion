@@ -17,6 +17,7 @@ use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
+use crate::export;
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationOutcome, OperationSettlement, OperationState, OperationStatus,
@@ -235,6 +236,15 @@ pub enum UiEffect {
     ImportSession {
         path: String,
     },
+    /// Write the debug log (rendered lines with visible widths + the
+    /// session's entries as JSONL) to the data-dir path, pi parity.
+    /// Resolved by the run loop, which owns the rendered transcript;
+    /// the notice carries the written path back to the user.
+    WriteDebugLog,
+    /// Share the session as a secret GitHub gist: render the HTML
+    /// archive, run `gh gist create --public=false`, print the viewer
+    /// URL. Resolved by the run loop (process spawn + progress UI).
+    ShareSession,
     /// Fork from before one user message: the host clones the ancestor
     /// path into a new durable session (the picked message's text
     /// returns for the composer), offers the git-checkpoint restore
@@ -2832,7 +2842,8 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             }
             // pi parity: a bare /export writes session-<timestamp>.jsonl
             // in the cwd; a path argument chooses the destination. The
-            // dispatch arm resolves the default name.
+            // dispatch arm resolves the default name and picks HTML
+            // (.html suffix) over JSONL.
             (
                 std::mem::take(state),
                 Some(UiEffect::ExportSession {
@@ -2859,6 +2870,46 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                     path: path.to_owned(),
                 }),
             )
+        }
+        "debug" => {
+            // pi parity: dump the rendered transcript (with visible
+            // widths) and the session entries as JSONL to a debug log
+            // under the data dir. The run loop resolves this — it owns
+            // the rendered lines and terminal dimensions.
+            (std::mem::take(state), Some(UiEffect::WriteDebugLog))
+        }
+        "changelog" => {
+            // pi parity: render the shipped changelog as markdown
+            // scrollback, newest first.
+            let entries = crate::changelog::parse(crate::changelog::SOURCE);
+            if entries.is_empty() {
+                notice(state, "no changelog entries found");
+            } else {
+                let mut body = String::new();
+                for entry in entries.iter().rev() {
+                    if !body.is_empty() {
+                        body.push_str("\n\n");
+                    }
+                    body.push_str(&entry.content);
+                }
+                let palette = render::palette(state.theme);
+                let width = state.terminal_width.unwrap_or(80).max(20);
+                state.pending_scrollback.extend(markdown::render(
+                    &format!("# What's New\n\n{body}"),
+                    &palette,
+                    width,
+                ));
+            }
+            (std::mem::take(state), None)
+        }
+        "share" => {
+            if state.session_id.is_none() {
+                notice(state, "no session is attached");
+                return (std::mem::take(state), None);
+            }
+            // pi parity: secret gist share. The run loop owns the
+            // process spawn and the working status.
+            (std::mem::take(state), Some(UiEffect::ShareSession))
         }
         "clone" => {
             if matches!(state.status, UiStatus::Working { .. }) {
@@ -2890,7 +2941,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
     }
 }
 
-const MAX_COMPLETION_SUGGESTIONS: usize = 16;
+const MAX_COMPLETION_SUGGESTIONS: usize = 24;
 
 /// Rows the `@` file picker filters over (pi caps its fd-backed list at
 /// 100 per query; the picker renders a bounded window anyway).
@@ -3013,9 +3064,11 @@ fn complete_composer(state: &mut UiState) {
         Some(_) => return,
         None => {
             let mut candidates: Vec<String> = [
+                "changelog",
                 "clone",
                 "compact",
                 "copy",
+                "debug",
                 "export",
                 "fork",
                 "fullscreen",
@@ -3027,6 +3080,7 @@ fn complete_composer(state: &mut UiState) {
                 "new",
                 "resume",
                 "session",
+                "share",
                 "thinking",
                 "quit",
             ]
@@ -4703,6 +4757,130 @@ fn run_external_editor(
     Ok(edited)
 }
 
+/// /debug (pi parity): dump every rendered transcript line with its
+/// visible width plus the session entries as JSONL into a debug log
+/// under the Ion data root. The path is reported to the user.
+async fn write_debug_log(
+    state: &mut UiState,
+    manager: Option<&crate::session_manager::SessionManager>,
+    transcript: &render::Transcript,
+    terminal_size: (u16, u16),
+) {
+    use std::fmt::Write as _;
+    let Some(root) = ion_core::default_db_path().parent().map(ToOwned::to_owned) else {
+        notice(state, "debug log: data root unavailable");
+        return;
+    };
+    let path = root.join("ion-debug.log");
+    let mut out = String::new();
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or_default();
+    let _ = writeln!(out, "Debug output at unix {now}");
+    let _ = writeln!(out, "Terminal: {}x{}", terminal_size.0, terminal_size.1);
+    let _ = writeln!(out, "Total lines: {}", transcript.wrapped.len());
+    let _ = writeln!(out);
+    let _ = writeln!(out, "=== All rendered lines with visible widths ===");
+    for (idx, line) in transcript.wrapped.iter().enumerate() {
+        let text = line.to_string();
+        let _ = writeln!(out, "[{idx}] (w={}) {text:?}", text.width());
+    }
+    let _ = writeln!(out);
+    let _ = writeln!(out, "=== Session entries (JSONL) ===");
+    if let (Some(manager), Some(session_id)) = (manager, state.session_id)
+        && let Ok((_, entries)) = manager.export_entries(session_id).await
+    {
+        for entry in entries {
+            if let Ok(json) = serde_json::to_string(&entry) {
+                let _ = writeln!(out, "{json}");
+            }
+        }
+    }
+    let report = match std::fs::write(&path, out) {
+        Ok(()) => format!("debug log written: {}", path.display()),
+        Err(err) => format!("debug log write failed: {err}"),
+    };
+    notice(state, &report);
+}
+
+/// /share (pi parity): render the session's HTML archive to a temp
+/// file and create a secret GitHub gist from it. Pi tries Radius
+/// first; ion has no radius provider, so the gist path is the whole
+/// surface, exactly pi's fallback behavior.
+async fn share_gist(
+    manager: Option<&crate::session_manager::SessionManager>,
+    session_id: Option<ion_core::SessionId>,
+    state: &mut UiState,
+) {
+    let Some(manager) = manager else {
+        notice(state, "session switching is unavailable in this host");
+        return;
+    };
+    let Some(session_id) = session_id else {
+        notice(state, "no session is attached");
+        return;
+    };
+    let (record, entries) = match manager.export_entries(session_id).await {
+        Ok(loaded) => loaded,
+        Err(err) => {
+            notice(state, &format!("share failed: {err}"));
+            return;
+        }
+    };
+    if entries.is_empty() {
+        notice(state, "nothing to share yet — start a conversation first");
+        return;
+    }
+    let html = export::html::render(&record.title, &entries, 80);
+    let file = std::env::temp_dir().join(format!("ion-share-{}.html", std::process::id()));
+    if let Err(err) = std::fs::write(&file, html) {
+        notice(
+            state,
+            &format!("share failed: could not stage the archive: {err}"),
+        );
+        return;
+    }
+    let output = tokio::process::Command::new("gh")
+        .arg("gist")
+        .arg("create")
+        .arg("--public=false")
+        .arg(&file)
+        .output()
+        .await;
+    let _ = std::fs::remove_file(&file);
+    match output {
+        Ok(output) if output.status.success() => {
+            let url = String::from_utf8_lossy(&output.stdout).trim().to_owned();
+            if url.is_empty() {
+                notice(state, "gist created but gh printed no URL");
+            } else {
+                notice(state, &format!("Share URL: {url}"));
+            }
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            notice(
+                state,
+                &format!(
+                    "share failed: {}",
+                    if stderr.is_empty() {
+                        "gh gist create failed"
+                    } else {
+                        &stderr
+                    }
+                ),
+            );
+        }
+        Err(err) => notice(
+            state,
+            &format!(
+                "share failed: gh not runnable ({err}); install it from https://cli.github.com/"
+            ),
+        ),
+    }
+}
+
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
@@ -5182,6 +5360,27 @@ pub async fn run(
                                         fullscreen = Some(fullscreen::FullscreenView::default());
                                     }
                                 }
+                            } else if matches!(effect, UiEffect::WriteDebugLog) {
+                                // /debug: the loop owns the rendered
+                                // transcript and the live band, so the
+                                // dump resolves here (pi's handleDebug).
+                                write_debug_log(
+                                    &mut state,
+                                    manager.as_ref(),
+                                    &transcript,
+                                    screen.size(),
+                                )
+                                .await;
+                            } else if matches!(effect, UiEffect::ShareSession) {
+                                // /share: render the HTML archive, then
+                                // spawn gh gist create. The loop owns
+                                // process access and the notice surface.
+                                share_gist(
+                                    manager.as_ref(),
+                                    state.session_id,
+                                    &mut state,
+                                )
+                                .await;
                             } else {
                                 let switch = dispatch(
                                     &session,
@@ -5635,6 +5834,16 @@ async fn dispatch(
             // arm exists only for match totality.
             None
         }
+        UiEffect::WriteDebugLog => {
+            // Resolved by the run loop, which owns the rendered
+            // transcript; this arm exists only for match totality.
+            None
+        }
+        UiEffect::ShareSession => {
+            // Resolved by the run loop, which owns the process spawn
+            // and the working-status overlay; match totality only.
+            None
+        }
         UiEffect::PasteClipboard => {
             // Resolved by the run loop, which owns process access.
             None
@@ -6002,25 +6211,51 @@ async fn dispatch(
                 notice(state, "no session is attached");
                 return None;
             };
-            match manager.export_jsonl(session_id).await {
-                Ok(contents) => {
-                    let destination = if path.is_empty() {
-                        let stamp = std::time::SystemTime::now()
-                            .duration_since(std::time::UNIX_EPOCH)
-                            .map(|d| d.as_secs())
-                            .unwrap_or_default();
-                        format!("session-{stamp}.jsonl")
-                    } else {
-                        path
-                    };
-                    match std::fs::write(&destination, contents) {
-                        Ok(()) => notice(state, &format!("session exported to: {destination}")),
-                        Err(err) => {
-                            notice(state, &format!("export failed: {err}"));
+            // pi parity: .jsonl selects the JSONL grammar, anything else
+            // (bare /export included) writes the HTML archive.
+            if path.ends_with(".jsonl") {
+                match manager.export_jsonl(session_id).await {
+                    Ok(contents) => {
+                        let destination = if path.is_empty() {
+                            let stamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or_default();
+                            format!("session-{stamp}.jsonl")
+                        } else {
+                            path
+                        };
+                        match std::fs::write(&destination, contents) {
+                            Ok(()) => notice(state, &format!("session exported to: {destination}")),
+                            Err(err) => {
+                                notice(state, &format!("export failed: {err}"));
+                            }
                         }
                     }
+                    Err(err) => notice(state, &format!("export failed: {err}")),
                 }
-                Err(err) => notice(state, &format!("export failed: {err}")),
+            } else {
+                match manager.export_entries(session_id).await {
+                    Ok((record, entries)) => {
+                        let destination = if path.is_empty() {
+                            let stamp = std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .map(|d| d.as_secs())
+                                .unwrap_or_default();
+                            format!("session-{stamp}.html")
+                        } else {
+                            path
+                        };
+                        let html = export::html::render(&record.title, &entries, 80);
+                        match std::fs::write(&destination, html) {
+                            Ok(()) => notice(state, &format!("session exported to: {destination}")),
+                            Err(err) => {
+                                notice(state, &format!("export failed: {err}"));
+                            }
+                        }
+                    }
+                    Err(err) => notice(state, &format!("export failed: {err}")),
+                }
             }
             None
         }
@@ -6259,7 +6494,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 16);
+        assert_eq!(state.pending_scrollback.len(), 19);
     }
 
     #[test]
@@ -9656,5 +9891,41 @@ mod fork_picker_tests {
         assert_eq!(state.session_id, Some(session));
         assert_eq!(state.composer, "second");
         assert_eq!(state.cursor, "second".chars().count());
+    }
+}
+
+#[cfg(test)]
+mod debug_share_tests {
+    use super::*;
+
+    #[test]
+    fn changelog_command_renders_markdown_scrollback() {
+        let mut state = UiState::new();
+        state.terminal_width = Some(80);
+        let (state, effect) = handle_command(&mut state, "changelog");
+        assert!(effect.is_none());
+        let rendered = state.pending_scrollback;
+        assert!(
+            rendered
+                .iter()
+                .any(|line| line.to_string().contains("What's New"))
+        );
+    }
+
+    #[test]
+    fn debug_and_share_emit_run_loop_effects() {
+        let (state, effect) = handle_command(&mut UiState::new(), "debug");
+        assert!(matches!(effect, Some(UiEffect::WriteDebugLog)));
+        assert!(state.pending_scrollback.is_empty());
+
+        // No attached session: /share refuses with a notice.
+        let (state, effect) = handle_command(&mut UiState::new(), "share");
+        assert!(effect.is_none());
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("no session is attached"))
+        );
     }
 }

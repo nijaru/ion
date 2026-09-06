@@ -209,6 +209,15 @@ impl SessionManager {
         Ok(self.store.export_session(session_id).await?)
     }
 
+    /// The session record and main-lane entries for the HTML export
+    /// (`/export <path>.html`, `/share`).
+    pub async fn export_entries(
+        &self,
+        session_id: SessionId,
+    ) -> Result<(ion_core::SessionRecord, Vec<ion_core::SessionEntry>), SessionManagerError> {
+        Ok(self.store.export_entries(session_id).await?)
+    }
+
     /// Import a JSONL export into a new session (`/import`).
     pub async fn import_jsonl(&self, contents: String) -> Result<SessionId, ion_core::ImportError> {
         self.store.import_session(contents).await
