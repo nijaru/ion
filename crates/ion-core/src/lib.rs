@@ -64,7 +64,7 @@ pub use store::{
 pub use tool::{
     BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
     ToolArtifact, ToolCall, ToolCallId, ToolCatalogError, ToolOutcome, ToolRegistry, ToolResult,
-    ToolSpec, WriteTool,
+    ToolSpec, WorkspacePolicy, WriteTool,
 };
 pub use tool::{ToolCatalog, target_from_arguments};
 

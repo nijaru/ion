@@ -6,7 +6,11 @@ use super::support::*;
 
 #[test]
 fn canonicalization_resolves_and_normalizes_paths() {
-    let registry = ToolRegistry::with_cwd("/tmp/project");
+    let registry = ToolRegistry::with_cwd_sandbox_and_paths(
+        "/tmp/project",
+        crate::process::SandboxMode::Auto,
+        crate::tool::WorkspacePolicy::Confined,
+    );
     let target = registry
         .canonicalize("read", &json!({ "path": "src/../src/main.rs" }))
         .expect("canonicalize");

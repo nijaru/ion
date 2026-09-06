@@ -181,7 +181,20 @@ impl ToolCatalog {
     /// A catalog with an explicit native-shell enforcement mode.
     #[must_use]
     pub fn with_cwd_and_sandbox(cwd: impl AsRef<Path>, sandbox: SandboxMode) -> Self {
-        Self::from(ToolRegistry::with_cwd_and_sandbox(cwd, sandbox))
+        Self::with_cwd_sandbox_and_paths(cwd, sandbox, WorkspacePolicy::Unrestricted)
+    }
+
+    /// A catalog with an explicit native-shell enforcement mode and
+    /// workspace path policy.
+    #[must_use]
+    pub fn with_cwd_sandbox_and_paths(
+        cwd: impl AsRef<Path>,
+        sandbox: SandboxMode,
+        paths: WorkspacePolicy,
+    ) -> Self {
+        Self::from(ToolRegistry::with_cwd_sandbox_and_paths(
+            cwd, sandbox, paths,
+        ))
     }
 
     /// A read-only catalog over `cwd` (§20.4): the bounded research
@@ -194,6 +207,12 @@ impl ToolCatalog {
     #[must_use]
     pub fn cwd(&self) -> &Path {
         self.core.cwd()
+    }
+
+    /// The workspace path policy the core registry resolves under.
+    #[must_use]
+    pub fn paths(&self) -> WorkspacePolicy {
+        self.core.paths()
     }
 
     /// Register tools under `scope`, replacing that scope's previous
@@ -302,6 +321,7 @@ impl ToolCatalog {
         }
         ToolRegistry {
             cwd: Arc::from(self.core.cwd()),
+            paths: self.core.paths(),
             entries: Arc::new(entries),
         }
     }

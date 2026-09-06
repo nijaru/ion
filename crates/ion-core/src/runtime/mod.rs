@@ -193,9 +193,14 @@ async fn edit_approval_preview(
         .get("new_str")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let original = crate::tool::read_secure_text(tools.cwd(), std::path::Path::new(path), false)
-        .await
-        .ok()?;
+    let original = crate::tool::read_secure_text(
+        tools.cwd(),
+        std::path::Path::new(path),
+        false,
+        tools.paths(),
+    )
+    .await
+    .ok()?;
     crate::tool::edit_diff_hunk(path, &original, old_str, new_str, 3, 24)
 }
 

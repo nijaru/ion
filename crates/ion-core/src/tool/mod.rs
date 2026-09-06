@@ -537,13 +537,14 @@ impl ToolSemantics {
         cwd: &Path,
         name: &str,
         arguments: &Value,
+        paths: WorkspacePolicy,
     ) -> Result<CanonicalTarget, String> {
         let resolve = |key: &str| -> Result<PathBuf, String> {
             let raw = arguments
                 .get(key)
                 .and_then(Value::as_str)
                 .ok_or_else(|| format!("missing string argument: {key}"))?;
-            resolve_under(cwd, raw)
+            resolve_under(cwd, raw, paths)
         };
         match self {
             Self::RequiredPath | Self::ReconcileWrite | Self::ReconcileEdit => {
@@ -649,20 +650,21 @@ pub(crate) async fn reconciliation_evidence(
         "edit" => ReconciliationKind::Edit,
         other => return Err(format!("tool {other} takes no reconciliation evidence")),
     };
-    reconciliation_evidence_for(cwd, kind, arguments).await
+    reconciliation_evidence_for(cwd, kind, arguments, WorkspacePolicy::Unrestricted).await
 }
 
 async fn reconciliation_evidence_for(
     cwd: &Path,
     kind: ReconciliationKind,
     arguments: &Value,
+    paths: WorkspacePolicy,
 ) -> Result<Value, String> {
     let path_arg = arguments
         .get("path")
         .and_then(|v| v.as_str())
         .ok_or_else(|| "missing string argument: path".to_owned())?;
-    let full = resolve_under(cwd, path_arg)?;
-    let preimage = match file_snapshot(cwd, Path::new(path_arg), false).await? {
+    let full = resolve_under(cwd, path_arg, paths)?;
+    let preimage = match file_snapshot(cwd, Path::new(path_arg), false, paths).await? {
         Some(snapshot) => snapshot_json(&snapshot),
         None => json!({ "exists": false }),
     };
@@ -682,7 +684,7 @@ async fn reconciliation_evidence_for(
                 .get("new_str")
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
-            let original = read_secure_text(cwd, Path::new(path_arg), false).await?;
+            let original = read_secure_text(cwd, Path::new(path_arg), false, paths).await?;
             if !original.contains(old_str) {
                 return Err("old_str not found in file".to_owned());
             }
@@ -798,6 +800,8 @@ fn precondition_matches(evidence: &Value, current: Option<&FileSnapshot>) -> boo
 #[derive(Clone)]
 pub struct ToolRegistry {
     cwd: Arc<Path>,
+    /// Workspace path policy: what file tools may resolve.
+    paths: WorkspacePolicy,
     entries: Arc<HashMap<String, ToolEntry>>,
 }
 
@@ -806,6 +810,21 @@ impl Default for ToolRegistry {
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
         Self::with_cwd(cwd)
     }
+}
+
+/// Where native file tools may resolve paths (the workspace policy).
+/// `Unrestricted` is pi parity: any absolute path resolves, like pi's
+/// `resolveToCwd`; protection of sensitive paths belongs to policy
+/// and protected-path rules, not the path resolver. `Confined` is
+/// ion's fail-closed posture: writes/edits/searches stay inside the
+/// project root and `.git` is protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum WorkspacePolicy {
+    /// Pi parity: any path resolves (reads and writes alike).
+    #[default]
+    Unrestricted,
+    /// Fail-closed: mutations confined to the project root.
+    Confined,
 }
 
 impl ToolRegistry {
@@ -817,26 +836,46 @@ impl ToolRegistry {
 
     /// Build a registry with an explicit native-shell enforcement mode.
     /// `Auto` is resolved once so capability descriptions are truthful.
+    /// File paths resolve unrestricted (pi parity).
     #[must_use]
     pub fn with_cwd_and_sandbox(cwd: impl AsRef<Path>, sandbox: SandboxMode) -> Self {
+        Self::with_cwd_sandbox_and_paths(cwd, sandbox, WorkspacePolicy::Unrestricted)
+    }
+
+    /// Build a registry with an explicit native-shell enforcement mode
+    /// and workspace path policy.
+    #[must_use]
+    pub fn with_cwd_sandbox_and_paths(
+        cwd: impl AsRef<Path>,
+        sandbox: SandboxMode,
+        paths: WorkspacePolicy,
+    ) -> Self {
         let cwd: Arc<Path> = Arc::from(cwd.as_ref());
-        let entries = core_tools(&cwd, sandbox.resolve());
+        let entries = core_tools(&cwd, sandbox.resolve(), paths);
         Self {
             cwd,
+            paths,
             entries: Arc::new(entries),
         }
     }
 
     /// A read-only registry rooted at `cwd`: the research-child
     /// capability set (§20.4). Structural narrowing - write paths are
-    /// absent, not denied at the gate.
+    /// absent, not denied at the gate. Read paths stay unrestricted
+    /// (pi's read resolves any path, including the pasted clipboard
+    /// image in the system temp directory).
     #[must_use]
     pub fn read_only(cwd: impl AsRef<Path>) -> Self {
         let cwd: Arc<Path> = Arc::from(cwd.as_ref());
-        let mut all = core_tools(&cwd, SandboxMode::Auto.resolve());
+        let mut all = core_tools(
+            &cwd,
+            SandboxMode::Auto.resolve(),
+            WorkspacePolicy::Unrestricted,
+        );
         all.retain(|name, _| matches!(name.as_str(), "read" | "search" | "find"));
         Self {
             cwd,
+            paths: WorkspacePolicy::Unrestricted,
             entries: Arc::new(all),
         }
     }
@@ -847,6 +886,12 @@ impl ToolRegistry {
         &self.cwd
     }
 
+    /// The workspace path policy this registry resolves under.
+    #[must_use]
+    pub fn paths(&self) -> WorkspacePolicy {
+        self.paths
+    }
+
     /// Structurally narrow this immutable registry. Missing tools stay absent;
     /// selection never manufactures an executor.
     #[must_use]
@@ -855,6 +900,7 @@ impl ToolRegistry {
         entries.retain(|name, _| selection.allows(name));
         Self {
             cwd: Arc::clone(&self.cwd),
+            paths: self.paths,
             entries: Arc::new(entries),
         }
     }
@@ -883,6 +929,7 @@ impl ToolRegistry {
         });
         Self {
             cwd: Arc::clone(&self.cwd),
+            paths: self.paths,
             entries: Arc::new(entries),
         }
     }
@@ -932,7 +979,9 @@ impl ToolRegistry {
             .entries
             .get(name)
             .ok_or_else(|| format!("unknown tool: {name}"))?;
-        entry.semantics.canonicalize(&self.cwd, name, arguments)
+        entry
+            .semantics
+            .canonicalize(&self.cwd, name, arguments, self.paths)
     }
 
     pub(crate) fn resolve_invocation(
@@ -946,7 +995,9 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| format!("unknown tool: {name}"))?;
         Ok(ResolvedInvocation {
-            canonical: entry.semantics.canonicalize(&self.cwd, name, arguments)?,
+            canonical: entry
+                .semantics
+                .canonicalize(&self.cwd, name, arguments, self.paths)?,
             recovery_class: entry.recovery_class,
             policy_route: entry.policy_route,
         })
@@ -962,7 +1013,7 @@ impl ToolRegistry {
             .get(name)
             .ok_or_else(|| format!("unknown tool: {name}"))?;
         match entry.semantics.reconciliation_kind() {
-            Some(kind) => reconciliation_evidence_for(&self.cwd, kind, arguments)
+            Some(kind) => reconciliation_evidence_for(&self.cwd, kind, arguments, self.paths)
                 .await
                 .map(Some),
             None => Ok(None),
@@ -1116,7 +1167,11 @@ pub fn target_from_arguments(name: &str, arguments: &Value) -> Option<String> {
     })
 }
 
-fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
+fn core_tools(
+    cwd: &Path,
+    sandbox: SandboxMode,
+    paths: WorkspacePolicy,
+) -> HashMap<String, ToolEntry> {
     let cwd_path: Arc<Path> = Arc::from(cwd);
     // Recovery classes per DESIGN.md §12.2/§12.3: reads are
     // replay-safe; bash never replays automatically (§12.4); write/edit
@@ -1127,6 +1182,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         (
             Arc::new(ReadTool {
                 cwd: cwd_path.clone(),
+                paths,
             }),
             RecoveryClass::ReplaySafe,
             ToolSemantics::RequiredPath,
@@ -1134,6 +1190,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         (
             Arc::new(WriteTool {
                 cwd: cwd_path.clone(),
+                paths,
             }),
             RecoveryClass::Reconcile,
             ToolSemantics::ReconcileWrite,
@@ -1141,6 +1198,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         (
             Arc::new(EditTool {
                 cwd: cwd_path.clone(),
+                paths,
             }),
             RecoveryClass::Reconcile,
             ToolSemantics::ReconcileEdit,
@@ -1156,6 +1214,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         (
             Arc::new(SearchTool {
                 cwd: cwd_path.clone(),
+                paths,
             }),
             RecoveryClass::ReplaySafe,
             ToolSemantics::OptionalPath,
@@ -1163,6 +1222,7 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
         (
             Arc::new(FindTool {
                 cwd: cwd_path.clone(),
+                paths,
             }),
             RecoveryClass::ReplaySafe,
             ToolSemantics::OptionalPath,
@@ -1190,6 +1250,10 @@ fn core_tools(cwd: &Path, sandbox: SandboxMode) -> HashMap<String, ToolEntry> {
 struct SecurePath {
     display: PathBuf,
     relative: PathBuf,
+    /// Unrestricted paths open directly (pi parity: OS permissions are
+    /// the enforcement; the no-symlink walk is a containment mechanism
+    /// and is skipped). Confined paths keep the component walk.
+    unrestricted: bool,
 }
 
 #[derive(Debug)]
@@ -1222,12 +1286,37 @@ enum SecureOpenMode {
 /// Resolve a user-supplied relative path under `cwd`, lexically normalizing
 /// `.` and `..`, rejecting escapes, and refusing protected `.git` paths.
 /// Filesystem symlink checks happen at the descriptor-open boundary below.
-fn resolve_under(cwd: &Path, raw: &str) -> Result<PathBuf, String> {
-    Ok(secure_path(cwd, Path::new(raw), false)?.display)
+fn resolve_under(cwd: &Path, raw: &str, paths: WorkspacePolicy) -> Result<PathBuf, String> {
+    Ok(secure_path(cwd, Path::new(raw), false, paths)?.display)
 }
 
-fn secure_path(cwd: &Path, raw: &Path, allow_absolute: bool) -> Result<SecurePath, String> {
+fn secure_path(
+    cwd: &Path,
+    raw: &Path,
+    allow_absolute: bool,
+    paths: WorkspacePolicy,
+) -> Result<SecurePath, String> {
     let root = lexically_normalize(cwd);
+    if paths == WorkspacePolicy::Unrestricted {
+        // Pi parity: any path resolves. Absolute paths (including ~
+        // expansion, normalized before the walk) walk from the
+        // filesystem root with the same no-symlink component walk;
+        // relative paths walk from the registry root.
+        let raw = expand_home(raw);
+        let (display, relative) = if raw.is_absolute() {
+            let display = lexically_normalize(&raw);
+            (display.clone(), display)
+        } else {
+            let relative = lexically_normalize(&raw);
+            let display = lexically_normalize(&root.join(&relative));
+            (display, relative)
+        };
+        return Ok(SecurePath {
+            display,
+            relative,
+            unrestricted: true,
+        });
+    }
     let (display, relative) = if raw.is_absolute() {
         if !allow_absolute {
             return Err(format!(
@@ -1266,7 +1355,30 @@ fn secure_path(cwd: &Path, raw: &Path, allow_absolute: bool) -> Result<SecurePat
             raw.display()
         ));
     }
-    Ok(SecurePath { display, relative })
+    Ok(SecurePath {
+        display,
+        relative,
+        unrestricted: false,
+    })
+}
+
+/// Expand a leading `~` to the user's home directory (pi's
+/// `resolvePath` handles `~` and `~/…` for every file tool under the
+/// unrestricted policy). A missing home directory leaves the path
+/// untouched; the open walk reports the miss.
+fn expand_home(raw: &Path) -> PathBuf {
+    let Some(text) = raw.to_str() else {
+        return raw.to_path_buf();
+    };
+    if (text == "~" || text.starts_with("~/"))
+        && let Some(home) = std::env::home_dir()
+    {
+        if text == "~" {
+            return home;
+        }
+        return home.join(&text[2..]);
+    }
+    raw.to_path_buf()
 }
 
 /// Lexical normalization: collapse `.` and `..` without touching the
@@ -1349,12 +1461,19 @@ fn open_secure_unix(
     mode: SecureOpenMode,
 ) -> Result<std::os::fd::OwnedFd, SecureOpenError> {
     let root_flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
-    let mut directory = open(cwd, root_flags, Mode::empty()).map_err(nix_open_error)?;
+    // Unrestricted absolute paths walk from the filesystem root; the
+    // component walk keeps the same no-symlink discipline.
+    let anchor = if path.relative.is_absolute() {
+        Path::new("/")
+    } else {
+        cwd
+    };
+    let mut directory = open(anchor, root_flags, Mode::empty()).map_err(nix_open_error)?;
     let components: Vec<_> = path.relative.components().collect();
     let Some(leaf) = components.last() else {
         return Err(SecureOpenError::message("path must name a file"));
     };
-    let mut candidate = cwd.to_path_buf();
+    let mut candidate = anchor.to_path_buf();
     for component in &components[..components.len() - 1] {
         let name = component.as_os_str();
         candidate.push(name);
@@ -1414,8 +1533,13 @@ fn open_secure_unix(
 #[cfg(unix)]
 fn validate_secure_directory_unix(cwd: &Path, path: &SecurePath) -> Result<(), SecureOpenError> {
     let root_flags = OFlag::O_RDONLY | OFlag::O_DIRECTORY | OFlag::O_CLOEXEC | OFlag::O_NOFOLLOW;
-    let mut directory = open(cwd, root_flags, Mode::empty()).map_err(nix_open_error)?;
-    let mut candidate = cwd.to_path_buf();
+    let anchor = if path.relative.is_absolute() {
+        Path::new("/")
+    } else {
+        cwd
+    };
+    let mut directory = open(anchor, root_flags, Mode::empty()).map_err(nix_open_error)?;
+    let mut candidate = anchor.to_path_buf();
     for component in path.relative.components() {
         candidate.push(component.as_os_str());
         if let Ok(metadata) = std::fs::symlink_metadata(&candidate)
@@ -1433,6 +1557,21 @@ fn validate_secure_directory_unix(cwd: &Path, path: &SecurePath) -> Result<(), S
 }
 
 fn validate_secure_directory(cwd: &Path, path: &SecurePath) -> Result<(), SecureOpenError> {
+    if path.unrestricted {
+        // Pi parity: unrestricted search roots validate through the
+        // filesystem (a missing or unreadable root reports naturally).
+        return match std::fs::symlink_metadata(&path.display) {
+            Ok(metadata) if metadata.is_dir() => Ok(()),
+            Ok(_) => Err(SecureOpenError::message("search root is not a directory")),
+            Err(err) => {
+                if err.kind() == std::io::ErrorKind::NotFound {
+                    Err(SecureOpenError::Missing)
+                } else {
+                    Err(SecureOpenError::message(err.to_string()))
+                }
+            }
+        };
+    }
     #[cfg(unix)]
     {
         validate_secure_directory_unix(cwd, path)
@@ -1448,6 +1587,38 @@ async fn open_secure_file(
     path: &SecurePath,
     mode: SecureOpenMode,
 ) -> Result<fs::File, SecureOpenError> {
+    if path.unrestricted {
+        // Pi parity: the resolved display path opens directly; OS
+        // permissions are the enforcement. The no-symlink component
+        // walk is a containment mechanism for the confined policy.
+        let mut options = fs::OpenOptions::new();
+        match mode {
+            SecureOpenMode::Read => {
+                options.read(true);
+            }
+            SecureOpenMode::WriteReplace => {
+                options.write(true).create(true).truncate(true);
+            }
+            SecureOpenMode::WriteExisting => {
+                options.read(true).write(true);
+            }
+            SecureOpenMode::WriteCreateExclusive => {
+                options.write(true).create_new(true);
+            }
+        }
+        if let Some(parent) = path.display.parent() {
+            // Mirror pi's write: parent directories are created when
+            // missing.
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return options.open(&path.display).await.map_err(|err| {
+            if err.kind() == std::io::ErrorKind::NotFound {
+                SecureOpenError::Missing
+            } else {
+                SecureOpenError::message(err.to_string())
+            }
+        });
+    }
     #[cfg(unix)]
     {
         let fd = open_secure_unix(cwd, path, mode)?;
@@ -1507,8 +1678,9 @@ pub(crate) async fn file_snapshot(
     cwd: &Path,
     path: &Path,
     allow_absolute: bool,
+    paths: WorkspacePolicy,
 ) -> Result<Option<FileSnapshot>, String> {
-    let secure = secure_path(cwd, path, allow_absolute)?;
+    let secure = secure_path(cwd, path, allow_absolute, paths)?;
     let mut file = match open_secure_file(cwd, &secure, SecureOpenMode::Read).await {
         Ok(file) => file,
         Err(SecureOpenError::Missing) => return Ok(None),
@@ -1521,8 +1693,9 @@ async fn read_secure_bytes(
     cwd: &Path,
     path: &Path,
     allow_absolute: bool,
+    paths: WorkspacePolicy,
 ) -> Result<Vec<u8>, String> {
-    let secure = secure_path(cwd, path, allow_absolute)?;
+    let secure = secure_path(cwd, path, allow_absolute, paths)?;
     let mut file = open_secure_file(cwd, &secure, SecureOpenMode::Read)
         .await
         .map_err(|error| match error {
@@ -1540,8 +1713,9 @@ pub(crate) async fn read_secure_text(
     cwd: &Path,
     path: &Path,
     allow_absolute: bool,
+    paths: WorkspacePolicy,
 ) -> Result<String, String> {
-    let bytes = read_secure_bytes(cwd, path, allow_absolute).await?;
+    let bytes = read_secure_bytes(cwd, path, allow_absolute, paths).await?;
     String::from_utf8(bytes).map_err(|err| format!("file is not valid UTF-8: {err}"))
 }
 
@@ -1550,8 +1724,9 @@ async fn write_secure_bytes(
     path: &str,
     contents: &[u8],
     reconciliation: Option<&Value>,
+    paths: WorkspacePolicy,
 ) -> Result<(), String> {
-    let secure = secure_path(cwd, Path::new(path), false)?;
+    let secure = secure_path(cwd, Path::new(path), false, paths)?;
     let expected_exists = reconciliation.and_then(|evidence| {
         evidence
             .get("preimage")
@@ -1598,6 +1773,7 @@ async fn write_secure_bytes(
 
 pub struct ReadTool {
     cwd: Arc<Path>,
+    paths: WorkspacePolicy,
 }
 
 impl ReadTool {
@@ -1636,7 +1812,8 @@ impl Tool for ReadTool {
             // Reads are non-mutating, so absolute paths outside the
             // project root are admitted (pi parity: `read` resolves the
             // pasted clipboard file in the system temp directory).
-            let bytes = match read_secure_bytes(&self.cwd, Path::new(&path), true).await {
+            let bytes = match read_secure_bytes(&self.cwd, Path::new(&path), true, self.paths).await
+            {
                 Ok(bytes) => bytes,
                 Err(message) => return ToolOutcome::error(format!("read failed: {message}")),
             };
@@ -1660,6 +1837,7 @@ impl Tool for ReadTool {
 
 pub struct WriteTool {
     cwd: Arc<Path>,
+    paths: WorkspacePolicy,
 }
 
 impl WriteTool {
@@ -1699,7 +1877,15 @@ impl Tool for WriteTool {
                 None => return ToolOutcome::error("missing argument: contents"),
             };
             let reconciliation = arguments.get("__ion_reconciliation");
-            match write_secure_bytes(&self.cwd, &path, contents.as_bytes(), reconciliation).await {
+            match write_secure_bytes(
+                &self.cwd,
+                &path,
+                contents.as_bytes(),
+                reconciliation,
+                self.paths,
+            )
+            .await
+            {
                 Ok(()) => ToolOutcome::text("written"),
                 Err(message) => ToolOutcome::error(message),
             }
@@ -1794,6 +1980,7 @@ pub(crate) fn edit_diff_hunk(
 
 pub struct EditTool {
     cwd: Arc<Path>,
+    paths: WorkspacePolicy,
 }
 
 impl EditTool {
@@ -1838,10 +2025,11 @@ impl Tool for EditTool {
                 .and_then(|v| v.as_str())
                 .unwrap_or("")
                 .to_owned();
-            let original = match read_secure_text(&self.cwd, Path::new(&path), false).await {
-                Ok(text) => text,
-                Err(message) => return ToolOutcome::error(format!("read failed: {message}")),
-            };
+            let original =
+                match read_secure_text(&self.cwd, Path::new(&path), false, self.paths).await {
+                    Ok(text) => text,
+                    Err(message) => return ToolOutcome::error(format!("read failed: {message}")),
+                };
             if !original.contains(&old_str) {
                 return ToolOutcome::error("old_str not found in file");
             }
@@ -1856,6 +2044,7 @@ impl Tool for EditTool {
                 &path,
                 updated.as_bytes(),
                 arguments.get("__ion_reconciliation"),
+                self.paths,
             )
             .await
             {
@@ -2399,6 +2588,7 @@ async fn run_shell_with_progress(
 
 pub struct SearchTool {
     cwd: Arc<Path>,
+    paths: WorkspacePolicy,
 }
 
 impl SearchTool {
@@ -2436,11 +2626,11 @@ impl Tool for SearchTool {
                 return ToolOutcome::error(format!("invalid regex: {pattern}"));
             };
             let secure_root = match arguments.get("path").and_then(|v| v.as_str()) {
-                Some(p) => match secure_path(&self.cwd, Path::new(p), false) {
+                Some(p) => match secure_path(&self.cwd, Path::new(p), false, self.paths) {
                     Ok(path) => path,
                     Err(message) => return ToolOutcome::error(message),
                 },
-                None => match secure_path(&self.cwd, Path::new("."), false) {
+                None => match secure_path(&self.cwd, Path::new("."), false, self.paths) {
                     Ok(path) => path,
                     Err(message) => return ToolOutcome::error(message),
                 },
@@ -2448,7 +2638,7 @@ impl Tool for SearchTool {
             if let Err(error) = validate_secure_directory(&self.cwd, &secure_root) {
                 return ToolOutcome::error(secure_open_error_text(error));
             }
-            search_files(&self.cwd, &secure_root.display, &regex, &cancel).await
+            search_files(&self.cwd, &secure_root.display, &regex, &cancel, self.paths).await
         })
     }
 }
@@ -2460,6 +2650,7 @@ async fn search_files(
     root: &Path,
     regex: &Regex,
     cancel: &CancellationToken,
+    paths: WorkspacePolicy,
 ) -> ToolOutcome {
     let mut results: Vec<String> = Vec::new();
     let mut files: VecDeque<PathBuf> = VecDeque::new();
@@ -2469,7 +2660,7 @@ async fn search_files(
         if cancel.is_cancelled() {
             return ToolOutcome::error("cancelled".to_owned());
         }
-        let Ok(contents) = read_secure_text(cwd, &file, true).await else {
+        let Ok(contents) = read_secure_text(cwd, &file, true, paths).await else {
             continue;
         };
         if contents.as_bytes().contains(&0u8) {
@@ -2526,6 +2717,7 @@ fn collect_files(root: &Path, out: &mut VecDeque<PathBuf>) {
 
 pub struct FindTool {
     cwd: Arc<Path>,
+    paths: WorkspacePolicy,
 }
 
 impl FindTool {
@@ -2568,11 +2760,11 @@ impl Tool for FindTool {
                 return ToolOutcome::error("cannot build glob set");
             };
             let secure_root = match arguments.get("path").and_then(|v| v.as_str()) {
-                Some(p) => match secure_path(&self.cwd, Path::new(p), false) {
+                Some(p) => match secure_path(&self.cwd, Path::new(p), false, self.paths) {
                     Ok(path) => path,
                     Err(message) => return ToolOutcome::error(message),
                 },
-                None => match secure_path(&self.cwd, Path::new("."), false) {
+                None => match secure_path(&self.cwd, Path::new("."), false, self.paths) {
                     Ok(path) => path,
                     Err(message) => return ToolOutcome::error(message),
                 },

@@ -288,7 +288,11 @@ async fn build_catalog(
     cli: &Cli,
 ) -> Result<(ion_core::ToolCatalog, Option<ion_core::ExtensionService>), std::io::Error> {
     let cwd = std::env::current_dir()?;
-    let tools = ion_core::ToolCatalog::with_cwd_and_sandbox(cwd.clone(), settings.sandbox_mode());
+    let tools = ion_core::ToolCatalog::with_cwd_sandbox_and_paths(
+        cwd.clone(),
+        settings.sandbox_mode(),
+        settings.workspace_policy(),
+    );
     tools.set_active_mcp_servers(&settings.active_mcp_servers);
     if !settings.mcp_servers.is_empty() {
         let defs: Vec<ion_core::ServerDef> = settings

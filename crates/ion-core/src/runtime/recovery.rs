@@ -371,6 +371,7 @@ impl<P: Provider> SessionRuntime<P> {
                                         self.tools.cwd(),
                                         std::path::Path::new(path),
                                         true,
+                                        self.tools.paths(),
                                     )
                                     .await
                                     {

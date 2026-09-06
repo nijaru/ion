@@ -116,6 +116,11 @@ pub struct Settings {
     /// Native shell enforcement. `auto` selects the strongest backend
     /// available on the host; it never upgrades project trust or approval.
     sandbox: Option<SandboxMode>,
+    /// Workspace path policy for native file tools. `off` (default,
+    /// pi parity) resolves any absolute path — protection belongs to
+    /// policy and protected-path rules; `workspace` confines
+    /// mutations to the project root.
+    workspace_sandbox: Option<WorkspaceSandboxMode>,
     theme: Option<Theme>,
     /// Interactive TUI mode: `"regular"` (default) or `"fullscreen"`
     /// (pi parity: alt-screen transcript with search). The `--tui-mode`
@@ -209,6 +214,27 @@ impl From<McpServerConfig> for ion_core::ServerDef {
     }
 }
 
+/// `workspaceSandbox`: where native file tools may resolve paths.
+/// `off` is pi parity (default): any absolute path resolves.
+/// `workspace` is ion's fail-closed posture: mutations confined to
+/// the project root with `.git` protected.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum WorkspaceSandboxMode {
+    #[default]
+    Off,
+    Workspace,
+}
+
+impl From<WorkspaceSandboxMode> for ion_core::WorkspacePolicy {
+    fn from(mode: WorkspaceSandboxMode) -> Self {
+        match mode {
+            WorkspaceSandboxMode::Off => Self::Unrestricted,
+            WorkspaceSandboxMode::Workspace => Self::Confined,
+        }
+    }
+}
+
 impl Settings {
     /// The resolved transient-failure retry policy for runtime
     /// composition.
@@ -236,6 +262,7 @@ impl Settings {
             model_catalog: Vec::new(),
             default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
+            workspace_sandbox: None,
             theme: None,
             tui_mode: None,
             keybindings: Keybindings::default(),
@@ -270,6 +297,7 @@ impl Settings {
             model_catalog: Vec::new(),
             default_thinking_level: None,
             sandbox: None,
+            workspace_sandbox: None,
             theme: None,
             tui_mode: None,
             keybindings: crate::settings::Keybindings::default(),
@@ -417,6 +445,12 @@ impl Settings {
     #[must_use]
     pub fn sandbox_mode(&self) -> SandboxMode {
         self.sandbox.unwrap_or(SandboxMode::Auto)
+    }
+
+    /// The workspace path policy for native file tools.
+    #[must_use]
+    pub fn workspace_policy(&self) -> ion_core::WorkspacePolicy {
+        self.workspace_sandbox.unwrap_or_default().into()
     }
 }
 
@@ -660,5 +694,32 @@ mod retry_tests {
         assert!(!policy.enabled);
         assert_eq!(policy.max_retries, 5);
         assert_eq!(policy.base_delay_ms, 500);
+    }
+}
+
+#[cfg(test)]
+mod workspace_sandbox_tests {
+    use super::*;
+
+    #[test]
+    fn workspace_sandbox_defaults_to_pi_parity_off() {
+        assert_eq!(
+            Settings::empty().workspace_policy(),
+            ion_core::WorkspacePolicy::Unrestricted
+        );
+    }
+
+    #[test]
+    fn workspace_sandbox_workspace_confines() {
+        let settings: Settings = toml::from_str(
+            r#"
+            workspaceSandbox = "workspace"
+            "#,
+        )
+        .expect("parse workspaceSandbox");
+        assert_eq!(
+            settings.workspace_policy(),
+            ion_core::WorkspacePolicy::Confined
+        );
     }
 }

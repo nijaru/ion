@@ -123,7 +123,11 @@ async fn read_write_edit_search_find_roundtrip() {
     let tmp = std::env::temp_dir().join(format!("ion-tool-test-{}-{}", std::process::id(), 1));
     let _ = std::fs::remove_dir_all(&tmp);
     let _ = std::fs::create_dir_all(&tmp);
-    let registry = ToolRegistry::with_cwd(&tmp);
+    let registry = ToolRegistry::with_cwd_sandbox_and_paths(
+        &tmp,
+        crate::process::SandboxMode::Auto,
+        crate::tool::WorkspacePolicy::Confined,
+    );
     let cancel = tokio_util::sync::CancellationToken::new();
 
     let out = registry
@@ -204,7 +208,11 @@ async fn native_file_tools_reject_symlink_targets_and_parents() {
     .expect("link file");
     symlink(outside.path().join("nested"), root.path().join("link-dir")).expect("link directory");
 
-    let registry = ToolRegistry::with_cwd(root.path());
+    let registry = ToolRegistry::with_cwd_sandbox_and_paths(
+        root.path(),
+        crate::process::SandboxMode::Auto,
+        crate::tool::WorkspacePolicy::Confined,
+    );
     let cancel = tokio_util::sync::CancellationToken::new();
     for (name, arguments) in [
         ("read", json!({"path": "link.txt"})),
@@ -241,7 +249,11 @@ async fn native_file_tools_reject_protected_git_paths() {
     let root = tempfile::tempdir().expect("root tempdir");
     std::fs::create_dir(root.path().join(".git")).expect("git directory");
     std::fs::write(root.path().join(".git/config"), "private").expect("git config");
-    let registry = ToolRegistry::with_cwd(root.path());
+    let registry = ToolRegistry::with_cwd_sandbox_and_paths(
+        root.path(),
+        crate::process::SandboxMode::Auto,
+        crate::tool::WorkspacePolicy::Confined,
+    );
     let cancel = tokio_util::sync::CancellationToken::new();
 
     for (name, arguments) in [
@@ -427,4 +439,89 @@ async fn edit_outcome_carries_the_hunk_instead_of_a_constant() {
     );
     assert!(out.output.contains("-hello world"), "got: {}", out.output);
     assert!(out.output.contains("+hello ion"), "got: {}", out.output);
+}
+
+// ---- Workspace path policy (pi parity + opt-in confinement) ----
+
+#[tokio::test]
+async fn unrestricted_default_resolves_absolute_paths_like_pi() {
+    // Default registry: pi parity. An absolute write outside the root
+    // lands exactly where the model asked (pi's resolveToCwd +
+    // writeFile), including `.git`.
+    let root = tempfile::tempdir().expect("root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let target = outside.path().join("absolute.txt");
+    let registry = ToolRegistry::with_cwd(root.path());
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let out = registry
+        .execute(
+            "write",
+            &json!({"path": target.to_string_lossy(), "contents": "outside"}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(!out.is_error, "absolute write failed: {out:?}");
+    assert_eq!(
+        std::fs::read_to_string(&target).expect("written"),
+        "outside"
+    );
+
+    // Read the same file back through an absolute path (pi's pasted
+    // clipboard flow).
+    let out = registry
+        .execute(
+            "read",
+            &json!({"path": target.to_string_lossy()}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(!out.is_error, "absolute read failed: {out:?}");
+    assert!(out.output.contains("outside"));
+
+    // `.git` is writable under the default policy: protection belongs
+    // to policy layers (protected paths), not the resolver.
+    std::fs::create_dir(root.path().join(".git")).expect("git dir");
+    let out = registry
+        .execute(
+            "write",
+            &json!({"path": ".git/config", "contents": "changed"}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(!out.is_error, "git write under default failed: {out:?}");
+}
+
+#[tokio::test]
+async fn confined_policy_keeps_the_fail_closed_posture() {
+    // The opt-in policy keeps ion's original confinement through the
+    // public execute surface: absolute mutations refuse, `.git`
+    // refuses, and the error explains why.
+    let root = tempfile::tempdir().expect("root tempdir");
+    let outside = tempfile::tempdir().expect("outside tempdir");
+    let registry = ToolRegistry::with_cwd_sandbox_and_paths(
+        root.path(),
+        crate::process::SandboxMode::Auto,
+        crate::tool::WorkspacePolicy::Confined,
+    );
+    let cancel = tokio_util::sync::CancellationToken::new();
+
+    let out = registry
+        .execute(
+            "write",
+            &json!({"path": outside.path().join("x.txt").to_string_lossy(), "contents": "x"}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(out.is_error, "confined write must refuse: {out:?}");
+    assert!(out.output.contains("refusing absolute"));
+
+    let out = registry
+        .execute(
+            "edit",
+            &json!({"path": outside.path().join("x.txt").to_string_lossy(), "old_str": "a", "new_str": "b"}),
+            cancel.clone(),
+        )
+        .await;
+    assert!(out.is_error, "confined edit must refuse: {out:?}");
 }

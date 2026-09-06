@@ -78,6 +78,10 @@ desktopBaseUrl = "http://desktop:8080/v1"
 modelCatalog = ["qwen3.8:27b"]
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
+# Where native file tools may resolve paths. "off" (default, pi parity)
+# resolves any absolute path — protecting sensitive paths is the policy
+# layer's job. "workspace" confines mutations to the project root.
+workspaceSandbox = "off"
 # Optional; model-facing subagent controls are disabled by default.
 # enableAgents = true
 
@@ -93,6 +97,11 @@ activeMcpServers = ["docs"]
 Malformed settings are a hard error, never silently ignored.
 `auto` selects Seatbelt on macOS or Bubblewrap on Linux when available;
 explicit sandbox modes fail closed if their backend is unavailable.
+By default the native file tools resolve any absolute path, exactly
+like pi (`write ~/notes.txt` and `/etc/hosts` reads both work; OS
+permissions are the enforcement). Set `workspaceSandbox = "workspace"`
+to confine write/edit/search to the project root with `.git`
+protected — ion's fail-closed posture for tighter setups.
 Project-local extensions load only behind explicit `--trust-project`.
 
 ## Development
