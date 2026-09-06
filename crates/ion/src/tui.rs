@@ -222,6 +222,19 @@ pub enum UiEffect {
     /// card (pi parity: usage/token breakdown by model). The host
     /// resolves this into `SessionStatsListed`.
     RequestSessionStats,
+    /// Render the attached session as a pi-grammar JSONL export and
+    /// write it to `path` (empty = `session-<timestamp>.jsonl` in the
+    /// cwd, pi parity). The host resolves this into an `Exported`
+    /// notice with the written path.
+    ExportSession {
+        path: String,
+    },
+    /// Import a JSONL export from `path` into a new session and
+    /// switch to it (pi parity: confirm-and-replace becomes open-new
+    /// under ion's session store, since imports never overwrite).
+    ImportSession {
+        path: String,
+    },
     /// Fork from before one user message: the host clones the ancestor
     /// path into a new durable session (the picked message's text
     /// returns for the composer), offers the git-checkpoint restore
@@ -2812,6 +2825,41 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             // (message counts, token/cache breakdown by model).
             (std::mem::take(state), Some(UiEffect::RequestSessionStats))
         }
+        "export" => {
+            if state.session_id.is_none() {
+                notice(state, "no session is attached");
+                return (std::mem::take(state), None);
+            }
+            // pi parity: a bare /export writes session-<timestamp>.jsonl
+            // in the cwd; a path argument chooses the destination. The
+            // dispatch arm resolves the default name.
+            (
+                std::mem::take(state),
+                Some(UiEffect::ExportSession {
+                    path: rest.trim().to_owned(),
+                }),
+            )
+        }
+        "import" => {
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(
+                    state,
+                    "cannot import while the current operation is running",
+                );
+                return (std::mem::take(state), None);
+            }
+            let path = rest.trim();
+            if path.is_empty() {
+                notice(state, "usage: /import <path.jsonl>");
+                return (std::mem::take(state), None);
+            }
+            (
+                std::mem::take(state),
+                Some(UiEffect::ImportSession {
+                    path: path.to_owned(),
+                }),
+            )
+        }
         "clone" => {
             if matches!(state.status, UiStatus::Working { .. }) {
                 notice(state, "cannot clone while the current operation is running");
@@ -2968,9 +3016,12 @@ fn complete_composer(state: &mut UiState) {
                 "clone",
                 "compact",
                 "copy",
+                "export",
+                "fork",
                 "fullscreen",
                 "help",
                 "hotkeys",
+                "import",
                 "model",
                 "name",
                 "new",
@@ -5942,6 +5993,60 @@ async fn dispatch(
                 }
             }
         }
+        UiEffect::ExportSession { path } => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(session_id) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            match manager.export_jsonl(session_id).await {
+                Ok(contents) => {
+                    let destination = if path.is_empty() {
+                        let stamp = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs())
+                            .unwrap_or_default();
+                        format!("session-{stamp}.jsonl")
+                    } else {
+                        path
+                    };
+                    match std::fs::write(&destination, contents) {
+                        Ok(()) => notice(state, &format!("session exported to: {destination}")),
+                        Err(err) => {
+                            notice(state, &format!("export failed: {err}"));
+                        }
+                    }
+                }
+                Err(err) => notice(state, &format!("export failed: {err}")),
+            }
+            None
+        }
+        UiEffect::ImportSession { path } => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let contents = match std::fs::read_to_string(&path) {
+                Ok(contents) => contents,
+                Err(err) => {
+                    notice(state, &format!("import failed: {err}"));
+                    return None;
+                }
+            };
+            match manager.import_jsonl(contents).await {
+                Ok(target) => {
+                    notice(state, &format!("session imported from: {path}"));
+                    Some(SessionSwitch::Resume(target))
+                }
+                Err(err) => {
+                    notice(state, &format!("import failed: {err}"));
+                    None
+                }
+            }
+        }
         UiEffect::RenameSession { title } => {
             let Some(manager) = manager else {
                 notice(state, "session switching is unavailable in this host");
@@ -6154,7 +6259,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 13);
+        assert_eq!(state.pending_scrollback.len(), 16);
     }
 
     #[test]

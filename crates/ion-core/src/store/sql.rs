@@ -163,6 +163,12 @@ pub(super) fn handle_command(
         StoreCommand::SessionStats { session_id, reply } => {
             let _ = reply.send(session_stats(connection, session_id));
         }
+        StoreCommand::ExportSession { session_id, reply } => {
+            let _ = reply.send(export_session(connection, session_id));
+        }
+        StoreCommand::ImportSession { contents, reply } => {
+            let _ = reply.send(import_session(connection, contents));
+        }
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
         }
@@ -906,6 +912,199 @@ fn session_stats(
         usage,
         by_model,
     })
+}
+
+/// Render the main lane's ancestor path as a pi-grammar JSONL export
+/// (pi's /export): a session header line followed by parent-chained
+/// entry lines. Only the main lane's path is exported, exactly like
+/// pi exports the current branch.
+fn export_session(connection: &Connection, session_id: SessionId) -> Result<String, StoreError> {
+    let loaded = load(connection, session_id)?;
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .ok_or_else(|| StoreError::Sqlite("main lane missing".to_owned()))?;
+    let thinking = main.config.thinking.clone();
+    let header = crate::store::ExportedEntry {
+        kind: "session".to_owned(),
+        id: session_id.as_uuid().to_string(),
+        parent_id: None,
+        timestamp: now_ms(),
+        session: Some(crate::store::ExportedSession {
+            flavor: "ion".to_owned(),
+            cwd: loaded.session.cwd.clone(),
+            title: loaded.session.title.clone(),
+            initial_model_ref: loaded.session.initial_model_ref.clone(),
+            thinking,
+        }),
+        entry: None,
+    };
+    let mut lines = vec![serde_json::to_string(&header).expect("header serializes")];
+    // Walk the ancestor path from the main-lane leaf (inclusive),
+    // mirroring fork_before's chain walk.
+    let by_id: std::collections::HashMap<EntryId, &EntryRecord> = loaded
+        .entries
+        .iter()
+        .map(|record| (record.id, record))
+        .collect();
+    let mut path: Vec<&EntryRecord> = Vec::new();
+    let mut cursor = main.state.leaf;
+    while let Some(id) = cursor {
+        let record = by_id
+            .get(&id)
+            .ok_or_else(|| StoreError::Sqlite(format!("export chain broken at {id}")))?;
+        path.push(record);
+        cursor = record.parent;
+    }
+    path.reverse();
+    for record in path {
+        let line = crate::store::ExportedEntry {
+            kind: entry_kind(&record.entry).to_owned(),
+            id: record.id.as_uuid().to_string(),
+            parent_id: record.parent.map(|parent| parent.as_uuid().to_string()),
+            // EntryRecord carries no creation timestamp; the line
+            // stamps the export time (pi's field grammar preserved).
+            timestamp: now_ms(),
+            session: None,
+            entry: Some(serde_json::to_value(&record.entry).expect("entry serializes")),
+        };
+        lines.push(serde_json::to_string(&line).expect("line serializes"));
+    }
+    Ok(lines.join("\n") + "\n")
+}
+
+/// Import a JSONL export into a new durable session (pi's /import).
+/// The header must be ion-flavored; the entry chain must be intact.
+/// Imported entries are written exactly as exported (same kinds, same
+/// payloads), with the main lane pointing at the last line.
+fn import_session(connection: &mut Connection, contents: String) -> Result<SessionId, ImportError> {
+    let mut parsed: Vec<crate::store::ExportedEntry> = Vec::new();
+    for (index, line) in contents.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let entry: crate::store::ExportedEntry =
+            serde_json::from_str(line).map_err(|err| ImportError::Malformed {
+                line: index + 1,
+                message: err.to_string(),
+            })?;
+        parsed.push(entry);
+    }
+    let Some(header) = parsed.first() else {
+        return Err(ImportError::Empty);
+    };
+    if header.kind != "session" {
+        return Err(ImportError::MissingHeader);
+    }
+    let Some(session) = header.session.as_ref() else {
+        // pi session headers carry no ion session payload.
+        return Err(ImportError::WrongFlavor);
+    };
+    if session.flavor != "ion" {
+        return Err(ImportError::WrongFlavor);
+    }
+    let session_id = SessionId::generate();
+    let now = now_ms();
+    let tx = connection.transaction().map_err(StoreError::from)?;
+    tx.execute(
+        "INSERT INTO sessions (
+            id, created_at, updated_at, cwd, title, control_parent_session_id,
+            fork_source_session_id, fork_source_entry_id
+         ) VALUES (?1, ?2, ?2, ?3, ?4, NULL, NULL, NULL)",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            now,
+            session.cwd,
+            format!("{} (imported)", session.title),
+        ],
+    )
+    .map_err(StoreError::from)?;
+    // Fresh entry ids: an import must never collide with the source
+    // session's durable identities when both live in one store.
+    let mut id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let entry_lines = &parsed[1..];
+    for line in entry_lines {
+        id_map.insert(line.id.clone(), EntryId::generate().as_uuid().to_string());
+    }
+    let mut mapped_last: Option<String> = None;
+    for (seq, line) in entry_lines.iter().enumerate() {
+        let Some(payload) = line.entry.as_ref() else {
+            return Err(ImportError::Malformed {
+                line: seq + 2,
+                message: "entry line missing payload".to_owned(),
+            });
+        };
+        // The durable kind is derived from the payload itself, so a
+        // renamed line can never misfile an entry.
+        let entry: crate::operation::SessionEntry = serde_json::from_value(payload.clone())
+            .map_err(|err| ImportError::Malformed {
+                line: seq + 2,
+                message: err.to_string(),
+            })?;
+        let mapped_parent = line
+            .parent_id
+            .as_ref()
+            .and_then(|parent| id_map.get(parent).cloned());
+        if line.parent_id.is_some() && mapped_parent.is_none() {
+            return Err(ImportError::BrokenChain {
+                id: line.parent_id.clone().unwrap_or_default(),
+            });
+        }
+        let mapped_id = id_map.get(&line.id).cloned().unwrap_or_default();
+        tx.execute(
+            "INSERT INTO entries (
+                session_id, seq, id, parent_id, kind, payload, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                session_id.as_uuid().to_string(),
+                i64::try_from(seq).unwrap_or(i64::MAX) + 1,
+                mapped_id,
+                mapped_parent,
+                entry_kind(&entry),
+                serde_json::to_string(&entry).expect("entry serializes"),
+                line.timestamp,
+            ],
+        )
+        .map_err(StoreError::from)?;
+        mapped_last = Some(id_map.get(&line.id).cloned().unwrap_or_default());
+    }
+    // Main lane at the last imported entry, with the exported model
+    // and thinking selection.
+    let config = crate::session::lane::Config {
+        model_ref: session.initial_model_ref.clone(),
+        thinking: session.thinking.clone(),
+        ..crate::session::lane::Config::new(session.initial_model_ref.clone())
+    };
+    tx.execute(
+        "INSERT INTO lanes (
+            session_id, name, leaf_id, current_operation_id,
+            pending_entry_id, pending_prompt, config, created_at, updated_at
+        ) VALUES (?1, 'main', ?2, NULL, NULL, NULL, ?3, ?4, ?4)",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            mapped_last,
+            serde_json::to_string(&config).expect("lane config serializes"),
+            now,
+        ],
+    )
+    .map_err(StoreError::from)?;
+    // Root agent address: every loadable session has one (load's
+    // invariant), so the import writes it alongside the lane.
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, NULL, ?2, 'main', 'root', NULL, NULL, ?3)",
+        rusqlite::params![
+            crate::ids::AgentId::root(session_id).as_uuid().to_string(),
+            session_id.as_uuid().to_string(),
+            now,
+        ],
+    )
+    .map_err(StoreError::from)?;
+    tx.commit().map_err(StoreError::from)?;
+    Ok(session_id)
 }
 
 fn usage_totals(connection: &Connection, session_id: SessionId) -> Result<TokenUsage, StoreError> {

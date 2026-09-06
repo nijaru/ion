@@ -246,6 +246,62 @@ pub struct ModelUsage {
     pub usage: TokenUsage,
 }
 
+/// One line of the pi-grammar JSONL export (session header or
+/// parent-chained entry). The line grammar (type/id/parentId/
+/// timestamp, camelCase) matches pi's session files; ion headers
+/// carry a `session` payload with `flavor: "ion"`, so importing a
+/// pi file fails cleanly instead of silently misinterpreting it.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExportedEntry {
+    /// `"session"` for the header line, otherwise the ion durable kind
+    /// (`user_message`, `assistant_message`, ...).
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub id: String,
+    #[serde(rename = "parentId", default, skip_serializing_if = "Option::is_none")]
+    pub parent_id: Option<String>,
+    /// Unix epoch milliseconds.
+    pub timestamp: i64,
+    /// Session-identity fields; present only on the header line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<ExportedSession>,
+    /// The serialized ion `SessionEntry`; present only on entry lines.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entry: Option<serde_json::Value>,
+}
+
+/// Session-identity fields of the export header.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct ExportedSession {
+    /// Always `"ion"`; import refuses other flavors.
+    pub flavor: String,
+    pub cwd: String,
+    pub title: String,
+    #[serde(rename = "initialModelRef")]
+    pub initial_model_ref: String,
+    /// Main-lane thinking selection, so a re-imported session keeps
+    /// its effort level.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub thinking: Option<String>,
+}
+
+/// Parse errors for `/import` (pi surfaces these modally).
+#[derive(Debug, thiserror::Error)]
+pub enum ImportError {
+    #[error("empty file")]
+    Empty,
+    #[error("first line must be a session header")]
+    MissingHeader,
+    #[error("this file is a pi session export, not an ion one")]
+    WrongFlavor,
+    #[error("line {line}: {message}")]
+    Malformed { line: usize, message: String },
+    #[error("entry chain broken at {id}")]
+    BrokenChain { id: String },
+    #[error("store: {0}")]
+    Store(#[from] StoreError),
+}
+
 /// Immutable durable history topology captured when an agent identity is
 /// published. Execution state remains on the addressed lane/operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -488,6 +544,19 @@ enum StoreCommand {
     SessionStats {
         session_id: SessionId,
         reply: oneshot::Sender<Result<SessionStats, StoreError>>,
+    },
+    /// Render the main lane's ancestor path as a pi-grammar JSONL
+    /// export (`/export`). The reply is the file contents; the host
+    /// owns writing it to the destination path.
+    ExportSession {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<String, StoreError>>,
+    },
+    /// Import a JSONL export into a new durable session (`/import`).
+    /// The reply is the new session id.
+    ImportSession {
+        contents: String,
+        reply: oneshot::Sender<Result<SessionId, ImportError>>,
     },
     UpsertAssistantFrame {
         frame: AssistantFrame,
@@ -867,6 +936,29 @@ impl SessionStore {
     pub async fn session_stats(&self, session_id: SessionId) -> Result<SessionStats, StoreError> {
         self.request(|reply| StoreCommand::SessionStats { session_id, reply })
             .await
+    }
+
+    /// Render the main lane's ancestor path as a pi-grammar JSONL
+    /// export (`/export`, pi parity). The host writes the file.
+    pub async fn export_session(&self, session_id: SessionId) -> Result<String, StoreError> {
+        self.request(|reply| StoreCommand::ExportSession { session_id, reply })
+            .await
+    }
+
+    /// Import a JSONL export into a new durable session (`/import`,
+    /// pi parity). Refuses non-ion flavors. Inline channel: the store's
+    /// `request` helper pins the reply error to StoreError, while
+    /// import additionally reports parse failures.
+    pub async fn import_session(&self, contents: String) -> Result<SessionId, ImportError> {
+        if self.closed.load(std::sync::atomic::Ordering::Acquire) {
+            return Err(ImportError::Store(StoreError::Closed));
+        }
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(StoreCommand::ImportSession { contents, reply })
+            .map_err(|_| ImportError::Store(StoreError::Closed))?;
+        rx.await
+            .map_err(|_| ImportError::Store(StoreError::Closed))?
     }
 
     /// The most recently updated session, for `--resume`.

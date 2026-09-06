@@ -203,6 +203,17 @@ impl SessionManager {
         Ok(self.store.session_stats(session_id).await?)
     }
 
+    /// Render the session as a pi-grammar JSONL export (`/export`).
+    /// The host writes the returned contents to the destination.
+    pub async fn export_jsonl(&self, session_id: SessionId) -> Result<String, SessionManagerError> {
+        Ok(self.store.export_session(session_id).await?)
+    }
+
+    /// Import a JSONL export into a new session (`/import`).
+    pub async fn import_jsonl(&self, contents: String) -> Result<SessionId, ion_core::ImportError> {
+        self.store.import_session(contents).await
+    }
+
     /// Fork from before one user message (pi's /fork): the new
     /// session's history ends at the picked message's parent; the
     /// picked message's text returns for the composer.

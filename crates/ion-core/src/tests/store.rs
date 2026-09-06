@@ -653,3 +653,107 @@ async fn checkpoints_roundtrip_and_key_by_entry() {
         .expect("still there");
     assert_eq!(replaced.0, "def456");
 }
+
+#[tokio::test]
+async fn export_import_roundtrip_preserves_the_main_lane() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let session_id = SessionId::generate();
+    let record = crate::store::SessionRecord {
+        id: session_id,
+        cwd: "/tmp".into(),
+        title: "export me".into(),
+        initial_model_ref: "ion_core::provider::ScriptedProvider".into(),
+        control_parent_session_id: None,
+        fork_source_session_id: None,
+        fork_source_entry_id: None,
+    };
+    store.create_session(record).await.expect("create");
+    let user = crate::store::EntryRecord::provision(
+        1,
+        crate::SessionEntry::UserMessage { text: "go".into() },
+    );
+    store
+        .append_entry(session_id, "main", user.clone())
+        .await
+        .expect("append user");
+    let assistant = crate::store::EntryRecord::provision(
+        2,
+        crate::SessionEntry::AssistantMessage {
+            text: "done".into(),
+        },
+    )
+    .after(Some(user.id));
+    store
+        .append_entry(session_id, "main", assistant)
+        .await
+        .expect("append assistant");
+
+    // Export: pi-grammar header plus parent-chained entry lines.
+    let contents = store.export_session(session_id).await.expect("export");
+    let lines: Vec<&str> = contents.trim_end().lines().collect();
+    assert_eq!(lines.len(), 3, "header + two entries: {contents}");
+    let header: crate::store::ExportedEntry = serde_json::from_str(lines[0]).expect("header line");
+    assert_eq!(header.kind, "session");
+    let session = header.session.as_ref().expect("ion session payload");
+    assert_eq!(session.flavor, "ion");
+    assert_eq!(session.cwd, "/tmp");
+    let first: crate::store::ExportedEntry = serde_json::from_str(lines[1]).expect("entry line");
+    assert_eq!(first.kind, "user_message");
+    assert!(first.parent_id.is_none());
+    let second: crate::store::ExportedEntry = serde_json::from_str(lines[2]).expect("entry line");
+    assert_eq!(second.kind, "assistant_message");
+    assert_eq!(second.parent_id.as_deref(), Some(first.id.as_str()));
+
+    // Import into a fresh session: entries round-trip with fresh ids,
+    // and the main lane points at the last one.
+    let imported = store.import_session(contents).await.expect("import");
+    assert_ne!(imported, session_id);
+    let loaded = store.load(imported).await.expect("load imported");
+    assert_eq!(loaded.entries.len(), 2);
+    assert_eq!(
+        loaded.entries[0].entry,
+        crate::SessionEntry::UserMessage { text: "go".into() }
+    );
+    assert_eq!(
+        loaded.entries[1].entry,
+        crate::SessionEntry::AssistantMessage {
+            text: "done".into()
+        }
+    );
+    assert_eq!(loaded.entries[1].parent, Some(loaded.entries[0].id));
+    let main = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == "main")
+        .expect("main lane");
+    assert_eq!(main.state.leaf, Some(loaded.entries[1].id));
+
+    // A pi export (parses as a header but carries no ion session
+    // payload) is refused cleanly.
+    let pi_line = format!(
+        "{{\"type\":\"session\",\"version\":3,\"id\":\"{}\",\"timestamp\":0,\"cwd\":\"/tmp\"}}",
+        session_id
+    );
+    let err = store
+        .import_session(pi_line)
+        .await
+        .expect_err("pi flavor refused");
+    assert!(matches!(err, crate::store::ImportError::WrongFlavor));
+
+    // Malformed JSON reports the line number.
+    let err = store
+        .import_session("not json\n".to_owned())
+        .await
+        .expect_err("malformed refused");
+    assert!(matches!(
+        err,
+        crate::store::ImportError::Malformed { line: 1, .. }
+    ));
+
+    // Empty file.
+    let err = store
+        .import_session(String::new())
+        .await
+        .expect_err("empty refused");
+    assert!(matches!(err, crate::store::ImportError::Empty));
+}
