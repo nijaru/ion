@@ -308,6 +308,10 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+/// One recorded turn checkpoint: the git ref, the entry it was captured
+/// at, and the capture time.
+pub type CheckpointReply = Result<Option<(String, EntryId, i64)>, StoreError>;
+
 enum StoreCommand {
     CreateSession {
         record: SessionRecord,
@@ -414,6 +418,32 @@ enum StoreCommand {
         fork_source_entry_id: Option<EntryId>,
         title: String,
         reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    /// Fork from one user-message entry: the destination session's
+    /// main lane ends at the picked message's parent, and the picked
+    /// message's text is returned for the editor (pi's /fork).
+    ForkBefore {
+        source: SessionId,
+        target: SessionId,
+        entry_id: EntryId,
+        title: String,
+        reply: oneshot::Sender<Result<Option<String>, StoreError>>,
+    },
+    /// Record one turn checkpoint (pi's git-checkpoint): the git ref
+    /// capturing the tree state before the model step at `entry_id`.
+    RecordCheckpoint {
+        session_id: SessionId,
+        entry_id: EntryId,
+        checkpoint_ref: String,
+        recorded_at: i64,
+        reply: oneshot::Sender<Result<(), StoreError>>,
+    },
+    /// The newest checkpoint at or before `entry_id` in durable seq
+    /// order, for the fork-restore offer.
+    LatestCheckpoint {
+        session_id: SessionId,
+        entry_id: EntryId,
+        reply: oneshot::Sender<CheckpointReply>,
     },
     Shutdown {
         reply: oneshot::Sender<Result<(), StoreError>>,
@@ -854,6 +884,65 @@ impl SessionStore {
         })
         .await?;
         Ok(target)
+    }
+
+    /// Fork from one user-message entry (pi's /fork): the destination
+    /// session's history ends at the picked message's parent and the
+    /// picked message's text returns for the editor. Returns the new
+    /// session id and the restored prompt text.
+    pub async fn fork_before(
+        &self,
+        source: SessionId,
+        entry_id: EntryId,
+        title: impl Into<String>,
+    ) -> Result<(SessionId, Option<String>), StoreError> {
+        let target = SessionId::generate();
+        let text = self
+            .request(|reply| StoreCommand::ForkBefore {
+                source,
+                target,
+                entry_id,
+                title: title.into(),
+                reply,
+            })
+            .await?;
+        Ok((target, text))
+    }
+
+    /// Record one turn checkpoint (pi's git-checkpoint): the git ref
+    /// capturing the tree state before the model step at `entry_id`.
+    pub async fn record_checkpoint(
+        &self,
+        session_id: SessionId,
+        entry_id: EntryId,
+        checkpoint_ref: impl Into<String>,
+    ) -> Result<(), StoreError> {
+        self.request(|reply| StoreCommand::RecordCheckpoint {
+            session_id,
+            entry_id,
+            checkpoint_ref: checkpoint_ref.into(),
+            recorded_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis() as i64)
+                .unwrap_or_default(),
+            reply,
+        })
+        .await
+    }
+
+    /// The newest checkpoint at or before `entry_id`, for the
+    /// fork-restore offer. `(checkpoint_ref, entry_id, recorded_at)`.
+    pub async fn latest_checkpoint(
+        &self,
+        session_id: SessionId,
+        entry_id: EntryId,
+    ) -> Result<Option<(String, EntryId, i64)>, StoreError> {
+        self.request(|reply| StoreCommand::LatestCheckpoint {
+            session_id,
+            entry_id,
+            reply,
+        })
+        .await
     }
 
     /// Remove one lane's pending next-run input durably; returns the

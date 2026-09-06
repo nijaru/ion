@@ -3840,6 +3840,20 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation_lane_live_mut(operation_id)
             .expect("resident operation has an owning lane")
             .last_prefix_fingerprint = Some(prefix_fingerprint);
+        // Pi's git-checkpoint parity: capture the tree state before the
+        // model can change files, keyed by the lane leaf (the user
+        // message on step 1 — the same entry /fork passes). Best effort:
+        // a skipped checkpoint never blocks the turn.
+        let checkpoint_leaf = self
+            .operation_lane_name(operation_id)
+            .and_then(|name| self.lane(name))
+            .and_then(|lane| lane.state.leaf);
+        if self
+            .live(operation_id)
+            .is_some_and(|live| live.model_step == 0)
+        {
+            self.record_turn_checkpoint(checkpoint_leaf);
+        }
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }

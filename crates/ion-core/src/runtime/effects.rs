@@ -853,4 +853,73 @@ impl<P: Provider> SessionRuntime<P> {
             }
         }
     }
+
+    /// Pi's git-checkpoint parity: capture the worktree state as a dangling
+    /// stash commit before a model step can change files. `git stash create`
+    /// never touches the index, worktree, or HEAD — it only writes commit
+    /// objects — so this is an observation with an inert side effect, run at
+    /// the same point pi's extension runs it (turn start, before the model
+    /// sees the prompt). Failures never block the turn (pi ignores them too).
+    pub(crate) fn record_turn_checkpoint(&mut self, leaf: Option<crate::ids::EntryId>) {
+        use std::path::Path;
+        let Some(leaf) = leaf else {
+            return;
+        };
+        let cwd = self.cwd.clone();
+        let session_id = self.session_id;
+        let store = self.store.clone();
+        // Best-effort observation, never a turn gate: git runs detached
+        // on the runtime tracker and the ref lands durably when it
+        // resolves. A blocking await here widened turn-start latency
+        // (fsmonitor contention) and raced one-shot ctrl+d exits.
+        self.tracker.spawn(async move {
+            let Some(checkpoint_ref) = git_stash_create(Path::new(&cwd)).await else {
+                return;
+            };
+            if let Err(err) = store
+                .record_checkpoint(session_id, leaf, checkpoint_ref)
+                .await
+            {
+                tracing::warn!(%session_id, %err, "turn checkpoint was not durably recorded");
+            }
+        });
+    }
+}
+
+/// One bounded `git stash create` invocation. None means: not a git
+/// worktree, git missing, nothing to stash, or any failure — every case
+/// is a skipped checkpoint, never a failed turn. The command runs with
+/// fsmonitor disabled (a detached fsmonitor daemon inherits the stdout
+/// pipe and its EOF never arrives, wedging `.output()`; `stash create`
+/// gains nothing from fsmonitor) and under a hard timeout, because a
+/// checkpoint is best-effort observation, never a gate.
+async fn git_stash_create(cwd: &std::path::Path) -> Option<String> {
+    const CHECKPOINT_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+    let output = tokio::time::timeout(
+        CHECKPOINT_TIMEOUT,
+        tokio::process::Command::new("git")
+            .arg("-C")
+            .arg(cwd)
+            // One-shot plumbing: no daemon spawn, no pager, no hooks
+            // that could outlive the child and hold the pipe open.
+            .arg("-c")
+            .arg("core.fsmonitor=false")
+            .arg("-c")
+            .arg("core.editor=:")
+            // A timed-out checkpoint kills its child: the future is
+            // dropped, and without kill_on_drop the git process (and
+            // anything it waits on) would outlive the turn.
+            .kill_on_drop(true)
+            .args(["stash", "create"])
+            .stdin(std::process::Stdio::null())
+            .output(),
+    )
+    .await
+    .ok()?
+    .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if text.is_empty() { None } else { Some(text) }
 }

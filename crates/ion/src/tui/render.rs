@@ -536,7 +536,11 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.session_selector.is_some()
         || state.thinking_selector.is_some()
         || state.file_selector.is_some()
+        || state.fork_selector.is_some()
     {
+        LIVE_REGION_MAX_ROWS
+    } else if state.restore_prompt.is_some() {
+        // The parked /fork restore offer is modal like an approval.
         LIVE_REGION_MAX_ROWS
     } else if state.ext_ui.dialog.is_some() {
         // A parked dialog is modal like a picker.
@@ -893,6 +897,69 @@ fn session_selector_lines(
     lines
 }
 
+fn fork_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_fork_rows();
+    let selected = state
+        .fork_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = Vec::new();
+    if rows.is_empty() {
+        lines.push(picker_header(
+            "fork from message",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
+        lines.push(selector_row(
+            Line::from("  no matching messages").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            "fork from message",
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
+        for (index, row) in rows.iter().enumerate().take(end).skip(start) {
+            let is_selected = index == selected;
+            let label = if row.text.chars().count() > width.saturating_sub(4) {
+                let mut cut: String = row.text.chars().take(width - 7).collect();
+                cut.push_str("...");
+                cut
+            } else {
+                row.text.clone()
+            };
+            lines.push(selector_row(
+                Line::from(vec![
+                    picker_cursor(is_selected, palette),
+                    picker_label(label, is_selected, palette),
+                ]),
+                width,
+            ));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
 fn file_selector_lines(
     state: &UiState,
     palette: &Palette,
@@ -1067,6 +1134,8 @@ pub(super) fn build_live_at_height(
         head.extend(thinking_selector_lines(state, palette, width, head_budget));
     } else if state.file_selector.is_some() {
         head.extend(file_selector_lines(state, palette, width, head_budget));
+    } else if state.fork_selector.is_some() {
+        head.extend(fork_selector_lines(state, palette, width, head_budget));
     } else if state.ext_ui.dialog.is_some() {
         head.extend(extension_dialog_lines(state, palette, width));
     } else if state.hotkeys_visible {
@@ -1222,6 +1291,30 @@ pub(super) fn build_live_at_height(
             ));
         }
         head.extend(decision_lines);
+    }
+
+    // The parked /fork restore offer sits at the band bottom like an
+    // approval card (pi's git-checkpoint "Restore code state?" select,
+    // as a two-option decision).
+    if state.restore_prompt.is_some() {
+        let header = Line::from(Span::styled(
+            "\u{21bb} fork: restore code to this point?",
+            Style::new().yellow().bold(),
+        ));
+        let decision = Line::from(Span::styled(
+            "  y restore \u{00b7} n keep current code",
+            Style::new().yellow(),
+        ));
+        let fixed = wrap_line(&header, width).len() + wrap_line(&decision, width).len();
+        let budget_now = band_height
+            .saturating_sub(LIVE_CHROME_ROWS)
+            .saturating_sub(composer_len);
+        if head.len() + fixed > budget_now {
+            let drop = (head.len() + fixed).saturating_sub(budget_now);
+            head.drain(..drop.min(head.len()));
+        }
+        head.extend(wrap_line(&header, width));
+        head.extend(wrap_line(&decision, width));
     }
 
     // Fit the head above the composer inside the band cap, keeping

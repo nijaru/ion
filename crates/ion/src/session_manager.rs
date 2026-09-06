@@ -176,6 +176,50 @@ impl SessionManager {
         Ok(self.store.clone_session(source, title).await?)
     }
 
+    /// The attached session's user messages, newest first, for the
+    /// /fork picker (pi parity: the message selector).
+    pub async fn fork_messages(
+        &self,
+        session_id: SessionId,
+    ) -> Result<Vec<(ion_core::EntryId, String)>, SessionManagerError> {
+        let loaded = self.store.load(session_id).await?;
+        let mut rows = Vec::new();
+        for record in loaded.entries.iter().rev() {
+            if let ion_core::SessionEntry::UserMessage { text } = &record.entry
+                && !text.is_empty()
+            {
+                rows.push((record.id, text.clone()));
+            }
+        }
+        Ok(rows)
+    }
+
+    /// Fork from before one user message (pi's /fork): the new
+    /// session's history ends at the picked message's parent; the
+    /// picked message's text returns for the composer.
+    pub async fn fork_before(
+        &self,
+        source: SessionId,
+        entry_id: ion_core::EntryId,
+        title: &str,
+    ) -> Result<(SessionId, Option<String>), SessionManagerError> {
+        Ok(self.store.fork_before(source, entry_id, title).await?)
+    }
+
+    /// The git-checkpoint recorded at one entry, for the /fork restore
+    /// offer (pi's git-checkpoint select).
+    pub async fn checkpoint_for(
+        &self,
+        session_id: SessionId,
+        entry_id: ion_core::EntryId,
+    ) -> Result<Option<String>, SessionManagerError> {
+        Ok(self
+            .store
+            .latest_checkpoint(session_id, entry_id)
+            .await?
+            .map(|(r, _, _)| r))
+    }
+
     /// Close the attached stack and open the requested session. The
     /// close order is owned here so no caller can strand an in-flight
     /// hosted agent or a half-joined runtime.

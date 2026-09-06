@@ -214,6 +214,32 @@ pub enum UiEffect {
     /// Load picker rows from the store (the reducer cannot read the
     /// store; the host resolves this into `SessionListed`).
     RequestSessionList,
+    /// Load the attached session's user messages for the /fork picker
+    /// (pi parity: fork from a past message). The host resolves this
+    /// into `ForkMessagesListed`.
+    RequestForkMessages,
+    /// Fork from before one user message: the host clones the ancestor
+    /// path into a new durable session (the picked message's text
+    /// returns for the composer), offers the git-checkpoint restore
+    /// when one exists, then switches to the fork.
+    ForkFrom {
+        entry_id: ion_core::EntryId,
+    },
+    /// Answer the parked /fork restore offer (pi's git-checkpoint
+    /// "Restore code state?" select). The ref, fork target, and
+    /// composer text ride along: the loop runs `git stash apply` on
+    /// accept, then switches to the fork either way.
+    AcceptRestore {
+        checkpoint_ref: String,
+        target: ion_core::SessionId,
+        title: String,
+        text: Option<String>,
+    },
+    DeclineRestore {
+        target: ion_core::SessionId,
+        title: String,
+        text: Option<String>,
+    },
     /// Answer a parked extension dialog; the id addresses the
     /// responder the loop registered when the dialog arrived.
     AnswerExtensionDialog {
@@ -240,6 +266,17 @@ pub struct ApprovalPrompt {
     /// Bounded proposed-change preview (`edit` hunks); rendered in
     /// diff colors below the prompt.
     pub preview: Option<String>,
+}
+
+/// The parked /fork restore offer (pi's git-checkpoint
+/// "Restore code state?" select). Modal like an approval: the fork
+/// waits on this decision.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestorePrompt {
+    pub checkpoint_ref: String,
+    pub target: ion_core::SessionId,
+    pub title: String,
+    pub text: Option<String>,
 }
 
 /// Extension UI presentation state (Phase G, pi ctx.ui parity): every
@@ -427,6 +464,26 @@ pub enum UiMessage {
     SteerRejected(String),
     /// The host delivered picker rows.
     SessionListed(Vec<ion_core::SessionSummary>),
+    /// The host delivered the attached session's user messages for the
+    /// /fork picker (pi parity).
+    ForkMessagesListed(Vec<ForkMessageRow>),
+    /// A /fork completed: the fork session was opened, the picked
+    /// message's text is restored into the composer (pi fills the
+    /// editor with the forked message), and the git-checkpoint
+    /// restore, when offered, was answered by the user.
+    ForkCompleted {
+        session: ion_core::SessionId,
+        title: String,
+        text: Option<String>,
+    },
+    /// A /fork found a checkpoint for the picked message; the reducer
+    /// parks the modal offer (pi's git-checkpoint restore select).
+    ForkRestorePrompt {
+        checkpoint_ref: String,
+        target: ion_core::SessionId,
+        title: String,
+        text: Option<String>,
+    },
     /// A session switch completed; the loop re-attaches.
     SessionSwitched {
         session: ion_core::SessionId,
@@ -969,6 +1026,25 @@ struct FileSelector {
     at_offset: usize,
 }
 
+/// One user-message row in the /fork picker (pi parity: the message
+/// selector lists user messages to fork from).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ForkMessageRow {
+    entry_id: ion_core::EntryId,
+    text: String,
+}
+
+/// Ephemeral /fork message picker: the composer filters over the
+/// attached session's user messages; picking one forks from before it
+/// (pi `/fork` + `app.session.fork`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ForkSelector {
+    rows: Vec<ForkMessageRow>,
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
 /// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -1055,6 +1131,9 @@ pub struct UiState {
     /// fuzzy-searches project files; selection inserts an `@path`
     /// reference into the composer — the model reads the file itself).
     file_selector: Option<FileSelector>,
+    /// /fork message picker (pi parity): rows arrive from the host as
+    /// `ForkMessagesListed`; the reducer never reads the store.
+    fork_selector: Option<ForkSelector>,
     /// Extension UI presentation state (Phase G): footer statuses,
     /// widgets, custom footer, parked dialogs, and the live command
     /// list. All presentation-only; the ion-core hub is the source.
@@ -1102,6 +1181,8 @@ pub struct UiState {
     /// The parked tool approval awaiting the user's decision (§17.4);
     /// set by the runtime, cleared by the decision or the next tool.
     approval: Option<ApprovalPrompt>,
+    /// Parked /fork restore offer (pi's git-checkpoint select).
+    restore_prompt: Option<RestorePrompt>,
     /// Most recent provider usage, retained for the footer after settlement.
     usage: Option<TokenUsage>,
     /// Session-lifetime token totals (pi-parity footer `↑ ↓ R W`).
@@ -1438,6 +1519,52 @@ impl UiState {
         });
     }
 
+    fn open_fork_selector(&mut self, rows: Vec<ForkMessageRow>) {
+        if self.fork_selector.is_some() || rows.is_empty() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.fork_selector = Some(ForkSelector {
+            rows,
+            // Start at the most recent message (pi preselects the last).
+            selected: 0,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_fork_selector(&mut self) {
+        let Some(selector) = self.fork_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_fork_rows(&self) -> Vec<ForkMessageRow> {
+        self.fork_selector
+            .as_ref()
+            .map(|selector| {
+                let query = self.composer.to_lowercase();
+                selector
+                    .rows
+                    .iter()
+                    .filter(|row| fuzzy_contains(&row.text.to_lowercase(), &query))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
     fn close_session_selector(&mut self) {
         let Some(selector) = self.session_selector.take() else {
             return;
@@ -1493,6 +1620,30 @@ impl UiState {
         if let Some(selector) = self.session_selector.as_mut() {
             selector.selected = selected;
         }
+    }
+
+    fn move_fork_selection(&mut self, delta: isize) {
+        let count = self.filtered_fork_rows().len();
+        let Some(selector) = self.fork_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn reset_fork_selection(&mut self) {
+        if let Some(selector) = self.fork_selector.as_mut() {
+            selector.selected = 0;
+        }
+    }
+
+    fn selected_fork_row(&self) -> Option<ForkMessageRow> {
+        let selector = self.fork_selector.as_ref()?;
+        self.filtered_fork_rows().into_iter().nth(selector.selected)
     }
 
     fn current_model_reference(&self) -> Option<String> {
@@ -1653,7 +1804,7 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             handle_key(state, key)
         }
         UiMessage::Paste(text) => {
-            if state.approval.is_none() {
+            if state.approval.is_none() && state.restore_prompt.is_none() {
                 insert_text(&mut state, &text, EditKind::Paste);
             }
             (state, None)
@@ -1721,6 +1872,46 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
                 .map(|summary| session_row_for_picker(&summary))
                 .collect();
             state.open_session_selector(rows, &query);
+            (state, None)
+        }
+        UiMessage::ForkMessagesListed(rows) => {
+            if rows.is_empty() {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no messages to fork from").dim());
+                return (state, None);
+            }
+            state.open_fork_selector(rows);
+            (state, None)
+        }
+        UiMessage::ForkRestorePrompt {
+            checkpoint_ref,
+            target,
+            title,
+            text,
+        } => {
+            state.restore_prompt = Some(RestorePrompt {
+                checkpoint_ref,
+                target,
+                title,
+                text,
+            });
+            (state, None)
+        }
+        UiMessage::ForkCompleted {
+            session,
+            title,
+            text,
+        } => {
+            state.session_id = Some(session);
+            state.session_title = Some(title);
+            state.ext_ui = ExtensionUiState::default();
+            if let Some(text) = text
+                && !text.is_empty()
+            {
+                state.composer = text;
+                state.cursor = state.composer.chars().count();
+            }
             (state, None)
         }
         UiMessage::SessionSwitched { session, title } => {
@@ -1907,6 +2098,53 @@ fn handle_session_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, O
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
             insert_at_cursor(&mut state, &ch.to_string());
             state.reset_session_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
+/// The /fork message picker owns the keyboard while open (pi parity:
+/// the user-message selector). Enter forks from before the selected
+/// message; esc keeps the current session and draft.
+fn handle_fork_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_fork_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(row) = state.selected_fork_row() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching messages").red());
+                return (state, None);
+            };
+            state.close_fork_selector();
+            (
+                state,
+                Some(UiEffect::ForkFrom {
+                    entry_id: row.entry_id,
+                }),
+            )
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_fork_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_fork_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_fork_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_fork_selection();
             (state, None)
         }
         _ => (state, None),
@@ -2152,6 +2390,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         || state.thinking_selector.is_some()
         || state.session_selector.is_some()
         || state.file_selector.is_some()
+        || state.fork_selector.is_some()
         || state.hotkeys_visible;
     if transient_open && let Some(action) = state.keymap.action_for(&key) {
         match action {
@@ -2160,6 +2399,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_thinking_selector();
                 state.close_session_selector();
                 state.close_file_selector();
+                state.close_fork_selector();
                 state.hotkeys_visible = false;
                 return handle_action(state, action);
             }
@@ -2173,6 +2413,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_thinking_selector();
                 state.close_session_selector();
                 state.close_file_selector();
+                state.close_fork_selector();
                 state.hotkeys_visible = false;
                 if state.composer.is_empty() {
                     state.hint = Some("ctrl+c again to exit".to_owned());
@@ -2192,8 +2433,55 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     if state.session_selector.is_some() {
         return handle_session_selector_key(state, key);
     }
+    if state.fork_selector.is_some() {
+        return handle_fork_selector_key(state, key);
+    }
     if state.file_selector.is_some() {
         return handle_file_selector_key(state, key);
+    }
+    // The parked /fork restore offer owns the keyboard like an
+    // approval: y/enter restores the checkpoint, n/esc keeps current
+    // code (pi's two-option select).
+    if state.restore_prompt.is_some() {
+        let restore = match key.code {
+            KeyCode::Enter if key.modifiers.is_empty() => Some(true),
+            KeyCode::Char('y') if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+                Some(true)
+            }
+            KeyCode::Esc if key.modifiers.is_empty() => Some(false),
+            KeyCode::Char('n') if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+                Some(false)
+            }
+            _ => None,
+        };
+        let Some(restore) = restore else {
+            return (state, None);
+        };
+        let prompt = state
+            .restore_prompt
+            .take()
+            .expect("restore prompt checked above");
+        let RestorePrompt {
+            checkpoint_ref,
+            target,
+            title,
+            text,
+        } = prompt;
+        let effect = if restore {
+            UiEffect::AcceptRestore {
+                checkpoint_ref,
+                target,
+                title,
+                text,
+            }
+        } else {
+            UiEffect::DeclineRestore {
+                target,
+                title,
+                text,
+            }
+        };
+        return (state, Some(effect));
     }
     // A parked approval owns the keyboard (§17.4): only the decision
     // keys act; every other key is swallowed so a stray keystroke can
@@ -2325,6 +2613,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/thinking [level]      - pick the thinking level (off..max)",
                 "shift+tab · ctrl+l · ctrl+p - cycle thinking, models, model picker",
                 "/new · /resume [query] · /clone - session switching",
+                "/fork                   - fork from a past message",
                 "/name <title> · /session - rename; show session identity",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
@@ -2490,6 +2779,17 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 return (std::mem::take(state), None);
             }
             (std::mem::take(state), Some(UiEffect::CloneSession))
+        }
+        "fork" => {
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(state, "cannot fork while the current operation is running");
+                return (std::mem::take(state), None);
+            }
+            if state.approval.is_some() {
+                notice(state, "decide the pending approval first");
+                return (std::mem::take(state), None);
+            }
+            (std::mem::take(state), Some(UiEffect::RequestForkMessages))
         }
         "quit" => (std::mem::take(state), Some(UiEffect::Quit)),
         other => {
@@ -5425,6 +5725,136 @@ async fn dispatch(
             }
             None
         }
+        UiEffect::RequestForkMessages => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(session_id) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            match manager.fork_messages(session_id).await {
+                Ok(rows) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::ForkMessagesListed(
+                            rows.into_iter()
+                                .map(|(entry_id, text)| ForkMessageRow { entry_id, text })
+                                .collect(),
+                        ),
+                    );
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("fork messages failed: {err}")),
+            }
+            None
+        }
+        UiEffect::ForkFrom { entry_id } => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(source) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            let source_title = state.session_title.clone().unwrap_or_default();
+            let title = if source_title.is_empty() {
+                format!("Fork of {}", &source.to_string()[..8])
+            } else {
+                format!("Fork of {source_title}")
+            };
+            let Ok((target, text)) = manager.fork_before(source, entry_id, &title).await else {
+                notice(state, "fork failed");
+                return None;
+            };
+            // Pi's git-checkpoint: offer to restore the tree state
+            // captured at the picked message before switching.
+            match manager.checkpoint_for(source, entry_id).await {
+                Ok(Some(checkpoint_ref)) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::ForkRestorePrompt {
+                            checkpoint_ref,
+                            target,
+                            title,
+                            text,
+                        },
+                    );
+                    *state = next;
+                }
+                _ => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::ForkCompleted {
+                            session: target,
+                            title,
+                            text,
+                        },
+                    );
+                    *state = next;
+                    return Some(SessionSwitch::Resume(target));
+                }
+            }
+            None
+        }
+        UiEffect::AcceptRestore {
+            checkpoint_ref,
+            target,
+            title,
+            text,
+        } => {
+            // Pi's git-checkpoint accept: `git stash apply` the captured
+            // ref, then switch to the fork. Apply failures surface and
+            // the fork still opens — a restore is an offer, never a
+            // gate (pi notifies either way).
+            let applied = tokio::process::Command::new("git")
+                .args(["stash", "apply"])
+                .arg(&checkpoint_ref)
+                .stdin(std::process::Stdio::null())
+                .output()
+                .await;
+            match applied {
+                Ok(output) if output.status.success() => {
+                    notice(state, "code restored to checkpoint");
+                }
+                Ok(output) => notice(
+                    state,
+                    &format!(
+                        "checkpoint restore failed: {}",
+                        String::from_utf8_lossy(&output.stderr).trim()
+                    ),
+                ),
+                Err(err) => notice(state, &format!("checkpoint restore failed: {err}")),
+            }
+            let (next, _) = update(
+                std::mem::take(state),
+                UiMessage::ForkCompleted {
+                    session: target,
+                    title,
+                    text,
+                },
+            );
+            *state = next;
+            Some(SessionSwitch::Resume(target))
+        }
+        UiEffect::DeclineRestore {
+            target,
+            title,
+            text,
+        } => {
+            let (next, _) = update(
+                std::mem::take(state),
+                UiMessage::ForkCompleted {
+                    session: target,
+                    title,
+                    text,
+                },
+            );
+            *state = next;
+            Some(SessionSwitch::Resume(target))
+        }
         UiEffect::NewSession => Some(SessionSwitch::New),
         UiEffect::ResumeSession { session } => Some(SessionSwitch::Resume(session)),
         UiEffect::CloneSession => {
@@ -7499,7 +7929,8 @@ mod session_command_tests {
 
     #[test]
     fn session_commands_are_dispatched_with_busy_and_approval_guards() {
-        // /new, /resume, /clone refuse while working or an approval waits.
+        // /new, /resume, /clone, /fork refuse while working or an
+        // approval waits.
         let mut state = UiState::new();
         state.status = UiStatus::Working {
             operation: "running bash".to_owned(),
@@ -8907,5 +9338,154 @@ mod cache_miss_tests {
                 .iter()
                 .any(|l| l.to_string().contains("Cache miss after model switch"))
         );
+    }
+}
+
+#[cfg(test)]
+mod fork_picker_tests {
+    use super::tests::key;
+    use super::*;
+
+    fn command(state: UiState, input: &str) -> (UiState, Option<UiEffect>) {
+        let mut state = state;
+        handle_command(&mut state, input)
+    }
+
+    fn row(text: &str) -> ForkMessageRow {
+        ForkMessageRow {
+            entry_id: ion_core::EntryId::generate(),
+            text: text.to_owned(),
+        }
+    }
+
+    #[test]
+    fn fork_command_requests_messages_and_the_picker_filters() {
+        let mut state = UiState::new();
+        state.session_id = Some(ion_core::SessionId::generate());
+        state.composer = "draft".to_owned();
+        state.cursor = state.composer.chars().count();
+
+        // /fork while working refuses.
+        state.status = UiStatus::Working {
+            operation: "op".into(),
+        };
+        let (working, effect) = command(state.clone(), "fork");
+        assert_eq!(effect, None);
+        assert!(working.fork_selector.is_none());
+
+        state.status = UiStatus::Idle;
+        let (state, effect) = command(state, "fork");
+        assert_eq!(effect, Some(UiEffect::RequestForkMessages));
+
+        // Host delivers the rows; the picker opens with the draft saved.
+        let (state, _) = update(
+            state,
+            UiMessage::ForkMessagesListed(vec![row("first"), row("second"), row("third")]),
+        );
+        assert!(state.fork_selector.is_some());
+        assert!(state.composer.is_empty());
+
+        // The composer filters the rows.
+        let (state, _) = update(state.clone(), key(KeyCode::Char('s')));
+        let (state, _) = update(state, key(KeyCode::Char('e')));
+        let (state, _) = update(state, key(KeyCode::Char('c')));
+        assert_eq!(state.filtered_fork_rows().len(), 1);
+        assert_eq!(state.filtered_fork_rows()[0].text, "second");
+
+        // Esc closes the picker and restores the saved draft.
+        let (state, _) = update(state, key(KeyCode::Esc));
+        assert!(state.fork_selector.is_none());
+        assert_eq!(state.composer, "draft");
+    }
+
+    #[test]
+    fn fork_picker_enter_forks_from_the_selected_message() {
+        let mut state = UiState::new();
+        state.session_id = Some(ion_core::SessionId::generate());
+        let rows = vec![row("first"), row("second"), row("third")];
+        let second_id = rows[1].entry_id;
+        let (state, _) = update(state, UiMessage::ForkMessagesListed(rows));
+
+        // Enter forks from the preselected newest message; Down first
+        // picks the next row back.
+        let (state, _) = update(state, key(KeyCode::Down));
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            effect,
+            Some(UiEffect::ForkFrom {
+                entry_id: second_id
+            })
+        );
+        assert!(state.fork_selector.is_none());
+    }
+
+    #[test]
+    fn restore_prompt_is_modal_and_y_restores() {
+        let mut state = UiState::new();
+        let target = ion_core::SessionId::generate();
+        state.restore_prompt = Some(RestorePrompt {
+            checkpoint_ref: "abc123".to_owned(),
+            target,
+            title: "Fork of test".to_owned(),
+            text: Some("second".to_owned()),
+        });
+
+        // Any key that is not the decision is swallowed.
+        let (state, effect) = update(state.clone(), key(KeyCode::Char('x')));
+        assert_eq!(effect, None);
+        assert!(state.restore_prompt.is_some());
+
+        // A paste is swallowed too (modal like an approval).
+        let (state, _) = update(state, UiMessage::Paste("pasted".to_owned()));
+        assert!(state.composer.is_empty());
+
+        // y accepts the restore.
+        let (state, effect) = update(state, key(KeyCode::Char('y')));
+        assert_eq!(
+            effect,
+            Some(UiEffect::AcceptRestore {
+                checkpoint_ref: "abc123".to_owned(),
+                target,
+                title: "Fork of test".to_owned(),
+                text: Some("second".to_owned()),
+            })
+        );
+        assert!(state.restore_prompt.is_none());
+
+        // n declines and keeps the current code.
+        let mut state = state;
+        state.restore_prompt = Some(RestorePrompt {
+            checkpoint_ref: "abc123".to_owned(),
+            target,
+            title: "Fork of test".to_owned(),
+            text: None,
+        });
+        let (state, effect) = update(state, key(KeyCode::Char('n')));
+        assert_eq!(
+            effect,
+            Some(UiEffect::DeclineRestore {
+                target,
+                title: "Fork of test".to_owned(),
+                text: None,
+            })
+        );
+        assert!(state.restore_prompt.is_none());
+    }
+
+    #[test]
+    fn fork_completed_fills_the_composer_with_the_picked_text() {
+        let state = UiState::new();
+        let session = ion_core::SessionId::generate();
+        let (state, _) = update(
+            state,
+            UiMessage::ForkCompleted {
+                session,
+                title: "Fork of test".to_owned(),
+                text: Some("second".to_owned()),
+            },
+        );
+        assert_eq!(state.session_id, Some(session));
+        assert_eq!(state.composer, "second");
+        assert_eq!(state.cursor, "second".chars().count());
     }
 }

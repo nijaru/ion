@@ -193,6 +193,42 @@ pub(super) fn handle_command(
                 clone_session(connection, source, target, fork_source_entry_id, &title)
             }));
         }
+        StoreCommand::ForkBefore {
+            source,
+            target,
+            entry_id,
+            title,
+            reply,
+        } => {
+            let _ = reply.send(
+                check_injected(fail_next_write)
+                    .and_then(|()| fork_before(connection, source, target, entry_id, &title)),
+            );
+        }
+        StoreCommand::RecordCheckpoint {
+            session_id,
+            entry_id,
+            checkpoint_ref,
+            recorded_at,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                record_checkpoint(
+                    connection,
+                    session_id,
+                    entry_id,
+                    &checkpoint_ref,
+                    recorded_at,
+                )
+            }));
+        }
+        StoreCommand::LatestCheckpoint {
+            session_id,
+            entry_id,
+            reply,
+        } => {
+            let _ = reply.send(checkpoint_for_entry(connection, session_id, entry_id));
+        }
         StoreCommand::Shutdown { reply } => {
             let _ = reply.send(Ok(()));
         }
@@ -383,6 +419,7 @@ fn delete_session(connection: &mut Connection, session_id: SessionId) -> Result<
     )?;
     for sql in [
         "DELETE FROM lanes WHERE session_id = ?1",
+        "DELETE FROM turn_checkpoints WHERE session_id = ?1",
         "DELETE FROM entries WHERE session_id = ?1",
         "DELETE FROM usage WHERE session_id = ?1",
         "DELETE FROM sessions WHERE id = ?1 OR control_parent_session_id = ?1",
@@ -547,6 +584,193 @@ fn clone_session(
     .map_err(StoreError::from)?;
     tx.commit().map_err(StoreError::from)?;
     Ok(())
+}
+
+/// Fork from one picked entry (pi's /fork with `position: "before"`):
+/// the destination session's main lane contains exactly the ancestor
+/// path of `entry_id`, its leaf pinned at the picked entry's parent.
+/// Returns the picked entry's text (a user message) for the editor.
+fn fork_before(
+    connection: &mut Connection,
+    source: SessionId,
+    target: SessionId,
+    entry_id: EntryId,
+    title: &str,
+) -> Result<Option<String>, StoreError> {
+    let loaded = load(connection, source)?;
+    if loaded.session.control_parent_session_id.is_some() {
+        return Err(StoreError::CloneHostedSession(source));
+    }
+    let picked = loaded
+        .entries
+        .iter()
+        .find(|record| record.id == entry_id)
+        .ok_or_else(|| StoreError::Sqlite(format!("fork entry {entry_id} not found")))?;
+    let picked_text = match &picked.entry {
+        crate::operation::SessionEntry::UserMessage { text } => Some(text.clone()),
+        _ => None,
+    };
+    // Ancestor path (picked entry excluded — its message returns to
+    // the editor, exactly pi's fork-selected-text flow).
+    let by_id: std::collections::HashMap<EntryId, &EntryRecord> = loaded
+        .entries
+        .iter()
+        .map(|record| (record.id, record))
+        .collect();
+    let mut path: Vec<&EntryRecord> = Vec::new();
+    let mut cursor = picked.parent;
+    while let Some(id) = cursor {
+        let record = by_id
+            .get(&id)
+            .ok_or_else(|| StoreError::Sqlite(format!("fork chain broken at {id}")))?;
+        path.push(record);
+        cursor = record.parent;
+    }
+    path.reverse();
+    let cut_leaf = picked.parent;
+
+    let tx = connection.transaction()?;
+    let now = now_ms();
+    let mut id_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for record in &path {
+        let fresh = crate::ids::EntryId::generate().as_uuid().to_string();
+        id_map.insert(record.id.as_uuid().to_string(), fresh);
+    }
+    tx.execute(
+        "INSERT INTO sessions (
+            id, created_at, updated_at, cwd, title, control_parent_session_id,
+            fork_source_session_id, fork_source_entry_id
+         ) VALUES (?1, ?2, ?2, ?3, ?4, NULL, ?5, ?6)",
+        rusqlite::params![
+            target.as_uuid().to_string(),
+            now,
+            loaded.session.cwd,
+            title,
+            source.as_uuid().to_string(),
+            entry_id.as_uuid().to_string(),
+        ],
+    )
+    .map_err(StoreError::from)?;
+    for (seq, record) in path.iter().enumerate() {
+        let mapped_parent = record
+            .parent
+            .and_then(|parent| id_map.get(&parent.as_uuid().to_string()).cloned());
+        tx.execute(
+            "INSERT INTO entries (
+                session_id, seq, id, parent_id, kind, payload, created_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            rusqlite::params![
+                target.as_uuid().to_string(),
+                i64::try_from(seq).unwrap_or(i64::MAX) + 1,
+                id_map
+                    .get(&record.id.as_uuid().to_string())
+                    .cloned()
+                    .unwrap_or_default(),
+                mapped_parent,
+                entry_kind(&record.entry),
+                serde_json::to_string(&record.entry).expect("entry serializes"),
+                now,
+            ],
+        )
+        .map_err(StoreError::from)?;
+    }
+    // Main lane at the cut, with the source main config; any other
+    // lanes are dropped — a fork is a new main-line session.
+    let main_config = loaded
+        .lanes
+        .iter()
+        .find(|lane| lane.name == "main")
+        .map(|lane| serde_json::to_string(&lane.config).expect("lane config serializes"));
+    if let Some(config) = main_config {
+        tx.execute(
+            "INSERT INTO lanes (
+                session_id, name, leaf_id, current_operation_id,
+                pending_entry_id, pending_prompt, config, created_at, updated_at
+            ) VALUES (?1, 'main', ?2, NULL, NULL, NULL, ?3, ?4, ?4)",
+            rusqlite::params![
+                target.as_uuid().to_string(),
+                cut_leaf
+                    .as_ref()
+                    .and_then(|leaf| id_map.get(&leaf.as_uuid().to_string()).cloned()),
+                config,
+                now,
+            ],
+        )
+        .map_err(StoreError::from)?;
+    }
+    tx.execute(
+        "INSERT INTO agents (
+            id, family_session_id, control_parent_id, session_id, lane_name,
+            history_kind, source_session_id, source_entry_id, created_at
+         ) VALUES (?1, ?2, NULL, ?2, 'main', 'root', NULL, NULL, ?3)",
+        rusqlite::params![
+            crate::ids::AgentId::root(target).as_uuid().to_string(),
+            target.as_uuid().to_string(),
+            now,
+        ],
+    )
+    .map_err(StoreError::from)?;
+    tx.commit().map_err(StoreError::from)?;
+    Ok(picked_text)
+}
+
+/// Record one turn checkpoint (pi's git-checkpoint). One row per
+/// (session, entry): a later turn at the same entry replaces the ref.
+fn record_checkpoint(
+    connection: &mut Connection,
+    session_id: SessionId,
+    entry_id: EntryId,
+    checkpoint_ref: &str,
+    recorded_at: i64,
+) -> Result<(), StoreError> {
+    connection
+        .execute(
+            "INSERT INTO turn_checkpoints (
+                session_id, entry_id, checkpoint_ref, recorded_at
+            ) VALUES (?1, ?2, ?3, ?4)
+            ON CONFLICT(session_id, entry_id) DO UPDATE SET
+                checkpoint_ref = excluded.checkpoint_ref,
+                recorded_at = excluded.recorded_at",
+            rusqlite::params![
+                session_id.as_uuid().to_string(),
+                entry_id.as_uuid().to_string(),
+                checkpoint_ref,
+                recorded_at,
+            ],
+        )
+        .map_err(StoreError::from)?;
+    Ok(())
+}
+
+/// The checkpoint recorded at one entry (pi's map lookup), if any.
+fn checkpoint_for_entry(
+    connection: &Connection,
+    session_id: SessionId,
+    entry_id: EntryId,
+) -> Result<Option<(String, EntryId, i64)>, StoreError> {
+    connection
+        .query_row(
+            "SELECT checkpoint_ref, entry_id, recorded_at
+             FROM turn_checkpoints
+             WHERE session_id = ?1 AND entry_id = ?2",
+            rusqlite::params![
+                session_id.as_uuid().to_string(),
+                entry_id.as_uuid().to_string(),
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    crate::ids::EntryId::parse(&row.get::<_, String>(1)?)
+                        .unwrap_or_else(crate::ids::EntryId::generate),
+                    row.get::<_, i64>(2)?,
+                ))
+            },
+        )
+        .map(Some)
+        .or_else(|err| match err {
+            rusqlite::Error::QueryReturnedNoRows => Ok(None),
+            other => Err(StoreError::from(other)),
+        })
 }
 
 fn latest_session(connection: &mut Connection) -> Result<Option<SessionId>, StoreError> {

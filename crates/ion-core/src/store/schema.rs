@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 23;
+const SCHEMA_VERSION: i64 = 24;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -363,7 +363,16 @@ CREATE TABLE IF NOT EXISTS tool_progress (
     call_id INTEGER NOT NULL,
     output TEXT NOT NULL,
     updated_at INTEGER NOT NULL
-)
+);
+
+CREATE TABLE IF NOT EXISTS turn_checkpoints (
+    session_id TEXT NOT NULL REFERENCES sessions(id),
+    entry_id TEXT NOT NULL,
+    checkpoint_ref TEXT NOT NULL,
+    recorded_at INTEGER NOT NULL,
+    PRIMARY KEY (session_id, entry_id),
+    FOREIGN KEY (session_id, entry_id) REFERENCES entries(session_id, id)
+);
 ";
 
 #[cfg(test)]

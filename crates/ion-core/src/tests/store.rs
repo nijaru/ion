@@ -475,3 +475,181 @@ async fn clone_session_copies_history_with_lineage_and_a_clean_tip() {
     let source = store.load(source_id).await.expect("load source");
     assert_eq!(source.entries.len(), 2);
 }
+
+#[tokio::test]
+async fn fork_before_copies_the_ancestor_path_and_returns_the_message() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session = runtime.session();
+    let source_id = runtime.session_id();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    let _ = session.submit_if_idle("first").await.expect("submit one");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("finish one");
+    let _ = session.submit_if_idle("second").await.expect("submit two");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("finish two");
+    let _ = session.submit_if_idle("third").await.expect("submit three");
+    collect_until_terminal(&mut events)
+        .await
+        .expect("finish three");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    // Find the second user message's entry id.
+    let loaded = store.load(source_id).await.expect("load source");
+    let second_entry = loaded
+        .entries
+        .iter()
+        .find(|record| {
+            matches!(
+                &record.entry,
+                crate::SessionEntry::UserMessage { text } if text == "second"
+            )
+        })
+        .expect("second user message exists");
+
+    let (target, text) = store
+        .fork_before(source_id, second_entry.id, "Fork of test")
+        .await
+        .expect("fork before");
+
+    // The picked message's text returns for the composer (pi fills the
+    // editor with the forked message).
+    assert_eq!(text.as_deref(), Some("second"));
+
+    let forked = store.load(target).await.expect("load fork");
+    assert_eq!(forked.session.title, "Fork of test");
+    assert_eq!(forked.session.fork_source_session_id, Some(source_id));
+    assert_eq!(
+        forked.session.fork_source_entry_id,
+        Some(second_entry.id),
+        "the fork records the picked entry"
+    );
+    // History: only the first turn's user+assistant pair precedes the
+    // picked message — the fork cuts before "second".
+    let texts: Vec<&str> = forked
+        .entries
+        .iter()
+        .filter_map(|record| match &record.entry {
+            crate::SessionEntry::UserMessage { text } => Some(text.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(texts, vec!["first"], "fork keeps only the prefix");
+    assert_eq!(forked.entries.len(), 2, "user + assistant only: {forked:?}");
+    let main = forked
+        .lanes
+        .iter()
+        .find(|lane| lane.name == crate::session::lane::MAIN)
+        .expect("main lane");
+    assert!(main.state.current_operation.is_none());
+    assert!(main.state.leaf.is_some(), "leaf pinned at the cut");
+
+    // The forked session is usable and continues from the cut.
+    let reopened = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::default(),
+        store.clone(),
+        target,
+    )
+    .await
+    .expect("open fork");
+    let handle = reopened.session();
+    let (snapshot, mut events) = handle.subscribe().await.expect("subscribe fork");
+    assert_eq!(snapshot.entries.len(), 2, "cut history is visible");
+    let _ = handle.submit_if_idle("resumed").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("finish");
+    handle.close().await.expect("close fork");
+    reopened.join().await.expect("join fork");
+
+    // The source is untouched.
+    let source = store.load(source_id).await.expect("reload source");
+    assert_eq!(source.entries.len(), 6, "three turns intact");
+}
+
+#[tokio::test]
+async fn checkpoints_roundtrip_and_key_by_entry() {
+    let store = SessionStore::open_in_memory().expect("store");
+    let session_id = SessionId::generate();
+    let record = crate::store::SessionRecord {
+        id: session_id,
+        cwd: "/tmp".into(),
+        title: "checkpoints".into(),
+        initial_model_ref: "ion_core::provider::ScriptedProvider".into(),
+        control_parent_session_id: None,
+        fork_source_session_id: None,
+        fork_source_entry_id: None,
+    };
+    store.create_session(record).await.expect("create");
+    // Direct entry insert is test-scoped: the store command exists for
+    // fixture assembly (see AppendEntry).
+    let entry = crate::store::EntryRecord::provision(
+        1,
+        crate::SessionEntry::UserMessage { text: "go".into() },
+    );
+    store
+        .append_entry(session_id, "main", entry.clone())
+        .await
+        .expect("append");
+
+    // No checkpoint yet.
+    assert!(
+        store
+            .latest_checkpoint(session_id, entry.id)
+            .await
+            .expect("query empty")
+            .is_none()
+    );
+
+    // Record and read back.
+    store
+        .record_checkpoint(session_id, entry.id, "abc123")
+        .await
+        .expect("record");
+    let found = store
+        .latest_checkpoint(session_id, entry.id)
+        .await
+        .expect("query")
+        .expect("checkpoint found");
+    assert_eq!(found.0, "abc123");
+
+    // A different entry has no checkpoint (exact key, pi's map). The
+    // entry chains after the lane's leaf, as every append does.
+    let other = crate::store::EntryRecord::provision(
+        2,
+        crate::SessionEntry::UserMessage {
+            text: "next".into(),
+        },
+    )
+    .after(Some(entry.id));
+    store
+        .append_entry(session_id, "main", other.clone())
+        .await
+        .expect("append other");
+    assert!(
+        store
+            .latest_checkpoint(session_id, other.id)
+            .await
+            .expect("query other")
+            .is_none()
+    );
+
+    // Re-recording the same entry replaces the ref (one row per key).
+    store
+        .record_checkpoint(session_id, entry.id, "def456")
+        .await
+        .expect("re-record");
+    let replaced = store
+        .latest_checkpoint(session_id, entry.id)
+        .await
+        .expect("query replaced")
+        .expect("still there");
+    assert_eq!(replaced.0, "def456");
+}

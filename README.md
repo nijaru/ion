@@ -37,7 +37,7 @@ For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
 | `ion` | Interactive TUI (new session) |
 | `ion --resume` / `ion -c` | Reopen the most recent persisted session |
 | `ion --session <id>` | Open a session by id (exact or unique prefix) |
-| `ion --fork <id>` | Fork a session into a new one and open the fork |
+| `ion --fork <id>` | Clone a session into a new one and open the fork |
 | `ion --name <name>` | Title a new session (fresh, fork, or ephemeral) |
 | `ion --no-session` | Ephemeral TUI run: nothing persisted |
 | `ion -p "prompt"` | Run one prompt in print mode and exit |
@@ -52,6 +52,17 @@ picker, while `/model <number>` switches a catalog entry directly. Selection
 is durable at the next step boundary and survives restart. `ctrl+j` inserts a
 newline; Tab completes known slash commands and catalog models. `ctrl+l` opens
 the picker, and `ctrl+p`/`shift+ctrl+p` cycle models.
+
+Session switching: `/new` starts fresh, `/resume` reopens a past session,
+`/clone` copies the current one whole. `/fork` picks a past user message and
+opens a new session ending right before it (the message returns to the
+composer for editing); when a git checkpoint was captured before that
+message's turn, ion offers to restore the code to that point — `y` applies
+the captured stash, `n` keeps the current tree.
+
+Each model turn in a git worktree records a checkpoint (`git stash create`,
+no worktree changes) under the session, so the restore offer survives
+restarts.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
