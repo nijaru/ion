@@ -181,6 +181,29 @@ async fn read_write_edit_search_find_roundtrip() {
     assert!(!out.is_error, "find failed: {out:?}");
     assert!(out.output.contains("note.txt"), "got: {out:?}");
 
+    // pi's ls: sorted entries, `/` suffix for directories, dotfiles
+    // included, default limit 500.
+    std::fs::write(tmp.join(".hidden"), "x").expect("dotfile");
+    std::fs::create_dir(tmp.join("adir")).expect("dir");
+    let out = registry.execute("ls", &json!({}), cancel.clone()).await;
+    assert!(!out.is_error, "ls failed: {out:?}");
+    let lines: Vec<&str> = out.output.lines().collect();
+    assert_eq!(
+        lines,
+        vec![".hidden", "adir/", "sub/"],
+        "sorted with dir suffix: {out:?}"
+    );
+    let out = registry
+        .execute("ls", &json!({"path":"sub"}), cancel.clone())
+        .await;
+    assert!(!out.is_error, "ls path failed: {out:?}");
+    assert_eq!(out.output, "note.txt", "got: {out:?}");
+    let out = registry
+        .execute("ls", &json!({"limit": 1}), cancel.clone())
+        .await;
+    assert!(!out.is_error, "ls limit failed: {out:?}");
+    assert_eq!(out.output.lines().count(), 1, "limit respected: {out:?}");
+
     let out = registry
         .execute("read", &json!({"path":"../outside.txt"}), cancel.clone())
         .await;

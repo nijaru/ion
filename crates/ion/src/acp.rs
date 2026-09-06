@@ -801,7 +801,7 @@ fn prompt_text(params: &Value) -> Option<String> {
 fn tool_kind(tool: &str) -> &'static str {
     match tool {
         "bash" => "execute",
-        "read" | "search" | "find" => "read",
+        "read" | "search" | "find" | "ls" => "read",
         "write" | "edit" => "edit",
         _ => "other",
     }

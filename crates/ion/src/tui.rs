@@ -3071,7 +3071,7 @@ fn relative_age(updated_at: u64) -> String {
     }
 }
 
-fn fuzzy_contains(candidate: &str, query: &str) -> bool {
+pub fn fuzzy_contains(candidate: &str, query: &str) -> bool {
     let mut candidate_chars = candidate.chars();
     query
         .chars()

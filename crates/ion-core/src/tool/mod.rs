@@ -872,7 +872,7 @@ impl ToolRegistry {
             SandboxMode::Auto.resolve(),
             WorkspacePolicy::Unrestricted,
         );
-        all.retain(|name, _| matches!(name.as_str(), "read" | "search" | "find"));
+        all.retain(|name, _| matches!(name.as_str(), "read" | "search" | "find" | "ls"));
         Self {
             cwd,
             paths: WorkspacePolicy::Unrestricted,
@@ -1221,6 +1221,14 @@ fn core_tools(
         ),
         (
             Arc::new(FindTool {
+                cwd: cwd_path.clone(),
+                paths,
+            }),
+            RecoveryClass::ReplaySafe,
+            ToolSemantics::OptionalPath,
+        ),
+        (
+            Arc::new(LsTool {
                 cwd: cwd_path.clone(),
                 paths,
             }),
@@ -2720,6 +2728,14 @@ pub struct FindTool {
     paths: WorkspacePolicy,
 }
 
+/// List directory contents (pi's `ls` tool): entries sorted
+/// alphabetically with a `/` suffix for directories, dotfiles
+/// included, truncated to 500 entries.
+pub struct LsTool {
+    cwd: Arc<Path>,
+    paths: WorkspacePolicy,
+}
+
 impl FindTool {
     fn input_schema() -> Value {
         json!({
@@ -2820,6 +2836,87 @@ fn collect_matches_under(original_root: &Path, dir: &Path, set: &GlobSet, out: &
                 out.push(rel);
             }
         }
+    }
+}
+
+impl LsTool {
+    fn input_schema() -> Value {
+        json!({
+            "type": "object",
+            "properties": {
+                "path": { "type": "string", "description": "Directory to list (defaults to the current directory)" },
+                "limit": { "type": "number", "description": "Maximum number of entries to return (default 500)" }
+            },
+            "required": []
+        })
+    }
+}
+
+impl Tool for LsTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "ls".to_owned(),
+            description: "List directory contents. Returns entries sorted alphabetically, with a / suffix for directories. Includes dotfiles. Output is truncated to 500 entries.".to_owned(),
+            input_schema: Self::input_schema(),
+        }
+    }
+
+    fn call<'a>(
+        &'a self,
+        arguments: Value,
+        cancel: CancellationToken,
+    ) -> Pin<Box<dyn Future<Output = ToolOutcome> + Send + 'a>> {
+        Box::pin(async move {
+            let _ = cancel;
+            let limit = arguments
+                .get("limit")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(500)
+                .clamp(1, 500) as usize;
+            let secure_root = match arguments.get("path").and_then(|v| v.as_str()) {
+                Some(p) => match secure_path(&self.cwd, Path::new(p), false, self.paths) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
+                },
+                None => match secure_path(&self.cwd, Path::new("."), false, self.paths) {
+                    Ok(path) => path,
+                    Err(message) => return ToolOutcome::error(message),
+                },
+            };
+            let mut names: Vec<String> = match std::fs::read_dir(&secure_root.display) {
+                Ok(entries) => {
+                    let mut raw: Vec<(String, bool)> = entries
+                        .flatten()
+                        .map(|entry| {
+                            let is_dir = entry.file_type().is_ok_and(|t| t.is_dir());
+                            let name = entry.file_name().to_string_lossy().into_owned();
+                            (name, is_dir)
+                        })
+                        .collect();
+                    raw.sort_by(|a, b| a.0.cmp(&b.0));
+                    raw
+                }
+                Err(err) => {
+                    return ToolOutcome::error(format!(
+                        "cannot read {}: {err}",
+                        secure_root.display.display()
+                    ));
+                }
+            }
+            .into_iter()
+            .map(
+                |(name, is_dir)| {
+                    if is_dir { format!("{name}/") } else { name }
+                },
+            )
+            .collect();
+            names.truncate(limit);
+            if names.is_empty() {
+                ToolOutcome::text("(empty directory)")
+            } else {
+                ToolOutcome::text(names.join("\n"))
+            }
+        })
     }
 }
 

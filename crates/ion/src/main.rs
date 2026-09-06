@@ -74,12 +74,33 @@ struct Cli {
     /// `fullscreen` (alt-screen transcript with search; pi parity).
     #[arg(long = "tui-mode", value_enum)]
     tui_mode: Option<TuiModeArg>,
+    /// Thinking level for this run (pi parity: off/minimal/low/medium/
+    /// high/xhigh/max), overriding defaultThinkingLevel.
+    #[arg(long = "thinking", value_enum)]
+    thinking: Option<ThinkingLevelArg>,
+    /// Print the model catalog (optionally filtered by a fuzzy search
+    /// pattern) and exit, instead of starting a session.
+    #[arg(long = "list-models", value_name = "PATTERN")]
+    list_models: Option<Option<String>>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
 enum TuiModeArg {
     Regular,
     Fullscreen,
+}
+
+/// CLI thinking levels (pi parity). Maps onto `ThinkingLevel`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+#[value(rename_all = "lowercase")]
+enum ThinkingLevelArg {
+    Off,
+    Minimal,
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
 }
 
 #[tokio::main]
@@ -99,6 +120,11 @@ async fn main() -> ExitCode {
     };
     if cli.acp {
         return run_acp(&cli, &settings).await;
+    }
+    // `--list-models` prints the catalog table and exits before any
+    // session state exists (pi parity).
+    if let Some(pattern) = cli.list_models {
+        return list_models(&settings, pattern.as_deref());
     }
     if cli.print.is_none() {
         return run_tui(&cli, &settings).await;
@@ -392,7 +418,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     };
     match resolve_model(cli.model.clone(), settings) {
         Ok(Some(selection)) => {
-            let material = match provider_material(&selection, settings) {
+            let material = match provider_material(&selection, settings, cli_thinking(cli)) {
                 Ok(material) => material,
                 Err(err) => {
                     let _ = writeln!(io::stderr(), "{err}");
@@ -737,6 +763,21 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let session = attached.handle();
+    // A launch-time --thinking selection seeds the durable lane config
+    // before the first turn, exactly like /thinking (pi's flag wins
+    // over defaultThinkingLevel; the provider material fallback keeps
+    // adapters that never saw a selection).
+    if let Some(level) = cli_thinking(cli) {
+        let level = level
+            .reasoning_effort()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "off".to_owned());
+        if let Err(err) = session.switch_thinking(Some(level)).await {
+            restore_tui_startup_terminal(guard);
+            let _ = writeln!(io::stderr(), "thinking: {err}");
+            return run_tui_cleanup_failure(tools, store).await;
+        }
+    }
     let result = tui::run(
         session.clone(),
         resume_session,
@@ -848,6 +889,82 @@ fn resolve_model(
     parse_model_reference(&cli_model, default_provider).map(Some)
 }
 
+/// The `--thinking` flag as a settings-level override (pi precedence:
+/// the flag wins over defaultThinkingLevel).
+fn cli_thinking(cli: &Cli) -> Option<ion::settings::ThinkingLevel> {
+    cli.thinking.map(|level| match level {
+        ThinkingLevelArg::Off => ion::settings::ThinkingLevel::Off,
+        ThinkingLevelArg::Minimal => ion::settings::ThinkingLevel::Minimal,
+        ThinkingLevelArg::Low => ion::settings::ThinkingLevel::Low,
+        ThinkingLevelArg::Medium => ion::settings::ThinkingLevel::Medium,
+        ThinkingLevelArg::High => ion::settings::ThinkingLevel::High,
+        ThinkingLevelArg::Xhigh => ion::settings::ThinkingLevel::Xhigh,
+        ThinkingLevelArg::Max => ion::settings::ThinkingLevel::Max,
+    })
+}
+
+/// Print the model catalog (pi `--list-models`): provider/model rows,
+/// optionally filtered by a fuzzy pattern, sorted by provider then
+/// model. Ion's catalog is provider-qualified refs; context/thinking
+/// columns come from the provider adapters when published, so the
+/// table shows provider, model, and a live-auth marker.
+fn list_models(settings: &Settings, pattern: Option<&str>) -> ExitCode {
+    let catalog = match settings.model_catalog() {
+        Ok(catalog) => catalog,
+        Err(err) => {
+            let _ = writeln!(io::stderr(), "settings: {err}");
+            return ExitCode::from(2);
+        }
+    };
+    let mut rows: Vec<&String> = catalog
+        .iter()
+        .filter(|model| {
+            pattern
+                .map(|p| ion::tui::fuzzy_contains(&model.to_lowercase(), &p.to_lowercase()))
+                .unwrap_or(true)
+        })
+        .collect();
+    rows.sort();
+    if rows.is_empty() {
+        if let Some(pattern) = pattern {
+            println!("No models matching \"{pattern}\"");
+        } else {
+            println!("No models configured");
+        }
+        return ExitCode::SUCCESS;
+    }
+    let provider_width = rows
+        .iter()
+        .map(|m| m.split('/').next().map_or(0, str::len))
+        .max()
+        .unwrap_or(8)
+        .max("provider".len());
+    let model_width = rows
+        .iter()
+        .map(|m| m.split('/').nth(1).map_or(0, str::len))
+        .max()
+        .unwrap_or(5)
+        .max("model".len());
+    println!(
+        "{:<pw$}  {:<mw$}",
+        "provider",
+        "model",
+        pw = provider_width,
+        mw = model_width
+    );
+    for model in rows {
+        let (provider, id) = model.split_once('/').unwrap_or(("?", model.as_str()));
+        println!(
+            "{:<pw$}  {:<mw$}",
+            provider,
+            id,
+            pw = provider_width,
+            mw = model_width
+        );
+    }
+    ExitCode::SUCCESS
+}
+
 /// The provider factory shared by the root session and any children it
 /// delegates to (§20): every child gets a fresh adapter instance.
 fn provider_factory(
@@ -857,7 +974,7 @@ fn provider_factory(
     let selection = resolve_model(cli.model.clone(), settings)?;
     Ok(match selection {
         Some(selection) => {
-            let material = provider_material(&selection, settings)?;
+            let material = provider_material(&selection, settings, cli_thinking(cli))?;
             let default_provider = selection.provider.clone();
             let model_ref = selection.model.clone();
             Arc::new(move || make_cli_provider_for_model(&model_ref, &default_provider, &material))
@@ -882,17 +999,17 @@ struct ProviderMaterial {
 fn provider_material(
     selection: &ModelSelection,
     settings: &Settings,
+    cli_thinking: Option<ion::settings::ThinkingLevel>,
 ) -> Result<ProviderMaterial, String> {
     // Keep provider-independent settings in the base material so a qualified
     // catalog entry can switch providers without silently losing the local
-    // endpoint or reasoning configuration.
+    // endpoint or reasoning configuration. An explicit --thinking flag wins
+    // over defaultThinkingLevel (pi's flag precedence).
+    let thinking = cli_thinking.unwrap_or_else(|| settings.thinking_level());
     let base = ProviderMaterial {
         desktop_api_key: settings.desktop_api_key(),
         desktop_base_url: settings.desktop_base_url(),
-        reasoning_effort: settings
-            .thinking_level()
-            .reasoning_effort()
-            .map(str::to_owned),
+        reasoning_effort: thinking.reasoning_effort().map(str::to_owned),
         ..ProviderMaterial::default()
     };
     match selection.provider.as_str() {
@@ -1088,6 +1205,18 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         }
     };
     let session = runtime.session();
+    // Same launch-time --thinking seed as the TUI: the durable lane
+    // selection must be in place before the one-shot run starts.
+    if let Some(level) = cli_thinking(cli) {
+        let level = level
+            .reasoning_effort()
+            .map(str::to_owned)
+            .unwrap_or_else(|| "off".to_owned());
+        session
+            .switch_thinking(Some(level))
+            .await
+            .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    }
     let result = PrintFrontend::new(io::stdout()).run(&session, prompt).await;
     let shutdown = session.close().await;
     let join = runtime.join().await;
@@ -1119,6 +1248,34 @@ mod tests {
         );
     }
 
+    #[test]
+    fn thinking_flag_overrides_the_settings_default() {
+        // --thinking high wins over defaultThinkingLevel = xhigh (pi's
+        // flag precedence); the flag maps onto the settings levels.
+        let settings: Settings = toml::from_str("defaultThinkingLevel = \"xhigh\"").unwrap();
+        assert_eq!(
+            settings.thinking_level(),
+            ion::settings::ThinkingLevel::Xhigh
+        );
+        let override_level = ion::settings::ThinkingLevel::High
+            .reasoning_effort()
+            .map(str::to_owned);
+        assert_eq!(override_level.as_deref(), Some("high"));
+        // provider_material composes the same way (exercised in the
+        // desktop material tests below).
+        let _ = provider_material(
+            &ModelSelection {
+                provider: "desktop".to_owned(),
+                model: "m".to_owned(),
+            },
+            &settings,
+            Some(ion::settings::ThinkingLevel::High),
+        )
+        .map(|material| {
+            assert_eq!(material.reasoning_effort.as_deref(), Some("high"));
+        });
+    }
+
     #[tokio::test]
     async fn qualified_switch_keeps_desktop_material_when_crossing_providers() {
         let settings: Settings = toml::from_str(
@@ -1130,7 +1287,7 @@ mod tests {
         )
         .unwrap();
         let selection = settings.model_selection().unwrap().unwrap();
-        let material = provider_material(&selection, &settings).unwrap();
+        let material = provider_material(&selection, &settings, None).unwrap();
         match make_cli_provider_for_model("desktop/next", "openrouter", &material) {
             CliProvider::Desktop(provider) => {
                 assert_eq!(provider.context_window().await, Some(262_144));
@@ -1153,7 +1310,7 @@ mod tests {
         )
         .unwrap();
         let selection = settings.model_selection().unwrap().unwrap();
-        let material = provider_material(&selection, &settings).unwrap();
+        let material = provider_material(&selection, &settings, None).unwrap();
         match make_cli_provider(&selection.model, &selection.provider, &material) {
             CliProvider::Desktop(provider) => {
                 assert_eq!(provider.context_window().await, Some(262_144));
@@ -1201,6 +1358,8 @@ mod session_flag_tests {
             trust_project: false,
             allow: Vec::new(),
             tui_mode: None,
+            thinking: None,
+            list_models: None,
         }
     }
 
