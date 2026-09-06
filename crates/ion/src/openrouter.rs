@@ -222,6 +222,9 @@ impl Provider for OpenRouterProvider {
                 "messages": message_payloads(&request.plan),
                 "stream": true,
                 "stream_options": { "include_usage": true },
+                // Session attribution (pi-openrouter-session parity):
+                // OpenRouter groups this session's requests together.
+                "session_id": request.session_id.as_uuid().to_string(),
             });
             // Pi-parity thinking level, frozen per step by the runtime
             // (chat-completions `reasoning.effort`).
@@ -721,6 +724,7 @@ mod tests {
         let request = ProviderRequest {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
+            session_id: ion_core::SessionId::generate(),
             model: ion_core::ModelConfig {
                 thinking: None,
                 model_ref: "test/model".to_owned(),
@@ -748,6 +752,38 @@ mod tests {
         }
         let _ = handle.await;
         signals
+    }
+
+    #[tokio::test]
+    async fn request_body_carries_session_id_for_attribution() {
+        // pi-openrouter-session parity: the session id rides every
+        // chat-completions body so OpenRouter groups this session's
+        // requests together.
+        let (captured_tx, captured_rx) = std::sync::mpsc::channel::<String>();
+        let base_url = spawn_sse_server(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+             data: [DONE]\n\n",
+            Some(captured_tx),
+        );
+        let provider = OpenRouterProvider::new("test/model", "key").with_base_url(base_url);
+        let signals = collect(provider).await;
+        assert!(matches!(
+            signals.last(),
+            Some(EngineSignal::Completed { .. })
+        ));
+        let payload = captured_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("request body captured");
+        let body: serde_json::Value =
+            serde_json::from_str(&payload).expect("captured body is JSON");
+        let session_id = body
+            .get("session_id")
+            .and_then(serde_json::Value::as_str)
+            .expect("session_id present in body");
+        assert!(
+            ion_core::SessionId::parse(session_id).is_some(),
+            "session_id is the durable session uuid: {session_id}"
+        );
     }
 
     #[tokio::test]
@@ -844,6 +880,7 @@ mod tests {
         let request = ProviderRequest {
             operation_id: ion_core::OperationId::generate(),
             step: 1,
+            session_id: ion_core::SessionId::generate(),
             model: ion_core::ModelConfig {
                 thinking: None,
                 model_ref: "test/model".to_owned(),

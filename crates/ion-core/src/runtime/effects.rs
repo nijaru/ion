@@ -22,6 +22,7 @@ impl<P: Provider> SessionRuntime<P> {
         let request = ProviderRequest {
             operation_id,
             step,
+            session_id: self.session_id,
             model: model.clone(),
             plan,
             tools,

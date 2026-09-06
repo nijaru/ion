@@ -16,7 +16,7 @@ use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
 use crate::context::ContextPlan;
-use crate::ids::OperationId;
+use crate::ids::{OperationId, SessionId};
 use crate::tool::{ToolCall, ToolSpec};
 
 /// Token accounting for one model step (DESIGN.md §27.2).
@@ -322,6 +322,10 @@ pub struct ProviderRequest {
     /// Monotonic model-step counter within the operation. Providers echo
     /// it in every signal so the runtime can drop stale generations.
     pub step: u64,
+    /// Owning session, for provider-side session attribution (pi's
+    /// pi-openrouter-session extension: OpenRouter groups request
+    /// activity by `session_id` in the request body).
+    pub session_id: SessionId,
     /// Exact provider identity and metadata persisted with the effect.
     pub model: ModelConfig,
     /// The deterministic projection of session state for this step

@@ -752,6 +752,7 @@ mod tests {
         ProviderRequest {
             operation_id: OperationId::generate(),
             step: 4,
+            session_id: ion_core::SessionId::generate(),
             model: ModelConfig {
                 thinking: None,
                 model_ref: "gpt-5.6-luna".to_owned(),
