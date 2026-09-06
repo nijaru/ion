@@ -500,6 +500,7 @@ async fn unified_agent_host_tools_route_lane_fresh_and_fork_without_child_namesp
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![ScriptedMessage::text("session agent answer")])
@@ -715,6 +716,7 @@ async fn family_wait_routes_to_live_separate_session_by_agent_address() {
     let child_provider_factory = child_provider.clone();
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(move || child_provider_factory.clone()),
             make_provider_for_model: None,

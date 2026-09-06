@@ -121,6 +121,11 @@ pub struct Settings {
     /// policy and protected-path rules; `workspace` confines
     /// mutations to the project root.
     workspace_sandbox: Option<WorkspaceSandboxMode>,
+    /// File mutations (write/edit) deny on these path entries wherever
+    /// they appear, exactly pi's protected-paths extension. The default
+    /// is pi's list: .env files, .git, node_modules, chezmoi data,
+    /// age keys. Reads never deny.
+    protected_paths: Option<Vec<String>>,
     theme: Option<Theme>,
     /// Interactive TUI mode: `"regular"` (default) or `"fullscreen"`
     /// (pi parity: alt-screen transcript with search). The `--tui-mode`
@@ -263,6 +268,7 @@ impl Settings {
             default_thinking_level: Some(ThinkingLevel::Xhigh),
             sandbox: None,
             workspace_sandbox: None,
+            protected_paths: None,
             theme: None,
             tui_mode: None,
             keybindings: Keybindings::default(),
@@ -298,6 +304,7 @@ impl Settings {
             default_thinking_level: None,
             sandbox: None,
             workspace_sandbox: None,
+            protected_paths: None,
             theme: None,
             tui_mode: None,
             keybindings: crate::settings::Keybindings::default(),
@@ -451,6 +458,19 @@ impl Settings {
     #[must_use]
     pub fn workspace_policy(&self) -> ion_core::WorkspacePolicy {
         self.workspace_sandbox.unwrap_or_default().into()
+    }
+
+    /// The protected-path deny list for write/edit. The default is
+    /// pi's protected-paths list; `protectedPaths = []` disables
+    /// protection.
+    #[must_use]
+    pub fn protected_paths(&self) -> Vec<String> {
+        self.protected_paths.clone().unwrap_or_else(|| {
+            ion_core::PI_PROTECTED_PATHS
+                .iter()
+                .map(|s| (*s).to_string())
+                .collect()
+        })
     }
 }
 
@@ -721,5 +741,36 @@ mod workspace_sandbox_tests {
             settings.workspace_policy(),
             ion_core::WorkspacePolicy::Confined
         );
+    }
+}
+
+#[cfg(test)]
+mod protected_paths_settings_tests {
+    use super::*;
+
+    #[test]
+    fn protected_paths_default_to_pi_extension_list() {
+        let paths = Settings::empty().protected_paths();
+        assert_eq!(
+            paths,
+            vec![
+                ".env".to_string(),
+                ".env.".to_string(),
+                ".git/".to_string(),
+                "node_modules/".to_string(),
+                ".chezmoidata.yaml".to_string(),
+                ".chezmoidata.yaml.age".to_string(),
+                ".config/age/keys.txt".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn protected_paths_setting_overrides_and_empty_disables() {
+        let custom: Settings =
+            toml::from_str(r#"protectedPaths = [".env", "secrets/"]"#).expect("parse custom");
+        assert_eq!(custom.protected_paths(), vec![".env", "secrets/"]);
+        let disabled: Settings = toml::from_str(r#"protectedPaths = []"#).expect("parse empty");
+        assert!(disabled.protected_paths().is_empty());
     }
 }

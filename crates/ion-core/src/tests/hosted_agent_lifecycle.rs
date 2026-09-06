@@ -21,6 +21,7 @@ async fn completed_hosted_agents_release_live_runtime_slots() {
     let family = Arc::new(parent_runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![ScriptedMessage::text("agent answer")])

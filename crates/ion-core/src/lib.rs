@@ -45,7 +45,10 @@ pub use extensions::{
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
-pub use policy::{AllowlistPolicy, DefaultPolicy, PolicyDecision, PolicyEngine};
+pub use policy::{
+    AllowlistPolicy, DefaultPolicy, PI_PROTECTED_PATHS, PolicyDecision, PolicyEngine,
+    ProtectedPathsPolicy,
+};
 pub use process::SandboxMode;
 pub use provider::{
     EngineSignal, ModelCapabilities, ModelConfig, ModelPricing, Provider, ProviderRequest,

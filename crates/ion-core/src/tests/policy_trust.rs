@@ -684,3 +684,56 @@ async fn parked_edit_carries_a_diff_preview_for_the_approval_prompt() {
     let content = std::fs::read_to_string(root.path().join("target.txt")).expect("read back");
     assert_eq!(content, "alpha\nbeta\ngamma\n");
 }
+
+#[tokio::test]
+async fn protected_paths_deny_write_end_to_end_and_stay_model_visible() {
+    // Pi's protected-paths extension, ported to the policy layer:
+    // a write to .env denies at admission wherever the entry appears,
+    // the denial settles as a model-visible tool error, and the model
+    // proceeds (it answers after the denial). Reads of the same path
+    // stay allowed.
+    let root = tempfile::tempdir().expect("root tempdir");
+    std::fs::write(root.path().join(".env"), "SECRET=1").expect("seed .env");
+    let store = SessionStore::open_in_memory().expect("store");
+    let policy: Arc<dyn PolicyEngine> = Arc::new(ProtectedPathsPolicy::new(
+        Arc::new(DefaultPolicy),
+        crate::policy::PI_PROTECTED_PATHS
+            .iter()
+            .map(|s| (*s).to_string()),
+    ));
+    let runtime = Runtime::start_with_policy(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::tool("write", json!({ "path": ".env", "contents": "leaked" })),
+            ScriptedMessage::text("after denial"),
+        ]),
+        ToolRegistry::with_cwd(root.path()),
+        store.clone(),
+        policy,
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+    let loaded = store.load(session_id).await.expect("load");
+    let denied = loaded.entries.iter().any(|record| {
+        matches!(
+            &record.entry,
+            SessionEntry::ToolResult {
+                result: ToolResult::Err { error, .. },
+            } if error.contains(".env\" is protected")
+        )
+    });
+    assert!(
+        denied,
+        "protected-path denial must be model-visible: {loaded:?}"
+    );
+    // The file is untouched: denial happens at admission, before any
+    // effect intent exists.
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".env")).expect(".env"),
+        "SECRET=1"
+    );
+}

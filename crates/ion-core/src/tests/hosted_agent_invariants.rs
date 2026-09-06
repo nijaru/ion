@@ -62,6 +62,7 @@ async fn hosted_agent_uses_parent_workspace_for_relative_tools() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![
@@ -126,6 +127,7 @@ async fn unified_host_reports_hosted_agent_lifecycle_progress() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![ScriptedMessage::text("agent answer")])
@@ -188,6 +190,7 @@ async fn multiple_fresh_agents_are_durable_family_descendants() {
     let family = Arc::new(runtime.agent_family(4).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![ScriptedMessage::text("agent answer")])
@@ -281,6 +284,7 @@ async fn fork_history_and_model_override_are_explicit() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 crate::SwitchingProvider::new(
@@ -362,6 +366,7 @@ async fn unsupported_hosted_model_override_fails_before_durable_admission() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 crate::SwitchingProvider::new(
@@ -426,6 +431,7 @@ async fn hosted_agent_cannot_widen_read_only_capabilities() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![
@@ -491,6 +497,7 @@ async fn hosted_agent_budget_stops_runaway_execution() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(|| {
                 ScriptedProvider::new(vec![
@@ -584,6 +591,7 @@ async fn spawn_cancellation_propagates_to_running_hosted_agent() {
     let family = Arc::new(runtime.agent_family(2).await.expect("family"));
     let hosted = crate::hosted_agent_runtimes(
         crate::HostedAgentConfig {
+            policy: std::sync::Arc::new(crate::policy::DefaultPolicy),
             store: store.clone(),
             make_provider: Arc::new(move || HangingProvider {
                 tokens: Arc::clone(&provider_tokens),

@@ -592,6 +592,7 @@ where
         crate::AgentHostOptions {
             max_active_agents: 4,
             agents_enabled: config.agents_enabled,
+            policy: Arc::clone(&config.policy),
         },
     )
     .await

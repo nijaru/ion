@@ -115,13 +115,20 @@ async fn main() -> ExitCode {
 }
 
 /// The host's approval policy: default (approval-gated) unless the
-/// caller grants explicit actions (DESIGN.md §17).
-fn policy_for(allow: &[String]) -> Arc<dyn ion_core::PolicyEngine> {
-    if allow.is_empty() {
-        Arc::new(ion_core::DefaultPolicy)
+/// caller grants explicit actions (DESIGN.md §17). Protected-path
+/// denials layer over any grant, exactly pi's protected-paths
+/// extension: writes and edits to `.env` and friends deny wherever
+/// they appear.
+fn policy_for(allow: &[String], settings: &Settings) -> Arc<dyn ion_core::PolicyEngine> {
+    let base = if allow.is_empty() {
+        Arc::new(ion_core::DefaultPolicy) as Arc<dyn ion_core::PolicyEngine>
     } else {
-        Arc::new(ion_core::AllowlistPolicy::new(allow.to_vec()))
-    }
+        Arc::new(ion_core::AllowlistPolicy::new(allow.to_vec())) as Arc<dyn ion_core::PolicyEngine>
+    };
+    Arc::new(ion_core::ProtectedPathsPolicy::new(
+        base,
+        settings.protected_paths(),
+    ))
 }
 
 /// How the interactive TUI opens its first session (CLI flags
@@ -257,7 +264,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
     if let Some(notice) = store.startup_notice() {
         let _ = writeln!(io::stderr(), "store: {notice}");
     }
-    let policy = policy_for(&cli.allow);
+    let policy = policy_for(&cli.allow, settings);
     let store_for_shutdown = Arc::clone(&store);
     let config = acp::AcpConfig {
         make_provider,
@@ -573,7 +580,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let policy = policy_for(&cli.allow);
+    let policy = policy_for(&cli.allow, settings);
     // The TUI can grant approvals interactively (DESIGN.md §17.4);
     // print/ACP hosts stay fail-closed. The session manager owns the
     // runtime stack for the attached session; the factory below is the
@@ -662,6 +669,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                         ion::AgentHostOptions {
                             max_active_agents: 4,
                             agents_enabled,
+                            policy: Arc::clone(&policy),
                         },
                     )
                     .await;
@@ -1044,7 +1052,8 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     if let Some(notice) = store.startup_notice() {
         eprintln!("store: {notice}");
     };
-    let policy = policy_for(&cli.allow);
+    let policy = policy_for(&cli.allow, settings);
+    let agent_policy = Arc::clone(&policy);
     let runtime = Runtime::start_with_policy_and_resources(
         (make_provider)(),
         tools.clone(),
@@ -1061,6 +1070,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
         ion::AgentHostOptions {
             max_active_agents: 4,
             agents_enabled: settings.agents_enabled(),
+            policy: agent_policy,
         },
     )
     .await

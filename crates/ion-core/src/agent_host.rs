@@ -73,6 +73,10 @@ pub struct HostedAgentConfig<P> {
     /// Explicitly inherited project resources; empty when the host did not
     /// grant project trust.
     pub trusted_resources: Vec<TrustedResource>,
+    /// Approval policy every hosted agent runtime runs under. The host
+    /// passes its own engine (including protected-path denials) so
+    /// children never widen what the parent denied.
+    pub policy: Arc<dyn crate::policy::PolicyEngine>,
     /// Host-owned workspace root used for the hosted catalog and durable
     /// session identity.
     pub cwd: PathBuf,
@@ -326,7 +330,7 @@ impl<P> HostedAgentRuntimes<P> {
             self.config.store.clone(),
             session_id,
             crate::runtime::HostedRuntimeConfig {
-                policy: Arc::new(crate::policy::DefaultPolicy),
+                policy: Arc::clone(&self.config.policy),
                 budget: self.config.budget,
                 control_parent: self.parent_id,
                 trusted_resources: self.config.trusted_resources.clone(),
@@ -435,7 +439,7 @@ impl<P> HostedAgentRuntimes<P> {
             self.config.store.clone(),
             session_id,
             crate::runtime::HostedRuntimeConfig {
-                policy: Arc::new(crate::policy::DefaultPolicy),
+                policy: Arc::clone(&self.config.policy),
                 budget: self.config.budget,
                 control_parent: self.parent_id,
                 trusted_resources: self.config.trusted_resources.clone(),

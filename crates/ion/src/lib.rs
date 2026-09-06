@@ -28,12 +28,16 @@ pub struct AgentHost<P> {
 }
 
 /// Launch-time model-facing agent-control policy and family capacity.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 pub struct AgentHostOptions {
     /// Maximum number of active family agents.
     pub max_active_agents: usize,
     /// Publish and durably admit the model-facing `agents` scope.
     pub agents_enabled: bool,
+    /// The approval policy every hosted agent runtime runs under.
+    /// Children never widen what the host denied (e.g. protected-path
+    /// write denials deny in subagents too).
+    pub policy: Arc<dyn ion_core::PolicyEngine>,
 }
 
 impl<P> AgentHost<P> {
@@ -92,6 +96,7 @@ where
             store: store.clone(),
             make_provider,
             make_provider_for_model,
+            policy: options.policy.clone(),
             max_active: 4,
             budget: ion_core::hosted_agent_budget_default(),
             trusted_resources,
@@ -240,6 +245,7 @@ mod provider_identity_tests {
             provider,
             Vec::new(),
             AgentHostOptions {
+                policy: Arc::new(ion_core::DefaultPolicy),
                 max_active_agents: 1,
                 agents_enabled: false,
             },

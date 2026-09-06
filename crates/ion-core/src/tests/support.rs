@@ -14,7 +14,9 @@ pub(super) use crate::operation::{
     Applied, EffectIntent, InboxItem, InboxKind, OperationMachine, OperationOutcome,
     OperationState, SessionEntry, Transition,
 };
-pub(super) use crate::policy::{AllowlistPolicy, PolicyEngine};
+pub(super) use crate::policy::{
+    AllowlistPolicy, DefaultPolicy, PolicyEngine, ProtectedPathsPolicy,
+};
 pub(super) use crate::provider::{
     EngineSignal, Provider, ProviderRequest, RetryPolicy, ScriptedMessage, ScriptedProvider,
 };
