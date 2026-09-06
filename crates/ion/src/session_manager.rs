@@ -194,6 +194,15 @@ impl SessionManager {
         Ok(rows)
     }
 
+    /// Aggregate stats for `/session` (pi-parity stats card): durable
+    /// message/tool counts plus per-model token attribution.
+    pub async fn stats(
+        &self,
+        session_id: SessionId,
+    ) -> Result<ion_core::SessionStats, SessionManagerError> {
+        Ok(self.store.session_stats(session_id).await?)
+    }
+
     /// Fork from before one user message (pi's /fork): the new
     /// session's history ends at the picked message's parent; the
     /// picked message's text returns for the composer.

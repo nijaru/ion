@@ -221,6 +221,31 @@ pub(crate) struct UsageRow {
     pub cache_write_tokens: u64,
 }
 
+/// Aggregate session report for `/session` (pi-parity stats card):
+/// durable entry counts plus per-model token/cost attribution from
+/// the usage ledger joined with the model-step's resolved model.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SessionStats {
+    pub total_messages: u64,
+    pub user_messages: u64,
+    pub assistant_messages: u64,
+    pub tool_calls: u64,
+    pub tool_results: u64,
+    pub usage: TokenUsage,
+    /// Per-model usage attribution, sorted by cost (descending).
+    /// The step's model comes from the durable model_steps row; steps
+    /// without one (e.g. scripted harness runs) group under `other`.
+    pub by_model: Vec<ModelUsage>,
+}
+
+/// One model's share of the session usage ledger.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelUsage {
+    /// Durable model reference (`provider/model`).
+    pub model_ref: String,
+    pub usage: TokenUsage,
+}
+
 /// Immutable durable history topology captured when an agent identity is
 /// published. Execution state remains on the addressed lane/operation.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -458,6 +483,11 @@ enum StoreCommand {
     UsageTotals {
         session_id: SessionId,
         reply: oneshot::Sender<Result<TokenUsage, StoreError>>,
+    },
+    /// Aggregate session report for `/session` (pi-parity stats card).
+    SessionStats {
+        session_id: SessionId,
+        reply: oneshot::Sender<Result<SessionStats, StoreError>>,
     },
     UpsertAssistantFrame {
         frame: AssistantFrame,
@@ -829,6 +859,13 @@ impl SessionStore {
     /// (pi-parity footer stats). Saturating sum over all settled rows.
     pub async fn usage_totals(&self, session_id: SessionId) -> Result<TokenUsage, StoreError> {
         self.request(|reply| StoreCommand::UsageTotals { session_id, reply })
+            .await
+    }
+
+    /// Aggregate session report for `/session` (pi-parity stats card):
+    /// durable entry counts plus per-model token attribution.
+    pub async fn session_stats(&self, session_id: SessionId) -> Result<SessionStats, StoreError> {
+        self.request(|reply| StoreCommand::SessionStats { session_id, reply })
             .await
     }
 

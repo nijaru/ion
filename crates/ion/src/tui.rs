@@ -218,6 +218,10 @@ pub enum UiEffect {
     /// (pi parity: fork from a past message). The host resolves this
     /// into `ForkMessagesListed`.
     RequestForkMessages,
+    /// Load the attached session's aggregate stats for the /session
+    /// card (pi parity: usage/token breakdown by model). The host
+    /// resolves this into `SessionStatsListed`.
+    RequestSessionStats,
     /// Fork from before one user message: the host clones the ancestor
     /// path into a new durable session (the picked message's text
     /// returns for the composer), offers the git-checkpoint restore
@@ -464,6 +468,9 @@ pub enum UiMessage {
     SteerRejected(String),
     /// The host delivered picker rows.
     SessionListed(Vec<ion_core::SessionSummary>),
+    /// The host delivered the attached session's aggregate stats for
+    /// the /session card (pi parity).
+    SessionStatsListed(Box<ion_core::SessionStats>),
     /// The host delivered the attached session's user messages for the
     /// /fork picker (pi parity).
     ForkMessagesListed(Vec<ForkMessageRow>),
@@ -1874,6 +1881,39 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.open_session_selector(rows, &query);
             (state, None)
         }
+        UiMessage::SessionStatsListed(stats) => {
+            // pi parity: the /session stats card. Line-by-line like
+            // pi's themed block; cost attribution is not shown because
+            // ion's providers publish prices per model only for the
+            // current step, not the whole ledger (no invented costs).
+            let u = &stats.usage;
+            let prompt = u.input + u.cache_read + u.cache_write;
+            let lines = vec![
+                Line::from(format!(
+                    "messages: {} total · {} user · {} assistant",
+                    stats.total_messages, stats.user_messages, stats.assistant_messages
+                )),
+                Line::from(format!(
+                    "tools: {} calls · {} results",
+                    stats.tool_calls, stats.tool_results
+                )),
+                Line::from(format!(
+                    "tokens ↑{} ↓{} · cached R{} (W{})",
+                    u.input, u.output, u.cache_read, u.cache_write
+                )),
+                Line::from(format!("prompt volume: {prompt}")),
+            ];
+            state.pending_scrollback.extend(lines);
+            for model in &stats.by_model {
+                let mu = &model.usage;
+                let total = mu.input + mu.output + mu.cache_read + mu.cache_write;
+                state.pending_scrollback.push(Line::from(format!(
+                    "  {} · ↑{} ↓{} R{} W{} ({total} total)",
+                    model.model_ref, mu.input, mu.output, mu.cache_read, mu.cache_write
+                )));
+            }
+            (state, None)
+        }
         UiMessage::ForkMessagesListed(rows) => {
             if rows.is_empty() {
                 state
@@ -2757,17 +2797,20 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             )
         }
         "session" => {
-            let id = state
-                .session_id
-                .map(|id| id.as_uuid().to_string())
-                .unwrap_or_else(|| "unknown".to_owned());
+            let Some(session_id) = state.session_id else {
+                notice(state, "no session is attached");
+                return (std::mem::take(state), None);
+            };
+            let id = session_id.as_uuid().to_string();
             let title = state.session_title.as_deref().unwrap_or("");
             let entries = state.history.len();
             notice(
                 state,
                 &format!("session {id} · title: {title:?} · prompts this run: {entries}"),
             );
-            (std::mem::take(state), None)
+            // pi parity: /session also shows the aggregate stats card
+            // (message counts, token/cache breakdown by model).
+            (std::mem::take(state), Some(UiEffect::RequestSessionStats))
         }
         "clone" => {
             if matches!(state.status, UiStatus::Working { .. }) {
@@ -5747,6 +5790,27 @@ async fn dispatch(
                     *state = next;
                 }
                 Err(err) => notice(state, &format!("fork messages failed: {err}")),
+            }
+            None
+        }
+        UiEffect::RequestSessionStats => {
+            let Some(manager) = manager else {
+                notice(state, "session switching is unavailable in this host");
+                return None;
+            };
+            let Some(session_id) = state.session_id else {
+                notice(state, "no session is attached");
+                return None;
+            };
+            match manager.stats(session_id).await {
+                Ok(stats) => {
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::SessionStatsListed(Box::new(stats)),
+                    );
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("session stats failed: {err}")),
             }
             None
         }

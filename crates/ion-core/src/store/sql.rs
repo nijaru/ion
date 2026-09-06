@@ -160,6 +160,9 @@ pub(super) fn handle_command(
         StoreCommand::UsageTotals { session_id, reply } => {
             let _ = reply.send(usage_totals(connection, session_id));
         }
+        StoreCommand::SessionStats { session_id, reply } => {
+            let _ = reply.send(session_stats(connection, session_id));
+        }
         StoreCommand::LatestSession { reply } => {
             let _ = reply.send(latest_session(connection));
         }
@@ -820,6 +823,89 @@ fn usage_rows(
         .query_map([session_id.as_uuid().to_string()], usage_row)?
         .collect::<Result<Vec<_>, rusqlite::Error>>()?;
     Ok(rows)
+}
+
+/// Aggregate session report for `/session` (pi-parity stats card).
+/// Entry counts come from the durable tree; per-model attribution
+/// joins the usage ledger with the step's model_steps row. Usage
+/// rows without a model-step record (scripted harness runs) group
+/// under "other".
+fn session_stats(
+    connection: &Connection,
+    session_id: SessionId,
+) -> Result<SessionStats, StoreError> {
+    let id = session_id.as_uuid().to_string();
+    let count = |kind: &str| -> Result<u64, StoreError> {
+        let mut statement = connection
+            .prepare("SELECT COUNT(*) FROM entries WHERE session_id = ?1 AND kind = ?2")?;
+        let n: i64 = statement.query_row([&id, &kind.to_owned()], |row| row.get(0))?;
+        Ok(u64::try_from(n.max(0)).unwrap_or(0))
+    };
+    let mut statement = connection.prepare(
+        "SELECT COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
+                COALESCE(SUM(u.cache_read_tokens), 0), COALESCE(SUM(u.cache_write_tokens), 0)
+         FROM usage u WHERE u.session_id = ?1",
+    )?;
+    let (input, output, cache_read, cache_write) = statement.query_row([&id], |row| {
+        Ok((
+            row.get::<_, i64>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, i64>(2)?,
+            row.get::<_, i64>(3)?,
+        ))
+    })?;
+    let saturate = |sum: i64| u64::try_from(sum.max(0)).unwrap_or(u64::MAX);
+    let usage = TokenUsage {
+        input: saturate(input),
+        output: saturate(output),
+        cache_read: saturate(cache_read),
+        cache_write: saturate(cache_write),
+    };
+    let mut statement = connection.prepare(
+        "SELECT COALESCE(m.model_ref, 'other'),
+                COALESCE(SUM(u.input_tokens), 0), COALESCE(SUM(u.output_tokens), 0),
+                COALESCE(SUM(u.cache_read_tokens), 0), COALESCE(SUM(u.cache_write_tokens), 0)
+         FROM usage u
+         LEFT JOIN model_steps m
+           ON m.operation_id = u.operation_id AND m.step = u.step
+         WHERE u.session_id = ?1
+         GROUP BY m.model_ref
+         ORDER BY SUM(u.input_tokens + u.output_tokens + u.cache_read_tokens + u.cache_write_tokens) DESC",
+    )?;
+    let mut by_model = Vec::new();
+    let rows = statement
+        .query_map([&id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, rusqlite::Error>>()?;
+    for (model_ref, input, output, cache_read, cache_write) in rows {
+        by_model.push(ModelUsage {
+            model_ref,
+            usage: TokenUsage {
+                input: saturate(input),
+                output: saturate(output),
+                cache_read: saturate(cache_read),
+                cache_write: saturate(cache_write),
+            },
+        });
+    }
+    Ok(SessionStats {
+        total_messages: count("user_message")?
+            + count("agent_message")?
+            + count("assistant_message")?,
+        user_messages: count("user_message")?,
+        assistant_messages: count("assistant_message")?,
+        tool_calls: count("tool_call")?,
+        tool_results: count("tool_result")?,
+        usage,
+        by_model,
+    })
 }
 
 fn usage_totals(connection: &Connection, session_id: SessionId) -> Result<TokenUsage, StoreError> {

@@ -438,3 +438,47 @@ async fn small_misses_stay_below_the_noise_floor() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn session_stats_reports_counts_and_per_model_usage() {
+    // pi-parity /session card: the durable ledger aggregates message
+    // counts and per-model token attribution (model_steps join).
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::new(vec![
+            ScriptedMessage::Usage(crate::provider::TokenUsage {
+                input: 100,
+                output: 20,
+                cache_read: 60,
+                cache_write: 0,
+            }),
+            ScriptedMessage::text("done"),
+        ]),
+        ToolRegistry::default(),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
+    session.submit_if_idle("go").await.expect("submit");
+    collect_until_terminal(&mut events).await.expect("collect");
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+
+    let stats = store.session_stats(session_id).await.expect("stats");
+    assert_eq!(stats.user_messages, 1);
+    assert_eq!(stats.assistant_messages, 1);
+    assert_eq!(stats.total_messages, 2);
+    assert_eq!(stats.tool_calls, 0);
+    assert_eq!(stats.usage.input, 100);
+    assert_eq!(stats.usage.output, 20);
+    assert_eq!(stats.usage.cache_read, 60);
+    // The scripted harness persists its own durable model-step model_ref,
+    // so the usage attributes to that model.
+    assert_eq!(stats.by_model.len(), 1);
+    assert_eq!(
+        stats.by_model[0].model_ref,
+        "ion_core::provider::ScriptedProvider"
+    );
+    assert_eq!(stats.by_model[0].usage.input, 100);
+}
