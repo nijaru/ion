@@ -27,6 +27,7 @@ impl Tool for AgentScopeTool {
 
 #[tokio::test]
 async fn resumed_interactive_recovery_uses_frozen_agents_scope_snapshot() {
+    let root = tempfile::tempdir().expect("workspace");
     let store = SessionStore::open_in_memory().expect("store");
     let gate = EffectGate::new(EffectBoundary::ModelExecution);
     let catalog = ToolCatalog::default();
@@ -43,6 +44,7 @@ async fn resumed_interactive_recovery_uses_frozen_agents_scope_snapshot() {
         catalog,
         store.clone(),
         gate.clone(),
+        root.path(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();

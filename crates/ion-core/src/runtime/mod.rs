@@ -1074,6 +1074,8 @@ struct Composition<P> {
     store: SessionStore,
     policy: Arc<dyn PolicyEngine>,
     interactive_approvals: bool,
+    /// Host policy: capture tracked Git changes before first model execution.
+    checkpoint_enabled: bool,
     budget: RuntimeBudget,
     parent: Option<SessionId>,
     fork_source: Option<(SessionId, Option<EntryId>)>,
@@ -1095,6 +1097,7 @@ impl<P: Provider> Composition<P> {
             store,
             policy: Arc::new(DefaultPolicy),
             interactive_approvals: false,
+            checkpoint_enabled: false,
             budget: RuntimeBudget::unbounded(),
             parent: None,
             fork_source: None,
@@ -1145,6 +1148,7 @@ impl<P: Provider> Composition<P> {
                     store: self.store,
                     policy: self.policy,
                     interactive_approvals: self.interactive_approvals,
+                    checkpoint_enabled: self.checkpoint_enabled,
                     budget: self.budget,
                     parent: self.parent,
                     fork_source: self.fork_source,
@@ -1202,16 +1206,40 @@ impl Runtime {
         composition.spawn(SessionId::generate(), None)
     }
 
+    /// Interactive test hosts name their workspace instead of observing the
+    /// checkout that happens to run the test process.
+    #[cfg(test)]
+    pub(crate) fn start_interactive_in_cwd(
+        provider: impl Provider,
+        tools: impl Into<ToolCatalog>,
+        store: SessionStore,
+        policy: Arc<dyn PolicyEngine>,
+        trusted_resources: Vec<TrustedResource>,
+        retry: crate::provider::RetryPolicy,
+        cwd: &std::path::Path,
+    ) -> Self {
+        let mut composition = Composition::new(provider, tools, store);
+        composition.policy = policy;
+        composition.interactive_approvals = true;
+        composition.checkpoint_enabled = true;
+        composition.trusted_resources = trusted_resources;
+        composition.retry = retry;
+        composition.cwd = Some(cwd.to_string_lossy().into_owned());
+        composition.spawn(SessionId::generate(), None)
+    }
+
     #[cfg(test)]
     pub(crate) fn start_interactive_with_effect_gate(
         provider: impl Provider,
         tools: impl Into<ToolCatalog>,
         store: SessionStore,
         gate: EffectGate,
+        cwd: &std::path::Path,
     ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.interactive_approvals = true;
         composition.effect_gate = Some(Arc::new(gate));
+        composition.cwd = Some(cwd.to_string_lossy().into_owned());
         composition.spawn(SessionId::generate(), None)
     }
 
@@ -1281,6 +1309,7 @@ impl Runtime {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.interactive_approvals = true;
+        composition.checkpoint_enabled = true;
         composition.trusted_resources = trusted_resources;
         composition.retry = retry;
         composition.spawn(SessionId::generate(), None)
@@ -1439,6 +1468,7 @@ impl Runtime {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.interactive_approvals = true;
+        composition.checkpoint_enabled = true;
         composition.trusted_resources = trusted_resources;
         composition.retry = retry;
         composition.defer_loaded_start = true;
@@ -1681,6 +1711,8 @@ struct SessionDeps<P> {
     /// calls park the operation for a durable decision instead of
     /// terminating it (DESIGN.md §17.4).
     interactive_approvals: bool,
+    /// Host policy: capture tracked Git changes before first model execution.
+    checkpoint_enabled: bool,
     budget: RuntimeBudget,
     /// Durable control lineage for separately hosted descendants.
     parent: Option<SessionId>,
@@ -1703,6 +1735,8 @@ struct SessionRuntime<P> {
     policy: Arc<dyn PolicyEngine>,
     /// This host can grant approvals interactively (§17.4).
     interactive_approvals: bool,
+    /// Host policy: capture tracked Git changes before first model execution.
+    checkpoint_enabled: bool,
     budget: RuntimeBudget,
     control_parent_session_id: Option<SessionId>,
     fork_source_session_id: Option<SessionId>,
@@ -1791,6 +1825,7 @@ impl<P: Provider> SessionRuntime<P> {
             store,
             policy,
             interactive_approvals,
+            checkpoint_enabled,
             budget,
             parent,
             fork_source,
@@ -1830,6 +1865,7 @@ impl<P: Provider> SessionRuntime<P> {
             store,
             policy,
             interactive_approvals,
+            checkpoint_enabled,
             budget,
             control_parent_session_id: parent,
             fork_source_session_id: fork_source.map(|(session, _)| session),

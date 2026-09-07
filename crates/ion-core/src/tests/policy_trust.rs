@@ -395,8 +395,9 @@ fn approval_required_also_terminates_a_parked_approval() {
 
 #[tokio::test]
 async fn interactive_runtime_parks_bash_and_approval_executes_it() {
+    let root = tempfile::tempdir().expect("workspace");
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_interactive(
+    let runtime = Runtime::start_interactive_in_cwd(
         ScriptedProvider::new(vec![
             ScriptedMessage::tool("bash", json!({ "command": "echo granted" })),
             ScriptedMessage::text("done"),
@@ -405,6 +406,8 @@ async fn interactive_runtime_parks_bash_and_approval_executes_it() {
         store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         Vec::new(),
+        RetryPolicy::default(),
+        root.path(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
@@ -464,8 +467,9 @@ async fn interactive_runtime_parks_bash_and_approval_executes_it() {
 
 #[tokio::test]
 async fn interactive_deny_is_model_visible_and_the_operation_continues() {
+    let root = tempfile::tempdir().expect("workspace");
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_interactive(
+    let runtime = Runtime::start_interactive_in_cwd(
         ScriptedProvider::new(vec![
             ScriptedMessage::tool("bash", json!({ "command": "echo hi" })),
             ScriptedMessage::text("fine, nothing else"),
@@ -474,6 +478,8 @@ async fn interactive_deny_is_model_visible_and_the_operation_continues() {
         store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         Vec::new(),
+        RetryPolicy::default(),
+        root.path(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();
@@ -518,8 +524,9 @@ async fn interactive_deny_is_model_visible_and_the_operation_continues() {
 
 #[tokio::test]
 async fn interactive_parked_operation_cancels_directly() {
+    let root = tempfile::tempdir().expect("workspace");
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_interactive(
+    let runtime = Runtime::start_interactive_in_cwd(
         ScriptedProvider::new(vec![ScriptedMessage::tool(
             "bash",
             json!({ "command": "echo hi" }),
@@ -528,6 +535,8 @@ async fn interactive_parked_operation_cancels_directly() {
         store.clone(),
         Arc::new(crate::policy::DefaultPolicy),
         Vec::new(),
+        RetryPolicy::default(),
+        root.path(),
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
@@ -638,7 +647,7 @@ async fn parked_edit_carries_a_diff_preview_for_the_approval_prompt() {
     // Edit is outside the allowlist, so the interactive runtime parks
     // for a decision instead of executing.
     let store = SessionStore::open_in_memory().expect("store");
-    let runtime = Runtime::start_interactive(
+    let runtime = Runtime::start_interactive_in_cwd(
         ScriptedProvider::new(vec![ScriptedMessage::tool(
             "edit",
             json!({"path":"target.txt","old_str":"beta","new_str":"BETA"}),
@@ -647,6 +656,8 @@ async fn parked_edit_carries_a_diff_preview_for_the_approval_prompt() {
         store.clone(),
         Arc::new(AllowlistPolicy::new(["read"])),
         Vec::new(),
+        RetryPolicy::default(),
+        root.path(),
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
