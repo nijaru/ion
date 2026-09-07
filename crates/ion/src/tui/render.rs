@@ -537,6 +537,8 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.thinking_selector.is_some()
         || state.file_selector.is_some()
         || state.fork_selector.is_some()
+        || state.auth_selector.is_some()
+        || state.login_progress.is_some()
     {
         LIVE_REGION_MAX_ROWS
     } else if state.restore_prompt.is_some() {
@@ -959,6 +961,119 @@ fn fork_selector_lines(
     ));
     lines
 }
+fn auth_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_auth_rows();
+    let logout = state
+        .auth_selector
+        .as_ref()
+        .is_some_and(|selector| selector.logout);
+    let title = if logout { "log out" } else { "log in" };
+    let selected = state
+        .auth_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = Vec::new();
+    if rows.is_empty() {
+        lines.push(picker_header(title, query, 0, 0, false, palette, width));
+        lines.push(selector_row(
+            Line::from(if logout {
+                "  no stored credentials"
+            } else {
+                "  no matching providers"
+            })
+            .style(palette.system_note),
+            width,
+        ));
+    } else {
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            title,
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
+        for (index, row) in rows.iter().enumerate().take(end).skip(start) {
+            let is_selected = index == selected;
+            lines.push(selector_row(
+                Line::from(vec![
+                    picker_cursor(is_selected, palette),
+                    picker_label(row.label.clone(), is_selected, palette),
+                ]),
+                width,
+            ));
+            if is_selected {
+                lines.push(selector_row(
+                    Line::from(format!("  {}", row.detail)).style(palette.system_note),
+                    width,
+                ));
+            }
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+/// The in-progress login panel (pi's login dialog): URL or device code
+/// plus the manual-code entry hint.
+fn login_progress_lines(
+    login: &LoginProgress,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    // Every line pushes ALL wrap segments: the authorize URL is one
+    // long unbroken token, and `selector_row`'s first-segment-only
+    // truncation would drop it entirely (found live in dogfood).
+    let push = |lines: &mut Vec<Line<'static>>, line: Line<'static>| {
+        lines.extend(wrap_line(&line, width));
+    };
+    let mut lines = Vec::new();
+    push(
+        &mut lines,
+        Line::from(format!("log in to {}", login.provider)).style(palette.assistant),
+    );
+    if let Some(url) = &login.url {
+        push(
+            &mut lines,
+            Line::from(format!("  open: {url}")).style(palette.system_note),
+        );
+        push(
+            &mut lines,
+            Line::from("  a browser window should open — complete login there")
+                .style(palette.system_note),
+        );
+    }
+    if let Some(code) = &login.user_code {
+        push(
+            &mut lines,
+            Line::from(format!("  code: {code}")).style(palette.system_note),
+        );
+        if let Some(uri) = &login.verification_uri {
+            push(
+                &mut lines,
+                Line::from(format!("  visit: {uri}")).style(palette.system_note),
+            );
+        }
+    }
+    push(
+        &mut lines,
+        Line::from("  paste the authorization code / redirect URL here, or esc to cancel")
+            .style(palette.system_note),
+    );
+    let _ = max_rows;
+    lines
+}
 
 fn file_selector_lines(
     state: &UiState,
@@ -1136,6 +1251,10 @@ pub(super) fn build_live_at_height(
         head.extend(file_selector_lines(state, palette, width, head_budget));
     } else if state.fork_selector.is_some() {
         head.extend(fork_selector_lines(state, palette, width, head_budget));
+    } else if state.auth_selector.is_some() {
+        head.extend(auth_selector_lines(state, palette, width, head_budget));
+    } else if let Some(login) = &state.login_progress {
+        head.extend(login_progress_lines(login, palette, width, head_budget));
     } else if state.ext_ui.dialog.is_some() {
         head.extend(extension_dialog_lines(state, palette, width));
     } else if state.hotkeys_visible {

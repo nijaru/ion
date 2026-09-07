@@ -17,12 +17,15 @@ use ratatui::text::{Line, Span};
 use unicode_segmentation::UnicodeSegmentation as _;
 use unicode_width::UnicodeWidthStr as _;
 
+use crate::auth;
 use crate::export;
 use crate::settings::Theme;
 use ion_core::{
     CommandError, OperationOutcome, OperationSettlement, OperationState, OperationStatus,
     RuntimeError, RuntimeEvent, SessionHandle, SessionSnapshot, TokenUsage,
 };
+use std::sync::Arc;
+
 use ion_terminal::{
     Frame, InputEvent, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession, install_panic_hook,
 };
@@ -132,6 +135,9 @@ pub struct HostConfig {
     pub workspace_files: Vec<String>,
     /// Git branch of the working directory, captured at launch.
     pub branch: Option<String>,
+    /// The switching provider the session runs on; /login invalidates
+    /// its cache so the next step rebuilds with fresh credentials.
+    pub provider: Option<Arc<ion_core::SwitchingProvider<crate::CliProvider>>>,
     /// Launch TUI mode (pi parity: --tui-mode / tuiMode): the alt-screen
     /// transcript view starts open when Fullscreen. `/fullscreen`
     /// toggles live.
@@ -245,6 +251,30 @@ pub enum UiEffect {
     /// archive, run `gh gist create --public=false`, print the viewer
     /// URL. Resolved by the run loop (process spawn + progress UI).
     ShareSession,
+    /// Open the /login provider picker. The run loop reads the auth
+    /// file and replies with `AuthRowsListed`.
+    RequestAuthRows {
+        /// `false` = login rows, `true` = logout rows.
+        logout: bool,
+    },
+    /// Run the picked provider's OAuth login flow (run-loop owned:
+    /// loopback listener, browser spawn, token exchange).
+    LoginProvider {
+        provider: String,
+        /// "browser" or "device" (codex only).
+        method: String,
+    },
+    /// Remove the picked provider's stored credential.
+    LogoutProvider {
+        provider: String,
+    },
+    /// Cancel the in-progress login (esc in the login panel).
+    CancelLogin,
+    /// Submit the composer text as a manual authorization code or
+    /// redirect URL (enter in the login panel).
+    SubmitLoginCode {
+        code: String,
+    },
     /// Fork from before one user message: the host clones the ancestor
     /// path into a new durable session (the picked message's text
     /// returns for the composer), offers the git-checkpoint restore
@@ -497,6 +527,17 @@ pub enum UiMessage {
     /// The host delivered the attached session's user messages for the
     /// /fork picker (pi parity).
     ForkMessagesListed(Vec<ForkMessageRow>),
+    /// The run loop resolved auth picker rows (providers + their
+    /// login methods or stored credential kinds). The reducer never
+    /// reads auth.json.
+    AuthRowsListed {
+        logout: bool,
+        rows: Vec<AuthRow>,
+    },
+    /// A login completed; the notice text reports what happened.
+    LoginCompleted(Result<String, String>),
+    /// A logout completed (the removed provider id is in the text).
+    LogoutCompleted(Result<String, String>),
     /// A /fork completed: the fork session was opened, the picked
     /// message's text is restored into the composer (pi fills the
     /// editor with the forked message), and the git-checkpoint
@@ -1075,6 +1116,64 @@ struct ForkSelector {
     saved_cursor: usize,
 }
 
+/// One selectable row in the /login or /logout picker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthRow {
+    /// The provider id written to auth.json ("openrouter",
+    /// "openai-codex").
+    provider: String,
+    /// Login method for the login picker: "browser" or "device".
+    method: String,
+    /// Display label.
+    label: String,
+    /// Detail line: stored credential kind (logout picker) or the
+    /// login method description (login picker).
+    detail: String,
+}
+
+/// Ephemeral /login //logout picker (pi's OAuth selector): the
+/// composer filters rows; enter starts the flow (or removes the
+/// stored credential for /logout).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct AuthSelector {
+    /// `false` = login picker, `true` = logout picker.
+    logout: bool,
+    rows: Vec<AuthRow>,
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
+/// Events from a running login/logout task to the run loop: progress
+/// updates paint the login panel; completion resolves the notice and
+/// (for login) invalidates the provider cache.
+enum AuthLoopEvent {
+    /// The flow started; paint the login progress panel.
+    Started {
+        provider: String,
+        url: Option<String>,
+        user_code: Option<String>,
+        verification_uri: Option<String>,
+    },
+    /// Progress text (e.g. "exchanging authorization code…").
+    Progress(String),
+    Done(Result<String, String>),
+}
+
+/// A login in progress (pi's login dialog): the browser flow shows
+/// the authorize URL (also opened); the device flow shows the user
+/// code and verification URL. Enter submits the composer as a
+/// manual authorization code; esc cancels the flow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginProgress {
+    provider: String,
+    /// Browser flow: the authorize URL.
+    url: Option<String>,
+    /// Device flow: the code to enter at the verification URL.
+    user_code: Option<String>,
+    verification_uri: Option<String>,
+}
+
 /// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
@@ -1164,6 +1263,11 @@ pub struct UiState {
     /// /fork message picker (pi parity): rows arrive from the host as
     /// `ForkMessagesListed`; the reducer never reads the store.
     fork_selector: Option<ForkSelector>,
+    /// /login //logout picker (pi's OAuth selector).
+    auth_selector: Option<AuthSelector>,
+    /// A login flow in progress (pi's login dialog): the composer
+    /// becomes a manual-code entry while the loopback listener runs.
+    login_progress: Option<LoginProgress>,
     /// Extension UI presentation state (Phase G): footer statuses,
     /// widgets, custom footer, parked dialogs, and the live command
     /// list. All presentation-only; the ion-core hub is the source.
@@ -1676,6 +1780,75 @@ impl UiState {
         self.filtered_fork_rows().into_iter().nth(selector.selected)
     }
 
+    /// Open the /login or /logout picker over the given rows (the run
+    /// loop supplies them; the reducer never reads the auth file).
+    fn open_auth_selector(&mut self, logout: bool, rows: Vec<AuthRow>) {
+        if self.auth_selector.is_some() {
+            return;
+        }
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.auth_selector = Some(AuthSelector {
+            logout,
+            rows,
+            selected: 0,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_auth_selector(&mut self) {
+        let Some(selector) = self.auth_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    fn filtered_auth_rows(&self) -> Vec<AuthRow> {
+        let Some(selector) = self.auth_selector.as_ref() else {
+            return Vec::new();
+        };
+        let query = self.composer.to_lowercase();
+        selector
+            .rows
+            .iter()
+            .filter(|row| {
+                row.label.to_lowercase().contains(&query)
+                    || row.provider.to_lowercase().contains(&query)
+                    || row.detail.to_lowercase().contains(&query)
+                    || row.method.to_lowercase().contains(&query)
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn move_auth_selection(&mut self, delta: isize) {
+        let count = self.filtered_auth_rows().len();
+        let Some(selector) = self.auth_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn selected_auth_row(&self) -> Option<AuthRow> {
+        let selector = self.auth_selector.as_ref()?;
+        self.filtered_auth_rows().into_iter().nth(selector.selected)
+    }
+
     fn current_model_reference(&self) -> Option<String> {
         Some(format!(
             "{}/{}",
@@ -1947,6 +2120,44 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
             state.open_fork_selector(rows);
             (state, None)
         }
+        UiMessage::AuthRowsListed { logout, rows } => {
+            if rows.is_empty() {
+                state.pending_scrollback.push(
+                    Line::from(if logout {
+                        "no stored credentials to remove"
+                    } else {
+                        "no login providers available"
+                    })
+                    .dim(),
+                );
+                return (state, None);
+            }
+            state.open_auth_selector(logout, rows);
+            (state, None)
+        }
+        UiMessage::LoginCompleted(result) => match result {
+            Ok(text) => {
+                state.pending_scrollback.push(Line::from(text).dim());
+                (state, None)
+            }
+            // Pi parity: a cancelled login is not an error — the esc
+            // path already reported the cancellation.
+            Err(err) if err == "login cancelled" => (state, None),
+            Err(err) => {
+                state
+                    .pending_scrollback
+                    .push(Line::from(format!("login failed: {err}")).dim());
+                (state, None)
+            }
+        },
+        UiMessage::LogoutCompleted(result) => {
+            let text = match result {
+                Ok(text) => text,
+                Err(err) => format!("logout failed: {err}"),
+            };
+            state.pending_scrollback.push(Line::from(text).dim());
+            (state, None)
+        }
         UiMessage::ForkRestorePrompt {
             checkpoint_ref,
             target,
@@ -2214,6 +2425,102 @@ fn handle_fork_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opti
     }
 }
 
+/// The /login //logout picker owns the keyboard while open (pi's
+/// OAuth selector). Enter resolves the picked row through a run-loop
+/// effect; esc closes and restores the draft.
+fn handle_auth_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    let logout = state
+        .auth_selector
+        .as_ref()
+        .is_some_and(|selector| selector.logout);
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_auth_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let Some(row) = state.selected_auth_row() else {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no matching providers").red());
+                return (state, None);
+            };
+            state.close_auth_selector();
+            (
+                state,
+                Some(if logout {
+                    UiEffect::LogoutProvider {
+                        provider: row.provider,
+                    }
+                } else {
+                    UiEffect::LoginProvider {
+                        provider: row.provider,
+                        method: row.method,
+                    }
+                }),
+            )
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_auth_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_auth_selection(1);
+            (state, None)
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            if let Some(selector) = state.auth_selector.as_mut() {
+                selector.selected = 0;
+            }
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            if let Some(selector) = state.auth_selector.as_mut() {
+                selector.selected = 0;
+            }
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
+/// A login flow in progress (pi's login dialog): enter submits the
+/// composer as a manual authorization code or redirect URL; esc
+/// cancels the flow. All other keys keep editing the composer.
+fn handle_login_progress_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.login_progress = None;
+            state
+                .pending_scrollback
+                .push(Line::from("login cancelled").dim());
+            (state, Some(UiEffect::CancelLogin))
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let code = state.composer.clone();
+            if code.trim().is_empty() {
+                return (state, None);
+            }
+            state.login_progress = None;
+            (state, Some(UiEffect::SubmitLoginCode { code }))
+        }
+        _ => {
+            // Editing keys go to the composer with the panel parked:
+            // routing through `handle_key` would re-enter this
+            // handler (login_progress is still set) and recurse
+            // forever. Enter and esc are matched above, so nothing
+            // here can submit a prompt or cancel the flow.
+            let parked = state.login_progress.take();
+            let (mut state, _) = handle_key(state, key);
+            state.login_progress = parked;
+            (state, None)
+        }
+    }
+}
+
 /// The `@` file picker owns the keyboard while open: the composer is
 /// the filter query over host-provided rows (pi parity: fuzzy file
 /// search). Enter splices the reference into the saved draft; esc
@@ -2454,6 +2761,8 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         || state.session_selector.is_some()
         || state.file_selector.is_some()
         || state.fork_selector.is_some()
+        || state.auth_selector.is_some()
+        || state.login_progress.is_some()
         || state.hotkeys_visible;
     if transient_open && let Some(action) = state.keymap.action_for(&key) {
         match action {
@@ -2463,6 +2772,8 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_session_selector();
                 state.close_file_selector();
                 state.close_fork_selector();
+                state.close_auth_selector();
+                state.login_progress = None;
                 state.hotkeys_visible = false;
                 return handle_action(state, action);
             }
@@ -2477,6 +2788,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_session_selector();
                 state.close_file_selector();
                 state.close_fork_selector();
+                state.close_auth_selector();
                 state.hotkeys_visible = false;
                 if state.composer.is_empty() {
                     state.hint = Some("ctrl+c again to exit".to_owned());
@@ -2498,6 +2810,15 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     }
     if state.fork_selector.is_some() {
         return handle_fork_selector_key(state, key);
+    }
+    if state.auth_selector.is_some() {
+        return handle_auth_selector_key(state, key);
+    }
+    // A login flow in progress owns the keyboard like pi's login
+    // dialog: enter submits the composer as a manual authorization
+    // code; esc cancels the whole flow.
+    if state.login_progress.is_some() {
+        return handle_login_progress_key(state, key);
     }
     if state.file_selector.is_some() {
         return handle_file_selector_key(state, key);
@@ -2678,6 +2999,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/new · /resume [query] · /clone - session switching",
                 "/fork                   - fork from a past message",
                 "/name <title> · /session - rename; show session identity",
+                "/login · /logout        - provider sign-in; remove stored credentials",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
@@ -2933,6 +3255,31 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             }
             (std::mem::take(state), Some(UiEffect::RequestForkMessages))
         }
+        "login" => {
+            // pi parity: bare /login opens the provider picker; a
+            // named provider skips straight to its flow.
+            let rest = rest.trim();
+            if rest.is_empty() {
+                (
+                    std::mem::take(state),
+                    Some(UiEffect::RequestAuthRows { logout: false }),
+                )
+            } else {
+                (
+                    std::mem::take(state),
+                    Some(UiEffect::LoginProvider {
+                        provider: rest.to_owned(),
+                        // A direct /login <provider> takes the browser
+                        // flow (pi's default method).
+                        method: "browser".to_owned(),
+                    }),
+                )
+            }
+        }
+        "logout" => (
+            std::mem::take(state),
+            Some(UiEffect::RequestAuthRows { logout: true }),
+        ),
         "quit" => (std::mem::take(state), Some(UiEffect::Quit)),
         other => {
             notice(state, &format!("unknown command: /{other} (try /help)"));
@@ -3075,6 +3422,8 @@ fn complete_composer(state: &mut UiState) {
                 "help",
                 "hotkeys",
                 "import",
+                "login",
+                "logout",
                 "model",
                 "name",
                 "new",
@@ -4808,6 +5157,286 @@ async fn write_debug_log(
 /// file and create a secret GitHub gist from it. Pi tries Radius
 /// first; ion has no radius provider, so the gist path is the whole
 /// surface, exactly pi's fallback behavior.
+/// Rows for the /login //logout picker (run-loop owned: it reads the
+/// auth file). Login rows list ion's providers with their flows;
+/// logout rows list only stored credentials.
+fn auth_rows(logout: bool) -> Vec<AuthRow> {
+    let auth_file = auth::AuthFile::shared();
+    if logout {
+        let Ok(stored) = auth_file.list() else {
+            return Vec::new();
+        };
+        return stored
+            .into_iter()
+            .map(|(provider, kind)| AuthRow {
+                label: auth_provider_label(&provider).to_owned(),
+                provider,
+                method: String::new(),
+                detail: format!("stored {kind} credential"),
+            })
+            .collect();
+    }
+    let mut rows = vec![
+        AuthRow {
+            provider: "openrouter".to_owned(),
+            method: "browser".to_owned(),
+            label: "OpenRouter".to_owned(),
+            detail: "browser OAuth — yields a permanent API key".to_owned(),
+        },
+        AuthRow {
+            provider: "openai-codex".to_owned(),
+            method: "browser".to_owned(),
+            label: "OpenAI Codex (browser)".to_owned(),
+            detail: "ChatGPT OAuth via the browser".to_owned(),
+        },
+        AuthRow {
+            provider: "openai-codex".to_owned(),
+            method: "device".to_owned(),
+            label: "OpenAI Codex (device code)".to_owned(),
+            detail: "headless: enter a code at openai.com".to_owned(),
+        },
+    ];
+    // Show the stored state beside each login row (pi shows status).
+    for row in &mut rows {
+        if let Ok(Some(credential)) = auth_file.read(&row.provider) {
+            let kind = match credential {
+                auth::Credential::Oauth { .. } => "oauth",
+                auth::Credential::ApiKey { .. } => "api key",
+            };
+            row.detail = format!("{} · currently stored: {kind}", row.detail);
+        }
+    }
+    rows
+}
+
+fn auth_provider_label(provider: &str) -> &str {
+    match provider {
+        "openrouter" => "OpenRouter",
+        "openai-codex" => "OpenAI Codex",
+        other => other,
+    }
+}
+
+/// Run one provider's OAuth flow to completion, reporting through the
+/// auth event channel. Manual codes (enter in the login panel) and
+/// cancellation (esc) arrive through the code channel; the
+/// cancellation token covers the run loop's exit path.
+async fn spawn_login_flow(
+    provider: String,
+    method: String,
+    events: tokio::sync::mpsc::Sender<AuthLoopEvent>,
+    mut code_rx: tokio::sync::mpsc::Receiver<String>,
+    cancel: tokio_util::sync::CancellationToken,
+) {
+    let result = run_login_flow(
+        provider.clone(),
+        method.clone(),
+        &events,
+        &mut code_rx,
+        &cancel,
+    )
+    .await;
+    let _ = events.send(AuthLoopEvent::Done(result)).await;
+}
+
+async fn run_login_flow(
+    provider: String,
+    method: String,
+    events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
+    code_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String, String> {
+    match (provider.as_str(), method.as_str()) {
+        ("openrouter", _) => login_openrouter(events, code_rx, cancel).await,
+        ("openai-codex", "device") => login_codex_device(events, code_rx, cancel).await,
+        ("openai-codex", _) => login_codex_browser(events, code_rx, cancel).await,
+        (other, _) => Err(format!("no login flow for provider {other:?}")),
+    }
+}
+
+async fn login_openrouter(
+    events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
+    code_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String, String> {
+    let listener = match auth::openrouter::LoginListener::start().await {
+        Ok(listener) => listener,
+        Err(err) => return Err(err.to_string()),
+    };
+    let verifier = listener.verifier().to_owned();
+    let authorize_url = listener.authorize_url.clone();
+    let _ = events
+        .send(AuthLoopEvent::Started {
+            provider: "openrouter".to_owned(),
+            url: Some(authorize_url),
+            user_code: None,
+            verification_uri: None,
+        })
+        .await;
+    // Race the loopback callback against a manual code and cancel.
+    let wait = listener.wait_for_code();
+    tokio::pin!(wait);
+    let code = loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("login cancelled".to_owned()),
+            code = &mut wait => match code {
+                Ok(code) => break Some(code),
+                Err(err) => return Err(err.to_string()),
+            },
+            manual = code_rx.recv() => match manual {
+                Some(input) => match auth::openrouter::parse_code(&input) {
+                    Some(code) => break Some(code),
+                    None => {
+                        let _ = events
+                            .send(AuthLoopEvent::Progress(
+                                "no code found in the pasted text".to_owned(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                },
+                None => return Err("login cancelled".to_owned()),
+            },
+        }
+    };
+    let Some(code) = code else {
+        return Err("missing authorization code".to_owned());
+    };
+    let _ = events
+        .send(AuthLoopEvent::Progress(
+            "exchanging the authorization code for an API key…".to_owned(),
+        ))
+        .await;
+    let credential = auth::openrouter::exchange_key(&code, &verifier)
+        .await
+        .map_err(|err| err.to_string())?;
+    finish_login("openrouter", credential, events).await
+}
+
+async fn login_codex_browser(
+    events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
+    code_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String, String> {
+    let listener = match auth::codex::CodexLoginListener::start().await {
+        Ok(listener) => listener,
+        Err(err) => return Err(err.to_string()),
+    };
+    let verifier = listener.verifier().to_owned();
+    let redirect_uri = listener.redirect_uri;
+    let authorize_url = listener.authorize_url.clone();
+    let _ = events
+        .send(AuthLoopEvent::Started {
+            provider: "openai-codex".to_owned(),
+            url: Some(authorize_url),
+            user_code: None,
+            verification_uri: None,
+        })
+        .await;
+    let wait = listener.wait_for_code();
+    tokio::pin!(wait);
+    let code = loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("login cancelled".to_owned()),
+            code = &mut wait => match code {
+                Ok(code) => break Some(code),
+                Err(err) => return Err(err.to_string()),
+            },
+            manual = code_rx.recv() => match manual {
+                Some(input) => match auth::openrouter::parse_code(&input) {
+                    Some(code) => break Some(code),
+                    None => {
+                        let _ = events
+                            .send(AuthLoopEvent::Progress(
+                                "no code found in the pasted text".to_owned(),
+                            ))
+                            .await;
+                        continue;
+                    }
+                },
+                None => return Err("login cancelled".to_owned()),
+            },
+        }
+    };
+    let Some(code) = code else {
+        return Err("missing authorization code".to_owned());
+    };
+    let credential = auth::codex::exchange_code(&code, &verifier, redirect_uri)
+        .await
+        .map_err(|err| err.to_string())?;
+    finish_login("openai-codex", credential, events).await
+}
+
+async fn login_codex_device(
+    events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
+    code_rx: &mut tokio::sync::mpsc::Receiver<String>,
+    cancel: &tokio_util::sync::CancellationToken,
+) -> Result<String, String> {
+    let device = match auth::codex::start_device_auth().await {
+        Ok(device) => device,
+        Err(err) => return Err(err.to_string()),
+    };
+    let _ = events
+        .send(AuthLoopEvent::Started {
+            provider: "openai-codex".to_owned(),
+            url: None,
+            user_code: Some(device.user_code.clone()),
+            verification_uri: Some(auth::codex::DEVICE_VERIFICATION_URI.to_owned()),
+        })
+        .await;
+    let poll = auth::codex::poll_device_auth(device, cancel.clone());
+    tokio::pin!(poll);
+    let device_code = loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return Err("login cancelled".to_owned()),
+            code = &mut poll => match code {
+                Ok(code) => break code,
+                Err(err) => return Err(err.to_string()),
+            },
+            // The device flow has no manual-code path; a submission
+            // during it is a slip and stays a no-op for the flow.
+            manual = code_rx.recv() => {
+                if manual.is_none() {
+                    return Err("login cancelled".to_owned());
+                }
+            },
+        }
+    };
+    let _ = events
+        .send(AuthLoopEvent::Progress(
+            "exchanging the authorization code…".to_owned(),
+        ))
+        .await;
+    let credential = auth::codex::complete_device_auth(device_code)
+        .await
+        .map_err(|err| err.to_string())?;
+    finish_login("openai-codex", credential, events).await
+}
+
+/// Persist the credential and report completion (pi's
+/// completeProviderAuthentication, minus model selection: ion keeps
+/// its configured model; the next provider rebuild picks the key up).
+async fn finish_login(
+    provider: &str,
+    credential: auth::Credential,
+    events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
+) -> Result<String, String> {
+    let auth_file = auth::AuthFile::shared();
+    auth_file
+        .write(provider, Some(&credential))
+        .map_err(|err| err.to_string())?;
+    let _ = events
+        .send(AuthLoopEvent::Progress(
+            "invalidating the provider cache…".to_owned(),
+        ))
+        .await;
+    Ok(format!(
+        "logged in to {} — credentials saved to {}",
+        auth_provider_label(provider),
+        auth_file.path().display()
+    ))
+}
+
 async fn share_gist(
     manager: Option<&crate::session_manager::SessionManager>,
     session_id: Option<ion_core::SessionId>,
@@ -5106,6 +5735,16 @@ pub async fn run(
     let (command_tx, mut command_rx) =
         tokio::sync::mpsc::channel::<(String, Result<Option<String>, String>)>(16);
 
+    // Login/logout events: the login task runs a loopback listener and
+    // reports progress/completion; manual codes flow the other way
+    // through `login_code_tx`. One channel, one owner (the run loop).
+    let (auth_event_tx, mut auth_event_rx) = tokio::sync::mpsc::channel::<AuthLoopEvent>(16);
+    // The current login's manual-code sender; each flow spawn creates
+    // its own pair and installs the sender here.
+    let mut login_code_tx: Option<tokio::sync::mpsc::Sender<String>> = None;
+    // A login task's cancellation handle, when one is running.
+    let mut login_cancel: Option<tokio_util::sync::CancellationToken> = None;
+
     let mut result: Result<(), RuntimeError> = Ok(());
     // Crossterm's EventStream can terminate on transient reads (notably
     // SIGWINCH during resize). Recreate it rather than treating the
@@ -5381,6 +6020,72 @@ pub async fn run(
                                     &mut state,
                                 )
                                 .await;
+                            } else if let UiEffect::RequestAuthRows { logout } = &effect {
+                                // /login //logout picker rows: the run
+                                // loop owns the auth file read.
+                                let rows = auth_rows(*logout);
+                                let (next, _) = update(
+                                    std::mem::take(&mut state),
+                                    UiMessage::AuthRowsListed {
+                                        logout: *logout,
+                                        rows,
+                                    },
+                                );
+                                state = next;
+                            } else if let UiEffect::LogoutProvider { provider } = &effect {
+                                // /logout: remove the stored credential;
+                                // surface exactly what happened.
+                                let auth_file = auth::AuthFile::shared();
+                                let result = match auth_file.write(provider, None) {
+                                    Ok(()) => Ok(format!(
+                                        "logged out of {provider}; environment variables and models.json config are unchanged"
+                                    )),
+                                    Err(err) => Err(err.to_string()),
+                                };
+                                let (next, _) = update(
+                                    std::mem::take(&mut state),
+                                    UiMessage::LogoutCompleted(result),
+                                );
+                                state = next;
+                            } else if let UiEffect::LoginProvider { provider, method } =
+                                &effect
+                            {
+                                // /login: spawn the provider's OAuth
+                                // flow. The task reports through the
+                                // auth event channel; manual codes
+                                // flow back through login_code_tx.
+                                let cancel = tokio_util::sync::CancellationToken::new();
+                                login_cancel = Some(cancel.clone());
+                                let (code_tx, code_rx) = tokio::sync::mpsc::channel::<String>(4);
+                                login_code_tx = Some(code_tx);
+                                tokio::spawn(spawn_login_flow(
+                                    provider.clone(),
+                                    method.clone(),
+                                    auth_event_tx.clone(),
+                                    code_rx,
+                                    cancel,
+                                ));
+                            } else if matches!(effect, UiEffect::CancelLogin) {
+                                // esc in the login panel: drop the
+                                // task's cancellation token and clear
+                                // the panel.
+                                if let Some(cancel) = login_cancel.take() {
+                                    cancel.cancel();
+                                }
+                                login_code_tx = None;
+                                state.login_progress = None;
+                            } else if let UiEffect::SubmitLoginCode { code } = &effect {
+                                // enter in the login panel: hand the
+                                // pasted code/URL to the login task.
+                                if let Some(tx) = login_code_tx.as_ref() {
+                                    let _ = tx.send(code.clone()).await;
+                                }
+                                state.login_progress = None;
+                                let (next, _) = update(
+                                    std::mem::take(&mut state),
+                                    UiMessage::SubmitAccepted,
+                                );
+                                state = next;
                             } else {
                                 let switch = dispatch(
                                     &session,
@@ -5501,6 +6206,45 @@ pub async fn run(
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         ext_events = None;
+                    }
+                }
+            }
+            Some(auth_event) = auth_event_rx.recv() => {
+                match auth_event {
+                    AuthLoopEvent::Started {
+                        provider,
+                        url,
+                        user_code,
+                        verification_uri,
+                    } => {
+                        state.login_progress = Some(LoginProgress {
+                            provider,
+                            url,
+                            user_code,
+                            verification_uri,
+                        });
+                    }
+                    AuthLoopEvent::Progress(text) => {
+                        state.pending_scrollback.push(Line::from(text).dim());
+                    }
+                    AuthLoopEvent::Done(result) => {
+                        // The flow finished: clear the panel and any
+                        // pending login handle; a successful login
+                        // invalidates the provider cache so the next
+                        // model step rebuilds with the new credential.
+                        state.login_progress = None;
+                        login_cancel = None;
+                        login_code_tx = None;
+                        if result.is_ok()
+                            && let Some(provider_arc) = host.provider.as_ref()
+                        {
+                            provider_arc.invalidate();
+                        }
+                        let (next, _) = update(
+                            std::mem::take(&mut state),
+                            UiMessage::LoginCompleted(result),
+                        );
+                        state = next;
                     }
                 }
             }
@@ -5842,6 +6586,31 @@ async fn dispatch(
         UiEffect::ShareSession => {
             // Resolved by the run loop, which owns the process spawn
             // and the working-status overlay; match totality only.
+            None
+        }
+        UiEffect::RequestAuthRows { .. } => {
+            // Resolved by the run loop, which owns the auth file read;
+            // match totality only.
+            None
+        }
+        UiEffect::LoginProvider { .. } => {
+            // Resolved by the run loop (loopback listener + browser);
+            // match totality only.
+            None
+        }
+        UiEffect::LogoutProvider { .. } => {
+            // Resolved by the run loop (auth file write); match
+            // totality only.
+            None
+        }
+        UiEffect::CancelLogin => {
+            // Resolved by the run loop (drops the login task); match
+            // totality only.
+            None
+        }
+        UiEffect::SubmitLoginCode { .. } => {
+            // Resolved by the run loop (hands the code to the login
+            // task); match totality only.
             None
         }
         UiEffect::PasteClipboard => {
@@ -6494,7 +7263,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 19);
+        assert_eq!(state.pending_scrollback.len(), 21);
     }
 
     #[test]
@@ -9927,5 +10696,76 @@ mod debug_share_tests {
                 .iter()
                 .any(|line| line.to_string().contains("no session is attached"))
         );
+    }
+
+    #[test]
+    fn login_logout_commands_emit_effects() {
+        // Bare /login asks for picker rows; /logout too.
+        let (_, effect) = handle_command(&mut UiState::new(), "login");
+        assert!(matches!(
+            effect,
+            Some(UiEffect::RequestAuthRows { logout: false })
+        ));
+        let (_, effect) = handle_command(&mut UiState::new(), "logout");
+        assert!(matches!(
+            effect,
+            Some(UiEffect::RequestAuthRows { logout: true })
+        ));
+
+        // A named provider goes straight to its flow.
+        let (_, effect) = handle_command(&mut UiState::new(), "login openrouter");
+        assert!(matches!(
+            effect,
+            Some(UiEffect::LoginProvider { provider, method })
+                if provider == "openrouter" && method == "browser"
+        ));
+
+        // The picker: enter resolves the selected row; esc restores.
+        let enter = KeyEvent::new(KeyCode::Enter, Modifiers::NONE);
+        let esc = KeyEvent::new(KeyCode::Esc, Modifiers::NONE);
+        let mut state = UiState::new();
+        state.open_auth_selector(
+            false,
+            vec![AuthRow {
+                provider: "openrouter".to_owned(),
+                method: "browser".to_owned(),
+                label: "OpenRouter".to_owned(),
+                detail: "browser OAuth".to_owned(),
+            }],
+        );
+        let (state, effect) = handle_key(state, enter);
+        assert!(matches!(
+            effect,
+            Some(UiEffect::LoginProvider { provider, method })
+                if provider == "openrouter" && method == "browser"
+        ));
+        assert!(state.auth_selector.is_none());
+
+        // The login panel: enter submits the code; esc cancels.
+        let mut state = UiState::new();
+        state.login_progress = Some(LoginProgress {
+            provider: "openrouter".to_owned(),
+            url: Some("https://openrouter.ai/auth?...".to_owned()),
+            user_code: None,
+            verification_uri: None,
+        });
+        state.composer = "http://127.0.0.1:1/cb?code=XYZ".to_owned();
+        let (state, effect) = handle_key(state, enter);
+        assert!(matches!(
+            effect,
+            Some(UiEffect::SubmitLoginCode { code }) if code.contains("XYZ")
+        ));
+        assert!(state.login_progress.is_none());
+
+        let mut state = UiState::new();
+        state.login_progress = Some(LoginProgress {
+            provider: "openrouter".to_owned(),
+            url: None,
+            user_code: Some("ABCD-1234".to_owned()),
+            verification_uri: None,
+        });
+        let (state, effect) = handle_key(state, esc);
+        assert!(matches!(effect, Some(UiEffect::CancelLogin)));
+        assert!(state.login_progress.is_none());
     }
 }

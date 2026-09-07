@@ -572,6 +572,16 @@ impl<P: Provider> SwitchingProvider<P> {
         providers.insert(model_ref.to_owned(), Arc::clone(&provider));
         Some(provider)
     }
+
+    /// Drop cached providers so the next model step rebuilds through
+    /// the factory with fresh credentials (/login). In-flight requests
+    /// keep their clones; only future constructions are affected.
+    pub fn invalidate(&self) {
+        self.providers
+            .lock()
+            .expect("provider cache poisoned")
+            .clear();
+    }
 }
 
 impl<P: Provider> Provider for SwitchingProvider<P> {

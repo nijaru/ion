@@ -799,6 +799,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             cwd_label: Some(display_cwd(&cwd)),
             branch: git_branch().ok().flatten(),
             workspace_files: tui::workspace_file_list(&cwd),
+            provider: Some(Arc::clone(&root_provider)),
             extension_service,
         },
         tui::SessionHost {
@@ -1017,13 +1018,24 @@ fn provider_material(
             codex_credential: Some(CodexCredential::from_environment_or_pi()?),
             ..base
         }),
-        "openrouter" => Ok(ProviderMaterial {
-            openrouter_key: Some(
-                std::env::var("OPENROUTER_API_KEY")
-                    .map_err(|_| "model requires OPENROUTER_API_KEY to be set".to_owned())?,
-            ),
-            ..base
-        }),
+        "openrouter" => {
+            // pi's resolve order: the stored credential first, then
+            // the environment. /login writes the stored credential.
+            let key = ion::auth::AuthFile::shared()
+                .openrouter_key()
+                .ok()
+                .flatten();
+            let Some(key) = key else {
+                return Err(
+                    "model requires an OpenRouter key: /login openrouter or OPENROUTER_API_KEY"
+                        .to_owned(),
+                );
+            };
+            Ok(ProviderMaterial {
+                openrouter_key: Some(key),
+                ..base
+            })
+        }
         "desktop" => Ok(base),
         provider => Err(format!("unsupported provider {provider:?}")),
     }
@@ -1040,7 +1052,12 @@ fn material_for_provider(base: &ProviderMaterial, provider: &str) -> ProviderMat
             material.codex_credential = CodexCredential::from_environment_or_pi().ok();
         }
         "openrouter" => {
-            material.openrouter_key = std::env::var("OPENROUTER_API_KEY").ok();
+            // pi's resolve order: the stored credential first, then
+            // the environment. /login writes the stored credential.
+            material.openrouter_key = ion::auth::AuthFile::shared()
+                .openrouter_key()
+                .ok()
+                .flatten();
         }
         _ => {}
     }

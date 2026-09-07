@@ -2,6 +2,7 @@
 //! shell over this library; integration tests drive the same surface.
 
 pub mod acp;
+pub mod auth;
 pub mod changelog;
 pub mod export;
 pub mod openai_codex;
