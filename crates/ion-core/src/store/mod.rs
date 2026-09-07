@@ -38,6 +38,7 @@ pub struct SessionSummary {
     pub entry_count: u64,
 }
 
+mod host_scopes;
 mod schema;
 mod sql;
 use schema::{SchemaPlan, classify, create_fresh};
@@ -394,6 +395,11 @@ impl From<rusqlite::Error> for StoreError {
 pub type CheckpointReply = Result<Option<(String, EntryId, i64)>, StoreError>;
 
 enum StoreCommand {
+    ReconcileHostScopes {
+        workspace: String,
+        desired: std::collections::BTreeMap<String, String>,
+        reply: oneshot::Sender<Result<std::collections::BTreeMap<String, u64>, StoreError>>,
+    },
     CreateSession {
         record: SessionRecord,
         reply: oneshot::Sender<Result<(), StoreError>>,
@@ -694,6 +700,22 @@ impl SessionStore {
     #[must_use]
     pub(crate) fn artifact_root(&self) -> Option<PathBuf> {
         self.artifact_root.as_deref().map(Path::to_path_buf)
+    }
+
+    /// Reconcile host authority definitions atomically. Removed scopes retain
+    /// a revision tombstone so later re-registration cannot revive old grants.
+    /// The caller supplies canonical workspace and definition identities.
+    pub(crate) async fn reconcile_host_scopes(
+        &self,
+        workspace: String,
+        desired: std::collections::BTreeMap<String, String>,
+    ) -> Result<std::collections::BTreeMap<String, u64>, StoreError> {
+        self.request(|reply| StoreCommand::ReconcileHostScopes {
+            workspace,
+            desired,
+            reply,
+        })
+        .await
     }
 
     pub(crate) async fn create_session(&self, record: SessionRecord) -> Result<(), StoreError> {

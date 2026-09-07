@@ -6,6 +6,17 @@ pub(super) fn handle_command(
     fail_next_write: &AtomicBool,
 ) {
     match command {
+        StoreCommand::ReconcileHostScopes {
+            workspace,
+            desired,
+            reply,
+        } => {
+            let _ = reply
+                .send(check_injected(fail_next_write).and_then(|()| {
+                    super::host_scopes::reconcile(connection, &workspace, &desired)
+                }));
+        }
+
         StoreCommand::CreateSession { record, reply } => {
             let _ = reply.send(
                 check_injected(fail_next_write)

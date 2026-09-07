@@ -2,7 +2,7 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-const SCHEMA_VERSION: i64 = 24;
+const SCHEMA_VERSION: i64 = 25;
 
 /// What an existing database needs before the store can open it.
 #[derive(Debug, PartialEq, Eq)]
@@ -62,6 +62,14 @@ pub(super) fn create_fresh(connection: &mut Connection) -> Result<(), StoreError
 }
 
 const SCHEMA: &str = "
+CREATE TABLE IF NOT EXISTS host_scope_state (
+    workspace TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    revision INTEGER NOT NULL CHECK (revision >= 0),
+    definition TEXT,
+    PRIMARY KEY (workspace, scope)
+);
+
 CREATE TABLE IF NOT EXISTS usage (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     session_id TEXT NOT NULL REFERENCES sessions(id),

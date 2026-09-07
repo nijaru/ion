@@ -295,13 +295,13 @@ fn older_schema_store_is_archived_and_reopened_fresh() {
             .execute_batch("CREATE TABLE sessions (id TEXT);")
             .expect("create marker");
         connection
-            .pragma_update(None, "user_version", 6)
+            .pragma_update(None, "user_version", 24)
             .expect("stamp version");
     }
     let store = SessionStore::open(&db).expect("older schema must archive, not refuse");
     let notice = store.startup_notice().expect("archive notice").to_owned();
     assert!(
-        notice.contains("v6"),
+        notice.contains("v24"),
         "notice names the old version: {notice}"
     );
     assert!(
@@ -315,14 +315,14 @@ fn older_schema_store_is_archived_and_reopened_fresh() {
         .expect("list data dir")
         .filter_map(Result::ok)
         .map(|entry| entry.file_name().to_string_lossy().into_owned())
-        .filter(|name| name.contains(".v6.") && name.ends_with(".bak"))
+        .filter(|name| name.contains(".v24.") && name.ends_with(".bak"))
         .collect();
-    assert_eq!(backups.len(), 1, "exactly one v6 archive: {backups:?}");
+    assert_eq!(backups.len(), 1, "exactly one v24 archive: {backups:?}");
     let archived = rusqlite::Connection::open(parent.join(&backups[0])).expect("open archive");
     let version: i64 = archived
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .expect("archive version");
-    assert_eq!(version, 6, "archived bytes keep the old version stamp");
+    assert_eq!(version, 24, "archived bytes keep the old version stamp");
 
     // The live database is usable at the current version.
     assert_eq!(store.startup_notice(), Some(notice.as_str()));
