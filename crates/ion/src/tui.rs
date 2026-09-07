@@ -142,6 +142,9 @@ pub struct HostConfig {
     /// additively starts newly configured MCP servers and extensions
     /// against it (§19: no mid-session scope revocation).
     pub tool_catalog: Option<ion_core::ToolCatalog>,
+    /// The persistent MCP service (startup-composed): /reload reuses
+    /// it so the same registry diffs the live server set.
+    pub mcp_service: Option<std::sync::Arc<ion_core::McpService>>,
     /// Whether project-local resources are trusted for this launch
     /// (--trust-project). /reload re-applies the same grant when
     /// re-reading trusted context files; reload never widens it.
@@ -5858,13 +5861,21 @@ async fn share_gist(
 /// the context-files half; the additive-only rule for live peers is
 /// DESIGN.md §19). What genuinely cannot change live is reported in
 /// the summary notice instead of failing the reload.
+/// Host services /reload reconciles against, borrowed from the
+/// run loop's `HostConfig` for one call.
+struct ReloadHost<'a> {
+    catalog: Option<&'a ion_core::ToolCatalog>,
+    mcp_service: Option<&'a std::sync::Arc<ion_core::McpService>>,
+    extension_service: Option<&'a ion_core::ExtensionService>,
+    provider: Option<&'a std::sync::Arc<ion_core::SwitchingProvider<crate::CliProvider>>>,
+}
+
 async fn reload_config(
     session: &SessionHandle,
     state: &mut UiState,
     keymap: &mut KeyMap,
     theme: &mut Theme,
-    catalog: Option<&ion_core::ToolCatalog>,
-    extension_service: Option<&ion_core::ExtensionService>,
+    host: ReloadHost<'_>,
     trust_project: bool,
 ) {
     // 1) Settings: a malformed file is reported, not silently kept.
@@ -5921,68 +5932,81 @@ async fn reload_config(
         }
     }
 
-    // 5) Extensions and MCP: additive only (§19). Newly configured
-    //    peers start against the live catalog; removed ones need a
-    //    restart and are reported. Existing peers are never touched.
-    let mut started = 0usize;
-    let mut restart_note: Vec<String> = Vec::new();
-    if let Some(catalog) = catalog {
-        if let Some(service) = extension_service {
-            let cwd = cwd.clone().unwrap_or_else(|| std::path::PathBuf::from(""));
+    // 5) Extensions and MCP: reconcile against the live supervision
+    //    registry — unchanged peers keep running, changed defs replace
+    //    their supervisor inside the same declared scope, removed defs
+    //    stop (generation unpublished, declared scope retained, §19).
+    //    Newly started scopes are durably admitted to the main lane
+    //    so the next model step can see them.
+    let mut started_total = 0usize;
+    let mut stopped_total = 0usize;
+    if let Some(catalog) = host.catalog {
+        let cwd = cwd.clone().unwrap_or_default();
+        if let Some(service) = host.extension_service {
             let defs =
                 crate::settings::load_extension_defs(&settings, Some(cwd.as_path()), trust_project);
-            let known = service.commands();
-            let known_extensions: std::collections::HashSet<String> = known
-                .iter()
-                .map(|command| command.extension.clone())
-                .collect();
-            let fresh: Vec<&ion_core::ExtensionDef> = defs
-                .iter()
-                .filter(|def| !known_extensions.contains(&def.name))
-                .collect();
-            started = fresh.len();
-            if fresh.is_empty() && !defs.is_empty() {
-                restart_note
-                    .push("extensions: no new ones (removed extensions need a restart)".to_owned());
-            } else if !fresh.is_empty() {
-                let defs: Vec<ion_core::ExtensionDef> = fresh.into_iter().cloned().collect();
-                service.start_into(&defs, catalog).await;
+            let (started, stopped) = service.ensure(&defs, catalog).await;
+            started_total += started;
+            stopped_total += stopped;
+            // A newly started extension's scope must be durably
+            // admitted to the main lane before a model step can see
+            // its tools (§19: live discovery alone never admits).
+            for def in &defs {
+                let scope = format!("ext:{}", def.name);
+                if let Err(err) = session.admit_structural_scope(scope).await {
+                    notice(state, &format!("admit ext:{} failed: {err}", def.name));
+                }
             }
         }
-        // MCP servers: start newly configured ones; the active set is
+        // MCP servers: same reconcile against the persistent service;
+        // a host without a service handle gets a one-shot ensure the
+        // first time servers appear. The active-set filter is
         // host-selected at launch and stays untouched (§19).
-        let defs: Vec<ion_core::ServerDef> = settings
+        let mcp_defs: Vec<ion_core::ServerDef> = settings
             .mcp_servers
             .iter()
             .cloned()
             .map(Into::into)
             .collect();
-        if !defs.is_empty() {
-            ion_core::McpService::new().start_into(&defs, catalog).await;
+        let (started, stopped) = match host.mcp_service {
+            Some(service) => service.ensure(&mcp_defs, catalog).await,
+            None => ion_core::McpService::new().ensure(&mcp_defs, catalog).await,
+        };
+        started_total += started;
+        stopped_total += stopped;
+        // A newly configured MCP server must also be durably admitted
+        // to the main lane to enter future model-step snapshots — the
+        // active-set filter gates the host selection, the lane grant
+        // is the authority (§19).
+        for def in &mcp_defs {
+            let scope = format!("mcp:{}", def.name);
+            if let Err(err) = session.admit_structural_scope(scope).await {
+                notice(state, &format!("admit mcp:{} failed: {err}", def.name));
+            }
         }
     }
 
-    // 6) The summary notice: what applied, what needs restart.
+    // 6) Provider cache: pi's resetApiProviders — the factory
+    //    re-resolves auth material (auth.json, env keys) per
+    //    construction, so dropping the cache makes the next model
+    //    step rebuild with fresh credentials. The desktop base URL is
+    //    launch-frozen in the factory closure and needs a restart.
+    if let Some(provider) = host.provider {
+        provider.invalidate();
+    }
+
+    // 7) The summary notice: what applied, what changed live.
     let mut parts: Vec<String> = Vec::new();
     parts.push("keybindings, theme, catalog".to_owned());
     if let Some(note) = context_note {
         parts.push(note);
     }
-    if started > 0 {
+    if started_total > 0 || stopped_total > 0 {
         parts.push(format!(
-            "started {started} new extension{}",
-            if started == 1 { "" } else { "s" }
+            "peers: {started_total} started, {stopped_total} stopped"
         ));
     }
-    let summary = parts.join(" · ");
-    if restart_note.is_empty() {
-        notice(state, &format!("reloaded {summary}"));
-    } else {
-        notice(
-            state,
-            &format!("reloaded {summary} — {}", restart_note.join("; ")),
-        );
-    }
+    notice(state, &format!("reloaded {}", parts.join(" · ")));
 }
 
 /// The TUI event loop: runtime events and terminal keys into the
@@ -6502,16 +6526,21 @@ pub async fn run(
                             } else if matches!(effect, UiEffect::ReloadConfig) {
                                 // /reload: re-read settings, rebuild the
                                 // keymap/theme/flags, refresh trusted
-                                // context, and additively start newly
-                                // configured peers. The loop owns all of
-                                // it (disk reads + state mutation).
+                                // context, and reconcile live peers
+                                // against the supervision registry. The
+                                // loop owns all of it (disk reads +
+                                // state mutation).
                                 reload_config(
                                     &session,
                                     &mut state,
                                     &mut keymap,
                                     &mut theme,
-                                    host.tool_catalog.as_ref(),
-                                    host.extension_service.as_ref(),
+                                    ReloadHost {
+                                        catalog: host.tool_catalog.as_ref(),
+                                        mcp_service: host.mcp_service.as_ref(),
+                                        extension_service: host.extension_service.as_ref(),
+                                        provider: host.provider.as_ref(),
+                                    },
                                     host.trust_project,
                                 )
                                 .await;

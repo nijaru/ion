@@ -278,14 +278,16 @@ pub(crate) async fn supervise_tool_peer<F>(
     mut ready: Option<oneshot::Sender<()>>,
     label: &str,
     make_tool: F,
+    cancel: CancellationToken,
 ) where
     F: Fn(Arc<StdioRpc>, ToolSpec) -> Arc<dyn Tool> + Send + Sync + 'static,
 {
     let mut failures = 0;
     loop {
-        let Some(lifetime) = service.lifetime() else {
-            return;
-        };
+        // The registry creates this token as a child of the catalog
+        // lifetime, so catalog close cancels it too; within the loop it
+        // is the single stop signal (peer replacement or catalog death).
+        let lifetime = cancel.clone();
 
         let (closed_tx, mut closed_rx) = watch::channel(false);
         let callback_scope = scope.clone();

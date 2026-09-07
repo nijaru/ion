@@ -101,6 +101,99 @@ async fn mcp_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
     assert_eq!(outcome.output, "echo: after restart");
 }
 
+fn spawncount_server(marker: &std::path::Path) -> crate::ServerDef {
+    let script = format!(
+        "{}/tests/fixtures/spawncount_mcp_server.py",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    crate::ServerDef {
+        name: "counter".to_owned(),
+        command: "python3".to_owned(),
+        args: vec![script, marker.to_string_lossy().into_owned()],
+    }
+}
+
+#[tokio::test]
+async fn ensure_reconciles_without_restarting_unchanged_peers() {
+    // /reload semantics (§19): unchanged defs keep their supervisor,
+    // changed defs replace it, removed defs stop. Process spawn count
+    // is the observable: a process starts exactly once per identity.
+    let root = tempfile::tempdir().expect("tempdir");
+    let marker = root.path().join("spawns.txt");
+    let catalog = crate::ToolCatalog::default();
+    catalog.set_active_mcp_servers(["counter"]);
+    let service = crate::McpService::new();
+
+    let def = spawncount_server(&marker);
+    let (started, stopped) = service.ensure(std::slice::from_ref(&def), &catalog).await;
+    assert_eq!((started, stopped), (1, 0));
+    assert_eq!(spawn_count(&marker), 1, "first ensure starts one process");
+
+    // Same def again (a reload that changed nothing): no new process.
+    let (started, stopped) = service.ensure(std::slice::from_ref(&def), &catalog).await;
+    assert_eq!((started, stopped), (0, 0));
+    assert_eq!(spawn_count(&marker), 1, "unchanged def must not restart");
+
+    // The tool stays live and served by the original process.
+    let outcome = catalog
+        .execute(
+            "counter__echo",
+            &json!({ "message": "still alive" }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.output);
+    assert_eq!(outcome.output, "echo: still alive");
+
+    // Changed args: the old supervisor stops, exactly one new
+    // process starts (a generation replacement inside the same
+    // scope).
+    let marker2 = root.path().join("spawns2.txt");
+    let changed = spawncount_server(&marker2);
+    let (started, stopped) = service
+        .ensure(std::slice::from_ref(&changed), &catalog)
+        .await;
+    assert_eq!((started, stopped), (1, 1));
+    assert_eq!(spawn_count(&marker), 1, "the old process was not respawned");
+    assert_eq!(spawn_count(&marker2), 1, "the replacement started once");
+
+    // The replacement serves under the same scope.
+    let outcome = catalog
+        .execute(
+            "counter__echo",
+            &json!({ "message": "replaced" }),
+            tokio_util::sync::CancellationToken::new(),
+        )
+        .await;
+    assert!(!outcome.is_error, "{}", outcome.output);
+    assert_eq!(outcome.output, "echo: replaced");
+
+    // Removed def: the supervisor stops, the live generation
+    // unregisters, and the declared scope survives (§19) —
+    // verify by re-ensuring the def and observing one fresh spawn.
+    let (started, stopped) = service.ensure(&[], &catalog).await;
+    assert_eq!((started, stopped), (0, 1));
+    assert!(
+        !catalog.specs().iter().any(|s| s.name == "counter__echo"),
+        "removed def unpublishes its tools"
+    );
+    let (started, stopped) = service.ensure(&[changed], &catalog).await;
+    assert_eq!((started, stopped), (1, 0));
+    assert_eq!(spawn_count(&marker2), 2, "re-add spawns once more");
+    assert!(
+        catalog.specs().iter().any(|s| s.name == "counter__echo"),
+        "re-add republishes under the retained scope"
+    );
+
+    catalog.close().await.expect("close catalog");
+}
+
+fn spawn_count(marker: &std::path::Path) -> usize {
+    std::fs::read_to_string(marker)
+        .map(|text| text.lines().filter(|line| line.contains("spawn")).count())
+        .unwrap_or(0)
+}
+
 #[tokio::test]
 async fn broken_mcp_server_never_blocks_startup() {
     let catalog = crate::ToolCatalog::default();

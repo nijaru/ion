@@ -315,11 +315,21 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 /// Compose the tool surface: core tools plus explicitly active MCP server
 /// tools. A failing server logs and is skipped - one broken server never
 /// blocks startup (DESIGN.md §19.1). The workspace directory is the tool
-/// path boundary, so it must resolve or startup fails.
+/// path boundary, so it must resolve or startup fails. Also returns the
+/// persistent MCP service handle: /reload reuses the same service so its
+/// registry diffs the live server set instead of starting fresh
+/// processes on every reload.
 async fn build_catalog(
     settings: &Settings,
     cli: &Cli,
-) -> Result<(ion_core::ToolCatalog, Option<ion_core::ExtensionService>), std::io::Error> {
+) -> Result<
+    (
+        ion_core::ToolCatalog,
+        Option<ion_core::ExtensionService>,
+        Option<std::sync::Arc<ion_core::McpService>>,
+    ),
+    std::io::Error,
+> {
     let cwd = std::env::current_dir()?;
     let tools = ion_core::ToolCatalog::with_cwd_sandbox_and_paths(
         cwd.clone(),
@@ -327,14 +337,16 @@ async fn build_catalog(
         settings.workspace_policy(),
     );
     tools.set_active_mcp_servers(&settings.active_mcp_servers);
-    if !settings.mcp_servers.is_empty() {
-        let defs: Vec<ion_core::ServerDef> = settings
-            .mcp_servers
-            .iter()
-            .cloned()
-            .map(Into::into)
-            .collect();
-        ion_core::McpService::new().start_into(&defs, &tools).await;
+    let mcp_defs: Vec<ion_core::ServerDef> = settings
+        .mcp_servers
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .collect();
+    let mcp_service =
+        (!mcp_defs.is_empty()).then(|| std::sync::Arc::new(ion_core::McpService::new()));
+    if let Some(service) = &mcp_service {
+        service.start_into(&mcp_defs, &tools).await;
     }
     // Project-local extension manifests load only under an explicit
     // trust grant (§24.5). The service handle stays alive for the TUI
@@ -346,7 +358,7 @@ async fn build_catalog(
     if let Some(service) = &extension_service {
         service.start_into(&ext_defs, &tools).await;
     }
-    Ok((tools, extension_service))
+    Ok((tools, extension_service, mcp_service))
 }
 
 /// TUI startup failure after the terminal guard exists: restore the
@@ -581,7 +593,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (tools, extension_service) = match build_catalog(settings, cli).await {
+    let (tools, extension_service, mcp_service) = match build_catalog(settings, cli).await {
         Ok(built) => built,
         Err(err) => {
             restore_tui_startup_terminal(guard);
@@ -801,6 +813,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             workspace_files: tui::workspace_file_list(&cwd),
             provider: Some(Arc::clone(&root_provider)),
             tool_catalog: Some(tools.clone()),
+            mcp_service: mcp_service.clone(),
             trust_project: cli.trust_project,
             extension_service,
         },
@@ -1156,7 +1169,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let cwd =
         std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let (tools, _extension_service) = build_catalog(settings, cli)
+    let (tools, _extension_service, _mcp_service) = build_catalog(settings, cli)
         .await
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {

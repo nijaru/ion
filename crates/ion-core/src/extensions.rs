@@ -50,6 +50,9 @@ pub struct ExtensionService {
     peers: std::sync::Arc<
         std::sync::Mutex<std::collections::HashMap<String, std::sync::Arc<StdioRpc>>>,
     >,
+    /// Live-supervisor registry for `ensure` diffs (/reload). Arc'd:
+    /// the service is Clone, the registry is one logical instance.
+    registry: std::sync::Arc<crate::peer::PeerRegistry>,
 }
 
 impl ExtensionService {
@@ -78,9 +81,71 @@ impl ExtensionService {
     /// Start `defs` and register their tools under `ext:<name>` scopes.
     /// A failing extension logs a warning and is skipped: one broken
     /// extension never blocks startup.
-    pub async fn start_into(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) {
+    /// Reconcile the configured extension set (pi parity: the
+    /// extension half of /reload): unchanged defs keep running,
+    /// changed defs replace their supervisor inside the same declared
+    /// scope, removed defs stop with their live generation unpublished
+    /// and their commands pruned (§19: never a scope revocation).
+    /// Returns `(started, stopped)`.
+    pub async fn ensure(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) -> (usize, usize) {
+        let mut started = 0usize;
+        let mut stopped = 0usize;
+
+        // Stop obsolete supervisors first: a changed def must fully
+        // release its old supervisor (scope unregistered, peer map
+        // entry removed) before the replacement starts.
+        let desired: Vec<String> = defs
+            .iter()
+            .map(|def| crate::peer::peer_key(&def.name, &def.command, &def.args))
+            .collect();
+        let obsolete: Vec<String> = self
+            .registry
+            .keys()
+            .into_iter()
+            .filter(|key| !desired.contains(key))
+            .collect();
+        // Extension names of the stopped peers, for command pruning.
+        let stopped_extensions: Vec<String> = obsolete
+            .iter()
+            .map(|key| key.split('\0').next().unwrap_or_default().to_owned())
+            .collect();
+        for key in obsolete {
+            if self.registry.stop(&key).await {
+                stopped += 1;
+            }
+        }
+        // Prune commands of extensions whose defs vanished entirely;
+        // a changed def re-registers on discovery (retain-by-extension
+        // inside register_discovered_commands).
+        let fully_removed: Vec<&String> = stopped_extensions
+            .iter()
+            .filter(|name| !defs.iter().any(|def| &def.name == *name))
+            .collect();
+        if !fully_removed.is_empty() {
+            let mut registry = self
+                .commands
+                .write()
+                .expect("extension command registry poisoned");
+            for name in &fully_removed {
+                registry.retain(|command| &command.extension != *name);
+            }
+            let snapshot = registry.clone();
+            drop(registry);
+            self.hub
+                .publish(ExtensionUiEvent::Commands { commands: snapshot });
+        }
+
         for def in defs {
+            let key = crate::peer::peer_key(&def.name, &def.command, &def.args);
+            if self.registry.contains(&key) {
+                continue;
+            }
+            let Some(lifetime) = catalog.service_handle().lifetime() else {
+                continue;
+            };
+            let cancel = lifetime.child_token();
             let (ready_tx, ready_rx) = oneshot::channel();
+            let (stopped_tx, stopped_rx) = oneshot::channel();
             let def = def.clone();
             let service = catalog.service_handle();
             let name = def.name.clone();
@@ -93,6 +158,7 @@ impl ExtensionService {
             let hub = self.hub.clone();
             let commands = std::sync::Arc::clone(&self.commands);
             let peers = std::sync::Arc::clone(&self.peers);
+            let supervise_cancel = cancel.clone();
             let spawned = service.spawn(async move {
                 supervise_extension_peer(
                     PeerDef {
@@ -103,19 +169,32 @@ impl ExtensionService {
                     scope,
                     peer_service,
                     Some(ready_tx),
-                    hub,
-                    commands,
-                    peers,
+                    ExtensionSupervisionContext {
+                        hub,
+                        commands,
+                        peers,
+                    },
+                    supervise_cancel,
                 )
                 .await;
+                let _ = stopped_tx.send(());
             });
             if !spawned {
                 continue;
             }
+            self.registry.record(key, cancel, stopped_rx);
             // Wait only for the first discovery attempt. Later retries are
             // owned by the service task and do not block other extensions.
             let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;
+            started += 1;
         }
+        (started, stopped)
+    }
+
+    /// Start `defs` without diffing (the legacy startup path —
+    /// equivalent to `ensure` against an empty registry).
+    pub async fn start_into(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) {
+        self.ensure(defs, catalog).await;
     }
 }
 
@@ -778,23 +857,37 @@ impl rmcp::ClientHandler for ExtensionUiHandler {
 /// discovered once per live generation, peer death clears its UI state
 /// (pi resetExtensionUI scoped to one extension), and the live
 /// connection is tracked for `/command` routing.
+/// Extension-side service state one supervisor needs beyond the
+/// shared tool-peer loop: the UI hub, the command registry, and the
+/// live connection map.
+pub(crate) struct ExtensionSupervisionContext {
+    pub(crate) hub: ExtensionUiHub,
+    pub(crate) commands: std::sync::Arc<std::sync::RwLock<Vec<ExtensionCommand>>>,
+    pub(crate) peers:
+        std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<StdioRpc>>>>,
+}
+
 pub(crate) async fn supervise_extension_peer(
     def: PeerDef,
     scope: String,
     service: CatalogService,
     mut ready: Option<oneshot::Sender<()>>,
-    hub: ExtensionUiHub,
-    commands: std::sync::Arc<std::sync::RwLock<Vec<ExtensionCommand>>>,
-    peers: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Arc<StdioRpc>>>>,
+    context: ExtensionSupervisionContext,
+    cancel: CancellationToken,
 ) {
     use crate::rpc::{HANDSHAKE_TIMEOUT, spawn_with_handler};
+    let ExtensionSupervisionContext {
+        hub,
+        commands,
+        peers,
+    } = context;
 
     let extension = def.name.clone();
     let mut failures = 0u32;
     loop {
-        let Some(lifetime) = service.lifetime() else {
-            return;
-        };
+        // The registry creates this token as a child of the catalog
+        // lifetime; within the loop it is the single stop signal.
+        let lifetime = cancel.clone();
         let (closed_tx, mut closed_rx) = tokio::sync::watch::channel(false);
         let callback_scope = scope.clone();
         let callback_service = service.clone();

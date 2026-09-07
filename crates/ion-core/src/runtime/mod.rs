@@ -726,7 +726,7 @@ impl SessionHandle {
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
 
-    pub(crate) async fn admit_structural_scope(
+    pub async fn admit_structural_scope(
         &self,
         scope: impl Into<String>,
     ) -> Result<(), CommandError> {

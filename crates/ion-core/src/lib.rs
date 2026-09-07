@@ -15,6 +15,7 @@ mod harness;
 mod ids;
 mod mcp;
 mod operation;
+mod peer;
 mod policy;
 mod process;
 mod provider;
