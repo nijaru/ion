@@ -28,9 +28,9 @@ pub struct CodexCredential {
 }
 
 impl CodexCredential {
-    /// Resolve an existing Pi OAuth credential without modifying the Pi
-    /// authentication file. An explicit environment token takes precedence.
-    pub fn from_environment_or_pi() -> Result<Self, String> {
+    /// Resolve an environment token, Ion credential, or explicitly configured
+    /// read-only Pi file, in that order. No credential is refreshed here.
+    pub fn resolve() -> Result<Self, String> {
         let access_token = std::env::var("OPENAI_CODEX_ACCESS_TOKEN").ok();
         let account_id = std::env::var("OPENAI_CODEX_ACCOUNT_ID").ok();
         if let Some(access_token) = access_token {
@@ -46,8 +46,21 @@ impl CodexCredential {
             });
         }
 
-        let path = pi_auth_path()?;
-        let document = std::fs::read_to_string(&path).map_err(|err| {
+        let owned = crate::auth::AuthFile::owned().map_err(|err| err.to_string())?;
+        let pi_path = std::env::var_os("ION_PI_AUTH").map(std::path::PathBuf::from);
+        Self::from_files(&owned, pi_path.as_deref())
+    }
+
+    fn from_files(
+        owned: &crate::auth::AuthFile,
+        pi_path: Option<&std::path::Path>,
+    ) -> Result<Self, String> {
+        if let Some(credential) = owned.read("openai-codex").map_err(|err| err.to_string())? {
+            let document = serde_json::json!({"openai-codex": credential}).to_string();
+            return parse_pi_credential(&document, now_millis());
+        }
+        let path = pi_path.ok_or_else(|| "no OpenAI Codex credential; use /login or explicitly set ION_PI_AUTH for read-only Pi reuse".to_owned())?;
+        let document = std::fs::read_to_string(path).map_err(|err| {
             format!(
                 "cannot read Pi authentication file {}: {err}",
                 path.display()
@@ -656,16 +669,6 @@ fn find_line_end(buffer: &[u8]) -> Option<usize> {
     buffer.iter().position(|&byte| byte == b'\n')
 }
 
-fn pi_auth_path() -> Result<std::path::PathBuf, String> {
-    if let Some(path) = std::env::var_os("ION_PI_AUTH") {
-        return Ok(path.into());
-    }
-    let base = etcetera::base_strategy::choose_base_strategy()
-        .map_err(|err| format!("cannot resolve the user home directory: {err}"))?;
-    use etcetera::base_strategy::BaseStrategy;
-    Ok(base.home_dir().join(".pi").join("agent").join("auth.json"))
-}
-
 fn now_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -688,7 +691,7 @@ fn parse_pi_credential(document: &str, now: u64) -> Result<CodexCredential, Stri
         && expires <= now
     {
         return Err(
-            "the stored OAuth access token is expired; log in with Pi or set OPENAI_CODEX_ACCESS_TOKEN"
+            "the stored OAuth access token is expired; use /login or set OPENAI_CODEX_ACCESS_TOKEN"
                 .to_owned(),
         );
     }
@@ -725,6 +728,45 @@ mod tests {
     use std::io::{Read, Write};
     use std::net::TcpListener;
     use std::time::Duration;
+
+    #[test]
+    fn stored_credentials_have_one_owner_and_pi_reuse_is_explicit() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let owned = crate::auth::AuthFile::with_path(dir.path().join("ion-auth.json"));
+        let pi = dir.path().join("pi-auth.json");
+        let pi_document = r#"{"openai-codex":{"type":"oauth","access":"pi-test","refresh":"","expires":9007199254740991,"accountId":"account"}}"#;
+        std::fs::write(&pi, pi_document).expect("Pi fixture");
+        assert!(CodexCredential::from_files(&owned, None).is_err());
+        assert_eq!(
+            CodexCredential::from_files(&owned, Some(&pi))
+                .expect("explicit reuse")
+                .access_token(),
+            "pi-test"
+        );
+        owned
+            .write(
+                "openai-codex",
+                Some(&crate::auth::Credential::Oauth {
+                    access: "ion-test".into(),
+                    refresh: String::new(),
+                    expires: i64::MAX,
+                    account_id: Some("account".into()),
+                }),
+            )
+            .expect("Ion login");
+        assert_eq!(
+            CodexCredential::from_files(&owned, Some(&pi))
+                .expect("Ion wins")
+                .access_token(),
+            "ion-test"
+        );
+        owned.write("openai-codex", None).expect("Ion logout");
+        assert!(CodexCredential::from_files(&owned, None).is_err());
+        assert_eq!(
+            std::fs::read_to_string(pi).expect("Pi unchanged"),
+            pi_document
+        );
+    }
 
     fn spawn_sse_server(body: &'static str, captured: std::sync::mpsc::Sender<String>) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");

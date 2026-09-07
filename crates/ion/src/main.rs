@@ -1030,16 +1030,16 @@ fn provider_material(
     };
     match selection.provider.as_str() {
         "openai-codex" => Ok(ProviderMaterial {
-            codex_credential: Some(CodexCredential::from_environment_or_pi()?),
+            codex_credential: Some(CodexCredential::resolve()?),
             ..base
         }),
         "openrouter" => {
             // pi's resolve order: the stored credential first, then
             // the environment. /login writes the stored credential.
-            let key = ion::auth::AuthFile::shared()
+            let key = ion::auth::AuthFile::owned()
+                .map_err(|err| err.to_string())?
                 .openrouter_key()
-                .ok()
-                .flatten();
+                .map_err(|err| err.to_string())?;
             let Some(key) = key else {
                 return Err(
                     "model requires an OpenRouter key: /login openrouter or OPENROUTER_API_KEY"
@@ -1064,13 +1064,13 @@ fn material_for_provider(base: &ProviderMaterial, provider: &str) -> ProviderMat
     let mut material = base.clone();
     match provider {
         "openai-codex" => {
-            material.codex_credential = CodexCredential::from_environment_or_pi().ok();
+            material.codex_credential = CodexCredential::resolve().ok();
         }
         "openrouter" => {
             // pi's resolve order: the stored credential first, then
             // the environment. /login writes the stored credential.
-            material.openrouter_key = ion::auth::AuthFile::shared()
-                .openrouter_key()
+            material.openrouter_key = ion::auth::AuthFile::owned()
+                .and_then(|file| file.openrouter_key())
                 .ok()
                 .flatten();
         }

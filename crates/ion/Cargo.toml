@@ -33,10 +33,10 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
+tempfile = "3.27.0"
 
 [dev-dependencies]
 nix = { version = "0.31.3", features = ["fs", "term"] }
-tempfile = "3.27.0"
 
 [lints]
 workspace = true

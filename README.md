@@ -28,7 +28,11 @@ cargo run -p ion -- --model openai-codex/gpt-5.6-luna
 ```
 
 For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
-`OPENAI_CODEX_ACCOUNT_ID`. Ion does not refresh or rewrite Pi credentials.
+`OPENAI_CODEX_ACCOUNT_ID`. Ion stores login credentials in its configuration directory at `ion/auth.json`
+(`ION_AUTH_FILE` overrides the path). To reuse Pi credentials read-only, explicitly
+set `ION_PI_AUTH` to its auth file. Ion never refreshes or rewrites that file.
+`/logout` removes only Ion-stored credentials; explicit environment credentials
+and read-only Pi reuse remain configured until their environment variables are unset.
 
 ## Usage
 
