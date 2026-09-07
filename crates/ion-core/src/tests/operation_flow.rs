@@ -528,6 +528,7 @@ async fn close_while_operating_suspends_instead_of_cancelling() {
 
 #[tokio::test]
 async fn retryable_failures_retry_until_success_and_discard_partial_output() {
+    let root = tempfile::tempdir().expect("workspace");
     // Attempt 1 streams partial text, then fails retryably; attempt 2
     // continues the scripted cursor and completes. The operation must
     // finish with only the retried attempt's text as content.
@@ -536,7 +537,7 @@ async fn retryable_failures_retry_until_success_and_discard_partial_output() {
         ScriptedMessage::fail("provider returned 429: rate limit exceeded"),
         ScriptedMessage::text("final answer"),
     ]);
-    let runtime = Runtime::start_interactive_with_retry(
+    let runtime = Runtime::start_interactive_in_cwd(
         provider,
         ToolRegistry::default(),
         SessionStore::open_in_memory().expect("in-memory store"),
@@ -547,6 +548,7 @@ async fn retryable_failures_retry_until_success_and_discard_partial_output() {
             max_retries: 3,
             base_delay_ms: 1,
         },
+        root.path(),
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");
@@ -586,13 +588,14 @@ async fn retryable_failures_retry_until_success_and_discard_partial_output() {
 
 #[tokio::test]
 async fn exhausted_retries_settle_the_last_failure() {
+    let root = tempfile::tempdir().expect("workspace");
     let provider = ScriptedProvider::new(vec![
         ScriptedMessage::fail("503 service unavailable"),
         ScriptedMessage::fail("503 service unavailable"),
         ScriptedMessage::fail("503 service unavailable"),
         ScriptedMessage::fail("503 service unavailable"),
     ]);
-    let runtime = Runtime::start_interactive_with_retry(
+    let runtime = Runtime::start_interactive_in_cwd(
         provider,
         ToolRegistry::default(),
         SessionStore::open_in_memory().expect("in-memory store"),
@@ -603,6 +606,7 @@ async fn exhausted_retries_settle_the_last_failure() {
             max_retries: 2,
             base_delay_ms: 1,
         },
+        root.path(),
     );
     let session = runtime.session();
     let (_snapshot, mut events) = session.subscribe().await.expect("subscribe");

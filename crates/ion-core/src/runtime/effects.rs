@@ -9,7 +9,9 @@ impl<P: Provider> SessionRuntime<P> {
         tools: Vec<ToolSpec>,
     ) {
         let checkpoint_leaf = self
-            .operation_lane_name(operation_id)
+            .checkpoint_enabled
+            .then(|| self.operation_lane_name(operation_id))
+            .flatten()
             .and_then(|name| self.lane(name))
             .and_then(|lane| lane.state.leaf);
         let checkpoint_tx = self.checkpoint_tx.clone();

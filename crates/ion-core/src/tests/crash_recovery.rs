@@ -972,6 +972,7 @@ async fn worker_indeterminate_does_not_leak_into_main_snapshot() {
 
 #[tokio::test]
 async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
+    let root = tempfile::tempdir().expect("workspace");
     let store = SessionStore::open_in_memory().expect("store");
     let runtime = Runtime::start_interactive_with_effect_gate(
         ScriptedProvider::new(vec![
@@ -981,6 +982,7 @@ async fn parked_approval_survives_process_loss_and_decides_after_reopen() {
         ToolRegistry::default(),
         store.clone(),
         EffectGate::new(EffectBoundary::ToolExecution),
+        root.path(),
     );
     let session_id = runtime.session_id();
     let session = runtime.session();

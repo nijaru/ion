@@ -309,6 +309,7 @@ mod tests {
         };
         let mut composition = Composition::new(provider, ToolRegistry::default(), store.clone());
         composition.cwd = Some(dir.path().to_str().unwrap().to_owned());
+        composition.checkpoint_enabled = true;
         let gate = EffectGate::new(EffectBoundary::ModelExecution);
         composition.effect_gate = Some(Arc::new(gate.clone()));
         let runtime = composition.spawn(SessionId::generate(), None);
@@ -363,5 +364,45 @@ mod tests {
     #[tokio::test]
     async fn checkpoint_persistence_failure_prevents_provider_execution() {
         runtime_checkpoint_case(true).await;
+    }
+    #[tokio::test]
+    async fn noninteractive_composition_does_not_capture_checkpoints() {
+        let dir = repository().await;
+        std::fs::write(dir.path().join("tracked"), "changed\n").unwrap();
+        let provider =
+            crate::provider::ScriptedProvider::new(vec![crate::provider::ScriptedMessage::text(
+                "done",
+            )]);
+        let runtime = Runtime::start_with_policy_and_resources_in_cwd(
+            provider,
+            ToolRegistry::default(),
+            SessionStore::open_in_memory().unwrap(),
+            Arc::new(crate::policy::DefaultPolicy),
+            Vec::new(),
+            dir.path().to_str().unwrap(),
+        );
+        let session = runtime.session();
+        let (_, mut events) = session.subscribe().await.unwrap();
+        session.submit_if_idle("go").await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if matches!(
+                    events.recv().await.unwrap(),
+                    RuntimeEvent::OperationFinished { .. }
+                ) {
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            git(dir.path(), &["for-each-ref", "refs/ion/checkpoints/"])
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        session.close().await.unwrap();
+        runtime.join().await.unwrap();
     }
 }
