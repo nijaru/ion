@@ -456,6 +456,7 @@ where
             RuntimeEvent::RetryScheduled { .. }
             | RuntimeEvent::CacheMiss { .. }
             | RuntimeEvent::OperationStarted { .. }
+            | RuntimeEvent::HistoryChanged { .. }
             | RuntimeEvent::SessionClosed { .. } => {}
         }
     }

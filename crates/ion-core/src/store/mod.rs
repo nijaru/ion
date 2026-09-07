@@ -71,7 +71,7 @@ pub struct EntryRecord {
     pub seq: u64,
     /// Parent in the semantic conversation tree. Session transitions
     /// bind this before persistence; the store only validates it.
-    pub(crate) parent: Option<EntryId>,
+    pub parent: Option<EntryId>,
     pub entry: SessionEntry,
 }
 
@@ -557,6 +557,12 @@ enum StoreCommand {
     ExportEntries {
         session_id: SessionId,
         reply: oneshot::Sender<Result<(SessionRecord, Vec<SessionEntry>), StoreError>>,
+    },
+    SetLaneLeaf {
+        session_id: SessionId,
+        lane_name: String,
+        entry_id: EntryId,
+        reply: oneshot::Sender<Result<(), StoreError>>,
     },
     /// Import a JSONL export into a new durable session (`/import`).
     /// The reply is the new session id.
@@ -1054,8 +1060,24 @@ impl SessionStore {
         Ok((target, text))
     }
 
-    /// Record one turn checkpoint (pi's git-checkpoint): the git ref
-    /// capturing the tree state before the model step at `entry_id`.
+    /// Persist a runtime-validated idle lane navigation.
+    pub(crate) async fn set_lane_leaf(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        entry_id: EntryId,
+    ) -> Result<(), StoreError> {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::SetLaneLeaf {
+            session_id,
+            lane_name,
+            entry_id,
+            reply,
+        })
+        .await
+    }
+
+    /// Record one turn checkpoint keyed at its user-message entry.
     pub async fn record_checkpoint(
         &self,
         session_id: SessionId,

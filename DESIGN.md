@@ -112,6 +112,16 @@ The tree only grows. A new append uses the target lane's current leaf as its par
 
 Branches share prefixes by reference. Branching within a session does not copy history.
 
+An idle main lane may navigate to any existing entry in its session. Navigation
+changes only its durable leaf; it never truncates the tree, restores files,
+changes configuration, or completes an operation. Active operations, queued
+input, and pending shell effects exclude navigation. `SessionHandle` owns this
+transition and full-tree readback; persistence mutation remains crate-private.
+After committing, the writer updates its resident leaf and publishes
+`HistoryChanged`. Subscribers rebuild their projection from snapshot plus
+cursor, including after event loss. Returning to an old descendant or sibling
+branch remains possible after subsequent appends.
+
 The conversation tree must not contain lane pointers, operation state, effect bookkeeping, queues, usage, agent control, or runtime configuration merely because those values are durable.
 
 ## 6. Lanes

@@ -34,10 +34,12 @@ mod fullscreen;
 mod help;
 mod markdown;
 mod render;
+mod tree;
 pub use render::{Palette, palette};
 use render::{Transcript, append_snapshot_entries};
 #[cfg(test)]
 use render::{build_live, entry_lines, wrap_line};
+use tree::{TreeRow, TreeSelector, handle_tree_selector_key};
 
 /// Bounded workspace listing for the `@` file picker and path
 /// completion (pi parity: fd-backed fuzzy search). One breadth-first
@@ -254,6 +256,14 @@ pub enum UiEffect {
     /// (pi parity: fork from a past message). The host resolves this
     /// into `ForkMessagesListed`.
     RequestForkMessages,
+    /// Read the session writer's full conversation tree (/tree).
+    RequestTreeRows,
+    /// Navigate the main lane to the picked entry (pi parity: the
+    /// /tree selector's confirm). The run loop resolves it and
+    /// rebuilds the transcript to the navigated prefix.
+    NavigateLeaf {
+        entry_id: ion_core::EntryId,
+    },
     /// Load the attached session's aggregate stats for the /session
     /// card (pi parity: usage/token breakdown by model). The host
     /// resolves this into `SessionStatsListed`.
@@ -561,6 +571,12 @@ pub enum UiMessage {
     /// The host delivered the attached session's user messages for the
     /// /fork picker (pi parity).
     ForkMessagesListed(Vec<ForkMessageRow>),
+    /// The host delivered the main lane's ancestor-path rows for the
+    /// /tree picker, leaf-first.
+    TreeRowsListed {
+        current: Option<ion_core::EntryId>,
+        rows: Vec<(ion_core::EntryId, String)>,
+    },
     /// The run loop resolved auth picker rows (providers + their
     /// login methods or stored credential kinds). The reducer never
     /// reads auth.json.
@@ -1352,6 +1368,9 @@ pub struct UiState {
     /// /fork message picker (pi parity): rows arrive from the host as
     /// `ForkMessagesListed`; the reducer never reads the store.
     fork_selector: Option<ForkSelector>,
+    /// /tree picker (pi parity): the main lane's ancestor-path rows
+    /// arrive as `TreeRowsListed`; enter navigates the lane leaf.
+    tree_selector: Option<TreeSelector>,
     /// /login //logout picker (pi's OAuth selector).
     auth_selector: Option<AuthSelector>,
     /// A login flow in progress (pi's login dialog): the composer
@@ -2333,6 +2352,7 @@ impl UiState {
         self.thinking_selector = None;
         self.file_selector = None;
         self.pending_resume_query = None;
+        self.tree_selector = None;
         self.reset_composer();
     }
 
@@ -2571,6 +2591,21 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
                 return (state, None);
             }
             state.open_fork_selector(rows);
+            (state, None)
+        }
+        UiMessage::TreeRowsListed { current, rows } => {
+            if rows.is_empty() {
+                state
+                    .pending_scrollback
+                    .push(Line::from("no entries in this session yet").dim());
+                return (state, None);
+            }
+            state.open_tree_selector(
+                rows.into_iter()
+                    .map(|(entry_id, label)| TreeRow { entry_id, label })
+                    .collect(),
+                current,
+            );
             (state, None)
         }
         UiMessage::AuthRowsListed { logout, rows } => {
@@ -2980,6 +3015,9 @@ fn handle_fork_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opti
     }
 }
 
+/// The /tree picker owns the keyboard while open (pi's tree
+/// selector): the composer filters, enter navigates to the picked
+/// row, esc closes and restores the draft.
 /// The /login //logout picker owns the keyboard while open (pi's
 /// OAuth selector). Enter resolves the picked row through a run-loop
 /// effect; esc closes and restores the draft.
@@ -3316,6 +3354,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         || state.session_selector.is_some()
         || state.file_selector.is_some()
         || state.fork_selector.is_some()
+        || state.tree_selector.is_some()
         || state.auth_selector.is_some()
         || state.login_progress.is_some()
         || state.scoped_models_selector.is_some()
@@ -3333,6 +3372,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.login_progress = None;
                 state.close_scoped_models_selector();
                 state.close_settings_selector();
+                state.close_tree_selector();
                 state.hotkeys_visible = false;
                 return handle_action(state, action);
             }
@@ -3350,6 +3390,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_auth_selector();
                 state.close_scoped_models_selector();
                 state.close_settings_selector();
+                state.close_tree_selector();
                 state.hotkeys_visible = false;
                 if state.composer.is_empty() {
                     state.hint = Some("ctrl+c again to exit".to_owned());
@@ -3377,6 +3418,9 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     }
     if state.fork_selector.is_some() {
         return handle_fork_selector_key(state, key);
+    }
+    if state.tree_selector.is_some() {
+        return handle_tree_selector_key(state, key);
     }
     if state.auth_selector.is_some() {
         return handle_auth_selector_key(state, key);
@@ -3570,6 +3614,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/reload                - re-read settings and project context live",
                 "/scoped-models         - enable/disable models (ctrl+s saves)",
                 "/settings              - view and toggle live settings",
+                "/tree                  - navigate to any point in this session",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
@@ -3837,6 +3882,23 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
             }
             (std::mem::take(state), Some(UiEffect::RequestForkMessages))
         }
+        "tree" => {
+            // pi parity: the session tree picker — navigate to any
+            // point on the main lane's branch. The run loop reads the
+            // rows and rebuilds the transcript on navigate.
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(
+                    state,
+                    "cannot navigate while the current operation is running",
+                );
+                return (std::mem::take(state), None);
+            }
+            if state.session_id.is_none() {
+                notice(state, "no session is attached");
+                return (std::mem::take(state), None);
+            }
+            (std::mem::take(state), Some(UiEffect::RequestTreeRows))
+        }
         "login" => {
             // pi parity: bare /login opens the provider picker; a
             // named provider skips straight to its flow.
@@ -3883,7 +3945,10 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
     }
 }
 
-const MAX_COMPLETION_SUGGESTIONS: usize = 24;
+/// The builtin command list is 26 entries; the cap must never
+/// truncate it (extensions push past it, which is the intended
+/// display limit, not builtin truncation).
+const MAX_COMPLETION_SUGGESTIONS: usize = 26;
 
 /// Rows the `@` file picker filters over (pi caps its fd-backed list at
 /// 100 per query; the picker renders a bounded window anyway).
@@ -4027,6 +4092,7 @@ fn complete_composer(state: &mut UiState) {
                 "scoped-models",
                 "session",
                 "settings",
+                "tree",
                 "share",
                 "thinking",
                 "quit",
@@ -5018,6 +5084,7 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.approval = None;
             state.status = UiStatus::Idle;
         }
+        RuntimeEvent::HistoryChanged { .. } => {}
         RuntimeEvent::SessionClosed { .. } => {
             state.hotkeys_visible = false;
             state.quit_requested = true;
@@ -5169,6 +5236,11 @@ impl UiState {
     /// (§21.4): the snapshot is authoritative for operation status;
     /// partial deltas and missed tool rows are display-only losses.
     fn resync_after_lag(&mut self, snapshot: &SessionSnapshot) {
+        self.last_assistant = snapshot.entries.iter().rev().find_map(|entry| match entry {
+            ion_core::SessionEntry::AssistantMessage { text } => Some(text.clone()),
+            _ => None,
+        });
+        self.thinking_level = snapshot.thinking.clone();
         self.close_model_selector();
         self.hotkeys_visible = false;
         self.queued_prompt = snapshot
@@ -6913,6 +6985,11 @@ pub async fn run(
                                     },
                                 );
                                 state = next;
+                            } else if let UiEffect::NavigateLeaf { entry_id } = &effect {
+                                match session.navigate_leaf(*entry_id).await {
+                                    Ok(_) => notice(&mut state, "navigated to the selected point; files unchanged"),
+                                    Err(err) => notice(&mut state, &format!("navigation failed: {err}")),
+                                }
                             } else if let UiEffect::LogoutProvider { provider } = &effect {
                                 // /logout: remove the stored credential;
                                 // surface exactly what happened.
@@ -7153,6 +7230,40 @@ pub async fn run(
             }
             event = events.recv() => {
                 match event {
+                    Ok(RuntimeEvent::HistoryChanged { .. }) | Err(RuntimeError::SubscriptionLagged) => {
+                        // Bounded loss (§21.4): re-subscribe; the fresh
+                        // snapshot is authoritative for live state.
+                        match session.subscribe().await {
+                            Ok((snapshot, fresh)) => {
+                                events = fresh;
+                                active_operation = match &snapshot.operation {
+                                    OperationStatus::Active { operation_id, .. } => {
+                                        Some(*operation_id)
+                                    }
+                                    OperationStatus::Idle => None,
+                                };
+                                state.resync_after_lag(&snapshot);
+                                // §21.4/§31.14: the snapshot is also
+                                // authoritative for committed history. The
+                                // resume marker is a presentation boundary,
+                                // not a rendered-line prefix.
+                                transcript.clear();
+                                append_snapshot_entries(
+                                    &mut transcript,
+                                    &snapshot.entries,
+                                    resume_entry_count,
+                                    resume_session,
+                                    &palette,
+                                    state.tool_output_expanded,
+                                );
+                            }
+                            Err(err) => {
+                                result = Err(err.into());
+                                break;
+                            }
+                        }
+                        continue;
+                    }
                     Ok(event) => {
                         if let RuntimeEvent::OperationStarted { operation_id, .. } = &event {
                             active_operation = Some(*operation_id);
@@ -7204,40 +7315,6 @@ pub async fn run(
                                 }
                             }
                         }
-                    }
-                    Err(RuntimeError::SubscriptionLagged) => {
-                        // Bounded loss (§21.4): re-subscribe; the fresh
-                        // snapshot is authoritative for live state.
-                        match session.subscribe().await {
-                            Ok((snapshot, fresh)) => {
-                                events = fresh;
-                                active_operation = match &snapshot.operation {
-                                    OperationStatus::Active { operation_id, .. } => {
-                                        Some(*operation_id)
-                                    }
-                                    OperationStatus::Idle => None,
-                                };
-                                state.resync_after_lag(&snapshot);
-                                // §21.4/§31.14: the snapshot is also
-                                // authoritative for committed history. The
-                                // resume marker is a presentation boundary,
-                                // not a rendered-line prefix.
-                                transcript.clear();
-                                append_snapshot_entries(
-                                    &mut transcript,
-                                    &snapshot.entries,
-                                    resume_entry_count,
-                                    resume_session,
-                                    &palette,
-                                    state.tool_output_expanded,
-                                );
-                            }
-                            Err(err) => {
-                                result = Err(err.into());
-                                break;
-                            }
-                        }
-                        continue;
                     }
                     Err(err) => {
                         result = Err(err);
@@ -7489,6 +7566,11 @@ async fn dispatch(
             // totality only.
             None
         }
+        UiEffect::NavigateLeaf { .. } => {
+            // Resolved by the run loop (durable leaf move + transcript
+            // rebuild); match totality only.
+            None
+        }
         UiEffect::RequestAuthRows { .. } => {
             // Resolved by the run loop, which owns the auth file read;
             // match totality only.
@@ -7720,6 +7802,23 @@ async fn dispatch(
                     *state = next;
                 }
                 Err(err) => notice(state, &format!("fork messages failed: {err}")),
+            }
+            None
+        }
+        UiEffect::RequestTreeRows => {
+            match session.tree().await {
+                Ok((leaf, entries)) => {
+                    let rows = tree::rows(entries);
+                    let (next, _) = update(
+                        std::mem::take(state),
+                        UiMessage::TreeRowsListed {
+                            current: leaf,
+                            rows,
+                        },
+                    );
+                    *state = next;
+                }
+                Err(err) => notice(state, &format!("tree read failed: {err}")),
             }
             None
         }
@@ -8164,7 +8263,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 24);
+        assert_eq!(state.pending_scrollback.len(), 25);
     }
 
     #[test]
@@ -11562,6 +11661,61 @@ mod fork_picker_tests {
         assert_eq!(state.composer, "second");
         assert_eq!(state.cursor, "second".chars().count());
     }
+    #[test]
+    fn tree_command_emits_effect_and_picker_opens_navigates() {
+        // /tree asks the run loop for rows; a working turn blocks it.
+        let mut state = UiState::new();
+        state.session_id = Some(ion_core::SessionId::generate());
+        let (_, effect) = handle_command(&mut state, "tree");
+        assert!(matches!(effect, Some(UiEffect::RequestTreeRows)));
+
+        let mut state = UiState::new();
+        state.session_id = Some(ion_core::SessionId::generate());
+        state.status = UiStatus::Working {
+            operation: "op".to_owned(),
+        };
+        let (state, effect) = handle_command(&mut state, "tree");
+        assert!(effect.is_none());
+
+        // Rows arrive: the picker opens leaf-first; enter navigates.
+        let mut state = state;
+        state.status = UiStatus::Idle;
+        let id_a = ion_core::EntryId::generate();
+        let id_b = ion_core::EntryId::generate();
+        let (state, _) = update(
+            state,
+            UiMessage::TreeRowsListed {
+                current: Some(id_a),
+                rows: vec![
+                    (id_a, "user: latest".to_owned()),
+                    (id_b, "assistant: earlier".to_owned()),
+                ],
+            },
+        );
+        assert!(state.tree_selector.is_some());
+        // Leaf-first: row 0 is the current leaf.
+        assert_eq!(
+            state.selected_tree_row().map(|row| row.label),
+            Some("user: latest".to_owned())
+        );
+        // Filter narrows.
+        let state = crate::tui::tests::type_text(state, "earlier");
+        let state = update(state, key(KeyCode::Enter)).0;
+        // Enter on the filtered row navigates and closes the picker.
+        assert!(state.tree_selector.is_none());
+
+        // Empty rows report gracefully.
+        let (state, _) = update(
+            UiState::new(),
+            UiMessage::TreeRowsListed {
+                current: None,
+                rows: Vec::new(),
+            },
+        );
+        assert!(state.tree_selector.is_none());
+        let _ = (id_a, id_b);
+    }
+
     #[test]
     fn settings_picker_cycles_rows_and_persists() {
         let mut state = UiState::new();

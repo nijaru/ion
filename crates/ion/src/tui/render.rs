@@ -541,6 +541,7 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.login_progress.is_some()
         || state.scoped_models_selector.is_some()
         || state.settings_selector.is_some()
+        || state.tree_selector.is_some()
     {
         LIVE_REGION_MAX_ROWS
     } else if state.restore_prompt.is_some() {
@@ -905,6 +906,67 @@ fn scoped_models_selector_lines(
     lines.push(selector_row(
         Line::from("  \u{2191}/\u{2193} \u{00b7} enter toggle \u{00b7} ctrl+a all \u{00b7} ctrl+x clear \u{00b7} ctrl+p provider \u{00b7} ctrl+s save \u{00b7} esc")
             .style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
+/// The /tree picker (pi parity: the tree selector): the main lane's
+/// branch from the leaf up, leaf-first; enter navigates to the row.
+fn tree_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_tree_rows();
+    let selected = state
+        .tree_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = Vec::new();
+    if rows.is_empty() {
+        lines.push(picker_header(
+            "session tree",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
+        lines.push(selector_row(
+            Line::from("  no matching entries").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            "session tree",
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
+        for (index, row) in rows.iter().enumerate().take(end).skip(start) {
+            let is_selected = index == selected;
+            let is_leaf = index == 0;
+            let mut spans = vec![
+                picker_cursor(is_selected, palette),
+                picker_current_marker(is_leaf, palette),
+                picker_label(row.label.clone(), is_selected, palette),
+            ];
+            if is_leaf {
+                spans.push(picker_badge(" · current".to_owned(), palette));
+            }
+            lines.push(selector_row(Line::from(spans), width));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  ↑/↓ · enter navigate · esc").style(palette.system_note),
         width,
     ));
     lines
@@ -1353,6 +1415,8 @@ pub(super) fn build_live_at_height(
         ));
     } else if state.settings_selector.is_some() {
         head.extend(settings_selector_lines(state, palette, width));
+    } else if state.tree_selector.is_some() {
+        head.extend(tree_selector_lines(state, palette, width, head_budget));
     } else if state.session_selector.is_some() {
         head.extend(session_selector_lines(state, palette, width, head_budget));
     } else if state.thinking_selector.is_some() {

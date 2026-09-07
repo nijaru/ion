@@ -10,6 +10,7 @@ mod hosted_agent_lifecycle;
 mod mcp;
 mod multi_lane;
 mod native_tools;
+mod navigation;
 mod operation_flow;
 mod policy_trust;
 mod print_mode;

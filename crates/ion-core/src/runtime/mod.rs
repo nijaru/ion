@@ -379,6 +379,11 @@ pub enum RuntimeEvent {
         /// the call against live state.
         preview: Option<String>,
     },
+    /// The main branch projection changed durably. Rebuild from a snapshot;
+    /// this event never implies an operation completed or files were restored.
+    HistoryChanged {
+        cursor: RuntimeCursor,
+    },
     SessionClosed {
         cursor: RuntimeCursor,
     },
@@ -407,6 +412,7 @@ impl RuntimeEvent {
             Self::ShellStarted { .. }
             | Self::ShellOutput { .. }
             | Self::ShellSettled { .. }
+            | Self::HistoryChanged { .. }
             | Self::SessionClosed { .. } => None,
         }
     }
@@ -432,6 +438,7 @@ impl RuntimeEvent {
             | Self::ShellStarted { cursor, .. }
             | Self::ShellOutput { cursor, .. }
             | Self::ShellSettled { cursor, .. }
+            | Self::HistoryChanged { cursor }
             | Self::SessionClosed { cursor } => *cursor,
         }
     }
@@ -669,6 +676,13 @@ enum SessionCommand {
     SetTrustedResources {
         resources: Vec<TrustedResource>,
         reply: oneshot::Sender<Result<Vec<TrustedResource>, CommandError>>,
+    },
+    ReadTree {
+        reply: oneshot::Sender<(Option<EntryId>, Vec<EntryRecord>)>,
+    },
+    NavigateLeaf {
+        entry_id: EntryId,
+        reply: oneshot::Sender<Result<SessionSnapshot, CommandError>>,
     },
     Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
@@ -911,6 +925,25 @@ impl SessionHandle {
                 thinking,
                 reply,
             })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Read the full immutable conversation tree and the current main leaf.
+    pub async fn tree(&self) -> Result<(Option<EntryId>, Vec<EntryRecord>), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::ReadTree { reply })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)
+    }
+
+    /// Move the idle main lane to an existing session entry. History remains
+    /// intact; subsequent prompts branch from this point. Durable before reply.
+    pub async fn navigate_leaf(&self, entry_id: EntryId) -> Result<SessionSnapshot, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::NavigateLeaf { entry_id, reply })
             .map_err(command_send_error)?;
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
@@ -2504,6 +2537,14 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.set_trusted_resources(resources));
                 false
             }
+            SessionCommand::ReadTree { reply } => {
+                let _ = reply.send((self.main_lane().state.leaf, self.tree_entries.clone()));
+                false
+            }
+            SessionCommand::NavigateLeaf { entry_id, reply } => {
+                let _ = reply.send(self.navigate_leaf(entry_id).await);
+                false
+            }
             SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
                 false
@@ -2994,6 +3035,41 @@ impl<P: Provider> SessionRuntime<P> {
         }
         self.trusted_resources = resources.clone();
         Ok(resources)
+    }
+
+    async fn navigate_leaf(&mut self, entry_id: EntryId) -> Result<SessionSnapshot, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        let state = &self.main_lane().state;
+        if let Some(operation_id) = state.current_operation {
+            return Err(CommandError::Busy { operation_id });
+        }
+        if let Some(pending) = &state.pending_next_run {
+            return Err(CommandError::NextRunQueued {
+                entry_id: pending.entry_id,
+            });
+        }
+        if state.pending_shell.is_some() {
+            return Err(CommandError::ShellPassthroughBusy);
+        }
+        if !self.entry_index.contains_key(&entry_id) {
+            return Err(CommandError::EntryNotFound(entry_id));
+        }
+        self.store
+            .set_lane_leaf(self.session_id, crate::session::lane::MAIN, entry_id)
+            .await
+            .map_err(persistence_command_error)?;
+        self.lanes
+            .get_mut(crate::session::lane::MAIN)
+            .expect("main lane remains resident")
+            .durable
+            .state
+            .leaf = Some(entry_id);
+        self.emit(RuntimeEvent::HistoryChanged {
+            cursor: RuntimeCursor::default(),
+        });
+        Ok(self.snapshot())
     }
 
     /// Run one user shell passthrough on an idle lane (pi parity:
@@ -4700,6 +4776,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::ShellStarted { cursor: slot, .. }
         | RuntimeEvent::ShellOutput { cursor: slot, .. }
         | RuntimeEvent::ShellSettled { cursor: slot, .. }
+        | RuntimeEvent::HistoryChanged { cursor: slot }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
     }
 }
@@ -4724,6 +4801,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ShellStarted { .. } => "shell_started",
         RuntimeEvent::ShellOutput { .. } => "shell_output",
         RuntimeEvent::ShellSettled { .. } => "shell_settled",
+        RuntimeEvent::HistoryChanged { .. } => "history_changed",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
     }
 }

@@ -16,6 +16,8 @@ pub enum CommandError {
     Busy { operation_id: OperationId },
     #[error("the lane already has a pending next run ({entry_id})")]
     NextRunQueued { entry_id: EntryId },
+    #[error("entry {0} does not exist in this session")]
+    EntryNotFound(EntryId),
     #[error("lane {0:?} does not exist")]
     LaneNotFound(String),
     #[error("lane {0:?} already exists")]

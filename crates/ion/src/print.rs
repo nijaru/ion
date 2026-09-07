@@ -116,7 +116,7 @@ impl<W: Write> PrintFrontend<W> {
                 // Retry and cache-miss notices are progress, not
                 // completion.
                 RuntimeEvent::RetryScheduled { .. } => {}
-                RuntimeEvent::CacheMiss { .. } => {}
+                RuntimeEvent::CacheMiss { .. } | RuntimeEvent::HistoryChanged { .. } => {}
             }
         }
     }

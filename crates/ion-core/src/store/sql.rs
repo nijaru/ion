@@ -169,6 +169,18 @@ pub(super) fn handle_command(
         StoreCommand::ExportEntries { session_id, reply } => {
             let _ = reply.send(export_entries(connection, session_id));
         }
+        StoreCommand::SetLaneLeaf {
+            session_id,
+            lane_name,
+            entry_id,
+            reply,
+        } => {
+            let _ =
+                reply
+                    .send(check_injected(fail_next_write).and_then(|()| {
+                        set_lane_leaf(connection, session_id, &lane_name, entry_id)
+                    }));
+        }
         StoreCommand::ImportSession { contents, reply } => {
             let _ = reply.send(import_session(connection, contents));
         }
@@ -595,6 +607,35 @@ fn clone_session(
     )
     .map_err(StoreError::from)?;
     tx.commit().map_err(StoreError::from)?;
+    Ok(())
+}
+
+fn set_lane_leaf(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane_name: &str,
+    entry_id: EntryId,
+) -> Result<(), StoreError> {
+    // The runtime validates domain preconditions. Keep the durable boundary
+    // defensive; the composite foreign key also rejects cross-session leaves.
+    let changed = connection.execute(
+        "UPDATE lanes SET leaf_id = ?3, updated_at = ?4
+         WHERE session_id = ?1 AND name = ?2
+           AND current_operation_id IS NULL
+           AND pending_entry_id IS NULL
+           AND pending_shell_entry_id IS NULL",
+        rusqlite::params![
+            session_id.as_uuid().to_string(),
+            lane_name,
+            entry_id.as_uuid().to_string(),
+            now_ms()
+        ],
+    )?;
+    if changed != 1 {
+        return Err(StoreError::Sqlite(
+            "idle lane missing during navigation".to_owned(),
+        ));
+    }
     Ok(())
 }
 
