@@ -138,6 +138,14 @@ pub struct HostConfig {
     /// The switching provider the session runs on; /login invalidates
     /// its cache so the next step rebuilds with fresh credentials.
     pub provider: Option<Arc<ion_core::SwitchingProvider<crate::CliProvider>>>,
+    /// The tool catalog backing this run: /reload re-reads settings and
+    /// additively starts newly configured MCP servers and extensions
+    /// against it (§19: no mid-session scope revocation).
+    pub tool_catalog: Option<ion_core::ToolCatalog>,
+    /// Whether project-local resources are trusted for this launch
+    /// (--trust-project). /reload re-applies the same grant when
+    /// re-reading trusted context files; reload never widens it.
+    pub trust_project: bool,
     /// Launch TUI mode (pi parity: --tui-mode / tuiMode): the alt-screen
     /// transcript view starts open when Fullscreen. `/fullscreen`
     /// toggles live.
@@ -251,6 +259,11 @@ pub enum UiEffect {
     /// archive, run `gh gist create --public=false`, print the viewer
     /// URL. Resolved by the run loop (process spawn + progress UI).
     ShareSession,
+    /// Re-read settings and project context live (pi parity: the
+    /// /reload command). The run loop owns the disk read, keymap
+    /// rebuild, and additive extension re-discovery; the summary
+    /// notice reports what changed and what still needs restart.
+    ReloadConfig,
     /// Open the /login provider picker. The run loop reads the auth
     /// file and replies with `AuthRowsListed`.
     RequestAuthRows {
@@ -3000,6 +3013,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/fork                   - fork from a past message",
                 "/name <title> · /session - rename; show session identity",
                 "/login · /logout        - provider sign-in; remove stored credentials",
+                "/reload                - re-read settings and project context live",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
@@ -3276,6 +3290,19 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 )
             }
         }
+        "reload" => {
+            // pi parity: re-read settings and project context live.
+            // The run loop owns the disk read, the keymap rebuild, and
+            // the extension/MCP re-discovery (§19: additive only).
+            if matches!(state.status, UiStatus::Working { .. }) {
+                notice(
+                    state,
+                    "wait for the current turn to finish before reloading",
+                );
+                return (std::mem::take(state), None);
+            }
+            (std::mem::take(state), Some(UiEffect::ReloadConfig))
+        }
         "logout" => (
             std::mem::take(state),
             Some(UiEffect::RequestAuthRows { logout: true }),
@@ -3427,6 +3454,7 @@ fn complete_composer(state: &mut UiState) {
                 "model",
                 "name",
                 "new",
+                "reload",
                 "resume",
                 "session",
                 "share",
@@ -5510,6 +5538,137 @@ async fn share_gist(
     }
 }
 
+/// /reload: re-read settings and project context live (pi parity for
+/// the context-files half; the additive-only rule for live peers is
+/// DESIGN.md §19). What genuinely cannot change live is reported in
+/// the summary notice instead of failing the reload.
+async fn reload_config(
+    session: &SessionHandle,
+    state: &mut UiState,
+    keymap: &mut KeyMap,
+    theme: &mut Theme,
+    catalog: Option<&ion_core::ToolCatalog>,
+    extension_service: Option<&ion_core::ExtensionService>,
+    trust_project: bool,
+) {
+    // 1) Settings: a malformed file is reported, not silently kept.
+    let settings = match crate::settings::Settings::load() {
+        Ok(settings) => settings,
+        Err(err) => {
+            notice(state, &format!("reload failed: settings: {err}"));
+            return;
+        }
+    };
+
+    // 2) Keymap: bad bindings keep the working map (pi parity).
+    match KeyMap::from_settings(&settings.keybindings) {
+        Ok(map) => {
+            *keymap = map.clone();
+            state.set_keymap(map);
+        }
+        Err(err) => notice(state, &format!("keybindings reload failed: {err}")),
+    }
+
+    // 3) Presentation flags and the model catalog.
+    state.theme = settings.theme();
+    *theme = settings.theme();
+    state.thinking_visible = !settings.hide_thinking_block;
+    state.show_cache_miss_notices = settings.show_cache_miss_notices();
+    if let Ok(catalog) = settings.model_catalog() {
+        state.model_catalog = catalog;
+    }
+    if let Some(selection) = settings.model_selection().ok().flatten() {
+        state.default_model_reference = Some(format!("{}/{}", selection.provider, selection.model));
+    }
+
+    // 4) Trusted context files: re-read under the same launch grant.
+    //    The runtime validates digests; the next model step's manifest
+    //    carries the new material.
+    let cwd = std::env::current_dir().ok();
+    let mut context_note: Option<String> = None;
+    if let Some(cwd) = cwd.as_deref() {
+        match ion_core::load_trusted_resources(cwd, trust_project) {
+            Ok(resources) => {
+                let changed = resources.len();
+                match session.set_trusted_resources(resources).await {
+                    Ok(_applied) => {
+                        context_note = Some(format!(
+                            "context files: {} trusted resource{}",
+                            changed,
+                            if changed == 1 { "" } else { "s" }
+                        ));
+                    }
+                    Err(err) => notice(state, &format!("context reload failed: {err}")),
+                }
+            }
+            Err(err) => notice(state, &format!("context reload failed: {err}")),
+        }
+    }
+
+    // 5) Extensions and MCP: additive only (§19). Newly configured
+    //    peers start against the live catalog; removed ones need a
+    //    restart and are reported. Existing peers are never touched.
+    let mut started = 0usize;
+    let mut restart_note: Vec<String> = Vec::new();
+    if let Some(catalog) = catalog {
+        if let Some(service) = extension_service {
+            let cwd = cwd.clone().unwrap_or_else(|| std::path::PathBuf::from(""));
+            let defs =
+                crate::settings::load_extension_defs(&settings, Some(cwd.as_path()), trust_project);
+            let known = service.commands();
+            let known_extensions: std::collections::HashSet<String> = known
+                .iter()
+                .map(|command| command.extension.clone())
+                .collect();
+            let fresh: Vec<&ion_core::ExtensionDef> = defs
+                .iter()
+                .filter(|def| !known_extensions.contains(&def.name))
+                .collect();
+            started = fresh.len();
+            if fresh.is_empty() && !defs.is_empty() {
+                restart_note
+                    .push("extensions: no new ones (removed extensions need a restart)".to_owned());
+            } else if !fresh.is_empty() {
+                let defs: Vec<ion_core::ExtensionDef> = fresh.into_iter().cloned().collect();
+                service.start_into(&defs, catalog).await;
+            }
+        }
+        // MCP servers: start newly configured ones; the active set is
+        // host-selected at launch and stays untouched (§19).
+        let defs: Vec<ion_core::ServerDef> = settings
+            .mcp_servers
+            .iter()
+            .cloned()
+            .map(Into::into)
+            .collect();
+        if !defs.is_empty() {
+            ion_core::McpService::new().start_into(&defs, catalog).await;
+        }
+    }
+
+    // 6) The summary notice: what applied, what needs restart.
+    let mut parts: Vec<String> = Vec::new();
+    parts.push("keybindings, theme, catalog".to_owned());
+    if let Some(note) = context_note {
+        parts.push(note);
+    }
+    if started > 0 {
+        parts.push(format!(
+            "started {started} new extension{}",
+            if started == 1 { "" } else { "s" }
+        ));
+    }
+    let summary = parts.join(" · ");
+    if restart_note.is_empty() {
+        notice(state, &format!("reloaded {summary}"));
+    } else {
+        notice(
+            state,
+            &format!("reloaded {summary} — {}", restart_note.join("; ")),
+        );
+    }
+}
+
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
 /// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
@@ -5532,6 +5691,10 @@ pub async fn run(
     mut terminal: TerminalSession,
 ) -> Result<(), RuntimeError> {
     let SessionHost { manager, attached } = session_host;
+    // /reload replaces both live: the reducer keeps keymap/theme in
+    // UiState, but the loop owns the canonical copies passed in.
+    let mut theme = theme;
+    let mut keymap = keymap;
     let switching_available = host.model_name.is_some();
 
     // Fullscreen view state is loop-owned (like the Transcript): it is
@@ -5616,7 +5779,7 @@ pub async fn run(
     // One live UiState for the whole loop; host-provided display
     // config seeds it here and nowhere else.
     let mut state = UiState::new();
-    state.set_keymap(keymap);
+    state.set_keymap(keymap.clone());
     state.set_model_name(host.model_name.clone());
     state.model_provider = host.model_provider.clone();
     state.model_catalog = host.model_catalog.clone();
@@ -6018,6 +6181,22 @@ pub async fn run(
                                     manager.as_ref(),
                                     state.session_id,
                                     &mut state,
+                                )
+                                .await;
+                            } else if matches!(effect, UiEffect::ReloadConfig) {
+                                // /reload: re-read settings, rebuild the
+                                // keymap/theme/flags, refresh trusted
+                                // context, and additively start newly
+                                // configured peers. The loop owns all of
+                                // it (disk reads + state mutation).
+                                reload_config(
+                                    &session,
+                                    &mut state,
+                                    &mut keymap,
+                                    &mut theme,
+                                    host.tool_catalog.as_ref(),
+                                    host.extension_service.as_ref(),
+                                    host.trust_project,
                                 )
                                 .await;
                             } else if let UiEffect::RequestAuthRows { logout } = &effect {
@@ -6586,6 +6765,11 @@ async fn dispatch(
         UiEffect::ShareSession => {
             // Resolved by the run loop, which owns the process spawn
             // and the working-status overlay; match totality only.
+            None
+        }
+        UiEffect::ReloadConfig => {
+            // Resolved by the run loop (settings read, keymap rebuild,
+            // additive extension re-discovery); match totality only.
             None
         }
         UiEffect::RequestAuthRows { .. } => {
@@ -7263,7 +7447,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 21);
+        assert_eq!(state.pending_scrollback.len(), 22);
     }
 
     #[test]
@@ -10696,6 +10880,26 @@ mod debug_share_tests {
                 .iter()
                 .any(|line| line.to_string().contains("no session is attached"))
         );
+    }
+
+    #[test]
+    fn reload_command_emits_effect_and_blocks_while_working() {
+        // Idle: the run loop owns the re-read.
+        let (_, effect) = handle_command(&mut UiState::new(), "reload");
+        assert!(matches!(effect, Some(UiEffect::ReloadConfig)));
+
+        // A running turn must not race a config swap.
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "op".to_owned(),
+        };
+        let (state, effect) = handle_command(&mut state, "reload");
+        assert!(effect.is_none());
+        assert!(state.pending_scrollback.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("wait for the current turn"))
+        }));
     }
 
     #[test]

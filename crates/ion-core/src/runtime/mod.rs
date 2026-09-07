@@ -660,6 +660,16 @@ enum SessionCommand {
         model_ref: String,
         reply: oneshot::Sender<Result<String, CommandError>>,
     },
+    /// Replace the session's trusted context resources (pi parity:
+    /// the context-files half of /reload). The host owns the trust
+    /// grant and re-applies its launch gating before sending; the
+    /// runtime owns the material. Manifests rebuild per model step, so
+    /// the next turn sees the new system material without touching
+    /// durable lane state.
+    SetTrustedResources {
+        resources: Vec<TrustedResource>,
+        reply: oneshot::Sender<Result<Vec<TrustedResource>, CommandError>>,
+    },
     Subscribe {
         reply: oneshot::Sender<SubscribeReply>,
     },
@@ -917,6 +927,23 @@ impl SessionHandle {
                 model_ref: model_ref.into(),
                 reply,
             })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Replace the session's trusted context resources (pi parity:
+    /// the context-files half of /reload). The host re-applies its
+    /// launch trust gating before sending; the runtime validates
+    /// self-consistency (each resource's digest matches its content)
+    /// and stores the set. The next model step's manifest carries the
+    /// new material. Returns the applied set.
+    pub async fn set_trusted_resources(
+        &self,
+        resources: Vec<crate::context::TrustedResource>,
+    ) -> Result<Vec<crate::context::TrustedResource>, CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::SetTrustedResources { resources, reply })
             .map_err(command_send_error)?;
         rx.await.map_err(|_| CommandError::RuntimeDropped)?
     }
@@ -2473,6 +2500,10 @@ impl<P: Provider> SessionRuntime<P> {
                 let _ = reply.send(self.switch_model_on_lane(lane_name, model_ref).await);
                 false
             }
+            SessionCommand::SetTrustedResources { resources, reply } => {
+                let _ = reply.send(self.set_trusted_resources(resources));
+                false
+            }
             SessionCommand::Subscribe { reply } => {
                 let _ = reply.send(self.subscribe());
                 false
@@ -2943,6 +2974,26 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("configured lane remains resident")
             .config = config;
         Ok(previous)
+    }
+
+    fn set_trusted_resources(
+        &mut self,
+        resources: Vec<TrustedResource>,
+    ) -> Result<Vec<TrustedResource>, CommandError> {
+        if self.closed {
+            return Err(CommandError::Closed);
+        }
+        // Self-consistency is the runtime's own trust check: a host
+        // bug must not be able to smuggle content that does not match
+        // its recorded digest.
+        if let Some(bad) = resources.iter().find(|r| !r.is_consistent()) {
+            return Err(CommandError::Persistence(format!(
+                "trusted resource {} content does not match its digest",
+                bad.path
+            )));
+        }
+        self.trusted_resources = resources.clone();
+        Ok(resources)
     }
 
     /// Run one user shell passthrough on an idle lane (pi parity:

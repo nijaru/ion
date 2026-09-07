@@ -800,6 +800,8 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             branch: git_branch().ok().flatten(),
             workspace_files: tui::workspace_file_list(&cwd),
             provider: Some(Arc::clone(&root_provider)),
+            tool_catalog: Some(tools.clone()),
+            trust_project: cli.trust_project,
             extension_service,
         },
         tui::SessionHost {

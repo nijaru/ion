@@ -207,6 +207,13 @@ fn digest_bytes(bytes: &[u8]) -> String {
     crate::tool::hex(&Sha256::digest(bytes))
 }
 
+/// SHA-256 of raw bytes as lowercase hex; the trusted-resource digest
+/// form. Public for hosts and tests that build consistent resources.
+#[must_use]
+pub fn sha256_of(bytes: &[u8]) -> String {
+    digest_bytes(bytes)
+}
+
 /// One model-facing message in the projected conversation.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ContextMessage {

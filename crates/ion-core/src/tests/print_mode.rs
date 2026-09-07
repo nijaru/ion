@@ -510,6 +510,51 @@ async fn dequeue_next_run_restores_the_prompt_and_leaves_nothing_queued() {
 }
 
 #[tokio::test]
+async fn set_trusted_resources_applies_and_rejects_inconsistent_content() {
+    use crate::context::TrustedResource;
+
+    let store = SessionStore::open_in_memory().expect("in-memory store");
+    let runtime =
+        start_runtime_with_store(ScriptedProvider::echo(), ToolRegistry::default(), store);
+    let session = runtime.session();
+
+    // A self-consistent resource applies and is returned.
+    let good = TrustedResource {
+        path: "AGENTS.md".to_owned(),
+        content: "be kind".to_owned(),
+        sha256: crate::sha256_of(b"be kind"),
+    };
+    let applied = session
+        .set_trusted_resources(vec![good.clone()])
+        .await
+        .expect("apply");
+    assert_eq!(applied.len(), 1);
+    assert_eq!(applied[0].path, "AGENTS.md");
+
+    // A tampered digest is refused loudly, keeping the previous set.
+    let bad = TrustedResource {
+        path: "AGENTS.md".to_owned(),
+        content: "be evil".to_owned(),
+        sha256: good.sha256,
+    };
+    let err = session
+        .set_trusted_resources(vec![bad])
+        .await
+        .expect_err("tampered digest refused");
+    assert!(err.to_string().contains("digest"), "{err}");
+
+    // Clearing is allowed (an empty set is a valid state).
+    let applied = session
+        .set_trusted_resources(Vec::new())
+        .await
+        .expect("clear");
+    assert!(applied.is_empty());
+
+    session.close().await.expect("close");
+    runtime.join().await.expect("join");
+}
+
+#[tokio::test]
 async fn switch_thinking_is_durable_validated_and_applies_at_step_boundaries() {
     let db = temp_db("switch-thinking");
     let store = SessionStore::open(&db).expect("open store");
