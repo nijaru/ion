@@ -196,14 +196,18 @@ async fn project_extensions_respect_workspace_trust() {
     let settings = Settings::empty();
 
     // Untrusted: skipped with a visible warning, not loaded silently.
-    let untrusted = load_extension_defs(&settings, Some(project), false);
+    let untrusted = load_extension_defs(&settings, Some(project), false).expect("untrusted config");
     assert!(untrusted.is_empty());
 
     // Trusted: explicit grant loads the manifest.
-    let trusted = load_extension_defs(&settings, Some(project), true);
+    let trusted = load_extension_defs(&settings, Some(project), true).expect("trusted config");
     assert_eq!(trusted.len(), 1);
     assert_eq!(trusted[0].name, "proj");
 
     // No project root: only user settings (none here).
-    assert!(load_extension_defs(&settings, None, true).is_empty());
+    assert!(
+        load_extension_defs(&settings, None, true)
+            .expect("no project")
+            .is_empty()
+    );
 }

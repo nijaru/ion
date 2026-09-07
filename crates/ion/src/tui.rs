@@ -33,7 +33,9 @@ use ion_terminal::{
 mod fullscreen;
 mod help;
 mod markdown;
+mod reload;
 mod render;
+use reload::{ReloadHost, reload_config};
 mod tree;
 pub use render::{Palette, palette};
 use render::{Transcript, append_snapshot_entries};
@@ -6176,158 +6178,6 @@ async fn share_gist(
             ),
         ),
     }
-}
-
-/// /reload: re-read settings and project context live (pi parity for
-/// the context-files half; the additive-only rule for live peers is
-/// DESIGN.md §19). What genuinely cannot change live is reported in
-/// the summary notice instead of failing the reload.
-/// Host services /reload reconciles against, borrowed from the
-/// run loop's `HostConfig` for one call.
-struct ReloadHost<'a> {
-    catalog: Option<&'a ion_core::ToolCatalog>,
-    mcp_service: Option<&'a std::sync::Arc<ion_core::McpService>>,
-    extension_service: Option<&'a ion_core::ExtensionService>,
-    provider: Option<&'a std::sync::Arc<ion_core::SwitchingProvider<crate::CliProvider>>>,
-}
-
-async fn reload_config(
-    session: &SessionHandle,
-    state: &mut UiState,
-    keymap: &mut KeyMap,
-    theme: &mut Theme,
-    host: ReloadHost<'_>,
-    trust_project: bool,
-) {
-    // 1) Settings: a malformed file is reported, not silently kept.
-    let settings = match crate::settings::Settings::load() {
-        Ok(settings) => settings,
-        Err(err) => {
-            notice(state, &format!("reload failed: settings: {err}"));
-            return;
-        }
-    };
-
-    // 2) Keymap: bad bindings keep the working map (pi parity).
-    match KeyMap::from_settings(&settings.keybindings) {
-        Ok(map) => {
-            *keymap = map.clone();
-            state.set_keymap(map);
-        }
-        Err(err) => notice(state, &format!("keybindings reload failed: {err}")),
-    }
-
-    // 3) Presentation flags and the model catalog.
-    state.theme = settings.theme();
-    *theme = settings.theme();
-    state.thinking_visible = !settings.hide_thinking_block;
-    state.show_cache_miss_notices = settings.show_cache_miss_notices();
-    if let Ok(catalog) = settings.model_catalog() {
-        state.model_catalog = catalog;
-    }
-    if let Some(selection) = settings.model_selection().ok().flatten() {
-        state.default_model_reference = Some(format!("{}/{}", selection.provider, selection.model));
-    }
-
-    // 4) Trusted context files: re-read under the same launch grant.
-    //    The runtime validates digests; the next model step's manifest
-    //    carries the new material.
-    let cwd = std::env::current_dir().ok();
-    let mut context_note: Option<String> = None;
-    if let Some(cwd) = cwd.as_deref() {
-        match ion_core::load_trusted_resources(cwd, trust_project) {
-            Ok(resources) => {
-                let changed = resources.len();
-                match session.set_trusted_resources(resources).await {
-                    Ok(_applied) => {
-                        context_note = Some(format!(
-                            "context files: {} trusted resource{}",
-                            changed,
-                            if changed == 1 { "" } else { "s" }
-                        ));
-                    }
-                    Err(err) => notice(state, &format!("context reload failed: {err}")),
-                }
-            }
-            Err(err) => notice(state, &format!("context reload failed: {err}")),
-        }
-    }
-
-    // 5) Extensions and MCP: reconcile against the live supervision
-    //    registry — unchanged peers keep running, changed defs replace
-    //    their supervisor inside the same declared scope, removed defs
-    //    stop (generation unpublished, declared scope retained, §19).
-    //    Newly started scopes are durably admitted to the main lane
-    //    so the next model step can see them.
-    let mut started_total = 0usize;
-    let mut stopped_total = 0usize;
-    if let Some(catalog) = host.catalog {
-        let cwd = cwd.clone().unwrap_or_default();
-        if let Some(service) = host.extension_service {
-            let defs =
-                crate::settings::load_extension_defs(&settings, Some(cwd.as_path()), trust_project);
-            let (started, stopped) = service.ensure(&defs, catalog).await;
-            started_total += started;
-            stopped_total += stopped;
-            // A newly started extension's scope must be durably
-            // admitted to the main lane before a model step can see
-            // its tools (§19: live discovery alone never admits).
-            for def in &defs {
-                let scope = format!("ext:{}", def.name);
-                if let Err(err) = session.admit_structural_scope(scope).await {
-                    notice(state, &format!("admit ext:{} failed: {err}", def.name));
-                }
-            }
-        }
-        // MCP servers: same reconcile against the persistent service;
-        // a host without a service handle gets a one-shot ensure the
-        // first time servers appear. The active-set filter is
-        // host-selected at launch and stays untouched (§19).
-        let mcp_defs: Vec<ion_core::ServerDef> = settings
-            .mcp_servers
-            .iter()
-            .cloned()
-            .map(Into::into)
-            .collect();
-        let (started, stopped) = match host.mcp_service {
-            Some(service) => service.ensure(&mcp_defs, catalog).await,
-            None => ion_core::McpService::new().ensure(&mcp_defs, catalog).await,
-        };
-        started_total += started;
-        stopped_total += stopped;
-        // A newly configured MCP server must also be durably admitted
-        // to the main lane to enter future model-step snapshots — the
-        // active-set filter gates the host selection, the lane grant
-        // is the authority (§19).
-        for def in &mcp_defs {
-            let scope = format!("mcp:{}", def.name);
-            if let Err(err) = session.admit_structural_scope(scope).await {
-                notice(state, &format!("admit mcp:{} failed: {err}", def.name));
-            }
-        }
-    }
-
-    // 6) Provider cache: pi's resetApiProviders — the factory
-    //    re-resolves auth material (auth.json, env keys) per
-    //    construction, so dropping the cache makes the next model
-    //    step rebuild with fresh credentials. The desktop base URL is
-    //    launch-frozen in the factory closure and needs a restart.
-    if let Some(provider) = host.provider {
-        provider.invalidate();
-    }
-
-    // 7) The summary notice: what applied, what changed live.
-    let mut parts: Vec<String> = Vec::new();
-    parts.push("keybindings, theme, catalog".to_owned());
-    if let Some(note) = context_note {
-        parts.push(note);
-    }
-    if started_total > 0 || stopped_total > 0 {
-        parts.push(format!(
-            "peers: {started_total} started, {stopped_total} stopped"
-        ));
-    }
-    notice(state, &format!("reloaded {}", parts.join(" · ")));
 }
 
 /// The TUI event loop: runtime events and terminal keys into the

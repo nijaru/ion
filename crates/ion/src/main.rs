@@ -343,18 +343,18 @@ async fn build_catalog(
         .cloned()
         .map(Into::into)
         .collect();
-    let mcp_service =
-        (!mcp_defs.is_empty()).then(|| std::sync::Arc::new(ion_core::McpService::new()));
-    if let Some(service) = &mcp_service {
-        service.start_into(&mcp_defs, &tools).await;
-    }
     // Project-local extension manifests load only under an explicit
     // trust grant (§24.5). The service handle stays alive for the TUI
     // (Phase G): its hub drives extension UI, its registry resolves
     // extension commands.
     let ext_defs =
-        ion::settings::load_extension_defs(settings, Some(cwd.as_path()), cli.trust_project);
-    let extension_service = (!ext_defs.is_empty()).then(ion_core::ExtensionService::new);
+        ion::settings::load_extension_defs(settings, Some(cwd.as_path()), cli.trust_project)
+            .map_err(std::io::Error::other)?;
+    let mcp_service = Some(std::sync::Arc::new(ion_core::McpService::new()));
+    if let Some(service) = &mcp_service {
+        service.start_into(&mcp_defs, &tools).await;
+    }
+    let extension_service = Some(ion_core::ExtensionService::new());
     if let Some(service) = &extension_service {
         service.start_into(&ext_defs, &tools).await;
     }

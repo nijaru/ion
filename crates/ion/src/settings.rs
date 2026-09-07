@@ -844,12 +844,11 @@ mod tests {
 /// configuration from the workspace and loads only under an explicit
 /// trust grant (§24.5). A skipped project manifest is announced, never
 /// silent.
-#[must_use]
 pub fn load_extension_defs(
     settings: &Settings,
     project_root: Option<&std::path::Path>,
     trust_project: bool,
-) -> Vec<ion_core::ExtensionDef> {
+) -> Result<Vec<ion_core::ExtensionDef>, String> {
     let mut defs: Vec<ion_core::ExtensionDef> = settings
         .extensions
         .iter()
@@ -862,25 +861,20 @@ pub fn load_extension_defs(
         .collect();
 
     let Some(root) = project_root else {
-        return defs;
+        return Ok(defs);
     };
     let path = root.join(".ion").join("extensions.toml");
+    if !trust_project {
+        if path.exists() {
+            tracing::warn!(path = %path.display(), "project extensions ignored: workspace is not trusted");
+        }
+        return Ok(defs);
+    }
     let text = match std::fs::read_to_string(&path) {
         Ok(text) => text,
-        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return defs,
-        Err(err) => {
-            tracing::warn!(path = %path.display(), error = %err, "project extensions unreadable");
-            return defs;
-        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(defs),
+        Err(err) => return Err(format!("project extensions {}: {err}", path.display())),
     };
-    if !trust_project {
-        tracing::warn!(
-            path = %path.display(),
-            "project extensions present but this workspace is not trusted; \
-             pass --trust-project to enable them"
-        );
-        return defs;
-    }
     match toml::from_str::<ProjectExtensions>(&text) {
         Ok(project) => {
             for config in project.extensions {
@@ -891,11 +885,9 @@ pub fn load_extension_defs(
                 });
             }
         }
-        Err(err) => {
-            tracing::warn!(path = %path.display(), error = %err, "project extensions malformed");
-        }
+        Err(err) => return Err(format!("project extensions {}: {err}", path.display())),
     }
-    defs
+    Ok(defs)
 }
 
 #[derive(Debug, Deserialize)]
