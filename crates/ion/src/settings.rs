@@ -182,6 +182,98 @@ impl RetrySettings {
     }
 }
 
+/// Replace one top-level `key = value` line, or insert it after the
+/// last top-level assignment. Only the key's line changes; comments,
+/// blank lines, tables, and unknown keys stay byte-identical. A key
+/// appearing multiple times replaces the first and drops later ones
+/// (TOML rejects duplicates anyway, so this heals a malformed file).
+fn replace_or_insert_key(text: &str, key: &str, value: &str) -> String {
+    let prefix = format!("{key} =");
+    let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
+    let mut replaced = false;
+    let mut retained: Vec<String> = Vec::with_capacity(lines.len());
+    for line in lines.drain(..) {
+        if line.trim_start().starts_with(&prefix)
+            && (line.trim_start() == prefix
+                || line.trim_start()[prefix.len()..]
+                    .chars()
+                    .next()
+                    .is_some_and(char::is_whitespace))
+        {
+            if !replaced {
+                retained.push(format!("{key} = {value}"));
+                replaced = true;
+            }
+            // Duplicate keys are dropped (heal malformed files).
+        } else {
+            retained.push(line);
+        }
+    }
+    lines = retained;
+    if !replaced {
+        // Insert before the first table header — backing up over the
+        // blank lines that separate it from top-level keys — else at
+        // EOF (dropping a trailing blank so the file ends with one).
+        let mut insert_at = lines
+            .iter()
+            .position(|line| line.trim_start().starts_with('['))
+            .unwrap_or(lines.len());
+        while insert_at > 0 && lines[insert_at - 1].trim().is_empty() {
+            insert_at -= 1;
+        }
+        if insert_at == lines.len() && lines.last().is_some_and(|line| line.trim().is_empty()) {
+            insert_at -= 1;
+        }
+        lines.insert(insert_at, format!("{key} = {value}"));
+    }
+    lines.join("\n")
+}
+
+/// Remove one top-level `key = ...` line (first occurrence) from the
+/// settings text, preserving every other byte.
+fn remove_key(text: &str, key: &str) -> String {
+    let prefix = format!("{key} =");
+    let mut dropped = false;
+    text.split('\n')
+        .filter(|line| {
+            let hits = line.trim_start().starts_with(&prefix)
+                && (line.trim_start() == prefix
+                    || line.trim_start()[prefix.len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(char::is_whitespace));
+            if hits && !dropped {
+                dropped = true;
+                false
+            } else {
+                true
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Escape a TOML basic-string body (quotes and backslashes).
+fn escape_toml_string(value: &str) -> String {
+    value.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// Write via a temp file + rename so a crash never truncates the
+/// user's settings file.
+fn atomic_write(path: &std::path::Path, text: &str) -> std::io::Result<()> {
+    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    std::fs::create_dir_all(dir)?;
+    let tmp = dir.join(format!(
+        ".{}.tmp{}",
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "settings".to_owned()),
+        std::process::id()
+    ));
+    std::fs::write(&tmp, text)?;
+    std::fs::rename(&tmp, path)
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelSelection {
     pub provider: String,
@@ -437,6 +529,49 @@ impl Settings {
         self.theme.unwrap_or(Theme::Auto)
     }
 
+    /// Surgically set `defaultProvider`/`defaultModel` in the settings
+    /// file at `path`. Only those two keys are touched; the rest of the
+    /// file — comments, ordering, unknown keys — is preserved
+    /// byte-for-byte (a hand-authored TOML is the user's file, not a
+    /// serialization target). A model with a provider prefix qualifies
+    /// both keys; the model is stored bare. Returns the written path
+    /// for the notice.
+    pub fn write_default_model(
+        path: &std::path::Path,
+        provider: &str,
+        model: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let bare_model = model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
+        let text = replace_or_insert_key(&text, "defaultProvider", &format!("\"{provider}\""));
+        let text = replace_or_insert_key(&text, "defaultModel", &format!("\"{bare_model}\""));
+        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
+        Ok(path.to_owned())
+    }
+
+    /// Surgically replace the `modelCatalog` array in the settings file
+    /// at `path`, preserving every other byte. An empty catalog removes
+    /// the key entirely. Returns the written path.
+    pub fn write_model_catalog(
+        path: &std::path::Path,
+        catalog: &[String],
+    ) -> Result<std::path::PathBuf, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let text = if catalog.is_empty() {
+            remove_key(&text, "modelCatalog")
+        } else {
+            let items: Vec<String> = catalog
+                .iter()
+                .map(|model| format!("\"{}\"", escape_toml_string(model)))
+                .collect();
+            replace_or_insert_key(&text, "modelCatalog", &format!("[{}]", items.join(", ")))
+        };
+        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
+        Ok(path.to_owned())
+    }
+
     /// Launch TUI mode: the `--tui-mode` flag overrides the setting.
     pub fn tui_mode(&self) -> TuiMode {
         self.tui_mode.unwrap_or_default()
@@ -491,6 +626,73 @@ mod tests {
         assert_eq!(settings.desktop_base_url(), "http://desktop:8080/v1");
         assert_eq!(settings.theme(), Theme::Auto);
         assert_eq!(settings.thinking_level(), ThinkingLevel::Xhigh);
+    }
+
+    #[test]
+    fn write_default_model_and_catalog_preserve_other_bytes() {
+        let dir = std::env::temp_dir().join(format!("ion-settings-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        let path = dir.join("settings.toml");
+        std::fs::write(
+            &path,
+            "# maintainer comments stay\ntheme = \"dark\"\n\ndefaultProvider = \"openrouter\"\ndefaultModel = \"old-model\"\n\n[retry]\nenabled = true\n",
+        )
+        .expect("write");
+
+        let written = Settings::write_default_model(&path, "desktop", "desktop/qwen3.8:27b")
+            .expect("write default");
+        assert_eq!(written, path);
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(text.contains("# maintainer comments stay"), "comments kept");
+        assert!(text.contains("theme = \"dark\""), "other key kept");
+        assert!(text.contains("defaultProvider = \"desktop\""));
+        assert!(
+            text.contains("defaultModel = \"qwen3.8:27b\""),
+            "bare model"
+        );
+        assert!(!text.contains("old-model"));
+
+        let written = Settings::write_model_catalog(
+            &path,
+            &[
+                "openrouter/z-ai/glm-5.3-flash".to_owned(),
+                "desktop/qwen3.8:27b".to_owned(),
+            ],
+        )
+        .expect("write catalog");
+        assert_eq!(written, path);
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(text.contains(
+            "modelCatalog = [\"openrouter/z-ai/glm-5.3-flash\", \"desktop/qwen3.8:27b\"]"
+        ));
+        assert!(text.contains("[retry]"), "table kept");
+
+        // An empty catalog removes the key.
+        Settings::write_model_catalog(&path, &[]).expect("clear catalog");
+        let text = std::fs::read_to_string(&path).expect("read back");
+        assert!(!text.contains("modelCatalog"));
+        assert!(text.contains("defaultProvider = \"desktop\""));
+
+        // The result still parses and round-trips the written values.
+        let settings: Settings = toml::from_str(&text).expect("written file parses");
+        assert_eq!(settings.default_provider.as_deref(), Some("desktop"));
+        assert_eq!(settings.default_model.as_deref(), Some("qwen3.8:27b"));
+        assert!(settings.model_catalog.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn replace_or_insert_key_inserts_into_empty_file() {
+        let text = replace_or_insert_key("", "defaultModel", "\"q\"");
+        assert_eq!(text.trim_end(), "defaultModel = \"q\"");
+        // Insert-before-table placement.
+        let text = replace_or_insert_key(
+            "theme = \"dark\"\n\n[retry]\nenabled = true\n",
+            "defaultModel",
+            "\"q\"",
+        );
+        assert!(text.starts_with("theme = \"dark\"\ndefaultModel = \"q\"\n\n[retry]"));
     }
 
     #[test]

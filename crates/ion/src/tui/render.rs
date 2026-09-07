@@ -539,6 +539,7 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.fork_selector.is_some()
         || state.auth_selector.is_some()
         || state.login_progress.is_some()
+        || state.scoped_models_selector.is_some()
     {
         LIVE_REGION_MAX_ROWS
     } else if state.restore_prompt.is_some() {
@@ -836,6 +837,73 @@ fn model_selector_lines(
     }
     lines.push(selector_row(
         Line::from("  ↑/↓ · enter · esc").style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
+/// The /scoped-models picker: each visible catalog row with its
+/// enabled checkbox; the composer filters (pi parity).
+fn scoped_models_selector_lines(
+    state: &UiState,
+    palette: &Palette,
+    width: usize,
+    max_rows: usize,
+) -> Vec<Line<'static>> {
+    let query = &state.composer;
+    let rows = state.filtered_scoped_rows();
+    let selected = state
+        .scoped_models_selector
+        .as_ref()
+        .map_or(0, |selector| selector.selected);
+    let mut lines = Vec::new();
+    if rows.is_empty() {
+        lines.push(picker_header(
+            "scoped models",
+            query,
+            0,
+            0,
+            false,
+            palette,
+            width,
+        ));
+        lines.push(selector_row(
+            Line::from("  no matching models").style(palette.system_note),
+            width,
+        ));
+    } else {
+        let (start, end, scrolled) = picker_window(selected, rows.len(), max_rows);
+        lines.push(picker_header(
+            "scoped models",
+            query,
+            selected,
+            rows.len(),
+            scrolled,
+            palette,
+            width,
+        ));
+        for (index, (model, enabled)) in rows.iter().enumerate().take(end).skip(start) {
+            let is_selected = index == selected;
+            let marker = if *enabled { "\u{2713}" } else { " " };
+            let checkbox = Span::styled(
+                format!("[{marker}] "),
+                if *enabled {
+                    palette.selector_selected
+                } else {
+                    palette.system_note
+                },
+            );
+            let spans = vec![
+                picker_cursor(is_selected, palette),
+                checkbox,
+                picker_label(model.to_owned(), is_selected, palette),
+            ];
+            lines.push(selector_row(Line::from(spans), width));
+        }
+    }
+    lines.push(selector_row(
+        Line::from("  \u{2191}/\u{2193} \u{00b7} enter toggle \u{00b7} ctrl+a all \u{00b7} ctrl+x clear \u{00b7} ctrl+p provider \u{00b7} ctrl+s save \u{00b7} esc")
+            .style(palette.system_note),
         width,
     ));
     lines
@@ -1243,6 +1311,13 @@ pub(super) fn build_live_at_height(
         .saturating_sub(composer_len);
     if state.model_selector.is_some() {
         head.extend(model_selector_lines(state, palette, width, head_budget));
+    } else if state.scoped_models_selector.is_some() {
+        head.extend(scoped_models_selector_lines(
+            state,
+            palette,
+            width,
+            head_budget,
+        ));
     } else if state.session_selector.is_some() {
         head.extend(session_selector_lines(state, palette, width, head_budget));
     } else if state.thinking_selector.is_some() {

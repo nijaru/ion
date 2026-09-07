@@ -176,6 +176,18 @@ pub enum UiEffect {
     SwitchModel {
         model: String,
     },
+    /// Persist the given model as settings default (pi parity: ctrl+s
+    /// in the model picker — "set as default"). Resolved by the run
+    /// loop, which owns the settings-file write.
+    SaveDefaultModel {
+        model: String,
+    },
+    /// Persist the effective model catalog (pi parity: /scoped-models
+    /// ctrl+s — "save to settings"). The disabled set is the session
+    /// catalog delta; the run loop writes `modelCatalog`.
+    SaveModelCatalog {
+        catalog: Vec<String>,
+    },
     /// Set the thinking level for future steps (pi parity: /thinking,
     /// shift+tab). `None` restores the adapter default.
     SwitchThinking {
@@ -1075,6 +1087,22 @@ struct ModelSelector {
     saved_cursor: usize,
 }
 
+/// Ephemeral /scoped-models picker (pi parity): the composer filters
+/// over the full catalog; each row toggles enabled for this session;
+/// ctrl+s persists the enabled set to `modelCatalog`. The disabled set
+/// starts from the delta between the full settings catalog and the
+/// session-effective catalog (a live /model switch never disables).
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ScopedModelsSelector {
+    /// Every catalog entry, display order preserved.
+    rows: Vec<String>,
+    /// Enabled membership by row index.
+    enabled: Vec<bool>,
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
 /// One session-picker row as presentation data. `summary` carries the
 /// durable identity; `label` is the rendered picker line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1253,6 +1281,13 @@ pub struct UiState {
     default_model_reference: Option<String>,
     /// Ephemeral searchable model selector, when open.
     model_selector: Option<ModelSelector>,
+    /// Ephemeral /scoped-models picker, when open.
+    scoped_models_selector: Option<ScopedModelsSelector>,
+    /// Session-scoped enabled model set (pi parity: /scoped-models).
+    /// `None` = every catalog model is enabled (pi's null); `Some`
+    /// narrows /model cycling and pickers until the session ends or a
+    /// later ctrl+s persists the choice as the settings catalog.
+    scoped_models_enabled: Option<Vec<String>>,
     /// The durable thinking-level selection for future steps (pi
     /// parity: /thinking, shift+tab). `None` is the adapter default.
     /// Presentation only; the lane config is authoritative.
@@ -1504,11 +1539,200 @@ impl UiState {
 
     fn filtered_model_catalog(&self) -> Vec<String> {
         let query = self.composer.to_lowercase();
-        self.model_catalog
+        self.effective_model_catalog()
             .iter()
             .filter(|model| fuzzy_contains(&model.to_lowercase(), &query))
             .cloned()
             .collect()
+    }
+
+    /// The session-effective catalog: every configured model unless a
+    /// /scoped-models selection narrowed it (pi parity: scopedModels).
+    fn effective_model_catalog(&self) -> Vec<String> {
+        match &self.scoped_models_enabled {
+            None => self.model_catalog.clone(),
+            Some(enabled) => self
+                .model_catalog
+                .iter()
+                .filter(|model| enabled.contains(model))
+                .cloned()
+                .collect(),
+        }
+    }
+
+    /// Open the /scoped-models picker: rows are the full catalog with
+    /// their enabled state; the composer doubles as the filter.
+    fn open_scoped_models_selector(&mut self) {
+        if self.scoped_models_selector.is_some() {
+            return;
+        }
+        let rows = self.model_catalog.clone();
+        let enabled = match &self.scoped_models_enabled {
+            None => rows.iter().map(|_| true).collect(),
+            Some(list) => rows.iter().map(|model| list.contains(model)).collect(),
+        };
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.scoped_models_selector = Some(ScopedModelsSelector {
+            rows,
+            enabled,
+            selected: 0,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_scoped_models_selector(&mut self) {
+        let Some(selector) = self.scoped_models_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    /// The scoped picker's filter-visible rows with their enabled
+    /// state: `(model, enabled)` in catalog order.
+    fn filtered_scoped_rows(&self) -> Vec<(String, bool)> {
+        let Some(selector) = self.scoped_models_selector.as_ref() else {
+            return Vec::new();
+        };
+        let query = self.composer.to_lowercase();
+        selector
+            .rows
+            .iter()
+            .zip(&selector.enabled)
+            .filter(|(model, _)| fuzzy_contains(&model.to_lowercase(), &query))
+            .map(|(model, enabled)| (model.clone(), *enabled))
+            .collect()
+    }
+
+    /// Toggle the selected row's enabled state (pi parity: enter).
+    fn toggle_scoped_model(&mut self) {
+        let Some(selector) = self.scoped_models_selector.as_mut() else {
+            return;
+        };
+        let query = self.composer.to_lowercase();
+        let visible: Vec<usize> = selector
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| fuzzy_contains(&model.to_lowercase(), &query))
+            .map(|(index, _)| index)
+            .collect();
+        let Some(row) = visible.get(selector.selected).copied() else {
+            return;
+        };
+        if let Some(flag) = selector.enabled.get_mut(row) {
+            *flag = !*flag;
+        }
+    }
+
+    /// Toggle every model of the selected row's provider (pi parity:
+    /// ctrl+p).
+    fn toggle_scoped_provider(&mut self) {
+        let Some(selector) = self.scoped_models_selector.as_mut() else {
+            return;
+        };
+        let query = self.composer.to_lowercase();
+        let visible: Vec<usize> = selector
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, model)| fuzzy_contains(&model.to_lowercase(), &query))
+            .map(|(index, _)| index)
+            .collect();
+        let Some(row) = visible.get(selector.selected).copied() else {
+            return;
+        };
+        let Some(model) = selector.rows.get(row) else {
+            return;
+        };
+        let Some(provider) = model.split('/').next() else {
+            return;
+        };
+        let provider_rows: Vec<usize> = selector
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| candidate.starts_with(&format!("{provider}/")))
+            .map(|(index, _)| index)
+            .collect();
+        let all_enabled = provider_rows
+            .iter()
+            .all(|index| selector.enabled.get(*index).copied().unwrap_or(false));
+        for index in provider_rows {
+            if let Some(flag) = selector.enabled.get_mut(index) {
+                *flag = !all_enabled;
+            }
+        }
+    }
+
+    /// Enable/disable every visible row (pi parity: ctrl+a / ctrl+x).
+    fn set_all_scoped(&mut self, enabled: bool) {
+        let Some(selector) = self.scoped_models_selector.as_mut() else {
+            return;
+        };
+        let query = self.composer.to_lowercase();
+        for (index, model) in selector.rows.iter().enumerate() {
+            if fuzzy_contains(&model.to_lowercase(), &query)
+                && let Some(flag) = selector.enabled.get_mut(index)
+            {
+                *flag = enabled;
+            }
+        }
+    }
+
+    /// Move the scoped picker's selection by visible rows.
+    fn move_scoped_selection(&mut self, delta: isize) {
+        let count = self.filtered_scoped_rows().len();
+        let Some(selector) = self.scoped_models_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    /// Reset the scoped picker's selection to the first fuzzy match of
+    /// the filter text, matching the model picker's behavior.
+    fn reset_scoped_selection(&mut self) {
+        let selected = self
+            .filtered_scoped_rows()
+            .iter()
+            .position(|(model, _)| model.eq_ignore_ascii_case(&self.composer))
+            .unwrap_or(0);
+        if let Some(selector) = self.scoped_models_selector.as_mut() {
+            selector.selected = selected;
+        }
+    }
+
+    /// Apply the picker's enabled set to the session (pi parity: any
+    /// change updates session scope immediately — session-only until
+    /// ctrl+s persists). All enabled = `None` (pi's null); otherwise
+    /// the enabled subset.
+    fn apply_scoped_selection(&mut self) {
+        let Some(selector) = self.scoped_models_selector.as_ref() else {
+            return;
+        };
+        let enabled: Vec<String> = selector
+            .rows
+            .iter()
+            .zip(&selector.enabled)
+            .filter(|(_, enabled)| **enabled)
+            .map(|(model, _)| model.clone())
+            .collect();
+        self.scoped_models_enabled = (enabled.len() != selector.rows.len()).then_some(enabled);
     }
 
     fn selected_model(&self) -> Option<String> {
@@ -2269,6 +2493,15 @@ pub fn update(state: UiState, message: UiMessage) -> (UiState, Option<UiEffect>)
 }
 
 fn handle_model_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    // ctrl+s: persist the selected model as the settings default (pi
+    // parity: app.models.save in the model picker = set as default).
+    if key.code == KeyCode::Char('s') && key.modifiers == Modifiers::CONTROL {
+        let Some(model) = state.selected_model() else {
+            return (state, None);
+        };
+        state.close_model_selector();
+        return (state, Some(UiEffect::SaveDefaultModel { model }));
+    }
     match key.code {
         KeyCode::Esc if key.modifiers.is_empty() => {
             state.close_model_selector();
@@ -2301,6 +2534,75 @@ fn handle_model_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Opt
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
             insert_at_cursor(&mut state, &ch.to_string());
             state.reset_model_selection();
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
+/// /scoped-models picker keys (pi parity): the composer filters,
+/// enter toggles, ctrl+a/ctrl+x enable/clear visible rows, ctrl+p
+/// toggles the selected provider, ctrl+s persists to settings, esc
+/// cancels (session keeps the last applied toggle set).
+fn handle_scoped_models_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_scoped_models_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            state.toggle_scoped_model();
+            state.apply_scoped_selection();
+            (state, None)
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_scoped_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_scoped_selection(1);
+            (state, None)
+        }
+        KeyCode::Char('a') if key.modifiers == Modifiers::CONTROL => {
+            state.set_all_scoped(true);
+            state.apply_scoped_selection();
+            (state, None)
+        }
+        KeyCode::Char('x') if key.modifiers == Modifiers::CONTROL => {
+            state.set_all_scoped(false);
+            state.apply_scoped_selection();
+            (state, None)
+        }
+        KeyCode::Char('p') if key.modifiers == Modifiers::CONTROL => {
+            state.toggle_scoped_provider();
+            state.apply_scoped_selection();
+            (state, None)
+        }
+        KeyCode::Char('s') if key.modifiers == Modifiers::CONTROL => {
+            // Persist the enabled set as the settings catalog (pi's
+            // "Session-only. Ctrl+S to save to settings.").
+            let Some(selector) = state.scoped_models_selector.as_ref() else {
+                return (state, None);
+            };
+            let catalog: Vec<String> = selector
+                .rows
+                .iter()
+                .zip(&selector.enabled)
+                .filter(|(_, enabled)| **enabled)
+                .map(|(model, _)| model.clone())
+                .collect();
+            state.close_scoped_models_selector();
+            (state, Some(UiEffect::SaveModelCatalog { catalog }))
+        }
+        KeyCode::Backspace if key.modifiers.is_empty() => {
+            let (state, _) = handle_backspace(state);
+            let mut state = state;
+            state.reset_scoped_selection();
+            (state, None)
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == Modifiers::SHIFT => {
+            insert_at_cursor(&mut state, &ch.to_string());
+            state.reset_scoped_selection();
             (state, None)
         }
         _ => (state, None),
@@ -2776,6 +3078,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         || state.fork_selector.is_some()
         || state.auth_selector.is_some()
         || state.login_progress.is_some()
+        || state.scoped_models_selector.is_some()
         || state.hotkeys_visible;
     if transient_open && let Some(action) = state.keymap.action_for(&key) {
         match action {
@@ -2787,6 +3090,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_fork_selector();
                 state.close_auth_selector();
                 state.login_progress = None;
+                state.close_scoped_models_selector();
                 state.hotkeys_visible = false;
                 return handle_action(state, action);
             }
@@ -2802,6 +3106,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_file_selector();
                 state.close_fork_selector();
                 state.close_auth_selector();
+                state.close_scoped_models_selector();
                 state.hotkeys_visible = false;
                 if state.composer.is_empty() {
                     state.hint = Some("ctrl+c again to exit".to_owned());
@@ -2814,6 +3119,9 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     }
     if state.model_selector.is_some() {
         return handle_model_selector_key(state, key);
+    }
+    if state.scoped_models_selector.is_some() {
+        return handle_scoped_models_key(state, key);
     }
     if state.thinking_selector.is_some() {
         return handle_thinking_selector_key(state, key);
@@ -3014,6 +3322,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/name <title> · /session - rename; show session identity",
                 "/login · /logout        - provider sign-in; remove stored credentials",
                 "/reload                - re-read settings and project context live",
+                "/scoped-models         - enable/disable models (ctrl+s saves)",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
@@ -3038,6 +3347,12 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 std::mem::take(state),
                 Some(UiEffect::Compact { instructions }),
             )
+        }
+        "scoped-models" => {
+            // pi parity: enable/disable models for this session's /model
+            // cycling and pickers; ctrl+s persists to settings.
+            state.open_scoped_models_selector();
+            (std::mem::take(state), None)
         }
         "model" => {
             if !state.model_switching_available {
@@ -3433,7 +3748,7 @@ fn complete_composer(state: &mut UiState) {
         Some((name, rest)) if name == "model" && !rest.chars().any(char::is_whitespace) => (
             "/model ".to_owned(),
             rest.to_owned(),
-            state.model_catalog.clone(),
+            state.effective_model_catalog(),
         ),
         Some(_) => return,
         None => {
@@ -3456,6 +3771,7 @@ fn complete_composer(state: &mut UiState) {
                 "new",
                 "reload",
                 "resume",
+                "scoped-models",
                 "session",
                 "share",
                 "thinking",
@@ -3596,23 +3912,23 @@ fn cycle_model(state: &mut UiState, delta: isize) -> Option<UiEffect> {
         notice(state, "model switching unavailable (scripted provider)");
         return None;
     }
-    let count = state.model_catalog.len();
+    // Scoped-models narrows cycling to the enabled set (pi parity:
+    // scopedModels drive ctrl+P cycling).
+    let catalog = state.effective_model_catalog();
+    let count = catalog.len();
     if count == 0 {
-        notice(state, "no models are configured");
+        notice(state, "no models are enabled in this scope");
         return None;
     }
-    let current = state.current_model_reference().and_then(|current| {
-        state
-            .model_catalog
-            .iter()
-            .position(|model| model == &current)
-    });
+    let current = state
+        .current_model_reference()
+        .and_then(|current| catalog.iter().position(|model| model == &current));
     let index = current.map_or_else(
         || if delta < 0 { count - 1 } else { 0 },
         |index| (index as isize + delta).rem_euclid(count as isize) as usize,
     );
     Some(UiEffect::SwitchModel {
-        model: state.model_catalog[index].clone(),
+        model: catalog[index].clone(),
     })
 }
 
@@ -6199,6 +6515,78 @@ pub async fn run(
                                     host.trust_project,
                                 )
                                 .await;
+                            } else if let UiEffect::SaveDefaultModel { model } = &effect {
+                                // ctrl+s in the model picker (pi parity:
+                                // set as default): split the qualified
+                                // reference, write both settings keys,
+                                // update the live default badge.
+                                let (provider, id) = match model.split_once('/') {
+                                    Some((provider, id)) => {
+                                        (provider.to_owned(), id.to_owned())
+                                    }
+                                    None => ("openrouter".to_owned(), model.clone()),
+                                };
+                                match crate::settings::Settings::path() {
+                                    Some(path) => {
+                                        match crate::settings::Settings::write_default_model(
+                                            &path, &provider, &id,
+                                        ) {
+                                            Ok(written) => {
+                                                state.default_model_reference =
+                                                    Some(model.clone());
+                                                notice(
+                                                    &mut state,
+                                                    &format!(
+                                                        "default model saved to {}: {}/{}",
+                                                        written.display(),
+                                                        provider,
+                                                        id
+                                                    ),
+                                                );
+                                            }
+                                            Err(err) => notice(
+                                                &mut state,
+                                                &format!("save failed: {err}"),
+                                            ),
+                                        }
+                                    }
+                                    None => notice(
+                                        &mut state,
+                                        "save failed: settings path unavailable",
+                                    ),
+                                }
+                            } else if let UiEffect::SaveModelCatalog { catalog } = &effect {
+                                // ctrl+s in /scoped-models (pi parity:
+                                // save to settings): persist the enabled
+                                // set as modelCatalog and apply it live.
+                                match crate::settings::Settings::path() {
+                                    Some(path) => {
+                                        match crate::settings::Settings::write_model_catalog(
+                                            &path,
+                                            catalog,
+                                        ) {
+                                            Ok(written) => {
+                                                state.model_catalog = catalog.clone();
+                                                state.scoped_models_enabled = None;
+                                                notice(
+                                                    &mut state,
+                                                    &format!(
+                                                        "model selection saved to {}",
+                                                        written.display()
+                                                    ),
+                                                );
+                                            }
+                                            Err(err) => notice(
+                                                &mut state,
+                                                &format!("save failed: {err}"),
+                                            ),
+                                        }
+                                    }
+                                    None => notice(
+                                        &mut state,
+                                        "save failed: settings path unavailable",
+                                    ),
+                                }
                             } else if let UiEffect::RequestAuthRows { logout } = &effect {
                                 // /login //logout picker rows: the run
                                 // loop owns the auth file read.
@@ -6770,6 +7158,16 @@ async fn dispatch(
         UiEffect::ReloadConfig => {
             // Resolved by the run loop (settings read, keymap rebuild,
             // additive extension re-discovery); match totality only.
+            None
+        }
+        UiEffect::SaveDefaultModel { .. } => {
+            // Resolved by the run loop (settings-file write); match
+            // totality only.
+            None
+        }
+        UiEffect::SaveModelCatalog { .. } => {
+            // Resolved by the run loop (settings-file write); match
+            // totality only.
             None
         }
         UiEffect::RequestAuthRows { .. } => {
@@ -7447,7 +7845,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 22);
+        assert_eq!(state.pending_scrollback.len(), 23);
     }
 
     #[test]
@@ -10700,7 +11098,7 @@ mod cache_miss_tests {
 
 #[cfg(test)]
 mod fork_picker_tests {
-    use super::tests::key;
+    use super::tests::{ctrl, key};
     use super::*;
 
     fn command(state: UiState, input: &str) -> (UiState, Option<UiEffect>) {
@@ -10845,6 +11243,115 @@ mod fork_picker_tests {
         assert_eq!(state.composer, "second");
         assert_eq!(state.cursor, "second".chars().count());
     }
+    #[test]
+    fn scoped_models_picker_toggles_filters_and_persists() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec![
+            "openrouter/a".to_owned(),
+            "openrouter/b".to_owned(),
+            "desktop/c".to_owned(),
+        ];
+
+        // Open: all rows enabled, none filtered.
+        state.open_scoped_models_selector();
+        assert_eq!(state.filtered_scoped_rows().len(), 3);
+
+        // Down + enter toggles the second row off; the session scope
+        // narrows immediately.
+        state.move_scoped_selection(1);
+        let (state, _) = update(state, key(KeyCode::Enter));
+        assert_eq!(
+            state.scoped_models_enabled,
+            Some(vec!["openrouter/a".to_owned(), "desktop/c".to_owned()])
+        );
+        // The effective catalog drives /model cycling and pickers.
+        assert_eq!(state.effective_model_catalog().len(), 2);
+
+        // ctrl+s persists the enabled set as the catalog.
+        let (state, effect) = update(state, ctrl('s'));
+        let UiEffect::SaveModelCatalog { catalog } = effect.expect("persist effect") else {
+            panic!("wrong effect");
+        };
+        assert_eq!(
+            catalog,
+            vec!["openrouter/a".to_owned(), "desktop/c".to_owned()]
+        );
+        // Saving closes the picker.
+        assert!(state.scoped_models_selector.is_none());
+
+        // Reopen after a hypothetical apply: rows reflect the narrowed
+        // set (b disabled).
+        let mut state = state;
+        state.open_scoped_models_selector();
+        assert!(!state.filtered_scoped_rows()[1].1);
+    }
+
+    #[test]
+    fn scoped_models_provider_toggle_and_enable_all() {
+        let mut state = UiState::new();
+        state.model_catalog = vec![
+            "openrouter/a".to_owned(),
+            "openrouter/b".to_owned(),
+            "desktop/c".to_owned(),
+        ];
+        state.open_scoped_models_selector();
+
+        // ctrl+p on the first row disables both openrouter models.
+        let (state, _) = update(state, ctrl('p'));
+        assert_eq!(
+            state.scoped_models_enabled,
+            Some(vec!["desktop/c".to_owned()])
+        );
+
+        // ctrl+a re-enables everything; the scope collapses to None
+        // (pi's null = all enabled).
+        let (state, _) = update(state, ctrl('a'));
+        assert_eq!(state.scoped_models_enabled, None);
+        assert_eq!(state.effective_model_catalog().len(), 3);
+
+        // ctrl+x clears all; zero enabled models.
+        let (state, _) = update(state, ctrl('x'));
+        assert_eq!(
+            state.scoped_models_enabled,
+            Some(Vec::new()) as Option<Vec<String>>
+        );
+        assert!(state.effective_model_catalog().is_empty());
+    }
+
+    #[test]
+    fn model_picker_ctrl_s_saves_default() {
+        let mut state = UiState::new();
+        state.model_switching_available = true;
+        state.model_catalog = vec!["desktop/qwen3.8:27b".to_owned()];
+        state.open_model_selector("");
+        let (state, effect) = update(state, ctrl('s'));
+        let UiEffect::SaveDefaultModel { model } = effect.expect("save effect") else {
+            panic!("wrong effect");
+        };
+        assert_eq!(model, "desktop/qwen3.8:27b");
+        assert!(state.model_selector.is_none());
+    }
+
+    #[test]
+    fn reload_command_emits_effect_and_blocks_while_working() {
+        // Idle: the run loop owns the re-read.
+        let (_, effect) = handle_command(&mut UiState::new(), "reload");
+        assert!(matches!(effect, Some(UiEffect::ReloadConfig)));
+
+        // A running turn must not race a config swap.
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "op".to_owned(),
+        };
+        let (state, effect) = handle_command(&mut state, "reload");
+        assert!(effect.is_none());
+        assert!(state.pending_scrollback.iter().any(|line| {
+            line.spans
+                .iter()
+                .any(|span| span.content.contains("wait for the current turn"))
+        }));
+    }
 }
 
 #[cfg(test)]
@@ -10880,26 +11387,6 @@ mod debug_share_tests {
                 .iter()
                 .any(|line| line.to_string().contains("no session is attached"))
         );
-    }
-
-    #[test]
-    fn reload_command_emits_effect_and_blocks_while_working() {
-        // Idle: the run loop owns the re-read.
-        let (_, effect) = handle_command(&mut UiState::new(), "reload");
-        assert!(matches!(effect, Some(UiEffect::ReloadConfig)));
-
-        // A running turn must not race a config swap.
-        let mut state = UiState::new();
-        state.status = UiStatus::Working {
-            operation: "op".to_owned(),
-        };
-        let (state, effect) = handle_command(&mut state, "reload");
-        assert!(effect.is_none());
-        assert!(state.pending_scrollback.iter().any(|line| {
-            line.spans
-                .iter()
-                .any(|span| span.content.contains("wait for the current turn"))
-        }));
     }
 
     #[test]
