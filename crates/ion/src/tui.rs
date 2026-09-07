@@ -5830,13 +5830,11 @@ async fn write_debug_log(
 /// Rows for the /login //logout picker (run-loop owned: it reads the
 /// auth file). Login rows list ion's providers with their flows;
 /// logout rows list only stored credentials.
-fn auth_rows(logout: bool) -> Vec<AuthRow> {
-    let auth_file = auth::AuthFile::shared();
+fn auth_rows(logout: bool) -> Result<Vec<AuthRow>, auth::LoginError> {
+    let auth_file = auth::AuthFile::owned()?;
     if logout {
-        let Ok(stored) = auth_file.list() else {
-            return Vec::new();
-        };
-        return stored
+        let stored = auth_file.list()?;
+        return Ok(stored
             .into_iter()
             .map(|(provider, kind)| AuthRow {
                 label: auth_provider_label(&provider).to_owned(),
@@ -5844,7 +5842,7 @@ fn auth_rows(logout: bool) -> Vec<AuthRow> {
                 method: String::new(),
                 detail: format!("stored {kind} credential"),
             })
-            .collect();
+            .collect());
     }
     let mut rows = vec![
         AuthRow {
@@ -5868,7 +5866,7 @@ fn auth_rows(logout: bool) -> Vec<AuthRow> {
     ];
     // Show the stored state beside each login row (pi shows status).
     for row in &mut rows {
-        if let Ok(Some(credential)) = auth_file.read(&row.provider) {
+        if let Some(credential) = auth_file.read(&row.provider)? {
             let kind = match credential {
                 auth::Credential::Oauth { .. } => "oauth",
                 auth::Credential::ApiKey { .. } => "api key",
@@ -5876,7 +5874,7 @@ fn auth_rows(logout: bool) -> Vec<AuthRow> {
             row.detail = format!("{} · currently stored: {kind}", row.detail);
         }
     }
-    rows
+    Ok(rows)
 }
 
 fn auth_provider_label(provider: &str) -> &str {
@@ -6091,7 +6089,7 @@ async fn finish_login(
     credential: auth::Credential,
     events: &tokio::sync::mpsc::Sender<AuthLoopEvent>,
 ) -> Result<String, String> {
-    let auth_file = auth::AuthFile::shared();
+    let auth_file = auth::AuthFile::owned().map_err(|err| err.to_string())?;
     auth_file
         .write(provider, Some(&credential))
         .map_err(|err| err.to_string())?;
@@ -6976,15 +6974,13 @@ pub async fn run(
                             } else if let UiEffect::RequestAuthRows { logout } = &effect {
                                 // /login //logout picker rows: the run
                                 // loop owns the auth file read.
-                                let rows = auth_rows(*logout);
-                                let (next, _) = update(
-                                    std::mem::take(&mut state),
-                                    UiMessage::AuthRowsListed {
-                                        logout: *logout,
-                                        rows,
-                                    },
-                                );
-                                state = next;
+                                match auth_rows(*logout) {
+                                    Ok(rows) => {
+                                        let (next, _) = update(std::mem::take(&mut state), UiMessage::AuthRowsListed { logout: *logout, rows });
+                                        state = next;
+                                    }
+                                    Err(err) => notice(&mut state, &format!("credentials could not be read: {err}")),
+                                }
                             } else if let UiEffect::NavigateLeaf { entry_id } = &effect {
                                 match session.navigate_leaf(*entry_id).await {
                                     Ok(_) => notice(&mut state, "navigated to the selected point; files unchanged"),
@@ -6993,8 +6989,7 @@ pub async fn run(
                             } else if let UiEffect::LogoutProvider { provider } = &effect {
                                 // /logout: remove the stored credential;
                                 // surface exactly what happened.
-                                let auth_file = auth::AuthFile::shared();
-                                let result = match auth_file.write(provider, None) {
+                                let result = match auth::AuthFile::owned().and_then(|file| file.write(provider, None)) {
                                     Ok(()) => Ok(format!(
                                         "logged out of {provider}; environment variables and models.json config are unchanged"
                                     )),
