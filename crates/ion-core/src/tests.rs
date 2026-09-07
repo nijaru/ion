@@ -3,6 +3,7 @@
 mod agent_family;
 mod agent_store;
 mod compaction;
+mod configuration;
 mod context_usage;
 mod crash_recovery;
 mod hosted_agent_invariants;

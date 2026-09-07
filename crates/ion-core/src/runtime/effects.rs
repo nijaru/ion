@@ -16,6 +16,12 @@ impl<P: Provider> SessionRuntime<P> {
             .and_then(|lane| lane.state.leaf);
         let checkpoint_tx = self.checkpoint_tx.clone();
         let checkpoint_cwd = self.cwd.clone();
+        let configuration = Arc::clone(
+            &self
+                .active(operation_id)
+                .expect("model effect has an operation")
+                ._configuration,
+        );
         let provider = Arc::clone(&self.provider);
         let cancel = self
             .active(operation_id)
@@ -39,6 +45,7 @@ impl<P: Provider> SessionRuntime<P> {
         let terminal = self.engine_tx.clone();
         let retry = self.retry.clone();
         self.tracker.spawn(async move {
+            let _configuration = configuration;
             if step == 1
                 && let Some(leaf) = checkpoint_leaf
                 && !checkpoints::prepare_before_model(
@@ -99,6 +106,12 @@ impl<P: Provider> SessionRuntime<P> {
         let Some(effect_id) = effect_id else {
             return;
         };
+        let configuration = Arc::clone(
+            &self
+                .active(call.operation_id)
+                .expect("tool effect has an operation")
+                ._configuration,
+        );
         let artifact_root = self.artifact_root.clone();
         let ToolCall {
             operation_id,
@@ -114,6 +127,7 @@ impl<P: Provider> SessionRuntime<P> {
         let (progress_tx, mut progress_rx) = mpsc::channel::<ToolProgress>(8);
         debug!(tool = %name, %call_id, "dispatching tool effect");
         self.tracker.spawn(async move {
+            let _configuration = configuration;
             let execute = tools.execute_with_reconciliation(
                 &name,
                 &arguments,

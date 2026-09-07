@@ -7,6 +7,7 @@
 
 mod agent;
 mod agent_host;
+mod configuration;
 mod context;
 mod effect;
 mod error;
@@ -33,6 +34,7 @@ pub use agent_host::{
     HostedAgentConfig, HostedAgentRuntimes, agent_host_tools, hosted_agent_budget_default,
     hosted_agent_runtimes, install_agent_host_tools,
 };
+pub use configuration::{ConfigurationLease, ConfigurationUpdate, HostConfiguration};
 pub use context::{
     CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
     TrustedResource, load_trusted_resources, project, project_with_manifest_for_model, sha256_of,
