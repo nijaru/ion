@@ -269,6 +269,13 @@ No repeat-sensitive effect starts before its exact invocation intent is durable.
 
 Typed runtime code operates on typed effect values. A storage codec may encode a discriminant plus JSON, but runtime/store logic should not repeatedly spelunk arbitrary JSON fields to rediscover domain state.
 
+User shell commands, including checkpoint application, keep a durable pending
+intent until their result commits. A result-write failure is a session failure:
+stop admission, drain owned work, and report the error without publishing a
+successful settlement. On reopen, an unresolved shell intent becomes an explicit
+unknown-outcome record; it is never replayed or described as confirmed cancellation.
+Recovery write failure prevents the session from accepting new work.
+
 ### 10.1 Model steps
 
 A model step freezes the exact effective input needed for recovery and evaluation, including:
