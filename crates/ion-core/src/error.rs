@@ -6,6 +6,10 @@ use crate::ids::{EntryId, OperationId};
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CommandError {
+    #[error("host configuration is busy; finish active work before reloading")]
+    ConfigurationBusy,
+    #[error("host configuration update failed; reconcile configuration before starting work")]
+    ConfigurationFailed,
     #[error("session command queue is saturated")]
     QueueSaturated,
     #[error("session is closed")]

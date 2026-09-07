@@ -61,6 +61,7 @@ struct HostedAgentSpec {
 
 /// Configuration and bounds for separately hosted agents in one family.
 pub struct HostedAgentConfig<P> {
+    pub configuration: crate::HostConfiguration,
     pub store: SessionStore,
     pub make_provider: Arc<dyn Fn() -> P + Send + Sync>,
     /// Optional resolver for explicit per-call model overrides. Unsupported
@@ -259,6 +260,11 @@ impl<P> HostedAgentRuntimes<P> {
     where
         P: Provider,
     {
+        let _configuration = self
+            .config
+            .configuration
+            .try_enter()
+            .map_err(|error| error.to_string())?;
         if parent_cancel.is_cancelled() {
             return Err("cancelled".to_owned());
         }
@@ -302,7 +308,8 @@ impl<P> HostedAgentRuntimes<P> {
         let fork_source = fork_context
             .as_ref()
             .map(|fork| (self.parent_id, fork.source_entry_id));
-        let catalog = crate::tool::ToolCatalog::read_only(&self.config.cwd);
+        let catalog = crate::tool::ToolCatalog::read_only(&self.config.cwd)
+            .with_configuration(self.config.configuration.clone());
         let session_id = SessionId::generate();
         let agent_id = crate::ids::AgentId::root(session_id);
         let initial_model_ref = provider.initial_model_ref();
@@ -399,6 +406,11 @@ impl<P> HostedAgentRuntimes<P> {
     where
         P: Provider,
     {
+        let _configuration = self
+            .config
+            .configuration
+            .try_enter()
+            .map_err(|error| error.to_string())?;
         if self.is_live(session_id) {
             return Ok(());
         }
@@ -432,7 +444,8 @@ impl<P> HostedAgentRuntimes<P> {
                 "model `{model_ref}` is unavailable for this hosted agent"
             ));
         };
-        let catalog = crate::tool::ToolCatalog::read_only(&loaded.session.cwd);
+        let catalog = crate::tool::ToolCatalog::read_only(&loaded.session.cwd)
+            .with_configuration(self.config.configuration.clone());
         let runtime = Runtime::open_hosted(
             provider,
             catalog.clone(),

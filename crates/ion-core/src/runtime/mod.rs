@@ -22,6 +22,7 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tracing::{debug, error, info, warn};
 
+use crate::configuration::ConfigurationLease;
 use crate::context::{
     CapabilitySnapshot, ContextManifest, ContextPlan, TrustedResource,
     project_with_manifest_for_model,
@@ -1113,6 +1114,7 @@ struct Composition<P> {
     /// persisted value instead, so process cwd cannot silently change it.
     cwd: Option<String>,
     defer_loaded_start: bool,
+    startup_configuration: Option<Arc<ConfigurationLease>>,
 }
 
 impl<P: Provider> Composition<P> {
@@ -1132,6 +1134,7 @@ impl<P: Provider> Composition<P> {
             retry: crate::provider::RetryPolicy::default(),
             cwd: None,
             defer_loaded_start: false,
+            startup_configuration: None,
         }
     }
 
@@ -1179,6 +1182,7 @@ impl<P: Provider> Composition<P> {
                     parent: self.parent,
                     fork_source: self.fork_source,
                     defer_loaded_start: deferred_loaded_start,
+                    startup_configuration: self.startup_configuration,
                     retry,
                 },
                 rx,
@@ -1413,11 +1417,14 @@ impl Runtime {
         policy: Arc<dyn PolicyEngine>,
         trusted_resources: Vec<TrustedResource>,
     ) -> Result<Self, RuntimeError> {
+        let tools = tools.into();
+        let configuration = Arc::new(tools.configuration().try_enter()?);
         let loaded = store
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
         let mut composition = Composition::new(provider, tools, store);
+        composition.startup_configuration = Some(configuration);
         composition.policy = policy;
         composition.trusted_resources = trusted_resources;
         Ok(composition.spawn(session_id, Some(loaded)))
@@ -1433,6 +1440,8 @@ impl Runtime {
         session_id: SessionId,
         config: HostedRuntimeConfig,
     ) -> Result<Self, RuntimeError> {
+        let tools = tools.into();
+        let configuration = Arc::new(tools.configuration().try_enter()?);
         let loaded = store
             .load(session_id)
             .await
@@ -1447,6 +1456,7 @@ impl Runtime {
             .fork_source_session_id
             .map(|source| (source, loaded.session.fork_source_entry_id));
         let mut composition = Composition::new(provider, tools, store);
+        composition.startup_configuration = Some(configuration);
         composition.policy = config.policy;
         composition.budget = config.budget;
         composition.parent = Some(config.control_parent);
@@ -1489,11 +1499,14 @@ impl Runtime {
         trusted_resources: Vec<TrustedResource>,
         retry: crate::provider::RetryPolicy,
     ) -> Result<Self, RuntimeError> {
+        let tools = tools.into();
+        let configuration = Arc::new(tools.configuration().try_enter()?);
         let loaded = store
             .load(session_id)
             .await
             .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
         let mut composition = Composition::new(provider, tools, store);
+        composition.startup_configuration = Some(configuration);
         composition.policy = policy;
         composition.interactive_approvals = true;
         composition.checkpoint_enabled = true;
@@ -1521,6 +1534,7 @@ impl Runtime {
         &self,
         max_active: usize,
     ) -> Result<crate::agent::Family, crate::agent::Error> {
+        let _configuration = self.tools.configuration().try_enter()?;
         if self.deferred_loaded_start {
             crate::agent::Family::attach_durable(
                 self.session_id,
@@ -1612,6 +1626,7 @@ enum PreparedToolAdmission {
 /// and never mutates live state (DESIGN.md §26.2).
 #[derive(Clone)]
 struct ActiveOperation {
+    _configuration: Arc<ConfigurationLease>,
     machine: OperationMachine,
     /// Durable identity of the registry captured for the current model step.
     capability_snapshot: CapabilitySnapshot,
@@ -1747,6 +1762,7 @@ struct SessionDeps<P> {
     /// Explicit history lineage; independent from control parentage.
     fork_source: Option<(SessionId, Option<EntryId>)>,
     defer_loaded_start: bool,
+    startup_configuration: Option<Arc<ConfigurationLease>>,
     retry: crate::provider::RetryPolicy,
 }
 
@@ -1780,6 +1796,7 @@ struct SessionRuntime<P> {
     shell_rx: mpsc::Receiver<ShellSignal>,
     /// The running passthrough's cancel token, when one is in flight.
     shell_cancel: Option<tokio_util::sync::CancellationToken>,
+    shell_configuration: Option<Arc<ConfigurationLease>>,
     cancel_root: CancellationToken,
     /// Transient provider-failure retry policy (pi `settings.retry`).
     retry: crate::provider::RetryPolicy,
@@ -1825,6 +1842,7 @@ struct SessionRuntime<P> {
     resumed: bool,
     loaded: Option<LoadedSession>,
     defer_loaded_start: bool,
+    startup_configuration: Option<Arc<ConfigurationLease>>,
     /// Durable entry count at the reopen boundary for frontend resume
     /// markers. This is presentation metadata, not session authority.
     reopen_entry_count: Option<usize>,
@@ -1858,6 +1876,7 @@ impl<P: Provider> SessionRuntime<P> {
             parent,
             fork_source,
             defer_loaded_start,
+            startup_configuration,
             retry,
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
@@ -1908,6 +1927,7 @@ impl<P: Provider> SessionRuntime<P> {
             tool_rx,
             shell_rx,
             shell_cancel: None,
+            shell_configuration: None,
             cancel_root: CancellationToken::new(),
             retry,
             tracker: TaskTracker::new(),
@@ -1926,6 +1946,7 @@ impl<P: Provider> SessionRuntime<P> {
             resumed,
             loaded,
             defer_loaded_start,
+            startup_configuration,
             reopen_entry_count: None,
             usage_totals: TokenUsage::default(),
         }
@@ -2076,6 +2097,11 @@ impl<P: Provider> SessionRuntime<P> {
                 .expect("loaded operation origin lane exists")
                 .available_for_snapshot(&operation.capability_snapshot);
             let active = ActiveOperation {
+                _configuration: Arc::clone(
+                    self.startup_configuration
+                        .as_ref()
+                        .expect("recovery holds configuration admission"),
+                ),
                 machine,
                 capability_snapshot: operation.capability_snapshot.clone(),
                 tool_registry,
@@ -2367,6 +2393,15 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     async fn run(mut self) {
+        if self.startup_configuration.is_none() {
+            match self.tools.configuration().try_enter() {
+                Ok(lease) => self.startup_configuration = Some(Arc::new(lease)),
+                Err(error) => {
+                    error!(session = %self.session_id, %error, "configuration prevents session startup");
+                    return;
+                }
+            }
+        }
         let mut startup_command = None;
         if self.resumed {
             if self.defer_loaded_start {
@@ -2461,6 +2496,7 @@ impl<P: Provider> SessionRuntime<P> {
                 }
             }
         }
+        self.startup_configuration = None;
         if let Some(command) = startup_command
             && self.handle_command(command).await
         {
@@ -2672,6 +2708,7 @@ impl<P: Provider> SessionRuntime<P> {
     }
 
     async fn create_lane(&mut self, lane_name: String) -> Result<(), CommandError> {
+        let _configuration = self.tools.configuration().try_enter()?;
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -2716,6 +2753,7 @@ impl<P: Provider> SessionRuntime<P> {
         control_parent_id: AgentId,
         source_lane_name: String,
     ) -> Result<String, CommandError> {
+        let _configuration = self.tools.configuration().try_enter()?;
         if self.closed {
             return Err(CommandError::Closed);
         }
@@ -2914,6 +2952,7 @@ impl<P: Provider> SessionRuntime<P> {
         input: InboxItem,
         reservation: Option<crate::session::lane::NextRun>,
     ) -> Result<(ActiveOperation, crate::ids::EntryId), CommandError> {
+        let configuration = Arc::new(self.tools.configuration().try_enter()?);
         let operation_id = OperationId::generate();
         let tool_registry = self
             .tool_registry_for_lane(lane_name)
@@ -2984,6 +3023,7 @@ impl<P: Provider> SessionRuntime<P> {
         }
         Ok((
             ActiveOperation {
+                _configuration: configuration,
                 machine,
                 capability_snapshot,
                 tool_registry,
@@ -3244,6 +3284,13 @@ impl<P: Provider> SessionRuntime<P> {
             let _ = reply.send(Err(CommandError::ShellPassthroughBusy));
             return;
         }
+        let configuration = match self.tools.configuration().try_enter() {
+            Ok(lease) => Arc::new(lease),
+            Err(error) => {
+                let _ = reply.send(Err(error));
+                return;
+            }
+        };
         // Durable intent first (§10): provision the entry identity and
         // mark the lane busy before any process exists.
         let pending = crate::session::lane::PendingShell {
@@ -3274,6 +3321,7 @@ impl<P: Provider> SessionRuntime<P> {
         // cancel; close cancels through the child of cancel_root.
         let shell_cancel = self.cancel_root.child_token();
         self.shell_cancel = Some(shell_cancel.clone());
+        self.shell_configuration = Some(Arc::clone(&configuration));
         let cancel = shell_cancel.clone();
         let tools = Arc::clone(&self.tools);
         let mut arguments = serde_json::json!({ "command": command });
@@ -3285,6 +3333,7 @@ impl<P: Provider> SessionRuntime<P> {
         let lane = lane_name.to_owned();
         let settle_command = command.clone();
         self.tracker.spawn(async move {
+            let _configuration = configuration;
             let forward = async {
                 while let Some(progress) = progress_rx.recv().await {
                     let _ = shell_tx
@@ -3387,6 +3436,7 @@ impl<P: Provider> SessionRuntime<P> {
                         lane_state.leaf = Some(record.id);
                         lane_state.pending_shell = None;
                         self.install_tree_entries(vec![record]);
+                        let _configuration = self.shell_configuration.take();
                         self.emit(RuntimeEvent::ShellSettled {
                             cursor: RuntimeCursor::default(),
                             lane_name: lane_name.clone(),
@@ -3596,7 +3646,7 @@ impl<P: Provider> SessionRuntime<P> {
             match state {
                 OperationState::Finished(_) => {
                     let lane_name = self.operation_lane_name(operation_id).map(str::to_owned);
-                    self.remove_operation(operation_id);
+                    let _finished = self.remove_operation(operation_id);
                     if let Some(lane_name) = lane_name
                         && let Some(next_operation_id) =
                             self.promote_pending_next_run(&lane_name).await
