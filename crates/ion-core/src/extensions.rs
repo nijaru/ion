@@ -87,7 +87,13 @@ impl ExtensionService {
     /// scope, removed defs stop with their live generation unpublished
     /// and their commands pruned (§19: never a scope revocation).
     /// Returns `(started, stopped)`.
-    pub async fn ensure(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) -> (usize, usize) {
+    pub async fn ensure(
+        &self,
+        defs: &[ExtensionDef],
+        catalog: &ToolCatalog,
+    ) -> Result<(usize, usize), crate::peer::PeerServiceError> {
+        crate::peer::validate_defs(defs.iter().map(|def| (&def.name, &def.command, &def.args)))?;
+        let mut reconciliation = self.registry.reconcile().await;
         let mut started = 0usize;
         let mut stopped = 0usize;
 
@@ -98,19 +104,14 @@ impl ExtensionService {
             .iter()
             .map(|def| crate::peer::peer_key(&def.name, &def.command, &def.args))
             .collect();
-        let obsolete: Vec<String> = self
-            .registry
-            .keys()
-            .into_iter()
-            .filter(|key| !desired.contains(key))
-            .collect();
+        let obsolete = reconciliation.obsolete(&desired);
         // Extension names of the stopped peers, for command pruning.
         let stopped_extensions: Vec<String> = obsolete
             .iter()
             .map(|key| key.split('\0').next().unwrap_or_default().to_owned())
             .collect();
         for key in obsolete {
-            if self.registry.stop(&key).await {
+            if reconciliation.stop(&key).await? {
                 stopped += 1;
             }
         }
@@ -137,12 +138,14 @@ impl ExtensionService {
 
         for def in defs {
             let key = crate::peer::peer_key(&def.name, &def.command, &def.args);
-            if self.registry.contains(&key) {
+            if reconciliation.contains(&key) {
                 continue;
             }
-            let Some(lifetime) = catalog.service_handle().lifetime() else {
-                continue;
-            };
+            let lifetime = catalog.service_handle().lifetime().ok_or_else(|| {
+                crate::peer::PeerServiceError::CatalogClosed {
+                    peer: def.name.clone(),
+                }
+            })?;
             let cancel = lifetime.child_token();
             let (ready_tx, ready_rx) = oneshot::channel();
             let (stopped_tx, stopped_rx) = oneshot::channel();
@@ -160,7 +163,7 @@ impl ExtensionService {
             let peers = std::sync::Arc::clone(&self.peers);
             let supervise_cancel = cancel.clone();
             let spawned = service.spawn(async move {
-                supervise_extension_peer(
+                let result = supervise_extension_peer(
                     PeerDef {
                         name: name.clone(),
                         command: def.command,
@@ -177,24 +180,43 @@ impl ExtensionService {
                     supervise_cancel,
                 )
                 .await;
-                let _ = stopped_tx.send(());
+                let _ = stopped_tx.send(result.clone());
+                result
             });
             if !spawned {
-                continue;
+                return Err(crate::peer::PeerServiceError::CatalogClosed {
+                    peer: def.name.clone(),
+                });
             }
-            self.registry.record(key, cancel, stopped_rx);
+            reconciliation.record(key, cancel, stopped_rx);
             // Wait only for the first discovery attempt. Later retries are
             // owned by the service task and do not block other extensions.
-            let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;
+            match tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => {
+                    return Err(crate::peer::PeerServiceError::StartupAcknowledgementLost {
+                        peer: def.name.clone(),
+                    });
+                }
+                Err(_) => {
+                    return Err(crate::peer::PeerServiceError::StartupTimeout {
+                        peer: def.name.clone(),
+                    });
+                }
+            }
             started += 1;
         }
-        (started, stopped)
+        Ok((started, stopped))
     }
 
     /// Start `defs` without diffing (the legacy startup path —
     /// equivalent to `ensure` against an empty registry).
-    pub async fn start_into(&self, defs: &[ExtensionDef], catalog: &ToolCatalog) {
-        self.ensure(defs, catalog).await;
+    pub async fn start_into(
+        &self,
+        defs: &[ExtensionDef],
+        catalog: &ToolCatalog,
+    ) -> Result<(), crate::peer::PeerServiceError> {
+        self.ensure(defs, catalog).await.map(|_| ())
     }
 }
 
@@ -874,7 +896,7 @@ pub(crate) async fn supervise_extension_peer(
     mut ready: Option<oneshot::Sender<()>>,
     context: ExtensionSupervisionContext,
     cancel: CancellationToken,
-) {
+) -> Result<(), crate::peer::PeerCleanupError> {
     use crate::rpc::{HANDSHAKE_TIMEOUT, spawn_with_handler};
     let ExtensionSupervisionContext {
         hub,
@@ -904,7 +926,7 @@ pub(crate) async fn supervise_extension_peer(
         });
         let handler = ExtensionUiHandler::new(hub.clone(), extension.clone());
         let rpc = match tokio::select! {
-            () = lifetime.cancelled() => return,
+            () = lifetime.cancelled() => return Ok(()),
             result = spawn_with_handler(&def, HANDSHAKE_TIMEOUT, on_closed, handler) => result,
         } {
             Ok(rpc) => Arc::new(rpc),
@@ -916,7 +938,7 @@ pub(crate) async fn supervise_extension_peer(
                 if !crate::rpc::schedule_restart(&def.name, &lifetime, &mut failures, "extension")
                     .await
                 {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -924,8 +946,8 @@ pub(crate) async fn supervise_extension_peer(
 
         let tools = match tokio::select! {
             () = lifetime.cancelled() => {
-                rpc.close().await;
-                return;
+                rpc.close().await?;
+                return Ok(());
             }
             result = tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()) => result,
         } {
@@ -935,11 +957,11 @@ pub(crate) async fn supervise_extension_peer(
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                rpc.close().await;
+                rpc.close().await?;
                 if !crate::rpc::schedule_restart(&def.name, &lifetime, &mut failures, "extension")
                     .await
                 {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -948,11 +970,11 @@ pub(crate) async fn supervise_extension_peer(
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                rpc.close().await;
+                rpc.close().await?;
                 if !crate::rpc::schedule_restart(&def.name, &lifetime, &mut failures, "extension")
                     .await
                 {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -1030,12 +1052,12 @@ pub(crate) async fn supervise_extension_peer(
                 }
             }
         }
-        rpc.close().await;
+        rpc.close().await?;
         if lifetime.is_cancelled() {
-            return;
+            return Ok(());
         }
         if !crate::rpc::schedule_restart(&def.name, &lifetime, &mut failures, "extension").await {
-            return;
+            return Ok(());
         }
     }
 }
@@ -1153,5 +1175,43 @@ impl ExtensionService {
             .and_then(Value::as_str)
             .map(str::to_owned);
         Ok(message)
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cloned_services_serialize_replacement_of_the_same_scope() {
+        let catalog = ToolCatalog::default();
+        let service = ExtensionService::new();
+        let clone = service.clone();
+        let mut def = ExtensionDef {
+            name: "textkit".into(),
+            command: "python3".into(),
+            args: vec![format!(
+                "{}/../ion/tests/fixtures/fake_extension.py",
+                env!("CARGO_MANIFEST_DIR")
+            )],
+        };
+        service
+            .ensure(std::slice::from_ref(&def), &catalog)
+            .await
+            .expect("initial supervisor");
+        def.args.push("replacement".into());
+        let defs = [def];
+        let (one, two) = tokio::join!(
+            service.ensure(&defs, &catalog),
+            clone.ensure(&defs, &catalog)
+        );
+        let (one_started, one_stopped) = one.expect("first reconcile");
+        let (two_started, two_stopped) = two.expect("second reconcile");
+        assert_eq!(
+            (one_started + two_started, one_stopped + two_stopped),
+            (1, 1)
+        );
+        service.ensure(&[], &catalog).await.expect("stop");
+        catalog.close().await.expect("close");
     }
 }

@@ -1,37 +1,65 @@
-//! Live-peer supervision registry (DESIGN.md §19, §24.4).
-//!
-//! One registry per service (MCP servers, extensions) tracks each
-//! configured peer's supervisor by structural identity —
-//! `(name, command, args)`. Service `ensure` methods diff the desired
-//! defs against the live set through this registry:
-//!
-//! - identical def → the running supervisor is left alone (a
-//!   `/reload` that changed nothing restarts no processes);
-//! - changed def → the old supervisor is stopped and joined before
-//!   the replacement starts (no two supervisors ever race one scope
-//!   or one peer map entry);
-//! - removed def → the supervisor is stopped and its live generation
-//!   unpublished through the existing close path; the declared scope
-//!   stays, so a later re-add re-admits without new authority (§19:
-//!   transient peer loss only unpublishes a generation, never
-//!   revokes).
-//!
-//! Stopping is cancel + bounded await of the supervisor's `stopped`
-//! signal; supervisors watch their token at every await point, so the
-//! bound only guards a wedged task (backoff is capped below it).
+//! Peer reconciliation owns the interval from selecting obsolete supervisors
+//! through joining them and publishing replacements. A failed stop retains its
+//! ownership record: cancellation alone never proves teardown completed.
 
-use std::collections::HashMap;
-
-use tokio::sync::oneshot;
+use std::collections::{HashMap, HashSet};
+use std::time::Duration;
+use tokio::sync::{Mutex, MutexGuard, oneshot};
 use tokio_util::sync::CancellationToken;
 
-/// How long a stop waits for the supervisor to exit before giving up
-/// on joining (the supervisor exits at its next await; restart
-/// backoff is capped at 2s, so this only trips on a wedged task).
-const STOP_JOIN_BOUND: std::time::Duration = std::time::Duration::from_secs(3);
+const STOP_JOIN_BOUND: Duration = Duration::from_secs(3);
 
-/// Structural identity of one def: name, command, and args joined
-/// with NUL, which cannot appear inside a command-line word.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PeerCleanupError {
+    #[error("peer monitor failed: {0}")]
+    MonitorFailed(String),
+    #[error("peer monitor did not drain before the shutdown deadline")]
+    DrainTimeout,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum PeerServiceError {
+    #[error("invalid peer definition: {0}")]
+    InvalidDefinition(String),
+    #[error("tool catalog is closed; cannot start peer {peer}")]
+    CatalogClosed { peer: String },
+    #[error("peer {peer} did not acknowledge its initial discovery attempt")]
+    StartupAcknowledgementLost { peer: String },
+    #[error("peer {peer} initial discovery attempt timed out")]
+    StartupTimeout { peer: String },
+    #[error("peer {peer} cleanup failed: {error}; replacement is fenced")]
+    CleanupFailed {
+        peer: String,
+        error: PeerCleanupError,
+    },
+    #[error("peer {peer} did not finish teardown before the deadline; replacement is fenced")]
+    StopTimeout { peer: String },
+    #[error("peer {peer} lost its teardown acknowledgement; replacement is fenced")]
+    StopAcknowledgementLost { peer: String },
+}
+
+pub(crate) fn validate_defs<'a>(
+    defs: impl Iterator<Item = (&'a String, &'a String, &'a Vec<String>)>,
+) -> Result<(), PeerServiceError> {
+    let mut names = HashSet::new();
+    for (name, command, args) in defs {
+        if name.trim().is_empty()
+            || command.trim().is_empty()
+            || name.contains('\0')
+            || command.contains('\0')
+            || args.iter().any(|arg| arg.contains('\0'))
+        {
+            return Err(PeerServiceError::InvalidDefinition(name.clone()));
+        }
+        if !names.insert(name) {
+            return Err(PeerServiceError::InvalidDefinition(format!(
+                "duplicate name {name}"
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn peer_key(name: &str, command: &str, args: &[String]) -> String {
     let mut key = format!("{name}\0{command}");
     for arg in args {
@@ -43,65 +71,213 @@ pub(crate) fn peer_key(name: &str, command: &str, args: &[String]) -> String {
 
 struct SupervisedPeer {
     cancel: CancellationToken,
-    stopped: oneshot::Receiver<()>,
+    stopped: oneshot::Receiver<Result<(), PeerCleanupError>>,
+    state: PeerState,
 }
 
-/// Serialized-caller registry: the TUI run loop resolves one reload at
-/// a time, so `record`/`stop` never race. The mutex covers only map
-/// access, never an await.
+enum PeerState {
+    Running,
+    Stopping,
+    Joined,
+    Failed(PeerServiceError),
+}
+
 #[derive(Default)]
 pub(crate) struct PeerRegistry {
-    supervised: std::sync::Mutex<HashMap<String, SupervisedPeer>>,
+    supervised: Mutex<HashMap<String, SupervisedPeer>>,
+}
+
+pub(crate) struct Reconciliation<'a> {
+    supervised: MutexGuard<'a, HashMap<String, SupervisedPeer>>,
 }
 
 impl PeerRegistry {
-    /// Whether a peer with this exact identity is running.
+    pub(crate) async fn reconcile(&self) -> Reconciliation<'_> {
+        Reconciliation {
+            supervised: self.supervised.lock().await,
+        }
+    }
+}
+
+impl Reconciliation<'_> {
     pub(crate) fn contains(&self, key: &str) -> bool {
-        self.supervised
-            .lock()
-            .expect("peer registry poisoned")
-            .contains_key(key)
+        self.supervised.contains_key(key)
     }
 
-    /// Live supervisor identities (tests/diagnostics).
-    pub(crate) fn keys(&self) -> Vec<String> {
+    pub(crate) fn obsolete(&mut self, desired: &[String]) -> Vec<String> {
+        for (key, peer) in self.supervised.iter_mut() {
+            if matches!(peer.state, PeerState::Running | PeerState::Stopping) {
+                let name = key.split('\0').next().unwrap_or(key).to_owned();
+                match peer.stopped.try_recv() {
+                    Ok(Ok(())) => peer.state = PeerState::Joined,
+                    Ok(Err(error)) => {
+                        peer.state =
+                            PeerState::Failed(PeerServiceError::CleanupFailed { peer: name, error })
+                    }
+                    Err(oneshot::error::TryRecvError::Closed) => {
+                        peer.state = PeerState::Failed(PeerServiceError::StopAcknowledgementLost {
+                            peer: name,
+                        })
+                    }
+                    Err(oneshot::error::TryRecvError::Empty) => {}
+                }
+            }
+        }
         self.supervised
-            .lock()
-            .expect("peer registry poisoned")
-            .keys()
-            .cloned()
+            .iter()
+            .filter(|(key, peer)| {
+                !matches!(peer.state, PeerState::Running)
+                    || peer.cancel.is_cancelled()
+                    || !desired.contains(key)
+            })
+            .map(|(key, _)| key.clone())
             .collect()
     }
 
-    /// Record one started supervisor. The `stopped` receiver fires
-    /// when the supervisor task returns; `cancel` stops it.
     pub(crate) fn record(
-        &self,
+        &mut self,
         key: String,
         cancel: CancellationToken,
-        stopped: oneshot::Receiver<()>,
+        stopped: oneshot::Receiver<Result<(), PeerCleanupError>>,
     ) {
-        self.supervised
-            .lock()
-            .expect("peer registry poisoned")
-            .insert(key, SupervisedPeer { cancel, stopped });
+        let previous = self.supervised.insert(
+            key,
+            SupervisedPeer {
+                cancel,
+                stopped,
+                state: PeerState::Running,
+            },
+        );
+        assert!(
+            previous.is_none(),
+            "replacement requires joined prior supervisor"
+        );
     }
 
-    /// Stop the peer with this identity, joining its exit within
-    /// [`STOP_JOIN_BOUND`]. Returns whether a peer was stopped; a
-    /// timeout still removes the entry (the token stays cancelled, so
-    /// a late exit cannot publish anything after removal).
-    pub(crate) async fn stop(&self, key: &str) -> bool {
-        let Some(peer) = self
-            .supervised
-            .lock()
-            .expect("peer registry poisoned")
-            .remove(key)
-        else {
-            return false;
+    pub(crate) async fn stop(&mut self, key: &str) -> Result<bool, PeerServiceError> {
+        self.stop_with_timeout(key, STOP_JOIN_BOUND).await
+    }
+
+    async fn stop_with_timeout(
+        &mut self,
+        key: &str,
+        deadline: Duration,
+    ) -> Result<bool, PeerServiceError> {
+        let Some(peer) = self.supervised.get_mut(key) else {
+            return Ok(false);
         };
+        if matches!(peer.state, PeerState::Joined) {
+            self.supervised.remove(key);
+            return Ok(true);
+        }
+        let name = key.split('\0').next().unwrap_or(key).to_owned();
         peer.cancel.cancel();
-        let _ = tokio::time::timeout(STOP_JOIN_BOUND, peer.stopped).await;
-        true
+        if let PeerState::Failed(error) = &peer.state {
+            return Err(error.clone());
+        }
+        peer.state = PeerState::Stopping;
+        match tokio::time::timeout(deadline, &mut peer.stopped).await {
+            Ok(Ok(Ok(()))) => {
+                self.supervised.remove(key);
+                Ok(true)
+            }
+            Ok(result) => {
+                let error = match result {
+                    Ok(Err(error)) => PeerServiceError::CleanupFailed { peer: name, error },
+                    Err(_) => PeerServiceError::StopAcknowledgementLost { peer: name },
+                    Ok(Ok(())) => unreachable!("success handled above"),
+                };
+                peer.state = PeerState::Failed(error.clone());
+                Err(error)
+            }
+            Err(_) => Err(PeerServiceError::StopTimeout { peer: name }),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn timeout_retains_ownership_and_retry_joins_before_replacement() {
+        let registry = PeerRegistry::default();
+        let mut reconciliation = registry.reconcile().await;
+        let cancel = CancellationToken::new();
+        let (tx, rx) = oneshot::channel();
+        reconciliation.record("peer".into(), cancel.clone(), rx);
+        assert!(matches!(
+            reconciliation
+                .stop_with_timeout("peer", Duration::ZERO)
+                .await,
+            Err(PeerServiceError::StopTimeout { .. })
+        ));
+        assert!(cancel.is_cancelled());
+        assert!(reconciliation.contains("peer"));
+        assert_eq!(reconciliation.obsolete(&["peer".into()]), ["peer"]);
+        tx.send(Ok(())).expect("late acknowledgement");
+        assert!(reconciliation.stop("peer").await.expect("retry joins"));
+        assert!(!reconciliation.contains("peer"));
+    }
+
+    #[tokio::test]
+    async fn dropped_acknowledgement_remains_a_stable_failure() {
+        let registry = PeerRegistry::default();
+        let mut reconciliation = registry.reconcile().await;
+        let (tx, rx) = oneshot::channel();
+        reconciliation.record("peer".into(), CancellationToken::new(), rx);
+        drop(tx);
+        for _ in 0..2 {
+            assert!(matches!(
+                reconciliation.stop("peer").await,
+                Err(PeerServiceError::StopAcknowledgementLost { .. })
+            ));
+            assert!(reconciliation.contains("peer"));
+        }
+    }
+
+    #[tokio::test]
+    async fn cleanup_failure_is_not_hidden_by_unchanged_configuration() {
+        let registry = PeerRegistry::default();
+        let mut reconciliation = registry.reconcile().await;
+        let (tx, rx) = oneshot::channel();
+        reconciliation.record("peer".into(), CancellationToken::new(), rx);
+        tx.send(Err(PeerCleanupError::DrainTimeout))
+            .expect("cleanup result");
+        assert_eq!(reconciliation.obsolete(&["peer".into()]), ["peer"]);
+        for _ in 0..2 {
+            assert!(matches!(
+                reconciliation.stop("peer").await,
+                Err(PeerServiceError::CleanupFailed {
+                    error: PeerCleanupError::DrainTimeout,
+                    ..
+                })
+            ));
+        }
+    }
+
+    #[tokio::test]
+    async fn cancelled_reconciliation_keeps_pending_stop_owned() {
+        let registry = PeerRegistry::default();
+        let (tx, rx) = oneshot::channel();
+        registry
+            .reconcile()
+            .await
+            .record("peer".into(), CancellationToken::new(), rx);
+        let mut reconciliation = registry.reconcile().await;
+        {
+            let stop = reconciliation.stop("peer");
+            tokio::pin!(stop);
+            assert!(
+                tokio::time::timeout(Duration::ZERO, &mut stop)
+                    .await
+                    .is_err()
+            );
+        }
+        drop(reconciliation);
+        let mut retry = registry.reconcile().await;
+        assert!(retry.contains("peer"));
+        tx.send(Ok(())).expect("ack");
+        assert!(retry.stop("peer").await.expect("join"));
     }
 }

@@ -51,7 +51,13 @@ impl McpService {
 
     /// Reconcile the configured MCP server set: start new/changed
     /// defs, stop removed ones. Returns `(started, stopped)`.
-    pub async fn ensure(&self, defs: &[ServerDef], catalog: &ToolCatalog) -> (usize, usize) {
+    pub async fn ensure(
+        &self,
+        defs: &[ServerDef],
+        catalog: &ToolCatalog,
+    ) -> Result<(usize, usize), crate::peer::PeerServiceError> {
+        crate::peer::validate_defs(defs.iter().map(|def| (&def.name, &def.command, &def.args)))?;
+        let mut reconciliation = self.registry.reconcile().await;
         let mut started = 0;
         let mut stopped = 0;
 
@@ -62,26 +68,23 @@ impl McpService {
             .iter()
             .map(|def| crate::peer::peer_key(&def.name, &def.command, &def.args))
             .collect();
-        let obsolete: Vec<String> = self
-            .registry
-            .keys()
-            .into_iter()
-            .filter(|key| !desired.contains(key))
-            .collect();
+        let obsolete = reconciliation.obsolete(&desired);
         for key in obsolete {
-            if self.registry.stop(&key).await {
+            if reconciliation.stop(&key).await? {
                 stopped += 1;
             }
         }
 
         for def in defs {
             let key = crate::peer::peer_key(&def.name, &def.command, &def.args);
-            if self.registry.contains(&key) {
+            if reconciliation.contains(&key) {
                 continue;
             }
-            let Some(lifetime) = catalog.service_handle().lifetime() else {
-                continue;
-            };
+            let lifetime = catalog.service_handle().lifetime().ok_or_else(|| {
+                crate::peer::PeerServiceError::CatalogClosed {
+                    peer: def.name.clone(),
+                }
+            })?;
             let cancel = lifetime.child_token();
             let (ready_tx, ready_rx) = oneshot::channel();
             let (stopped_tx, stopped_rx) = oneshot::channel();
@@ -97,7 +100,7 @@ impl McpService {
             let peer_service = service.clone();
             let supervise_cancel = cancel.clone();
             let spawned = service.spawn(async move {
-                supervise_tool_peer(
+                let result = supervise_tool_peer(
                     PeerDef {
                         name: name.clone(),
                         command: def.command,
@@ -119,26 +122,45 @@ impl McpService {
                     supervise_cancel,
                 )
                 .await;
-                let _ = stopped_tx.send(());
+                let _ = stopped_tx.send(result.clone());
+                result
             });
             if !spawned {
-                continue;
+                return Err(crate::peer::PeerServiceError::CatalogClosed {
+                    peer: def.name.clone(),
+                });
             }
-            self.registry.record(key, cancel, stopped_rx);
+            reconciliation.record(key, cancel, stopped_rx);
             // Wait only for the first discovery attempt. Restart/backoff
             // belongs to the service task and never delays the rest of the
             // host after the initial bounded startup decision.
-            let _ = tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await;
+            match tokio::time::timeout(HANDSHAKE_TIMEOUT, ready_rx).await {
+                Ok(Ok(())) => {}
+                Ok(Err(_)) => {
+                    return Err(crate::peer::PeerServiceError::StartupAcknowledgementLost {
+                        peer: def.name.clone(),
+                    });
+                }
+                Err(_) => {
+                    return Err(crate::peer::PeerServiceError::StartupTimeout {
+                        peer: def.name.clone(),
+                    });
+                }
+            }
             started += 1;
         }
-        (started, stopped)
+        Ok((started, stopped))
     }
 
     /// Start `defs` without diffing (the legacy startup path —
     /// equivalent to `ensure` against an empty registry). Retained
     /// for existing callers; new callers should prefer `ensure`.
-    pub async fn start_into(&self, defs: &[ServerDef], catalog: &ToolCatalog) {
-        self.ensure(defs, catalog).await;
+    pub async fn start_into(
+        &self,
+        defs: &[ServerDef],
+        catalog: &ToolCatalog,
+    ) -> Result<(), crate::peer::PeerServiceError> {
+        self.ensure(defs, catalog).await.map(|_| ())
     }
 }
 
@@ -174,5 +196,61 @@ impl Tool for McpTool {
                 () = cancel.cancelled() => ToolOutcome::error("cancelled"),
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+    use crate::peer::{PeerServiceError, peer_key};
+
+    #[tokio::test]
+    async fn failed_stop_fences_replacement_and_remains_reported_on_retry() {
+        let service = McpService::new();
+        let catalog = ToolCatalog::default();
+        let (tx, rx) = oneshot::channel();
+        service.registry.reconcile().await.record(
+            peer_key("same", "old", &[]),
+            CancellationToken::new(),
+            rx,
+        );
+        drop(tx);
+        let replacement = ServerDef {
+            name: "same".into(),
+            command: "must-not-spawn".into(),
+            args: vec![],
+        };
+        for _ in 0..2 {
+            assert!(matches!(
+                service
+                    .ensure(std::slice::from_ref(&replacement), &catalog)
+                    .await,
+                Err(PeerServiceError::StopAcknowledgementLost { .. })
+            ));
+        }
+        assert!(
+            service
+                .registry
+                .reconcile()
+                .await
+                .contains(&peer_key("same", "old", &[]))
+        );
+        catalog.close().await.expect("close");
+    }
+
+    #[tokio::test]
+    async fn duplicate_names_are_rejected_before_reconciliation() {
+        let service = McpService::new();
+        let catalog = ToolCatalog::default();
+        let def = ServerDef {
+            name: "same".into(),
+            command: "unused".into(),
+            args: vec![],
+        };
+        assert!(matches!(
+            service.ensure(&[def.clone(), def], &catalog).await,
+            Err(PeerServiceError::InvalidDefinition(_))
+        ));
+        catalog.close().await.expect("close");
     }
 }

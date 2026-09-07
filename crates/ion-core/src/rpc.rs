@@ -31,7 +31,39 @@ pub(crate) struct StdioRpc {
     client: Peer<RoleClient>,
     shutdown: CancellationToken,
     closed: Arc<AtomicBool>,
-    monitor: std::sync::Mutex<Option<JoinHandle<()>>>,
+    monitor: tokio::sync::Mutex<Monitor>,
+}
+
+enum Monitor {
+    Running(JoinHandle<Result<(), crate::peer::PeerCleanupError>>),
+    Closed(Result<(), crate::peer::PeerCleanupError>),
+}
+
+impl Monitor {
+    async fn close(&mut self, deadline: Duration) -> Result<(), crate::peer::PeerCleanupError> {
+        let monitor = match self {
+            Self::Running(monitor) => monitor,
+            Self::Closed(result) => return result.clone(),
+        };
+        let result = match tokio::time::timeout(deadline, &mut *monitor).await {
+            Ok(result) => result
+                .map_err(|err| crate::peer::PeerCleanupError::MonitorFailed(err.to_string()))
+                .and_then(|result| result),
+            Err(_) => {
+                monitor.abort();
+                // Await the aborted monitor so cleanup ownership does not
+                // detach on timeout. The timeout itself remains an error.
+                match monitor.await {
+                    Err(err) if !err.is_cancelled() => Err(
+                        crate::peer::PeerCleanupError::MonitorFailed(err.to_string()),
+                    ),
+                    _ => Err(crate::peer::PeerCleanupError::DrainTimeout),
+                }
+            }
+        };
+        *self = Monitor::Closed(result.clone());
+        result
+    }
 }
 
 /// Definition of one subprocess peer.
@@ -114,16 +146,15 @@ impl StdioRpc {
             let mut waiting = Box::pin(client.waiting());
             tokio::select! {
                 result = &mut waiting => {
-                    if let Err(err) = result {
-                        tracing::debug!(error = %err, "subprocess peer monitor stopped");
-                    }
                     monitor_closed.store(true, Ordering::Release);
                     on_closed();
+                    result.map(|_| ()).map_err(|err| crate::peer::PeerCleanupError::MonitorFailed(err.to_string()))
                 }
                 () = monitor_shutdown.cancelled() => {
                     client_shutdown.cancel();
-                    let _ = waiting.await;
+                    let result = waiting.await;
                     monitor_closed.store(true, Ordering::Release);
+                    result.map(|_| ()).map_err(|err| crate::peer::PeerCleanupError::MonitorFailed(err.to_string()))
                 }
             }
         });
@@ -132,26 +163,17 @@ impl StdioRpc {
             client: peer,
             shutdown,
             closed,
-            monitor: std::sync::Mutex::new(Some(monitor)),
+            monitor: tokio::sync::Mutex::new(Monitor::Running(monitor)),
         })
     }
 
     /// Cancel the peer and drain its monitor. The monitor owns the rmcp
     /// client's transport wait, so joining it is the observable completion
     /// point for subprocess shutdown.
-    pub(crate) async fn close(&self) {
+    pub(crate) async fn close(&self) -> Result<(), crate::peer::PeerCleanupError> {
         self.shutdown.cancel();
-        let Some(mut monitor) = self.monitor.lock().expect("peer monitor poisoned").take() else {
-            return;
-        };
-        if tokio::time::timeout(PEER_DRAIN_TIMEOUT, &mut monitor)
-            .await
-            .is_err()
-        {
-            tracing::warn!("subprocess peer monitor did not drain before shutdown deadline");
-            monitor.abort();
-            let _ = monitor.await;
-        }
+        let mut state = self.monitor.lock().await;
+        state.close(PEER_DRAIN_TIMEOUT).await
     }
 
     #[must_use]
@@ -279,7 +301,8 @@ pub(crate) async fn supervise_tool_peer<F>(
     label: &str,
     make_tool: F,
     cancel: CancellationToken,
-) where
+) -> Result<(), crate::peer::PeerCleanupError>
+where
     F: Fn(Arc<StdioRpc>, ToolSpec) -> Arc<dyn Tool> + Send + Sync + 'static,
 {
     let mut failures = 0;
@@ -297,7 +320,7 @@ pub(crate) async fn supervise_tool_peer<F>(
             let _ = closed_tx.send(true);
         });
         let rpc = match tokio::select! {
-            () = lifetime.cancelled() => return,
+            () = lifetime.cancelled() => return Ok(()),
             result = StdioRpc::spawn(&def, client_info(), HANDSHAKE_TIMEOUT, on_closed) => result,
         } {
             Ok(rpc) => Arc::new(rpc),
@@ -307,7 +330,7 @@ pub(crate) async fn supervise_tool_peer<F>(
                     let _ = ready.send(());
                 }
                 if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -315,8 +338,8 @@ pub(crate) async fn supervise_tool_peer<F>(
 
         let tools = match tokio::select! {
             () = lifetime.cancelled() => {
-                rpc.close().await;
-                return;
+                rpc.close().await?;
+                return Ok(());
             }
             result = tokio::time::timeout(HANDSHAKE_TIMEOUT, rpc.list_tools()) => result,
         } {
@@ -326,9 +349,9 @@ pub(crate) async fn supervise_tool_peer<F>(
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                rpc.close().await;
+                rpc.close().await?;
                 if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -337,9 +360,9 @@ pub(crate) async fn supervise_tool_peer<F>(
                 if let Some(ready) = ready.take() {
                     let _ = ready.send(());
                 }
-                rpc.close().await;
+                rpc.close().await?;
                 if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
-                    return;
+                    return Ok(());
                 }
                 continue;
             }
@@ -368,12 +391,12 @@ pub(crate) async fn supervise_tool_peer<F>(
                 }
             }
         }
-        rpc.close().await;
+        rpc.close().await?;
         if lifetime.is_cancelled() {
-            return;
+            return Ok(());
         }
         if !schedule_restart(&def.name, &lifetime, &mut failures, label).await {
-            return;
+            return Ok(());
         }
     }
 }
@@ -413,5 +436,55 @@ fn extract_text(content: &[ContentBlock], result: &impl serde::Serialize) -> Str
             .unwrap_or_else(|_| "MCP tool returned an unreadable result".to_owned())
     } else {
         texts.join("\n")
+    }
+}
+
+#[cfg(test)]
+mod monitor_tests {
+    use super::*;
+    use crate::peer::PeerCleanupError;
+
+    #[tokio::test]
+    async fn monitor_timeout_is_reported_after_abort_join_and_retained() {
+        struct Exited(Arc<AtomicBool>);
+        impl Drop for Exited {
+            fn drop(&mut self) {
+                self.0.store(true, Ordering::Release);
+            }
+        }
+        let exited = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&exited);
+        let (tx, rx) = oneshot::channel();
+        let mut monitor = Monitor::Running(tokio::spawn(async move {
+            let _exited = Exited(flag);
+            tx.send(()).expect("started");
+            std::future::pending().await
+        }));
+        rx.await.expect("monitor started");
+        assert_eq!(
+            monitor.close(Duration::ZERO).await,
+            Err(PeerCleanupError::DrainTimeout)
+        );
+        assert!(
+            exited.load(Ordering::Acquire),
+            "abort must be joined before returning"
+        );
+        assert_eq!(
+            monitor.close(Duration::ZERO).await,
+            Err(PeerCleanupError::DrainTimeout)
+        );
+    }
+
+    #[tokio::test]
+    async fn monitor_failure_is_not_acknowledged_as_success() {
+        let mut monitor = Monitor::Running(tokio::spawn(async { panic!("monitor failure") }));
+        assert!(matches!(
+            monitor.close(Duration::from_secs(1)).await,
+            Err(PeerCleanupError::MonitorFailed(_))
+        ));
+        assert!(matches!(
+            monitor.close(Duration::ZERO).await,
+            Err(PeerCleanupError::MonitorFailed(_))
+        ));
     }
 }

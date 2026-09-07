@@ -46,6 +46,7 @@ pub use extensions::{
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
+pub use peer::{PeerCleanupError, PeerServiceError};
 pub use policy::{
     AllowlistPolicy, DefaultPolicy, PI_PROTECTED_PATHS, PolicyDecision, PolicyEngine,
     ProtectedPathsPolicy,

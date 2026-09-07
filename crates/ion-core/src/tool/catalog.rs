@@ -25,7 +25,7 @@ pub struct ToolCatalog {
 
 struct CatalogLifetime {
     cancel: CancellationToken,
-    tasks: Mutex<Option<JoinSet<()>>>,
+    tasks: Mutex<Option<JoinSet<Result<(), crate::peer::PeerCleanupError>>>>,
 }
 
 /// Failure while joining peer supervisors owned by a tool catalog.
@@ -40,7 +40,7 @@ pub enum ToolCatalogError {
 impl CatalogLifetime {
     fn spawn<F>(&self, task: F) -> bool
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = Result<(), crate::peer::PeerCleanupError>> + Send + 'static,
     {
         if self.cancel.is_cancelled() {
             return false;
@@ -65,8 +65,14 @@ impl CatalogLifetime {
         let drain = async {
             let mut first_error = None;
             while let Some(result) = tasks.join_next().await {
-                if let Err(err) = result {
-                    first_error.get_or_insert_with(|| err.to_string());
+                match result {
+                    Ok(Ok(())) => {}
+                    Ok(Err(err)) => {
+                        first_error.get_or_insert_with(|| err.to_string());
+                    }
+                    Err(err) => {
+                        first_error.get_or_insert_with(|| err.to_string());
+                    }
                 }
             }
             first_error
@@ -163,7 +169,7 @@ impl CatalogService {
 
     pub(crate) fn spawn<F>(&self, task: F) -> bool
     where
-        F: Future<Output = ()> + Send + 'static,
+        F: Future<Output = Result<(), crate::peer::PeerCleanupError>> + Send + 'static,
     {
         self.lifetime
             .upgrade()
@@ -689,6 +695,23 @@ mod catalog_tests {
     }
 
     #[tokio::test]
+    async fn close_reports_returned_peer_cleanup_failure() {
+        let catalog = ToolCatalog::with_cwd("/tmp");
+        assert!(
+            catalog
+                .service_handle()
+                .spawn(async { Err(crate::peer::PeerCleanupError::DrainTimeout) })
+        );
+        let error = catalog
+            .close()
+            .await
+            .expect_err("cleanup failure must propagate");
+        assert!(
+            matches!(error, ToolCatalogError::TaskFailed(message) if message.contains("shutdown deadline"))
+        );
+    }
+
+    #[tokio::test]
     async fn close_reports_supervisor_failure_and_is_idempotent() {
         let catalog = ToolCatalog::with_cwd("/tmp");
         let task = catalog
@@ -698,7 +721,9 @@ mod catalog_tests {
             .expect("catalog lifetime")
             .as_mut()
             .expect("catalog tasks")
-            .spawn(std::future::pending::<()>());
+            .spawn(std::future::pending::<
+                Result<(), crate::peer::PeerCleanupError>,
+            >());
         task.abort();
 
         let error = catalog

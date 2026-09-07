@@ -34,7 +34,8 @@ async fn mcp_server_publishes_and_serves_tools_through_the_catalog() {
     catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
-        .await;
+        .await
+        .expect("peer reconciliation");
 
     // Published under a namespaced scope, visible to model steps.
     let specs = catalog.specs();
@@ -77,7 +78,8 @@ async fn mcp_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
     catalog.set_active_mcp_servers(["restarting"]);
     crate::McpService::new()
         .start_into(&[restarting_mcp_server(&marker)], &catalog)
-        .await;
+        .await
+        .expect("peer reconciliation");
 
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut outcome = None;
@@ -125,12 +127,18 @@ async fn ensure_reconciles_without_restarting_unchanged_peers() {
     let service = crate::McpService::new();
 
     let def = spawncount_server(&marker);
-    let (started, stopped) = service.ensure(std::slice::from_ref(&def), &catalog).await;
+    let (started, stopped) = service
+        .ensure(std::slice::from_ref(&def), &catalog)
+        .await
+        .expect("peer reconciliation");
     assert_eq!((started, stopped), (1, 0));
     assert_eq!(spawn_count(&marker), 1, "first ensure starts one process");
 
     // Same def again (a reload that changed nothing): no new process.
-    let (started, stopped) = service.ensure(std::slice::from_ref(&def), &catalog).await;
+    let (started, stopped) = service
+        .ensure(std::slice::from_ref(&def), &catalog)
+        .await
+        .expect("peer reconciliation");
     assert_eq!((started, stopped), (0, 0));
     assert_eq!(spawn_count(&marker), 1, "unchanged def must not restart");
 
@@ -152,7 +160,8 @@ async fn ensure_reconciles_without_restarting_unchanged_peers() {
     let changed = spawncount_server(&marker2);
     let (started, stopped) = service
         .ensure(std::slice::from_ref(&changed), &catalog)
-        .await;
+        .await
+        .expect("peer reconciliation");
     assert_eq!((started, stopped), (1, 1));
     assert_eq!(spawn_count(&marker), 1, "the old process was not respawned");
     assert_eq!(spawn_count(&marker2), 1, "the replacement started once");
@@ -171,13 +180,19 @@ async fn ensure_reconciles_without_restarting_unchanged_peers() {
     // Removed def: the supervisor stops, the live generation
     // unregisters, and the declared scope survives (§19) —
     // verify by re-ensuring the def and observing one fresh spawn.
-    let (started, stopped) = service.ensure(&[], &catalog).await;
+    let (started, stopped) = service
+        .ensure(&[], &catalog)
+        .await
+        .expect("peer reconciliation");
     assert_eq!((started, stopped), (0, 1));
     assert!(
         !catalog.specs().iter().any(|s| s.name == "counter__echo"),
         "removed def unpublishes its tools"
     );
-    let (started, stopped) = service.ensure(&[changed], &catalog).await;
+    let (started, stopped) = service
+        .ensure(&[changed], &catalog)
+        .await
+        .expect("peer reconciliation");
     assert_eq!((started, stopped), (1, 0));
     assert_eq!(spawn_count(&marker2), 2, "re-add spawns once more");
     assert!(
@@ -204,7 +219,10 @@ async fn broken_mcp_server_never_blocks_startup() {
         command: "/nonexistent/ion-missing-binary".to_owned(),
         args: vec![],
     });
-    crate::McpService::new().start_into(&defs, &catalog).await;
+    crate::McpService::new()
+        .start_into(&defs, &catalog)
+        .await
+        .expect("peer reconciliation");
     assert!(
         catalog.specs().iter().any(|s| s.name == "fake__echo"),
         "the healthy server still publishes"
@@ -218,7 +236,8 @@ async fn mcp_tool_flows_through_the_normal_operation_path() {
     catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
-        .await;
+        .await
+        .expect("peer reconciliation");
 
     // Scripted model: call the MCP tool, then summarize the result.
     let provider = ScriptedProvider::new(vec![
@@ -266,7 +285,8 @@ async fn default_policy_requires_approval_for_mcp_tools() {
     catalog.set_active_mcp_servers(["fake"]);
     crate::McpService::new()
         .start_into(&[fake_mcp_server()], &catalog)
-        .await;
+        .await
+        .expect("peer reconciliation");
 
     let provider = ScriptedProvider::new(vec![ScriptedMessage::ToolCall {
         name: "fake__echo".to_owned(),
@@ -289,4 +309,32 @@ async fn default_policy_requires_approval_for_mcp_tools() {
     );
     session.close().await.expect("close");
     runtime.join().await.expect("join");
+}
+
+#[tokio::test]
+async fn concurrent_replacements_join_one_prior_supervisor_and_start_one_replacement() {
+    let root = tempfile::tempdir().expect("workspace");
+    let first = spawncount_server(&root.path().join("first"));
+    let replacement_marker = root.path().join("replacement");
+    let replacement = spawncount_server(&replacement_marker);
+    let catalog = crate::ToolCatalog::default();
+    let service = crate::McpService::new();
+    service
+        .ensure(&[first], &catalog)
+        .await
+        .expect("initial supervisor");
+    let defs = [replacement];
+    let (one, two) = tokio::join!(
+        service.ensure(&defs, &catalog),
+        service.ensure(&defs, &catalog)
+    );
+    let (one_started, one_stopped) = one.expect("first reconcile");
+    let (two_started, two_stopped) = two.expect("second reconcile");
+    assert_eq!(
+        (one_started + two_started, one_stopped + two_stopped),
+        (1, 1)
+    );
+    assert_eq!(spawn_count(&replacement_marker), 1);
+    service.ensure(&[], &catalog).await.expect("stop");
+    catalog.close().await.expect("close");
 }
