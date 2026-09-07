@@ -282,9 +282,27 @@ impl Screen {
         // the shift maps old window row r + k to new window row r.
         let scrolled = offset.saturating_sub(previous_offset);
         if scrolled > 0 {
-            write!(out, "\x1b[{};1H", self.screen_height)?;
-            for _ in 0..scrolled {
-                out.write_all(b"\r\n")?;
+            // A batch can add more committed rows than fit in the visible
+            // window. Paint each outgoing row before scrolling it away;
+            // otherwise notices that never appeared in a previous frame
+            // disappear from native scrollback entirely.
+            for step in 0..scrolled {
+                let mut outgoing = Surface::new(w, 1);
+                if let Some(line) = (previous_offset + step)
+                    .checked_sub(live_padding)
+                    .and_then(|row| frame.committed.get(row))
+                {
+                    outgoing.render_line(line.clone(), 0);
+                }
+                let unchanged = previous.as_ref().is_some_and(|prev| {
+                    self.origin == origin_before
+                        && step < prev.surface.buffer.area.height as usize
+                        && !row_differs(&outgoing.buffer, 0, &prev.surface.buffer, step as u16)
+                });
+                if !unchanged {
+                    emit_buffer_row(out, &outgoing.buffer, 0, 0)?;
+                }
+                write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
             }
         }
 
@@ -722,6 +740,51 @@ mod tests {
                 "status".to_owned(),
             ]
         );
+    }
+
+    #[test]
+    fn bulk_committed_rows_reach_native_scrollback_in_order() {
+        for (origin, band_height) in [(0, 1), (2, 1), (0, 4), (2, 4)] {
+            let mut screen = Screen::new(40, origin, 6);
+            screen.set_live_height(band_height);
+            let mut terminal = vt100::Parser::new(6, 40, 64);
+            let committed: Vec<Line> = (0..24).map(|i| line(&format!("notice-{i}"))).collect();
+            let live = [line("composer")];
+            for count in [1, 24] {
+                let mut bytes = Vec::new();
+                screen
+                    .draw(
+                        &mut bytes,
+                        &Frame {
+                            committed: &committed[..count],
+                            live: &live,
+                            cursor: None,
+                        },
+                    )
+                    .expect("draw");
+                terminal.process(&bytes);
+            }
+            terminal.screen_mut().set_scrollback(usize::MAX);
+            let depth = terminal.screen().scrollback();
+            let mut rows = Vec::new();
+            for offset in (1..=depth).rev() {
+                terminal.screen_mut().set_scrollback(offset);
+                rows.push(terminal.screen().rows(0, 40).next().expect("top row"));
+            }
+            terminal.screen_mut().set_scrollback(0);
+            rows.extend(terminal.screen().rows(0, 40));
+            let notices: Vec<_> = rows
+                .iter()
+                .filter(|row| row.starts_with("notice-"))
+                .map(|row| row.trim_end().to_owned())
+                .collect();
+            assert_eq!(
+                notices,
+                (0..24).map(|i| format!("notice-{i}")).collect::<Vec<_>>(),
+                "origin {origin}"
+            );
+            assert_eq!(rows.last().map(|row| row.trim_end()), Some("composer"));
+        }
     }
 
     #[test]
