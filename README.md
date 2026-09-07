@@ -60,13 +60,22 @@ the picker, and `ctrl+p`/`shift+ctrl+p` cycle models.
 Session switching: `/new` starts fresh, `/resume` reopens a past session,
 `/clone` copies the current one whole. `/fork` picks a past user message and
 opens a new session ending right before it (the message returns to the
-composer for editing); when a git checkpoint was captured before that
-message's turn, ion offers to restore the code to that point — `y` applies
-the captured stash, `n` keeps the current tree.
+composer for editing). When saved tracked changes are available, Ion offers
+`y` to apply them or `n` to keep the current files. Application can conflict;
+it is not an exact restore and does not include untracked files.
 
-Each model turn in a git worktree records a checkpoint (`git stash create`,
-no worktree changes) under the session, so the restore offer survives
-restarts.
+Persistent interactive sessions capture tracked changes before the turn's
+model work and retain the Git object so the offer survives restart and Git
+GC. Application runs through the durable shell path: it is cancellable,
+bounded to 30 seconds, and never automatically replayed after interruption.
+Print mode and `--no-session` do not capture retained checkpoints.
+
+`/tree` navigates the retained session history, including sibling branches and
+previous descendants. It changes the conversation branch, not workspace files.
+`/settings` saves typed TOML values; thinking changes also save the future
+default. The startup view setting takes effect on the next launch.
+`/reload` validates configuration before applying it. Removing peers stops their
+availability but currently retains lane authority; it is not a revocation tool.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,

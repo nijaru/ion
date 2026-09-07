@@ -9,7 +9,7 @@
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="$ROOT/target/debug/ion"
+BIN="${ION_SMOKE_BIN:-$ROOT/target/debug/ion}"
 SESSION="ion-smoke"
 STEP=0
 
@@ -65,7 +65,7 @@ launch() { # $@ = ion args
     # Explicit bash: tmux default-shell may be fish, where "$?" aborts.
     # Keep-alive keeps the exit code visible after ion exits.
     tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-        "bash -c 'env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data $BIN $* 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
+        "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data $BIN $* 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
     SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
 }
 
@@ -126,7 +126,7 @@ echo "== 5. kill -9 mid-operation recovers =="
 # deterministically in flight when the process dies.
 tmux kill-session -t "$SESSION" 2>/dev/null
 tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-    "bash -c 'env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data ION_TEST_PROVIDER_DELAY_MS=8000 $BIN --resume 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
+    "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data ION_TEST_PROVIDER_DELAY_MS=8000 $BIN --resume 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
 SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
 wait_for "resumed" 15 || fail "kill -9: no resumed banner"
 type_line "interruptible"

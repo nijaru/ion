@@ -622,6 +622,10 @@ enum SessionCommand {
         exclude_from_context: bool,
         reply: oneshot::Sender<Result<(), CommandError>>,
     },
+    ApplyCheckpoint {
+        object: String,
+        reply: oneshot::Sender<Result<(), CommandError>>,
+    },
     /// Cancel the running user shell passthrough, if any. The settled
     /// entry still lands durably with `cancelled: true`.
     CancelShell {
@@ -824,6 +828,20 @@ impl SessionHandle {
                 lane_name: crate::session::lane::MAIN.to_owned(),
                 command: command.into(),
                 exclude_from_context,
+                reply,
+            })
+            .map_err(command_send_error)?;
+        rx.await.map_err(|_| CommandError::RuntimeDropped)?
+    }
+
+    /// Apply saved tracked changes through the durable shell-effect owner.
+    /// This is a merge, not an exact restore. Completion/conflicts arrive as
+    /// ShellSettled; cancellation and restart follow the never-replay shell path.
+    pub async fn apply_checkpoint(&self, object: impl Into<String>) -> Result<(), CommandError> {
+        let (reply, rx) = oneshot::channel();
+        self.tx
+            .try_send(SessionCommand::ApplyCheckpoint {
+                object: object.into(),
                 reply,
             })
             .map_err(command_send_error)?;
@@ -1292,6 +1310,7 @@ impl Runtime {
             policy,
             trusted_resources,
             crate::provider::RetryPolicy::default(),
+            true,
         )
     }
 
@@ -1305,11 +1324,12 @@ impl Runtime {
         policy: Arc<dyn PolicyEngine>,
         trusted_resources: Vec<TrustedResource>,
         retry: crate::provider::RetryPolicy,
+        checkpoint_enabled: bool,
     ) -> Self {
         let mut composition = Composition::new(provider, tools, store);
         composition.policy = policy;
         composition.interactive_approvals = true;
-        composition.checkpoint_enabled = true;
+        composition.checkpoint_enabled = checkpoint_enabled;
         composition.trusted_resources = trusted_resources;
         composition.retry = retry;
         composition.spawn(SessionId::generate(), None)
@@ -2508,8 +2528,29 @@ impl<P: Provider> SessionRuntime<P> {
                 exclude_from_context,
                 reply,
             } => {
-                self.run_shell_on_lane(&lane_name, command, exclude_from_context, reply)
+                self.run_shell_on_lane(&lane_name, command, exclude_from_context, None, reply)
                     .await;
+                false
+            }
+            SessionCommand::ApplyCheckpoint { object, reply } => {
+                if !matches!(object.len(), 40 | 64)
+                    || !object.bytes().all(|byte| byte.is_ascii_hexdigit())
+                {
+                    let _ = reply.send(Err(CommandError::InvalidCheckpoint));
+                } else {
+                    let command = format!(
+                        "git -C '{}' -c core.hooksPath=/dev/null -c core.fsmonitor=false stash apply {object}",
+                        self.cwd.replace('\'', "'\\''")
+                    );
+                    self.run_shell_on_lane(
+                        crate::session::lane::MAIN,
+                        command,
+                        true,
+                        Some(30),
+                        reply,
+                    )
+                    .await;
+                }
                 false
             }
             SessionCommand::CancelShell { reply } => {
@@ -3132,6 +3173,7 @@ impl<P: Provider> SessionRuntime<P> {
         lane_name: &str,
         command: String,
         exclude_from_context: bool,
+        timeout_seconds: Option<u64>,
         reply: oneshot::Sender<Result<(), CommandError>>,
     ) {
         if self.closed {
@@ -3188,7 +3230,10 @@ impl<P: Provider> SessionRuntime<P> {
         self.shell_cancel = Some(shell_cancel.clone());
         let cancel = shell_cancel.clone();
         let tools = Arc::clone(&self.tools);
-        let arguments = serde_json::json!({ "command": command });
+        let mut arguments = serde_json::json!({ "command": command });
+        if let Some(seconds) = timeout_seconds {
+            arguments["timeout"] = seconds.into();
+        }
         let (progress_tx, mut progress_rx) = mpsc::channel::<crate::tool::ToolProgress>(8);
         let shell_tx = self.shell_tx.clone();
         let lane = lane_name.to_owned();

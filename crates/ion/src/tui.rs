@@ -35,6 +35,7 @@ mod help;
 mod markdown;
 mod reload;
 mod render;
+mod settings_picker;
 use reload::{ReloadHost, reload_config};
 mod tree;
 pub use render::{Palette, palette};
@@ -197,6 +198,9 @@ pub enum UiEffect {
     },
     /// Persist one /settings row (pi parity: the settings list). The
     /// run loop writes the key through the surgical settings writer.
+    SaveThinkingDefault {
+        thinking: String,
+    },
     SaveSetting {
         key: String,
         value: String,
@@ -1665,7 +1669,7 @@ impl UiState {
             },
             SettingsRow {
                 id: "tuiMode",
-                label: "tui mode",
+                label: "startup view",
                 value: if self.fullscreen_open() {
                     "fullscreen"
                 } else {
@@ -1673,11 +1677,11 @@ impl UiState {
                 }
                 .to_owned(),
                 values: vec!["regular".to_owned(), "fullscreen".to_owned()],
-                restart: false,
+                restart: true,
             },
             SettingsRow {
                 id: "defaultThinkingLevel",
-                label: "default thinking",
+                label: "thinking + default",
                 value: self
                     .thinking_level
                     .clone()
@@ -1776,14 +1780,7 @@ impl UiState {
                 self.launch_tui_mode_fullscreen = next == "fullscreen";
             }
             "defaultThinkingLevel" => {
-                self.thinking_level = Some(next.clone());
-                let effect = UiEffect::SwitchThinking {
-                    thinking: Some(next),
-                };
-                // The runtime switch carries the lane selection; the
-                // settings-file default persists separately after the
-                // switch.
-                return Some(effect);
+                return Some(UiEffect::SaveThinkingDefault { thinking: next });
             }
             _ => return None,
         }
@@ -6757,6 +6754,11 @@ pub async fn run(
                                         "save failed: settings path unavailable",
                                     ),
                                 }
+                            } else if let UiEffect::SaveThinkingDefault { thinking } = &effect {
+                                match crate::settings::Settings::path() {
+                                    Some(path) => settings_picker::save_thinking_default(&session, &mut state, &path, thinking).await,
+                                    None => notice(&mut state, "save failed: settings path unavailable"),
+                                }
                             } else if let UiEffect::SaveSetting { key, value } = &effect {
                                 // /settings row: write the key through
                                 // the surgical writer. theme also swaps
@@ -6771,7 +6773,7 @@ pub async fn run(
                                 }
                                 match crate::settings::Settings::path() {
                                     Some(path) => {
-                                        match crate::settings::Settings::write_plain_key(
+                                        match crate::settings::Settings::write_setting(
                                             &path, key, value,
                                         ) {
                                             Ok(written) => notice(
@@ -7266,9 +7268,16 @@ async fn switch_session(
     let Some(current) = attached.take() else {
         return Ok(());
     };
+    let checkpoint = match &switch {
+        SessionSwitch::ResumeAndApplyCheckpoint { object, .. } => Some(object.clone()),
+        _ => None,
+    };
     let start = match switch {
         SessionSwitch::New => crate::session_manager::SessionStart::New,
-        SessionSwitch::Resume(session) => crate::session_manager::SessionStart::Resume(session),
+        SessionSwitch::Resume(session)
+        | SessionSwitch::ResumeAndApplyCheckpoint { session, .. } => {
+            crate::session_manager::SessionStart::Resume(session)
+        }
         SessionSwitch::Clone(target) => crate::session_manager::SessionStart::Resume(target),
     };
     let next = manager
@@ -7326,6 +7335,19 @@ async fn switch_session(
         state.surface_latest_settlement(snapshot.latest_settlement.as_ref());
     }
     state.surface_indeterminate_warning(snapshot.indeterminate.as_ref());
+    if let Some(object) = checkpoint {
+        match session.apply_checkpoint(object).await {
+            Ok(()) => notice(
+                state,
+                "applying saved tracked changes; conflicts will be reported",
+            ),
+            Err(err) => notice(
+                state,
+                &format!("fork opened; saved changes were not applied: {err}"),
+            ),
+        }
+    }
+
     Ok(())
 }
 
@@ -7337,6 +7359,10 @@ pub enum SessionSwitch {
     New,
     Resume(ion_core::SessionId),
     Clone(ion_core::SessionId),
+    ResumeAndApplyCheckpoint {
+        session: ion_core::SessionId,
+        object: String,
+    },
 }
 
 /// Execute one reducer effect against the session; acceptance and
@@ -7406,7 +7432,7 @@ async fn dispatch(
             // totality only.
             None
         }
-        UiEffect::SaveSetting { .. } => {
+        UiEffect::SaveThinkingDefault { .. } | UiEffect::SaveSetting { .. } => {
             // Resolved by the run loop (settings-file write); match
             // totality only.
             None
@@ -7707,10 +7733,21 @@ async fn dispatch(
                 notice(state, "fork failed");
                 return None;
             };
-            // Pi's git-checkpoint: offer to restore the tree state
-            // captured at the picked message before switching.
-            match manager.checkpoint_for(source, entry_id).await {
-                Ok(Some(checkpoint_ref)) => {
+            // Offer the tracked changes captured before this message.
+            let checkpoint = match manager.checkpoint_for(source, entry_id).await {
+                Ok(value) => value,
+                Err(err) => {
+                    notice(
+                        state,
+                        &format!(
+                            "checkpoint lookup failed; fork opens without applying saved changes: {err}"
+                        ),
+                    );
+                    None
+                }
+            };
+            match checkpoint {
+                Some(checkpoint_ref) => {
                     let (next, _) = update(
                         std::mem::take(state),
                         UiMessage::ForkRestorePrompt {
@@ -7743,29 +7780,6 @@ async fn dispatch(
             title,
             text,
         } => {
-            // Pi's git-checkpoint accept: `git stash apply` the captured
-            // ref, then switch to the fork. Apply failures surface and
-            // the fork still opens — a restore is an offer, never a
-            // gate (pi notifies either way).
-            let applied = tokio::process::Command::new("git")
-                .args(["stash", "apply"])
-                .arg(&checkpoint_ref)
-                .stdin(std::process::Stdio::null())
-                .output()
-                .await;
-            match applied {
-                Ok(output) if output.status.success() => {
-                    notice(state, "code restored to checkpoint");
-                }
-                Ok(output) => notice(
-                    state,
-                    &format!(
-                        "checkpoint restore failed: {}",
-                        String::from_utf8_lossy(&output.stderr).trim()
-                    ),
-                ),
-                Err(err) => notice(state, &format!("checkpoint restore failed: {err}")),
-            }
             let (next, _) = update(
                 std::mem::take(state),
                 UiMessage::ForkCompleted {
@@ -7775,7 +7789,10 @@ async fn dispatch(
                 },
             );
             *state = next;
-            Some(SessionSwitch::Resume(target))
+            Some(SessionSwitch::ResumeAndApplyCheckpoint {
+                session: target,
+                object: checkpoint_ref,
+            })
         }
         UiEffect::DeclineRestore {
             target,

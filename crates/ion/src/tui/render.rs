@@ -991,6 +991,9 @@ fn settings_selector_lines(state: &UiState, palette: &Palette, width: usize) -> 
             is_selected,
             palette,
         ));
+        if row.restart {
+            spans.push(picker_badge(" · next launch".to_owned(), palette));
+        }
         if !row.values.is_empty() {
             spans.push(picker_badge(" \u{00b7} enter cycles".to_owned(), palette));
         }
@@ -1591,11 +1594,11 @@ pub(super) fn build_live_at_height(
     // as a two-option decision).
     if state.restore_prompt.is_some() {
         let header = Line::from(Span::styled(
-            "\u{21bb} fork: restore code to this point?",
+            "\u{21bb} fork: apply saved tracked changes?",
             Style::new().yellow().bold(),
         ));
         let decision = Line::from(Span::styled(
-            "  y restore \u{00b7} n keep current code",
+            "  y apply (may conflict) \u{00b7} n keep current files",
             Style::new().yellow(),
         ));
         let fixed = wrap_line(&header, width).len() + wrap_line(&decision, width).len();

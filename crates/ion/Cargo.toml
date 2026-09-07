@@ -34,6 +34,7 @@ tracing-subscriber.workspace = true
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
 tempfile = "3.27.0"
+toml_edit = "0.25.13"
 
 [dev-dependencies]
 nix = { version = "0.31.3", features = ["fs", "term"] }

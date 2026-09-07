@@ -149,7 +149,10 @@ mod tests {
     use super::*;
 
     async fn repository() -> tempfile::TempDir {
-        let dir = tempfile::tempdir().unwrap();
+        let dir = tempfile::Builder::new()
+            .prefix("ion ' $ checkpoint ")
+            .tempdir()
+            .unwrap();
         git(dir.path(), &["init", "-q"]).await.unwrap();
         git(dir.path(), &["config", "user.email", "ion@example.invalid"])
             .await
@@ -163,6 +166,87 @@ mod tests {
             .await
             .unwrap();
         dir
+    }
+
+    #[tokio::test]
+    async fn apply_uses_durable_shell_owner_and_workspace() {
+        let dir = repository().await;
+        std::fs::write(dir.path().join("tracked"), "saved changes\n").unwrap();
+        let object = capture(dir.path(), SessionId::generate(), EntryId::generate())
+            .await
+            .unwrap()
+            .unwrap();
+        std::fs::write(dir.path().join("tracked"), "initial\n").unwrap();
+        let store = SessionStore::open_in_memory().unwrap();
+        let other_workspace = tempfile::tempdir().unwrap();
+        // Separate launch cwd from the persisted session cwd; sandbox policy
+        // is tested separately and must not mask command targeting here.
+        let catalog = ToolCatalog::with_cwd_and_sandbox(
+            other_workspace.path(),
+            crate::SandboxMode::Unconfined,
+        );
+        let runtime = Runtime::start_with_policy_and_resources_in_cwd(
+            crate::ScriptedProvider::echo(),
+            catalog.clone(),
+            store.clone(),
+            Arc::new(crate::AllowlistPolicy::new(["bash"])),
+            Vec::new(),
+            dir.path().to_string_lossy().into_owned(),
+        );
+        let session = runtime.session();
+        let id = runtime.session_id();
+        let (_, mut events) = session.subscribe().await.unwrap();
+        assert_eq!(
+            session
+                .apply_checkpoint("invalid; touch unexpected")
+                .await
+                .unwrap_err(),
+            CommandError::InvalidCheckpoint
+        );
+        store.fail_next_write();
+        assert!(matches!(
+            session.apply_checkpoint(&object).await,
+            Err(CommandError::Persistence(_))
+        ));
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("tracked")).unwrap(),
+            "initial\n"
+        );
+        session.apply_checkpoint(&object).await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if let RuntimeEvent::ShellSettled {
+                    exit_code,
+                    cancelled,
+                    output_preview,
+                    ..
+                } = events.recv().await.unwrap()
+                {
+                    assert_eq!(exit_code, Some(0), "{output_preview:?}");
+                    assert!(!cancelled);
+                    break;
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("tracked")).unwrap(),
+            "saved changes\n"
+        );
+        let loaded = store.load(id).await.unwrap();
+        assert!(loaded.lanes[0].state.pending_shell.is_none());
+        assert!(matches!(
+            &loaded.entries.last().unwrap().entry,
+            crate::SessionEntry::ShellExecution {
+                exclude_from_context: true,
+                exit_code: Some(0),
+                ..
+            }
+        ));
+        session.close().await.unwrap();
+        runtime.join().await.unwrap();
+        catalog.close().await.unwrap();
     }
 
     #[tokio::test]

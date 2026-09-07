@@ -93,6 +93,8 @@ fn spawn_ion_with_args(args: &[&str], envs: &[(&str, &str)]) -> PtySession {
     let data_root = tempfile::tempdir().expect("temp data root");
     let mut command = Command::new(env!("CARGO_BIN_EXE_ion"));
     command.args(args);
+    // Interactive checkpoint capture must never observe the developer workspace.
+    command.current_dir(data_root.path());
     command.env("ION_SETTINGS", settings.path());
     // Isolate the session store: the schema version gate must never
     // see (or refuse) the developer's real database.

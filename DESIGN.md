@@ -1,7 +1,7 @@
 # Ion — Durable Harness Architecture
 
 **Status:** normative architecture contract for the Rust implementation  
-**Date:** 2026-08-28  
+**Date:** 2026-09-07
 **Scope:** durable harness, session/runtime ownership, effects, tools, agents, and persistence  
 **Primary implementation target:** Rust 1.98.0, Edition 2024, Tokio, macOS + Linux first
 
@@ -27,7 +27,7 @@ Ion owns its contracts. External systems are evidence, not compatibility targets
 
 Reference weighting:
 
-1. **Pi 2** is the primary durable-session reference: parent-linked history, lanes as active cursors, one writer with one open operation per lane, parallel slow effects, forks, provision-before-effect identity, replay/reconciliation, and explicit total lane/operation state. Ion follows the logical model rather than Pi's TypeScript API or JSONL persistence.
+1. **Pi 2, on its `dev` branch,** is the primary practical and durable-session reference: parent-linked history, lanes as active cursors, one writer with one open operation per lane, parallel slow effects, forks, provision-before-effect identity, replay/reconciliation, and explicit total lane/operation state. Ion follows the logical model rather than Pi's TypeScript API or JSONL persistence.
 2. **DeepSeek Harness / Cordis** is the strongest ownership/composition cross-check: agent-scoped visibility, lifecycle-owned registrations/resources, private setup followed by one publication point, rollback on failed admission, and one authority per independent fact.
 3. **Codex** is the strongest production constraint on multi-agent control: family-scoped authority, execution/rollout budgets, control lineage separate from history lineage, retained identity separate from live capacity, cancellation, recovery, and headless lifecycle visibility.
 4. **Zed / Agent Client Protocol (ACP)** is the primary interoperability signal for the client/agent boundary: explicit session lifecycle, prompt/update/cancel flow, capability negotiation, permissions, and ordered resume updates.
@@ -37,6 +37,22 @@ Reference weighting:
 8. **Prime Agent** and **Headlong** are experimental stress tests for recursive, persistent, message-driven, and long-running compositions. Their benchmark or shared-mind choices are not core architecture authority.
 
 Cursor and Warp/Oz are product/UX evidence for parallel sessions, worktrees, remote agents, and unified agent views. Factory Droid and Amp are useful closed-source references only where public docs or blogs expose concrete observable semantics; do not infer their internals. OpenCode remains low-weight because repeated rewrites weaken convergence claims. Gemini CLI is not an architectural reference.
+
+The installed Pi distribution is useful for reproducing a user's workflow; it
+is not the sole architecture reference or a frozen compatibility target.
+Completeness means the requested workflows work end to end, including failure,
+cancellation, persistence, and frontend behavior. A matching command name or a
+ported example is not evidence of that completeness. Existing requested
+capabilities remain in scope when implementation order changes.
+
+Reference source revisions inspected in the September 2026 alignment review:
+
+- Pi `dev`: `35fb116a6a99d32ebfdec2eaa796d6d20e1b23cf` (session reload and checkpoint extension).
+- Codex: `eb10d91e48ccbd0930427461fb392337addb1ac0` (ownership/control reference).
+- DSH: `c389f96bf3a9b6807cb71ed6bdad5849be0df6d8` (`docs/cordis-primer.md`, reversible registrations and disposal).
+
+These are reproducible evidence snapshots, not version requirements. Recheck
+upstream when a concrete design question depends on changed behavior.
 
 Do not transliterate another system's TypeScript API, physical persistence format, compatibility baggage, or framework vocabulary into Rust.
 
@@ -112,7 +128,9 @@ The tree only grows. A new append uses the target lane's current leaf as its par
 
 Branches share prefixes by reference. Branching within a session does not copy history.
 
-An idle main lane may navigate to any existing entry in its session. Navigation
+An idle main lane may navigate to an existing entry whose projected history has
+no outstanding tool calls. Choose before a tool exchange or after all its results;
+never synthesize results to make a partial exchange admissible. Navigation
 changes only its durable leaf; it never truncates the tree, restores files,
 changes configuration, or completes an operation. Active operations, queued
 input, and pending shell effects exclude navigation. `SessionHandle` owns this
@@ -468,20 +486,35 @@ The current workstream has already established:
 - the native `bash` tool accepts an optional per-call timeout in seconds,
   matching the Pi contract, with no default timeout; expiry kills the owned
   process group and settles as a model-visible tool error;
-- git turn checkpoints and message-level forks (Pi's `/fork` and its
-  git-checkpoint extension, ported to durable ownership): each interactive
-  model turn in a git worktree records a best-effort `git stash create` ref
-  under the session (`turn_checkpoints`, keyed by the lane leaf — the user
-  message on step 1), spawned detached on the runtime tracker so observation
-  never gates a turn; `/fork` opens a message picker, and
-  `store.fork_before` clones exactly the picked message's ancestor path into
-  a new session (the picked message's text returns to the composer). When a
-  checkpoint exists for the picked message, the TUI offers the restore;
-  accepting runs `git stash apply` and the fork opens either way. The
-  store's `fork_before` is the sole prefix-clone owner; session-level
-  `--fork`/`/clone` remain whole-tree clones and never offer a restore.
+- message-level forks and explicit interactive Git checkpoints. The first
+  model task captures tracked changes with a five-second bound, then asks the
+  session writer to persist the checkpoint before invoking the provider.
+  Cancellation covers capture and the writer acknowledgement. Optional capture
+  failure skips the checkpoint visibly in diagnostics; metadata write failure
+  stops the operation. Noninteractive and ephemeral CLI sessions do not opt in.
+  Git refs retain captured objects across garbage collection; interruption may
+  leave an orphan retained ref, never a published checkpoint lacking retention.
+  This precedes the operation's own work, not concurrent external writers, and
+  does not capture untracked files.
+- `/fork` clones the selected user message's prefix into a new session. An
+  available checkpoint is offered as **apply saved tracked changes**, not exact
+  restoration. After attaching the fork, `SessionHandle::apply_checkpoint`
+  uses the existing durable, cancellable shell-effect path with a 30-second
+  bound and an immutable object ID. Conflicts remain visible; interrupted
+  application is never replayed. `/clone` and `--fork` never offer application.
+- `/tree` reads the full retained tree through the session writer and moves the
+  idle main leaf without deleting descendants or sibling branches. Subscribers
+  receive a projection-change event and rebuild from the runtime snapshot.
+- credentials are Ion-owned, privately and atomically replaced under an OS
+  lock. Explicit external credential reuse is read-only. Login/logout and
+  provider setup propagate corrupt-store errors; login never launches a browser.
+- settings edits parse and preserve TOML structure rather than modifying lines
+  that may belong to nested tables or arrays. Thinking changes are accepted by
+  the runtime before the picker reflects them; saving a future default is a
+  separate host effect with an explicit failure result. Startup view settings
+  are labeled as taking effect on the next launch.
 
-Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven across shared and separately hosted sessions, and agent messaging uses the durable input path. Lane/fresh/fork agents share one model-facing namespace and durable family authority; the unified agent host is the sole model-facing publisher, while a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency. There is no parallel child/delegate or lane-only agent tool namespace. Shared-history and separately hosted admission both publish durable lane capability selections that may narrow but never exceed the control parent. Recovery reconstructs an operation registry by intersecting its immutable capability snapshot with the lane's current structural selection; it never reacquires an executor from a later live catalog snapshot. Durable lane configuration now separates dynamic structural-scope grants from tool-name narrowing: core tools are inherent, a lane sees only admitted dynamic scopes, and later generations inside an admitted scope may appear at a future model-step boundary without granting unrelated scopes. Pre-Step-7 lane rows materialize their legacy ambient scope set once before resumed work; new sessions persist the currently published scope set before accepting commands. Model-step context manifests and tool descriptions come from the same admitted registry snapshot. Resumed interactive sessions defer restoration/recovery until the first session command so the host can reattach durable structural scopes such as `agents` before exact recovery runs. Configured MCP/extension structural identities are declared before discovery and remain distinct from their currently live tool generation, so transient peer loss/restart does not accidentally revoke or ambiently re-grant authority. The current host has no live settings-reload or unload command that owns durable scope revocation: MCP selection is launch-time composition, and transient peer removal only unpublishes a generation. Do not add a generic revoke surface until a concrete host action can own that transition without resetting prior lane narrowing. Step 7 is complete for the currently implemented owners; a future live deconfiguration feature must add explicit structural revocation semantics. The current client snapshot still projects `main`.
+Storage, recovery, and live execution now support multiple concurrent lanes under one session writer. Operation residency/effects/continuation are operation-addressed, family-scoped retained agents have separate execution permits, waits are event-driven across shared and separately hosted sessions, and agent messaging uses the durable input path. Lane/fresh/fork agents share one model-facing namespace and durable family authority; the unified agent host is the sole model-facing publisher, while a hosted-runtime service owns only fresh/fork provider/runtime/catalog residency. There is no parallel child/delegate or lane-only agent tool namespace. Shared-history and separately hosted admission both publish durable lane capability selections that may narrow but never exceed the control parent. Recovery reconstructs an operation registry by intersecting its immutable capability snapshot with the lane's current structural selection; it never reacquires an executor from a later live catalog snapshot. Durable lane configuration now separates dynamic structural-scope grants from tool-name narrowing: core tools are inherent, a lane sees only admitted dynamic scopes, and later generations inside an admitted scope may appear at a future model-step boundary without granting unrelated scopes. Pre-Step-7 lane rows materialize their legacy ambient scope set once before resumed work; new sessions persist the currently published scope set before accepting commands. Model-step context manifests and tool descriptions come from the same admitted registry snapshot. Resumed interactive sessions defer restoration/recovery until the first session command so the host can reattach durable structural scopes such as `agents` before exact recovery runs. Configured MCP/extension structural identities are declared before discovery and remain distinct from their currently live tool generation, so transient peer loss/restart does not accidentally revoke or ambiently re-grant authority. The interactive host now has `/reload`. A read-only preparation phase validates settings, keybindings, model selection, trusted resources and peer definitions before applying changes. Retained services own peer supervision even when initially empty. Runtime admission failures stop application and report possible partial changes. Peer supervision is distinct from successful connection. Explicit removal currently stops availability while retaining durable scope grants, exactly as reported to the user; re-adding a scope can therefore make it available to previously admitted lanes. **Durable revocation is not implemented.** Host-wide admission fencing, affected-runtime coordination and teardown error propagation are required follow-up work before removal can be advertised as authority revocation. Tool-name narrowing must survive that work. The current client snapshot still projects `main`.
 
 ## 20. Implementation order
 
@@ -491,9 +524,16 @@ Storage, recovery, and live execution now support multiple concurrent lanes unde
 4. Introduce family-scoped agent control with admission-first identity, separate retained registry/execution permits, explicit wait semantics, cancellation ownership, and deterministic reattachment.
 5. Replace child-only topology with lane/fork/fresh agent admission. Add worktree/remote topology only when a concrete owner exists.
 6. Add durable agent messaging/background completion through the common session-input path.
-7. Make scoped capability publication/teardown structural at lane/agent admission and exact on recovery; capability narrowing must never be reset by unrelated lane configuration changes. Current owners are established; live host deconfiguration stays deferred until a concrete owner exists.
+7. Make scoped capability publication/teardown structural at lane/agent admission and exact on recovery; capability narrowing must never be reset by unrelated lane configuration changes. Current owners are established; complete host-wide reload fencing and durable deconfiguration without conflating authority with transient availability.
 8. Typed tool/effect admission and recovery boundaries are established for current owners. Runtime writers and recovery consume `EffectRecord`, tool admission reaches the durable boundary as one coherent typed value, and recovery/multi-agent invariants cover structural-scope narrowing without a separate unowned eval crate.
 9. Public Rust API cleanup is established for current owners: dead runtime/reducer migration seams are gone; store mutation, recovery/checkpoint/effect encoding, harness-profile identity, and raw ledger probes are crate-owned; host/frontend surface retains runtime control plus semantic session/history readback. No coherent runtime/session concepts were renamed speculatively.
 10. Finish the interactive frontend against the stable session/agent-host contract, with ACP as a first-class sibling client. Validate pure UI configuration before terminal/runtime/session acquisition; after terminal acquisition, explicitly restore the terminal before startup diagnostics and unwind acquired store/catalog/runtime ownership on failure. Keep the public frontend snapshot/event subscription coherent on `main` while family waits observe all lanes internally. The snapshot retains the latest durable main-lane terminal settlement as well as correctness-visible warnings and live draft state, so a lagged client can classify a terminal event that fell out of the bounded ring. TUI rebuilds terminal notices from the snapshot; print mode losslessly reconstructs its assistant-text projection from durable assistant entries plus the live draft; ACP remains attached and cancellable while the operation is still active and reports incomplete streaming only after the durable operation settles. Keep `SessionHandle` as the only runtime mutation path and preserve the established `TERMINAL.md` reducer/`TerminalSession` architecture rather than introducing another UI framework.
 
 Research from here is question-driven at concrete implementation boundaries, not another broad framework survey.
+
+The next correctness slice is host-wide reload/deconfiguration: define one
+configuration owner, block conflicting admission during replacement, durably
+revoke affected grants, and propagate teardown failures. Then resume the full
+requested daily-use capability matrix against Pi dev and the other references.
+Do not silently drop features, expand the loop into an orchestration framework,
+or count a UI-only implementation as a completed runtime capability.

@@ -1078,7 +1078,7 @@ impl SessionStore {
     }
 
     /// Record one turn checkpoint keyed at its user-message entry.
-    pub async fn record_checkpoint(
+    pub(crate) async fn record_checkpoint(
         &self,
         session_id: SessionId,
         entry_id: EntryId,

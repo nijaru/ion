@@ -182,96 +182,46 @@ impl RetrySettings {
     }
 }
 
-/// Replace one top-level `key = value` line, or insert it after the
-/// last top-level assignment. Only the key's line changes; comments,
-/// blank lines, tables, and unknown keys stay byte-identical. A key
-/// appearing multiple times replaces the first and drops later ones
-/// (TOML rejects duplicates anyway, so this heals a malformed file).
-fn replace_or_insert_key(text: &str, key: &str, value: &str) -> String {
-    let prefix = format!("{key} =");
-    let mut lines: Vec<String> = text.split('\n').map(str::to_owned).collect();
-    let mut replaced = false;
-    let mut retained: Vec<String> = Vec::with_capacity(lines.len());
-    for line in lines.drain(..) {
-        if line.trim_start().starts_with(&prefix)
-            && (line.trim_start() == prefix
-                || line.trim_start()[prefix.len()..]
-                    .chars()
-                    .next()
-                    .is_some_and(char::is_whitespace))
-        {
-            if !replaced {
-                retained.push(format!("{key} = {value}"));
-                replaced = true;
-            }
-            // Duplicate keys are dropped (heal malformed files).
-        } else {
-            retained.push(line);
-        }
+/// Parse before editing so nested keys, arrays, comments, and string values
+/// retain their TOML meaning. A missing file is an empty configuration;
+/// malformed existing content is never silently repaired or overwritten.
+fn edit_settings(
+    path: &std::path::Path,
+    edit: impl FnOnce(&mut toml_edit::DocumentMut),
+) -> Result<std::path::PathBuf, String> {
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => String::new(),
+        Err(err) => return Err(format!("{}: {err}", path.display())),
+    };
+    let mut document = text
+        .parse::<toml_edit::DocumentMut>()
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    edit(&mut document);
+    atomic_write(path, &document.to_string())
+        .map_err(|err| format!("{}: {err}", path.display()))?;
+    Ok(path.to_owned())
+}
+
+fn set_value(document: &mut toml_edit::DocumentMut, key: &str, mut value: toml_edit::Value) {
+    if let Some(previous) = document.get(key).and_then(toml_edit::Item::as_value) {
+        *value.decor_mut() = previous.decor().clone();
     }
-    lines = retained;
-    if !replaced {
-        // Insert before the first table header — backing up over the
-        // blank lines that separate it from top-level keys — else at
-        // EOF (dropping a trailing blank so the file ends with one).
-        let mut insert_at = lines
-            .iter()
-            .position(|line| line.trim_start().starts_with('['))
-            .unwrap_or(lines.len());
-        while insert_at > 0 && lines[insert_at - 1].trim().is_empty() {
-            insert_at -= 1;
-        }
-        if insert_at == lines.len() && lines.last().is_some_and(|line| line.trim().is_empty()) {
-            insert_at -= 1;
-        }
-        lines.insert(insert_at, format!("{key} = {value}"));
-    }
-    lines.join("\n")
+    document[key] = toml_edit::Item::Value(value);
 }
 
-/// Remove one top-level `key = ...` line (first occurrence) from the
-/// settings text, preserving every other byte.
-fn remove_key(text: &str, key: &str) -> String {
-    let prefix = format!("{key} =");
-    let mut dropped = false;
-    text.split('\n')
-        .filter(|line| {
-            let hits = line.trim_start().starts_with(&prefix)
-                && (line.trim_start() == prefix
-                    || line.trim_start()[prefix.len()..]
-                        .chars()
-                        .next()
-                        .is_some_and(char::is_whitespace));
-            if hits && !dropped {
-                dropped = true;
-                false
-            } else {
-                true
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-/// Escape a TOML basic-string body (quotes and backslashes).
-fn escape_toml_string(value: &str) -> String {
-    value.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Write via a temp file + rename so a crash never truncates the
-/// user's settings file.
 fn atomic_write(path: &std::path::Path, text: &str) -> std::io::Result<()> {
-    let dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .filter(|path| !path.as_os_str().is_empty())
+        .unwrap_or_else(|| std::path::Path::new("."));
     std::fs::create_dir_all(dir)?;
-    let tmp = dir.join(format!(
-        ".{}.tmp{}",
-        path.file_name()
-            .map(|name| name.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "settings".to_owned()),
-        std::process::id()
-    ));
-    std::fs::write(&tmp, text)?;
-    std::fs::rename(&tmp, path)
+    let mut pending = tempfile::NamedTempFile::new_in(dir)?;
+    pending.write_all(text.as_bytes())?;
+    pending.as_file().sync_all()?;
+    pending.persist(path).map_err(|err| err.error)?;
+    std::fs::File::open(dir)?.sync_all()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -529,62 +479,51 @@ impl Settings {
         self.theme.unwrap_or(Theme::Auto)
     }
 
-    /// Surgically set one top-level key to a boolean or lowercase word
-    /// value in the settings file at `path` (same preservation rules as
-    /// [`Self::write_default_model`]). Returns the written path.
-    pub fn write_plain_key(
+    /// Save a picker value with its TOML type, preserving unrelated settings.
+    pub fn write_setting(
         path: &std::path::Path,
         key: &str,
         value: &str,
     ) -> Result<std::path::PathBuf, String> {
-        let text =
-            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
-        let text = replace_or_insert_key(&text, key, value);
-        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
-        Ok(path.to_owned())
+        let value = match key {
+            "hideThinkingBlock" | "showCacheMissNotices" => {
+                toml_edit::Value::from(value.parse::<bool>().map_err(|err| err.to_string())?)
+            }
+            "theme" | "tuiMode" | "defaultThinkingLevel" => toml_edit::Value::from(value),
+            _ => return Err(format!("unsupported picker setting: {key}")),
+        };
+        edit_settings(path, |document| set_value(document, key, value))
     }
 
-    /// Surgically set `defaultProvider`/`defaultModel` in the settings
-    /// file at `path`. Only those two keys are touched; the rest of the
-    /// file — comments, ordering, unknown keys — is preserved
-    /// byte-for-byte (a hand-authored TOML is the user's file, not a
-    /// serialization target). A model with a provider prefix qualifies
-    /// both keys; the model is stored bare. Returns the written path
-    /// for the notice.
+    /// Save the provider/model pair without reserializing unrelated settings.
     pub fn write_default_model(
         path: &std::path::Path,
         provider: &str,
         model: &str,
     ) -> Result<std::path::PathBuf, String> {
-        let text =
-            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
         let bare_model = model.strip_prefix(&format!("{provider}/")).unwrap_or(model);
-        let text = replace_or_insert_key(&text, "defaultProvider", &format!("\"{provider}\""));
-        let text = replace_or_insert_key(&text, "defaultModel", &format!("\"{bare_model}\""));
-        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
-        Ok(path.to_owned())
+        edit_settings(path, |document| {
+            set_value(document, "defaultProvider", provider.into());
+            set_value(document, "defaultModel", bare_model.into());
+        })
     }
 
-    /// Surgically replace the `modelCatalog` array in the settings file
-    /// at `path`, preserving every other byte. An empty catalog removes
-    /// the key entirely. Returns the written path.
+    /// Save the scoped catalog; an empty selection removes the override.
     pub fn write_model_catalog(
         path: &std::path::Path,
         catalog: &[String],
     ) -> Result<std::path::PathBuf, String> {
-        let text =
-            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
-        let text = if catalog.is_empty() {
-            remove_key(&text, "modelCatalog")
-        } else {
-            let items: Vec<String> = catalog
-                .iter()
-                .map(|model| format!("\"{}\"", escape_toml_string(model)))
-                .collect();
-            replace_or_insert_key(&text, "modelCatalog", &format!("[{}]", items.join(", ")))
-        };
-        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
-        Ok(path.to_owned())
+        edit_settings(path, |document| {
+            if catalog.is_empty() {
+                document.as_table_mut().remove("modelCatalog");
+            } else {
+                let array = catalog
+                    .iter()
+                    .map(String::as_str)
+                    .collect::<toml_edit::Array>();
+                set_value(document, "modelCatalog", array.into());
+            }
+        })
     }
 
     /// Launch TUI mode: the `--tui-mode` flag overrides the setting.
@@ -698,16 +637,23 @@ mod tests {
     }
 
     #[test]
-    fn replace_or_insert_key_inserts_into_empty_file() {
-        let text = replace_or_insert_key("", "defaultModel", "\"q\"");
-        assert_eq!(text.trim_end(), "defaultModel = \"q\"");
-        // Insert-before-table placement.
-        let text = replace_or_insert_key(
-            "theme = \"dark\"\n\n[retry]\nenabled = true\n",
-            "defaultModel",
-            "\"q\"",
-        );
-        assert!(text.starts_with("theme = \"dark\"\ndefaultModel = \"q\"\n\n[retry]"));
+    fn picker_writes_typed_root_values_and_preserves_nested_keys() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("settings.toml");
+        Settings::write_setting(&path, "theme", "dark").unwrap();
+        Settings::write_setting(&path, "hideThinkingBlock", "true").unwrap();
+        std::fs::write(&path, "# keep\ntheme= 'dark' # choice\n[other]\ntheme = 'nested'\nmodelCatalog = [\n 'leave',\n]\n").unwrap();
+        Settings::write_setting(&path, "theme", "light").unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        let parsed: toml::Value = toml::from_str(&text).unwrap();
+        assert_eq!(parsed["theme"].as_str(), Some("light"));
+        assert_eq!(parsed["other"]["theme"].as_str(), Some("nested"));
+        assert!(text.contains("# keep") && text.contains("# choice"));
+        assert!(text.ends_with("[other]\ntheme = 'nested'\nmodelCatalog = [\n 'leave',\n]\n"));
+        let corrupt = "theme = invalid[";
+        std::fs::write(&path, corrupt).unwrap();
+        assert!(Settings::write_setting(&path, "theme", "dark").is_err());
+        assert_eq!(std::fs::read_to_string(path).unwrap(), corrupt);
     }
 
     #[test]

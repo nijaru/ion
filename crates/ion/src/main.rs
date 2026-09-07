@@ -624,6 +624,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
     // runtime stack for the attached session; the factory below is the
     // single composition point for every runtime this process opens
     // (initial and every /new /resume /clone switch).
+    let checkpoints_enabled = !cli.no_session;
     let open_runtime: ion::session_manager::OpenRuntime = {
         let tools = tools.clone();
         let store = (*store).clone();
@@ -665,6 +666,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
                                 Arc::clone(&policy),
                                 trusted.clone(),
                                 retry.clone(),
+                                checkpoints_enabled,
                             )
                         }
                         ion::session_manager::SessionStart::Resume(session_id) => {

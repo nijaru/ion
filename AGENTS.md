@@ -5,20 +5,21 @@ inside a durable, single-writer session runtime. v0.0.0. No Pi or Go
 compatibility; reference agents are evidence, never contracts.
 
 The authoritative target design is `DESIGN.md` in this repository. It
-owns the core journey, principles (P1–P14), ownership table, domain
-vocabulary, schema, and implementation order (§32). Read its §0.1 first
-when implementing.
+owns the product definition, invariants, ownership, domain vocabulary, schema,
+and implementation order (§20). Read §§1–3 first when implementing. Pi 2 on
+its dev branch, DSH/Cordis, Codex and other relevant agents are references;
+the installed Pi distribution is not the sole design authority.
 
 ## Session start
 
-Persistent working context (brief, decisions, journal) lives in the
+Use `mem --json context "Ion current objective and constraints"` first.
+Legacy working context (brief, decisions, journal) lives in the
 central repository at
 `~/github/nijaru/agent-context/projects/github.com/nijaru/ion/ai/`
 (load the `ai-context` skill for resolution rules; never recreate a
 repository-local `ai/`). Before claims or choosing work:
 
     sed -n '1,80p' DESIGN.md
-    cat ~/github/nijaru/agent-context/projects/github.com/nijaru/ion/ai/brief.md
     tk ready
     git log --oneline -10
     git status --short
@@ -32,8 +33,10 @@ Do the highest-priority unblocked `tk` task.
 3. Central `decisions.md` for rationale still in force.
 4. Central `brief.md` for current state.
 
-If `DESIGN.md` and the implementation disagree, resolve per DESIGN.md §0
-and record an intentional design change in central `decisions.md`.
+If `DESIGN.md` and the implementation disagree, resolve against §§1–3
+and record the intentional contract and rationale with the verified change.
+Legacy briefs are historical evidence; reconcile their claims against source
+and the current task before using them.
 Changing `DESIGN.md` is itself a decision.
 
 Tag `last-go` is a recovery snapshot, not a design or acceptance
@@ -45,18 +48,19 @@ reference; inspect it only when the user explicitly asks.
 2. Name the Ion owner, lifecycle, failure/recovery, and acceptance check.
 3. Implement that contract. Delete the obsolete path in the same change.
 4. Prove it with tests, then run the matching gates.
-5. Update `DESIGN.md` if the design changed, central `brief.md`,
-   `decisions.md` if rationale changed, `journal.md` for the factual
-   outcome, and the `tk` log. Commit the coherent chunk.
+5. Update `DESIGN.md` when the contract changes and the `tk` log with
+   decisions, verification, and unresolved work. Follow `ai-context` and
+   the current memory policy for continuity; do not add new legacy context.
+   Commit the coherent chunk.
 
-Follow `DESIGN.md` §32 order. Work order: correctness and ownership,
+Follow `DESIGN.md` §20 order. Work order: correctness and ownership,
 safety, daily-driver UX through one runtime, providers and integrations,
 polish. Do not skip a recorded blocker for a more visible slice. Do not
-rewrite working code for style (§29.3).
+rewrite working code for style.
 
 ## Invariants
 
-Full set with rationale: `DESIGN.md` P1–P14 and §31. Non-negotiables:
+Full set with rationale: `DESIGN.md` §§3–16. Non-negotiables:
 
 - One owner per authoritative state; a loaded session has exactly one
   mutation authority.
@@ -82,6 +86,6 @@ Full set with rationale: `DESIGN.md` P1–P14 and §31. Non-negotiables:
     cargo test --locked --workspace
     scripts/smoke.sh   # before any dogfood request; tmux-based daily-driver flows
 
-Match deeper checks to the slice (DESIGN.md §30): transition tests,
+Match deeper checks to the slice (DESIGN.md §18): transition tests,
 crash injection, PTY, allow/deny, cancel, shutdown, non-interactive.
 Performance claims need measurements.
