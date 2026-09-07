@@ -61,6 +61,7 @@ async fn extension_publishes_and_serves_tools_through_the_catalog() {
         .await;
     assert!(!outcome.is_error, "{}", outcome.output);
     assert_eq!(outcome.output, "HELLO");
+    catalog.close().await.expect("host catalog close");
 }
 
 #[tokio::test]
@@ -111,20 +112,17 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
         "{transcript}"
     );
 
-    tokio::time::timeout(Duration::from_secs(1), async {
-        loop {
-            if !catalog
-                .specs()
-                .iter()
-                .any(|spec| spec.name == "textkit__ghost")
-            {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .expect("a dead extension must be removed from future capability snapshots");
+    assert!(transcript.contains("still here"), "{transcript}");
+    // Closing a session does not close the host's catalog. Its supervisor
+    // may already have restarted the peer; the host must drain it before
+    // asserting permanent unpublication.
+    catalog.close().await.expect("host catalog close");
+    assert!(
+        !catalog
+            .specs()
+            .iter()
+            .any(|spec| spec.name == "textkit__ghost")
+    );
 }
 
 #[tokio::test]
@@ -158,6 +156,7 @@ async fn extension_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
         output.expect("the extension must recover after its first discovery crash"),
         "echo: after restart"
     );
+    catalog.close().await.expect("host catalog close");
 }
 
 #[tokio::test]
@@ -180,6 +179,7 @@ async fn a_second_language_registers_the_same_logical_tool() {
         .await;
     assert!(!outcome.is_error, "{}", outcome.output);
     assert_eq!(outcome.output, "pong");
+    catalog.close().await.expect("host catalog close");
 }
 
 #[tokio::test]

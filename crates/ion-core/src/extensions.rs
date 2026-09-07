@@ -989,14 +989,13 @@ pub(crate) async fn supervise_extension_peer(
         if let Some(ready) = ready.take() {
             let _ = ready.send(());
         }
-        if let Some(discovered) = tokio::time::timeout(
-            COMMAND_DISCOVERY_TIMEOUT,
-            discover_commands(&rpc, &extension),
-        )
-        .await
-        .ok()
-        .flatten()
-        {
+        // Optional command discovery must not hold host shutdown until its
+        // timeout. Cancellation falls through the same unpublish/close path.
+        let discovered = tokio::select! {
+            () = lifetime.cancelled() => None,
+            result = tokio::time::timeout(COMMAND_DISCOVERY_TIMEOUT, discover_commands(&rpc, &extension)) => result.ok().flatten(),
+        };
+        if let Some(discovered) = discovered {
             register_discovered_commands(&commands, extension.clone(), discovered);
             hub.publish(ExtensionUiEvent::Commands {
                 commands: commands
