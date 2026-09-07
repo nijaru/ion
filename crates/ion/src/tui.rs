@@ -191,6 +191,12 @@ pub enum UiEffect {
     SaveModelCatalog {
         catalog: Vec<String>,
     },
+    /// Persist one /settings row (pi parity: the settings list). The
+    /// run loop writes the key through the surgical settings writer.
+    SaveSetting {
+        key: String,
+        value: String,
+    },
     /// Set the thinking level for future steps (pi parity: /thinking,
     /// shift+tab). `None` restores the adapter default.
     SwitchThinking {
@@ -1106,6 +1112,33 @@ struct ScopedModelsSelector {
     saved_cursor: usize,
 }
 
+/// One /settings row: a live-toggleable setting (or a display-only
+/// row whose value is launch-composed). `values` cycles on enter;
+/// `restart` rows show their current value but report restart-needed
+/// on select.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettingsRow {
+    id: &'static str,
+    label: &'static str,
+    /// Current value as displayed; empty for launch-composed rows.
+    value: String,
+    /// The cycle of selectable values (empty = display-only).
+    values: Vec<String>,
+    /// True when changing this needs a restart (display-only rows).
+    restart: bool,
+}
+
+/// Ephemeral /settings picker (pi parity: a settings list). The
+/// composer is unused; up/down move, enter cycles or reports
+/// restart-needed, esc closes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SettingsSelector {
+    rows: Vec<SettingsRow>,
+    selected: usize,
+    saved_composer: String,
+    saved_cursor: usize,
+}
+
 /// One session-picker row as presentation data. `summary` carries the
 /// durable identity; `label` is the rendered picker line.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1291,6 +1324,11 @@ pub struct UiState {
     /// narrows /model cycling and pickers until the session ends or a
     /// later ctrl+s persists the choice as the settings catalog.
     scoped_models_enabled: Option<Vec<String>>,
+    /// Launch TUI mode seed (HostConfig.launch_mode): the /settings
+    /// row's display proxy for the default view until the loop toggles.
+    launch_tui_mode_fullscreen: bool,
+    /// Ephemeral /settings picker, when open.
+    settings_selector: Option<SettingsSelector>,
     /// The durable thinking-level selection for future steps (pi
     /// parity: /thinking, shift+tab). `None` is the adapter default.
     /// Presentation only; the lane config is authoritative.
@@ -1565,6 +1603,181 @@ impl UiState {
 
     /// Open the /scoped-models picker: rows are the full catalog with
     /// their enabled state; the composer doubles as the filter.
+    /// Open the /settings picker: rows describe ion's live-toggleable
+    /// settings (theme, hideThinkingBlock, showCacheMissNotices, tuiMode,
+    /// defaultThinkingLevel) plus launch-composed rows shown with their
+    /// current value and a restart note.
+    fn open_settings_selector(&mut self) {
+        if self.settings_selector.is_some() {
+            return;
+        }
+        let theme = match self.theme {
+            Theme::Light => "light",
+            Theme::Dark => "dark",
+            Theme::Auto => "light/dark",
+        };
+        let rows = vec![
+            SettingsRow {
+                id: "theme",
+                label: "theme",
+                value: theme.to_owned(),
+                values: vec![
+                    "light".to_owned(),
+                    "dark".to_owned(),
+                    "light/dark".to_owned(),
+                ],
+                restart: false,
+            },
+            SettingsRow {
+                id: "hideThinkingBlock",
+                label: "hide thinking block",
+                value: (!self.thinking_visible).to_string(),
+                values: vec!["true".to_owned(), "false".to_owned()],
+                restart: false,
+            },
+            SettingsRow {
+                id: "showCacheMissNotices",
+                label: "cache-miss notices",
+                value: self.show_cache_miss_notices.to_string(),
+                values: vec!["false".to_owned(), "true".to_owned()],
+                restart: false,
+            },
+            SettingsRow {
+                id: "tuiMode",
+                label: "tui mode",
+                value: if self.fullscreen_open() {
+                    "fullscreen"
+                } else {
+                    "regular"
+                }
+                .to_owned(),
+                values: vec!["regular".to_owned(), "fullscreen".to_owned()],
+                restart: false,
+            },
+            SettingsRow {
+                id: "defaultThinkingLevel",
+                label: "default thinking",
+                value: self
+                    .thinking_level
+                    .clone()
+                    .unwrap_or_else(|| "default".to_owned()),
+                values: THINKING_LEVELS
+                    .iter()
+                    .map(|level| (*level).to_owned())
+                    .collect(),
+                restart: false,
+            },
+        ];
+        let saved_composer = std::mem::take(&mut self.composer);
+        let saved_cursor = self.cursor;
+        self.composer.clear();
+        self.cursor = 0;
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+        self.settings_selector = Some(SettingsSelector {
+            rows,
+            selected: 0,
+            saved_composer,
+            saved_cursor,
+        });
+    }
+
+    fn close_settings_selector(&mut self) {
+        let Some(selector) = self.settings_selector.take() else {
+            return;
+        };
+        self.composer = selector.saved_composer;
+        self.cursor = selector.saved_cursor.min(self.composer.chars().count());
+        self.preferred_column = None;
+        self.undo_stack.clear();
+        self.last_edit = None;
+    }
+
+    /// Move the settings picker selection.
+    fn move_settings_selection(&mut self, delta: isize) {
+        let count = self
+            .settings_selector
+            .as_ref()
+            .map_or(0, |selector| selector.rows.len());
+        let Some(selector) = self.settings_selector.as_mut() else {
+            return;
+        };
+        if count == 0 {
+            selector.selected = 0;
+            return;
+        }
+        selector.selected =
+            (selector.selected as isize + delta).rem_euclid(count as isize) as usize;
+    }
+
+    fn fullscreen_open(&self) -> bool {
+        // The reducer cannot see the loop-owned fullscreen view; the
+        // launch mode is the best proxy for the default display.
+        self.launch_tui_mode_fullscreen
+    }
+
+    /// The row the settings cursor is on, if any.
+    fn selected_settings_row(&self) -> Option<SettingsRow> {
+        let selector = self.settings_selector.as_ref()?;
+        selector.rows.get(selector.selected).cloned()
+    }
+
+    /// Apply one settings row's next value in-cycle to the session and
+    /// emit the persist effect (the run loop writes the settings file).
+    fn cycle_settings_row(&mut self) -> Option<UiEffect> {
+        let row = self.selected_settings_row()?;
+        if row.values.is_empty() {
+            return None;
+        }
+        let index = row
+            .values
+            .iter()
+            .position(|value| *value == row.value)
+            .map_or(0, |index| (index + 1) % row.values.len());
+        let next = row.values[index].clone();
+        let row_id = row.id;
+        match row_id {
+            "theme" => {
+                self.theme = match next.as_str() {
+                    "light" => Theme::Light,
+                    "dark" => Theme::Dark,
+                    _ => Theme::Auto,
+                };
+            }
+            "hideThinkingBlock" => {
+                self.thinking_visible = next == "false";
+            }
+            "showCacheMissNotices" => {
+                self.show_cache_miss_notices = next == "true";
+            }
+            "tuiMode" => {
+                self.launch_tui_mode_fullscreen = next == "fullscreen";
+            }
+            "defaultThinkingLevel" => {
+                self.thinking_level = Some(next.clone());
+                let effect = UiEffect::SwitchThinking {
+                    thinking: Some(next),
+                };
+                // The runtime switch carries the lane selection; the
+                // settings-file default persists separately after the
+                // switch.
+                return Some(effect);
+            }
+            _ => return None,
+        }
+        // The row's displayed value follows the applied one.
+        if let Some(selector) = self.settings_selector.as_mut()
+            && let Some(displayed) = selector.rows.get_mut(selector.selected)
+        {
+            displayed.value = next.clone();
+        }
+        Some(UiEffect::SaveSetting {
+            key: row_id.to_owned(),
+            value: next,
+        })
+    }
+
     fn open_scoped_models_selector(&mut self) {
         if self.scoped_models_selector.is_some() {
             return;
@@ -2612,6 +2825,30 @@ fn handle_scoped_models_key(mut state: UiState, key: KeyEvent) -> (UiState, Opti
     }
 }
 
+/// /settings picker keys: up/down move, enter cycles the selected
+/// row (persisting through SaveSetting), esc closes.
+fn handle_settings_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
+    match key.code {
+        KeyCode::Esc if key.modifiers.is_empty() => {
+            state.close_settings_selector();
+            (state, None)
+        }
+        KeyCode::Enter if key.modifiers.is_empty() => {
+            let effect = state.cycle_settings_row();
+            (state, effect)
+        }
+        KeyCode::Up if key.modifiers.is_empty() => {
+            state.move_settings_selection(-1);
+            (state, None)
+        }
+        KeyCode::Down if key.modifiers.is_empty() => {
+            state.move_settings_selection(1);
+            (state, None)
+        }
+        _ => (state, None),
+    }
+}
+
 fn handle_thinking_selector_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) {
     match key.code {
         KeyCode::Esc if key.modifiers.is_empty() => {
@@ -3082,6 +3319,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
         || state.auth_selector.is_some()
         || state.login_progress.is_some()
         || state.scoped_models_selector.is_some()
+        || state.settings_selector.is_some()
         || state.hotkeys_visible;
     if transient_open && let Some(action) = state.keymap.action_for(&key) {
         match action {
@@ -3094,6 +3332,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_auth_selector();
                 state.login_progress = None;
                 state.close_scoped_models_selector();
+                state.close_settings_selector();
                 state.hotkeys_visible = false;
                 return handle_action(state, action);
             }
@@ -3110,6 +3349,7 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
                 state.close_fork_selector();
                 state.close_auth_selector();
                 state.close_scoped_models_selector();
+                state.close_settings_selector();
                 state.hotkeys_visible = false;
                 if state.composer.is_empty() {
                     state.hint = Some("ctrl+c again to exit".to_owned());
@@ -3125,6 +3365,9 @@ fn handle_key(mut state: UiState, key: KeyEvent) -> (UiState, Option<UiEffect>) 
     }
     if state.scoped_models_selector.is_some() {
         return handle_scoped_models_key(state, key);
+    }
+    if state.settings_selector.is_some() {
+        return handle_settings_key(state, key);
     }
     if state.thinking_selector.is_some() {
         return handle_thinking_selector_key(state, key);
@@ -3326,6 +3569,7 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 "/login · /logout        - provider sign-in; remove stored credentials",
                 "/reload                - re-read settings and project context live",
                 "/scoped-models         - enable/disable models (ctrl+s saves)",
+                "/settings              - view and toggle live settings",
                 "enter · shift+enter · ctrl+j - submit, steer, newline",
                 "ctrl+g                  - edit the draft in $VISUAL/$EDITOR",
                 "alt+left/right · alt+b/f - move by words",
@@ -3350,6 +3594,12 @@ fn handle_command(state: &mut UiState, command: &str) -> (UiState, Option<UiEffe
                 std::mem::take(state),
                 Some(UiEffect::Compact { instructions }),
             )
+        }
+        "settings" => {
+            // pi parity: the settings list picker. Live-toggleable rows
+            // cycle on enter and persist; the loop owns the file write.
+            state.open_settings_selector();
+            (std::mem::take(state), None)
         }
         "scoped-models" => {
             // pi parity: enable/disable models for this session's /model
@@ -3776,6 +4026,7 @@ fn complete_composer(state: &mut UiState) {
                 "resume",
                 "scoped-models",
                 "session",
+                "settings",
                 "share",
                 "thinking",
                 "quit",
@@ -6049,7 +6300,7 @@ pub async fn run(
             .map_err(|err| RuntimeError::OperationFailed(format!("alt screen failed: {err}")))?;
     }
 
-    let palette = palette(theme);
+    let mut palette = palette(theme);
 
     let (term_w, term_h) = terminal.size().unwrap_or((80, 24));
 
@@ -6131,6 +6382,8 @@ pub async fn run(
     state.workspace_files = host.workspace_files.clone();
     state.branch = host.branch.clone();
     state.model_switching_available = switching_available;
+    state.launch_tui_mode_fullscreen =
+        matches!(host.launch_mode, crate::settings::TuiMode::Fullscreen);
     state.session_id = attached
         .as_ref()
         .map(crate::session_manager::AttachedSession::session_id);
@@ -6573,6 +6826,38 @@ pub async fn run(
                                                     ),
                                                 );
                                             }
+                                            Err(err) => notice(
+                                                &mut state,
+                                                &format!("save failed: {err}"),
+                                            ),
+                                        }
+                                    }
+                                    None => notice(
+                                        &mut state,
+                                        "save failed: settings path unavailable",
+                                    ),
+                                }
+                            } else if let UiEffect::SaveSetting { key, value } = &effect {
+                                // /settings row: write the key through
+                                // the surgical writer. theme also swaps
+                                // the loop-owned palette.
+                                if key == "theme" {
+                                    theme = match value.as_str() {
+                                        "light" => Theme::Light,
+                                        "dark" => Theme::Dark,
+                                        _ => Theme::Auto,
+                                    };
+                                    palette = render::palette(theme);
+                                }
+                                match crate::settings::Settings::path() {
+                                    Some(path) => {
+                                        match crate::settings::Settings::write_plain_key(
+                                            &path, key, value,
+                                        ) {
+                                            Ok(written) => notice(
+                                                &mut state,
+                                                &format!("{} = {} saved to {}", key, value, written.display()),
+                                            ),
                                             Err(err) => notice(
                                                 &mut state,
                                                 &format!("save failed: {err}"),
@@ -7195,6 +7480,11 @@ async fn dispatch(
             None
         }
         UiEffect::SaveModelCatalog { .. } => {
+            // Resolved by the run loop (settings-file write); match
+            // totality only.
+            None
+        }
+        UiEffect::SaveSetting { .. } => {
             // Resolved by the run loop (settings-file write); match
             // totality only.
             None
@@ -7874,7 +8164,7 @@ pub(crate) mod tests {
         let state = update(state, key(KeyCode::Tab)).0;
         assert_eq!(state.composer, "/");
         // Every registered command is offered (Pi parity surface).
-        assert_eq!(state.pending_scrollback.len(), 23);
+        assert_eq!(state.pending_scrollback.len(), 24);
     }
 
     #[test]
@@ -11272,6 +11562,62 @@ mod fork_picker_tests {
         assert_eq!(state.composer, "second");
         assert_eq!(state.cursor, "second".chars().count());
     }
+    #[test]
+    fn settings_picker_cycles_rows_and_persists() {
+        let mut state = UiState::new();
+        state.theme = Theme::Dark;
+        state.open_settings_selector();
+        assert_eq!(
+            state.selected_settings_row().map(|row| row.id),
+            Some("theme")
+        );
+
+        // Enter cycles theme dark -> light/dark (the next value) and
+        // emits the persist effect.
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        let UiEffect::SaveSetting {
+            key: setting_key,
+            value,
+        } = effect.expect("save effect")
+        else {
+            panic!("wrong effect");
+        };
+        assert_eq!(setting_key, "theme");
+        assert_eq!(value, "light/dark");
+        assert_eq!(state.theme, Theme::Auto);
+        // The row's display value follows.
+        assert_eq!(
+            state.selected_settings_row().map(|row| row.value),
+            Some("light/dark".to_owned())
+        );
+
+        // Second row: hideThinkingBlock cycles true -> false (a fresh
+        // UiState hides thinking; the toggle makes it visible).
+        let (state, _) = update(state, key(KeyCode::Down));
+        let (state, effect) = update(state, key(KeyCode::Enter));
+        let UiEffect::SaveSetting {
+            key: setting_key,
+            value,
+        } = effect.expect("save effect")
+        else {
+            panic!("wrong effect");
+        };
+        assert_eq!(setting_key, "hideThinkingBlock");
+        assert_eq!(value, "false");
+        assert!(state.thinking_visible);
+
+        // Esc closes and restores the composer: close the still-open
+        // picker, type a draft, reopen, then esc.
+        let (state, _) = update(state, key(KeyCode::Esc));
+        assert!(state.settings_selector.is_none());
+        let state = crate::tui::tests::type_text(state, "draft");
+        let mut state = state;
+        state.open_settings_selector();
+        let (state, _) = update(state, key(KeyCode::Esc));
+        assert!(state.settings_selector.is_none());
+        assert_eq!(state.composer, "draft");
+    }
+
     #[test]
     fn scoped_models_picker_toggles_filters_and_persists() {
         let mut state = UiState::new();

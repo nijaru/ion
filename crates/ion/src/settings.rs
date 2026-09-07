@@ -529,6 +529,21 @@ impl Settings {
         self.theme.unwrap_or(Theme::Auto)
     }
 
+    /// Surgically set one top-level key to a boolean or lowercase word
+    /// value in the settings file at `path` (same preservation rules as
+    /// [`Self::write_default_model`]). Returns the written path.
+    pub fn write_plain_key(
+        path: &std::path::Path,
+        key: &str,
+        value: &str,
+    ) -> Result<std::path::PathBuf, String> {
+        let text =
+            std::fs::read_to_string(path).map_err(|err| format!("{}: {err}", path.display()))?;
+        let text = replace_or_insert_key(&text, key, value);
+        atomic_write(path, &text).map_err(|err| format!("{}: {err}", path.display()))?;
+        Ok(path.to_owned())
+    }
+
     /// Surgically set `defaultProvider`/`defaultModel` in the settings
     /// file at `path`. Only those two keys are touched; the rest of the
     /// file — comments, ordering, unknown keys — is preserved

@@ -540,6 +540,7 @@ pub(super) fn live_region_height(state: &UiState) -> usize {
         || state.auth_selector.is_some()
         || state.login_progress.is_some()
         || state.scoped_models_selector.is_some()
+        || state.settings_selector.is_some()
     {
         LIVE_REGION_MAX_ROWS
     } else if state.restore_prompt.is_some() {
@@ -903,6 +904,38 @@ fn scoped_models_selector_lines(
     }
     lines.push(selector_row(
         Line::from("  \u{2191}/\u{2193} \u{00b7} enter toggle \u{00b7} ctrl+a all \u{00b7} ctrl+x clear \u{00b7} ctrl+p provider \u{00b7} ctrl+s save \u{00b7} esc")
+            .style(palette.system_note),
+        width,
+    ));
+    lines
+}
+
+/// The /settings picker (pi parity: a settings list). One row per
+/// live-toggleable setting with its current value; enter cycles.
+fn settings_selector_lines(state: &UiState, palette: &Palette, width: usize) -> Vec<Line<'static>> {
+    let Some(selector) = &state.settings_selector else {
+        return Vec::new();
+    };
+    let mut lines = vec![selector_row(
+        Line::from(format!("settings \u{00b7} {} rows", selector.rows.len()))
+            .style(palette.system_note),
+        width,
+    )];
+    for (index, row) in selector.rows.iter().enumerate() {
+        let is_selected = index == selector.selected;
+        let mut spans = vec![picker_cursor(is_selected, palette)];
+        spans.push(picker_label(
+            format!("{}: {}", row.label, row.value),
+            is_selected,
+            palette,
+        ));
+        if !row.values.is_empty() {
+            spans.push(picker_badge(" \u{00b7} enter cycles".to_owned(), palette));
+        }
+        lines.push(selector_row(Line::from(spans), width));
+    }
+    lines.push(selector_row(
+        Line::from("  \u{2191}/\u{2193} \u{00b7} enter toggle \u{00b7} esc")
             .style(palette.system_note),
         width,
     ));
@@ -1318,6 +1351,8 @@ pub(super) fn build_live_at_height(
             width,
             head_budget,
         ));
+    } else if state.settings_selector.is_some() {
+        head.extend(settings_selector_lines(state, palette, width));
     } else if state.session_selector.is_some() {
         head.extend(session_selector_lines(state, palette, width, head_budget));
     } else if state.thinking_selector.is_some() {
