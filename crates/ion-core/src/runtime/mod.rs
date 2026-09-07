@@ -53,6 +53,7 @@ use crate::tool::{
     ToolRegistry, ToolResult, ToolSelection, ToolSpec,
 };
 
+mod checkpoints;
 mod effects;
 mod persistence;
 mod recovery;
@@ -1709,6 +1710,8 @@ struct SessionRuntime<P> {
     commands: mpsc::Receiver<SessionCommand>,
     engine_tx: mpsc::Sender<EngineSignal>,
     engine_rx: mpsc::Receiver<EngineSignal>,
+    checkpoint_tx: mpsc::Sender<checkpoints::PreparedCheckpoint>,
+    checkpoint_rx: mpsc::Receiver<checkpoints::PreparedCheckpoint>,
     tool_tx: mpsc::Sender<ToolSettlement>,
     tool_rx: mpsc::Receiver<ToolSettlement>,
     shell_tx: mpsc::Sender<ShellSignal>,
@@ -1796,6 +1799,7 @@ impl<P: Provider> SessionRuntime<P> {
         } = deps;
         let (engine_tx, engine_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (tool_tx, tool_rx) = mpsc::channel(ENGINE_CAPACITY);
+        let (checkpoint_tx, checkpoint_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (shell_tx, shell_rx) = mpsc::channel(ENGINE_CAPACITY);
         let (events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
         let (main_events, _) = broadcast::channel(SUBSCRIBER_CAPACITY);
@@ -1833,6 +1837,8 @@ impl<P: Provider> SessionRuntime<P> {
             commands,
             engine_tx,
             engine_rx,
+            checkpoint_tx,
+            checkpoint_rx,
             tool_tx,
             shell_tx,
             tool_rx,
@@ -2397,6 +2403,9 @@ impl<P: Provider> SessionRuntime<P> {
                     if let Some(signal) = signal {
                         self.handle_engine(signal).await;
                     }
+                }
+                Some(checkpoint) = self.checkpoint_rx.recv() => {
+                    self.record_prepared_checkpoint(checkpoint).await;
                 }
                 result = self.tool_rx.recv() => {
                     if let Some(result) = result {
@@ -3967,20 +3976,6 @@ impl<P: Provider> SessionRuntime<P> {
         self.operation_lane_live_mut(operation_id)
             .expect("resident operation has an owning lane")
             .last_prefix_fingerprint = Some(prefix_fingerprint);
-        // Pi's git-checkpoint parity: capture the tree state before the
-        // model can change files, keyed by the lane leaf (the user
-        // message on step 1 — the same entry /fork passes). Best effort:
-        // a skipped checkpoint never blocks the turn.
-        let checkpoint_leaf = self
-            .operation_lane_name(operation_id)
-            .and_then(|name| self.lane(name))
-            .and_then(|lane| lane.state.leaf);
-        if self
-            .live(operation_id)
-            .is_some_and(|live| live.model_step == 0)
-        {
-            self.record_turn_checkpoint(checkpoint_leaf);
-        }
         self.spawn_model_step(operation_id, model, plan, tools);
         true
     }
@@ -4651,6 +4646,7 @@ impl<P: Provider> SessionRuntime<P> {
             let wait = self.tracker.wait();
             tokio::pin!(wait);
             let mut engine_open = true;
+            let mut checkpoint_open = true;
             let mut tool_open = true;
             let mut shell_open = true;
             loop {
@@ -4660,6 +4656,12 @@ impl<P: Provider> SessionRuntime<P> {
                         match signal {
                             Some(signal) => drop(signal),
                             None => engine_open = false,
+                        }
+                    }
+                    checkpoint = self.checkpoint_rx.recv(), if checkpoint_open => {
+                        match checkpoint {
+                            Some(checkpoint) => drop(checkpoint),
+                            None => checkpoint_open = false,
                         }
                     }
                     result = self.tool_rx.recv(), if tool_open => {
