@@ -32,11 +32,11 @@ trap cleanup EXIT
 pass() { STEP=$((STEP + 1)); echo "ok $STEP - $1"; }
 fail() { STEP=$((STEP + 1)); echo "FAIL $STEP - $1"; tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 1; }
 
-capture() { tmux capture-pane -t "$SESSION" -p 2>/dev/null; }
+capture() { tmux capture-pane -t "$SESSION" -p "$@" 2>/dev/null; }
 
-wait_for() { # $1 needle, $2 timeout seconds
+wait_for() { # $1 needle, $2 timeout seconds, remaining args passed to capture
     local deadline=$((SECONDS + ${2:-15}))
-    until capture | grep -q "$1"; do
+    until capture "${@:3}" | grep -q "$1"; do
         (( SECONDS > deadline )) && return 1
         sleep 0.2
     done
@@ -93,8 +93,10 @@ quit_and_check_exit_code() { # $1 = description
 
 type_line() { tmux send-keys -t "$SESSION" -l "$1"; tmux send-keys -t "$SESSION" Enter; }
 
-echo "== building =="
-cargo build -q -p ion || { echo "build failed"; exit 1; }
+if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
+    echo "== building =="
+    cargo build -q -p ion || { echo "build failed"; exit 1; }
+fi
 [[ -x "$BIN" ]] || { echo "binary missing at $BIN"; exit 1; }
 
 echo "== 1. fresh start =="
@@ -143,7 +145,8 @@ if ! capture | grep -qE "indeterminate|cancelled"; then
         || fail "kill -9: interrupted op neither surfaced nor replayed"
 fi
 type_line "/help"
-wait_for "/compact" 10 || fail "kill -9: composer unusable after recovery"
+# Help may exceed the viewport; verify committed terminal history.
+wait_for "/compact" 10 -S - || fail "kill -9: composer unusable after recovery"
 pass "interrupted operation settles and session stays usable"
 
 echo "== 6. older schema store archives instead of refusing =="
