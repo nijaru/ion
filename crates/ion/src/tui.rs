@@ -5084,6 +5084,15 @@ fn apply_runtime_event(mut state: UiState, event: RuntimeEvent) -> UiState {
             state.status = UiStatus::Idle;
         }
         RuntimeEvent::HistoryChanged { .. } => {}
+        RuntimeEvent::SessionFailed { message, .. } => {
+            state.abandon_draft();
+            state.shell_output.clear();
+            state.approval = None;
+            state.status = UiStatus::Idle;
+            state
+                .pending_scrollback
+                .push(Line::from(format!("! session failed: {message}")).red());
+        }
         RuntimeEvent::SessionClosed { .. } => {
             state.hotkeys_visible = false;
             state.quit_requested = true;
@@ -10512,6 +10521,37 @@ mod shell_passthrough_tests {
         };
         let (_, effect) = update(type_text(working, "!cargo test"), key(KeyCode::Enter));
         assert_eq!(effect, None);
+    }
+
+    #[test]
+    fn fatal_session_event_clears_provisional_shell_state() {
+        let mut state = UiState::new();
+        state.status = UiStatus::Working {
+            operation: "shell".to_owned(),
+        };
+        state.shell_output = "uncommitted".to_owned();
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::SessionFailed {
+                cursor: ion_core::RuntimeCursor::default(),
+                message: "shell result not durable".to_owned(),
+            },
+        );
+        assert_eq!(state.status, UiStatus::Idle);
+        assert!(state.shell_output.is_empty());
+        assert!(
+            state
+                .pending_scrollback
+                .iter()
+                .any(|line| line.to_string().contains("shell result not durable"))
+        );
+        state = apply_runtime_event(
+            state,
+            RuntimeEvent::SessionClosed {
+                cursor: ion_core::RuntimeCursor::default(),
+            },
+        );
+        assert!(state.quit_requested);
     }
 
     #[test]

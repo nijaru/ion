@@ -436,7 +436,8 @@ where
                 };
             }
             RuntimeEvent::OperationCancelled { .. } => return TurnStop::Cancelled,
-            RuntimeEvent::OperationFailed { message, .. } => {
+            RuntimeEvent::OperationFailed { message, .. }
+            | RuntimeEvent::SessionFailed { message, .. } => {
                 return TurnStop::Failed(message);
             }
             RuntimeEvent::OperationIndeterminate { message, .. } => {
@@ -758,7 +759,11 @@ fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
                 cancelled,
                 ..
             } => {
-                let mut text = format!("Ran `{command}`\n");
+                let mut text = if exit_code.is_some() {
+                    format!("Ran `{command}`\n")
+                } else {
+                    format!("Shell command `{command}`\n")
+                };
                 if output.is_empty() {
                     text.push_str("(no output)");
                 } else {
@@ -766,11 +771,12 @@ fn replay_history(entries: &[ion_core::EntryRecord]) -> Vec<Value> {
                 }
                 if *cancelled {
                     text.push_str("\n\n(command cancelled)");
-                } else if *exit_code != Some(0) {
-                    text.push_str(&format!(
-                        "\n\nCommand exited with code {}",
-                        exit_code.unwrap_or(-1)
-                    ));
+                } else if let Some(code) = exit_code {
+                    if *code != 0 {
+                        text.push_str(&format!("\n\nCommand exited with code {code}"));
+                    }
+                } else {
+                    text.push_str("\n\nExit status unknown");
                 }
                 updates.push(json!({
                     "sessionUpdate": "user_message_chunk",

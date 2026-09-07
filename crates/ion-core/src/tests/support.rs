@@ -108,6 +108,7 @@ pub(super) fn kinds(events: &[RuntimeEvent]) -> Vec<&'static str> {
             RuntimeEvent::ShellSettled { .. } => "shell_settled",
             RuntimeEvent::HistoryChanged { .. } => "history_changed",
             RuntimeEvent::SessionClosed { .. } => "session_closed",
+            RuntimeEvent::SessionFailed { .. } => "session_failed",
         })
         .collect()
 }

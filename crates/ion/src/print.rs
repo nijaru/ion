@@ -101,7 +101,7 @@ impl<W: Write> PrintFrontend<W> {
                 RuntimeEvent::ApprovalPending { tool, .. } => {
                     return Err(RuntimeError::ApprovalRequired { tool });
                 }
-                RuntimeEvent::OperationFailed { message, .. } => {
+                RuntimeEvent::OperationFailed { message, .. } | RuntimeEvent::SessionFailed { message, .. } => {
                     return Err(RuntimeError::OperationFailed(message));
                 }
                 RuntimeEvent::OperationIndeterminate { message, .. } => {

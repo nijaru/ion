@@ -2019,11 +2019,12 @@ fn push_entry_lines(
             }
             if *cancelled {
                 out.push(Line::from("  (command cancelled)").style(palette.tool_error));
-            } else if *exit_code != Some(0) {
-                out.push(
-                    Line::from(format!("  (exit {}) ", exit_code.unwrap_or(-1)))
-                        .style(palette.tool_error),
-                );
+            } else if let Some(code) = exit_code {
+                if *code != 0 {
+                    out.push(Line::from(format!("  (exit {code})")).style(palette.tool_error));
+                }
+            } else {
+                out.push(Line::from("  (exit status unknown)").style(palette.tool_error));
             }
         }
         ion_core::SessionEntry::ToolCall { call } => {

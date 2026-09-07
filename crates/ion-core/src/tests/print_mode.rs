@@ -876,3 +876,187 @@ async fn shell_marker_owns_the_branch_until_settled() {
     session.close().await.expect("close");
     runtime.join().await.expect("join");
 }
+
+#[tokio::test]
+async fn shell_settlement_write_failure_closes_without_settling_or_replaying() {
+    let dir = tempfile::tempdir().expect("workspace");
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(dir.path()),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_, mut events) = session.subscribe().await.expect("subscribe");
+    session
+        .run_shell(
+            "while [ ! -f release ]; do sleep 0.01; done; printf x >> executions",
+            false,
+        )
+        .await
+        .expect("shell accepted");
+    store.fail_next_write();
+    std::fs::write(dir.path().join("release"), "go").expect("release shell");
+    let mut failed = false;
+    timeout(Duration::from_secs(5), async {
+        loop {
+            match events.recv().await.expect("event") {
+                RuntimeEvent::SessionFailed { message, .. } => {
+                    assert!(message.contains("could not be saved"), "{message}");
+                    failed = true;
+                }
+                RuntimeEvent::ShellSettled { .. } => {
+                    panic!("failed commit must not publish settlement")
+                }
+                RuntimeEvent::SessionClosed { .. } => break,
+                _ => {}
+            }
+        }
+    })
+    .await
+    .expect("fatal failure closes runtime promptly");
+    assert!(failed);
+    assert!(session.submit_if_idle("must not run").await.is_err());
+    runtime.join().await.expect("join");
+    let loaded = store.load(session_id).await.expect("load marker");
+    assert!(
+        loaded
+            .lanes
+            .iter()
+            .any(|lane| lane.state.pending_shell.is_some())
+    );
+    assert!(
+        !loaded
+            .entries
+            .iter()
+            .any(|record| matches!(record.entry, SessionEntry::ShellExecution { .. }))
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("executions")).expect("external effect"),
+        "x"
+    );
+
+    let reopened = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(dir.path()),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("reopen");
+    let handle = reopened.session();
+    let snapshot = handle.snapshot().await.expect("recovered snapshot");
+    assert!(
+        matches!(snapshot.entries.last(), Some(SessionEntry::ShellExecution { output, cancelled: false, exit_code: None, .. }) if output.contains("Outcome unknown") && output.contains("not replayed"))
+    );
+    let projection = project(&snapshot.entries, 1);
+    assert!(
+        matches!(projection.messages.last(), Some(ContextMessage::User { content }) if content.contains("Exit status unknown") && !content.contains("Command exited with code") && !content.starts_with("Ran "))
+    );
+    assert_eq!(
+        std::fs::read_to_string(dir.path().join("executions")).expect("no replay"),
+        "x"
+    );
+    handle.close().await.expect("close");
+    reopened.join().await.expect("join recovery");
+}
+
+#[tokio::test]
+async fn shell_settlement_failure_during_close_returns_error_after_teardown() {
+    let dir = tempfile::tempdir().expect("workspace");
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(dir.path()),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    let session = runtime.session();
+    let (_, mut events) = session.subscribe().await.expect("subscribe");
+    session
+        .run_shell("sleep 30", false)
+        .await
+        .expect("shell accepted");
+    store.fail_next_write();
+    let result = timeout(Duration::from_secs(5), session.close())
+        .await
+        .expect("close drains");
+    assert!(
+        matches!(result, Err(CommandError::Persistence(_))),
+        "{result:?}"
+    );
+    runtime.join().await.expect("join");
+    let loaded = store.load(session_id).await.expect("pending marker");
+    assert!(
+        loaded
+            .lanes
+            .iter()
+            .any(|lane| lane.state.pending_shell.is_some())
+    );
+    let mut failed = false;
+    loop {
+        match events.recv().await.expect("event") {
+            RuntimeEvent::SessionFailed { .. } => failed = true,
+            RuntimeEvent::ShellSettled { .. } => panic!("no durable settlement"),
+            RuntimeEvent::SessionClosed { .. } => break,
+            _ => {}
+        }
+    }
+    assert!(failed);
+}
+
+#[tokio::test]
+async fn shell_recovery_write_failure_refuses_commands_and_preserves_intent() {
+    let dir = tempfile::tempdir().expect("workspace");
+    let store = SessionStore::open_in_memory().expect("store");
+    let runtime = start_runtime_with_store(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(dir.path()),
+        store.clone(),
+    );
+    let session_id = runtime.session_id();
+    runtime.session().close().await.expect("close initial");
+    runtime.join().await.expect("join initial");
+    store
+        .queue_pending_shell(
+            session_id,
+            "main",
+            crate::session::lane::PendingShell {
+                entry_id: crate::EntryId::generate(),
+                command: "touch must-not-run".to_owned(),
+                exclude_from_context: false,
+            },
+        )
+        .await
+        .expect("interrupted intent");
+    store.fail_next_write();
+    let reopened = Runtime::open_session(
+        ScriptedProvider::echo(),
+        ToolRegistry::with_cwd(dir.path()),
+        store.clone(),
+        session_id,
+    )
+    .await
+    .expect("load");
+    assert!(
+        reopened
+            .session()
+            .submit_if_idle("must refuse")
+            .await
+            .is_err()
+    );
+    timeout(Duration::from_secs(3), reopened.join())
+        .await
+        .expect("failed recovery closes")
+        .expect("join");
+    let loaded = store.load(session_id).await.expect("preserved state");
+    assert!(
+        loaded
+            .lanes
+            .iter()
+            .any(|lane| lane.state.pending_shell.is_some())
+    );
+    assert!(loaded.entries.is_empty());
+    assert!(!dir.path().join("must-not-run").exists());
+}

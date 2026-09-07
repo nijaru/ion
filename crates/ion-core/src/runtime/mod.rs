@@ -385,6 +385,12 @@ pub enum RuntimeEvent {
     HistoryChanged {
         cursor: RuntimeCursor,
     },
+    /// The runtime cannot safely continue. This is a host failure, never
+    /// evidence that an in-flight external effect settled durably.
+    SessionFailed {
+        cursor: RuntimeCursor,
+        message: String,
+    },
     SessionClosed {
         cursor: RuntimeCursor,
     },
@@ -414,6 +420,7 @@ impl RuntimeEvent {
             | Self::ShellOutput { .. }
             | Self::ShellSettled { .. }
             | Self::HistoryChanged { .. }
+            | Self::SessionFailed { .. }
             | Self::SessionClosed { .. } => None,
         }
     }
@@ -440,6 +447,7 @@ impl RuntimeEvent {
             | Self::ShellOutput { cursor, .. }
             | Self::ShellSettled { cursor, .. }
             | Self::HistoryChanged { cursor }
+            | Self::SessionFailed { cursor, .. }
             | Self::SessionClosed { cursor } => *cursor,
         }
     }
@@ -2273,18 +2281,21 @@ impl<P: Provider> SessionRuntime<P> {
     /// Reopen recovery for a shell passthrough interrupted by process
     /// loss (§10): the command was user-initiated and its completion
     /// was never observed, so it never silently replays. Settle the
-    /// marker durably as cancelled — the honest record — rather than
-    /// leaving a busy marker or dropping the run.
-    async fn recover_pending_shells(&mut self, loaded: &crate::store::LoadedSession) {
+    /// marker with an explicit unknown outcome. Process loss proves neither
+    /// cancellation nor completion.
+    async fn recover_pending_shells(
+        &mut self,
+        loaded: &crate::store::LoadedSession,
+    ) -> Result<(), CommandError> {
         for lane in &loaded.lanes {
             let Some(pending) = &lane.state.pending_shell else {
                 continue;
             };
             let entry = SessionEntry::ShellExecution {
                 command: pending.command.clone(),
-                output: String::new(),
+                output: "Outcome unknown: Ion stopped before shell completion was durably recorded. The command was not replayed; inspect its external effects before retrying.".to_owned(),
                 exit_code: None,
-                cancelled: true,
+                cancelled: false,
                 exclude_from_context: pending.exclude_from_context,
             };
             let record = EntryRecord {
@@ -2304,7 +2315,11 @@ impl<P: Provider> SessionRuntime<P> {
                     %err,
                     "interrupted shell passthrough could not settle; lane stays marked"
                 );
-                continue;
+                self.emit(RuntimeEvent::SessionFailed {
+                    cursor: RuntimeCursor::default(),
+                    message: format!("interrupted shell recovery could not be saved: {err}; pending command was not replayed"),
+                });
+                return Err(persistence_command_error(err));
             }
             self.next_entry_seq += 1;
             let lane_state = &mut self
@@ -2317,9 +2332,10 @@ impl<P: Provider> SessionRuntime<P> {
             warn!(
                 session = %self.session_id,
                 lane = %lane.name,
-                "reopened with an interrupted shell passthrough; settled as cancelled"
+                "reopened with an interrupted shell passthrough; recorded unknown outcome"
             );
         }
+        Ok(())
     }
 
     fn main_model_ref(&self) -> &str {
@@ -2375,12 +2391,14 @@ impl<P: Provider> SessionRuntime<P> {
                 return;
             }
             self.restore_from(loaded);
-            let loaded_for_recovery = self.store.load(self.session_id).await;
-            match loaded_for_recovery {
+            let recovery = match self.store.load(self.session_id).await {
                 Ok(fresh) => self.recover_pending_shells(&fresh).await,
-                Err(err) => {
-                    error!(session = %self.session_id, %err, "could not reload lanes for shell recovery");
-                }
+                Err(err) => Err(persistence_command_error(err)),
+            };
+            if let Err(err) = recovery {
+                error!(session = %self.session_id, %err, "shell recovery failed; runtime cannot accept commands");
+                let _ = self.close_internal().await;
+                return;
             }
         } else {
             let published = self.tools.admission_scopes();
@@ -2472,8 +2490,9 @@ impl<P: Provider> SessionRuntime<P> {
                     }
                 }
                 signal = self.shell_rx.recv() => {
-                    if let Some(signal) = signal {
-                        self.handle_shell_signal(signal).await;
+                    if let Some(signal) = signal
+                        && self.handle_shell_signal(signal).await.is_err() {
+                        break;
                     }
                 }
             }
@@ -3299,7 +3318,7 @@ impl<P: Provider> SessionRuntime<P> {
     /// Drain one shell passthrough signal. Output forwards as a
     /// display-only event; settlement makes the entry durable before
     /// the pending reply is answered.
-    async fn handle_shell_signal(&mut self, signal: ShellSignal) {
+    async fn handle_shell_signal(&mut self, signal: ShellSignal) -> Result<(), CommandError> {
         match signal {
             ShellSignal::Output { lane_name, output } => {
                 self.emit(RuntimeEvent::ShellOutput {
@@ -3382,13 +3401,22 @@ impl<P: Provider> SessionRuntime<P> {
                     Err(err) => {
                         // §15: persistence failure is a harness failure.
                         // Surface it; the entry is not durable.
-                        error!(session = %self.session_id, %err, "shell settlement not durable")
+                        let message = format!(
+                            "shell completion could not be saved: {err}; outcome remains unknown after recovery; the command will not be replayed"
+                        );
+                        error!(session = %self.session_id, %err, "shell settlement not durable");
+                        self.emit(RuntimeEvent::SessionFailed {
+                            cursor: RuntimeCursor::default(),
+                            message,
+                        });
+                        return Err(persistence_command_error(err));
                     }
                 };
                 // Outcome visibility is the settled entry plus its event;
                 // there is no pending command reply to answer.
             }
         }
+        Ok(())
     }
 
     async fn enqueue_steer(&mut self, text: String) -> Result<(), CommandError> {
@@ -4792,14 +4820,26 @@ impl<P: Provider> SessionRuntime<P> {
                 }
             }
         }
+        // Tracker completion and a queued shell settlement can become ready
+        // together. All producers are joined now; drain their buffered signals
+        // before declaring shutdown complete.
+        while let Ok(signal) = self.shell_rx.try_recv() {
+            settled_shell.push(signal);
+        }
+        let mut shell_failure = None;
         for signal in settled_shell {
-            self.handle_shell_signal(signal).await;
+            if let Err(err) = self.handle_shell_signal(signal).await {
+                shell_failure.get_or_insert(err);
+            }
         }
         self.tracker.wait().await;
         self.emit(RuntimeEvent::SessionClosed {
             cursor: RuntimeCursor::default(),
         });
-        Ok(())
+        match shell_failure {
+            Some(err) => Err(err),
+            None => Ok(()),
+        }
     }
 
     fn emit(&mut self, mut event: RuntimeEvent) {
@@ -4887,6 +4927,7 @@ fn set_cursor(event: &mut RuntimeEvent, cursor: RuntimeCursor) {
         | RuntimeEvent::ShellOutput { cursor: slot, .. }
         | RuntimeEvent::ShellSettled { cursor: slot, .. }
         | RuntimeEvent::HistoryChanged { cursor: slot }
+        | RuntimeEvent::SessionFailed { cursor: slot, .. }
         | RuntimeEvent::SessionClosed { cursor: slot } => *slot = cursor,
     }
 }
@@ -4913,6 +4954,7 @@ fn event_kind(event: &RuntimeEvent) -> &'static str {
         RuntimeEvent::ShellSettled { .. } => "shell_settled",
         RuntimeEvent::HistoryChanged { .. } => "history_changed",
         RuntimeEvent::SessionClosed { .. } => "session_closed",
+        RuntimeEvent::SessionFailed { .. } => "session_failed",
     }
 }
 

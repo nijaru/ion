@@ -333,7 +333,11 @@ fn project_with_system<'a>(
                 // but never enters the model projection; `!command` joins
                 // as user content in pi's exact shape.
                 if !*exclude_from_context {
-                    let mut content = format!("Ran `{command}`\n");
+                    let mut content = if exit_code.is_some() {
+                        format!("Ran `{command}`\n")
+                    } else {
+                        format!("Shell command `{command}`\n")
+                    };
                     if output.is_empty() {
                         content.push_str("(no output)");
                     } else {
@@ -341,11 +345,12 @@ fn project_with_system<'a>(
                     }
                     if *cancelled {
                         content.push_str("\n\n(command cancelled)");
-                    } else if *exit_code != Some(0) {
-                        content.push_str(&format!(
-                            "\n\nCommand exited with code {}",
-                            exit_code.unwrap_or(-1)
-                        ));
+                    } else if let Some(code) = exit_code {
+                        if *code != 0 {
+                            content.push_str(&format!("\n\nCommand exited with code {code}"));
+                        }
+                    } else {
+                        content.push_str("\n\nExit status unknown");
                     }
                     messages.push(ContextMessage::User { content });
                 }
