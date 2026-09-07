@@ -18,6 +18,8 @@ pub enum CommandError {
     NextRunQueued { entry_id: EntryId },
     #[error("entry {0} does not exist in this session")]
     EntryNotFound(EntryId),
+    #[error("entry {0} ends within a tool exchange; select a point after all tool results")]
+    IncompleteToolExchange(EntryId),
     #[error("lane {0:?} does not exist")]
     LaneNotFound(String),
     #[error("lane {0:?} already exists")]

@@ -953,7 +953,11 @@ fn tree_selector_lines(
         ));
         for (index, row) in rows.iter().enumerate().take(end).skip(start) {
             let is_selected = index == selected;
-            let is_leaf = index == 0;
+            let is_leaf = state
+                .tree_selector
+                .as_ref()
+                .and_then(|selector| selector.current)
+                == Some(row.entry_id);
             let mut spans = vec![
                 picker_cursor(is_selected, palette),
                 picker_current_marker(is_leaf, palette),
@@ -2071,6 +2075,44 @@ fn push_entry_lines(
 mod tests {
     use super::*;
     use crate::settings::Theme;
+
+    #[test]
+    fn tree_current_marker_tracks_identity_after_filtering_and_selection() {
+        let root = ion_core::EntryId::generate();
+        let leaf = ion_core::EntryId::generate();
+        let mut state = UiState::new();
+        state.open_tree_selector(
+            vec![
+                super::super::tree::TreeRow {
+                    entry_id: root,
+                    label: "root".into(),
+                },
+                super::super::tree::TreeRow {
+                    entry_id: leaf,
+                    label: "leaf".into(),
+                },
+            ],
+            Some(leaf),
+        );
+        state.move_tree_selection(-1);
+        let palette = palette(Theme::Dark);
+        for query in ["", "leaf", "root"] {
+            state.composer = query.into();
+            let lines = tree_selector_lines(&state, &palette, 80, 10);
+            let marked: Vec<_> = lines
+                .iter()
+                .map(|line| line.to_string())
+                .filter(|line| line.contains(" · current"))
+                .collect();
+            if query == "root" {
+                assert!(marked.is_empty());
+            } else {
+                assert_eq!(marked.len(), 1);
+                assert!(marked[0].contains("leaf"));
+            }
+        }
+    }
+
     use ratatui::style::Style;
 
     fn dark() -> Palette {

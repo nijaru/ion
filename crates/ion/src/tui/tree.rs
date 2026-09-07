@@ -70,6 +70,7 @@ pub(super) struct TreeRow {
 /// enter navigates the lane to that point.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct TreeSelector {
+    pub(super) current: Option<EntryId>,
     pub(super) rows: Vec<TreeRow>,
     pub(super) selected: usize,
     pub(super) saved_composer: String,
@@ -97,6 +98,7 @@ impl UiState {
             .position(|row| Some(row.entry_id) == current)
             .unwrap_or(0);
         self.tree_selector = Some(TreeSelector {
+            current,
             rows,
             selected,
             saved_composer,

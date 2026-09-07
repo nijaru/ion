@@ -2234,8 +2234,11 @@ impl<P: Provider> SessionRuntime<P> {
 
     fn lane_branch_records(&self, lane_name: &str) -> Option<Vec<&EntryRecord>> {
         let lane = self.lanes.get(lane_name)?;
+        self.branch_records_at(lane.durable.state.leaf)
+    }
+
+    fn branch_records_at(&self, mut cursor: Option<EntryId>) -> Option<Vec<&EntryRecord>> {
         let mut branch = Vec::new();
-        let mut cursor = lane.durable.state.leaf;
         while let Some(entry_id) = cursor {
             let index = *self.entry_index.get(&entry_id)?;
             let record = self.tree_entries.get(index)?;
@@ -3141,6 +3144,30 @@ impl<P: Provider> SessionRuntime<P> {
         }
         if !self.entry_index.contains_key(&entry_id) {
             return Err(CommandError::EntryNotFound(entry_id));
+        }
+        let branch = self
+            .branch_records_at(Some(entry_id))
+            .expect("resident entry has a complete branch");
+        // Use the same projection as model requests: a covering compaction
+        // can remove an earlier tool exchange from the model-facing prefix.
+        let plan = crate::context::project(
+            branch.iter().map(|record| &record.entry),
+            branch.first().expect("selected entry exists").seq,
+        );
+        let mut outstanding = std::collections::HashSet::new();
+        for message in &plan.messages {
+            match message {
+                crate::context::ContextMessage::Assistant { tool_calls, .. } => {
+                    outstanding.extend(tool_calls.iter().map(|call| call.call_id));
+                }
+                crate::context::ContextMessage::Tool { call_id, .. } => {
+                    outstanding.remove(call_id);
+                }
+                crate::context::ContextMessage::User { .. } => {}
+            }
+        }
+        if !outstanding.is_empty() {
+            return Err(CommandError::IncompleteToolExchange(entry_id));
         }
         self.store
             .set_lane_leaf(self.session_id, crate::session::lane::MAIN, entry_id)
