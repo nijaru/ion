@@ -1,8 +1,8 @@
 # Core rewrite plan
 
-Status: active implementation plan, 2026-09-12.
+Status: R0 accepted; clean production rewrite is active, 2026-09-12.
 
-This document translates `DESIGN.md` revision 5 into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation.
+This document translates `DESIGN.md` into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation. `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
 
 ## Decision
 
@@ -19,7 +19,7 @@ operation-bound provider signals
 root-wide session schema
 ```
 
-Trying to rename/translate these in place would repeatedly preserve old ownership assumptions while the target now uses:
+Trying to rename/translate these in place would repeatedly preserve old ownership assumptions while the target uses:
 
 ```text
 Session
@@ -31,15 +31,13 @@ Session
 
 with workers as owned conversations, immutable context controls, task-level recovery and one per-session canonical store.
 
-After the five pre-rewrite gates below pass, replace `ion-core` directly. Do not maintain a production `old` and `new` runtime side by side.
+The five pre-rewrite gates passed at `81c344d713f13b73e19232b4ad36dfe40ba663b9` under CI run `34718467220`. Replace `ion-core` directly. Do not maintain production `old` and `new` runtimes side by side.
 
-## Pre-rewrite gates
+## Accepted R0 contracts
 
-### R0.1 — Task contract
+### R0.1 — task contract: accepted
 
-Prototype the final Rust task authoring interface in isolation.
-
-Required shape:
+Use one typed task framework:
 
 ```text
 TaskKind
@@ -49,113 +47,77 @@ TaskKind
   Failure
   Aborted
 
-  execute(...)
-  recover(...)
-  abort(...)
+  async execute(...)
+  async recover(...)
+  async abort(...)
 ```
 
-`execute/recover/abort` are async invocations, but the async stack is never durable continuation state. `TaskContext::commit` replaces the complete checkpoint and makes authorized canonical writes through the session writer. Each commit revalidates task identity + invocation generation + cancellation.
+The async stack is process-local, never durable continuation. `TaskContext::commit` replaces the complete typed checkpoint and performs authorized canonical writes through the session writer after revalidating task identity, invocation generation and cancellation authority.
 
-The terminal result is a closure/plan applied on the writer so outcome, successor work, ownership changes and scratch retirement are atomic.
+Cancellation is durable mark + process-local signal. The durable mark revokes the old invocation's normal authority; after that invocation joins, a fresh higher-generation abort invocation owns cleanup and terminal abort settlement.
 
-Also prototype an optional typed state/phase helper that compiles to the ordinary task trait. Reject any design that creates a second scheduler or public task framework.
+An optional typed checkpoint/phase helper may make exhaustive task authoring easier but creates no second scheduler/lifecycle.
 
-Test:
+### R0.2 — immutable entries/context/forks: accepted
 
-- checkpoint survives abrupt process loss;
-- stale invocation writes reject;
-- settle-before-cancel and cancel-before-settle;
-- abort uses a fresh invocation after old invocation joins;
-- cancelled waiter does not cancel durable task;
-- panic/failure cannot silently lose running work.
+Canonical history is append-only. Effective model context is derived from immutable entries containing provider-neutral projection plus optional heads and constrained edits.
 
-### R0.2 — Entries/context/forks
+Summary, handoff and reset append heads. Forks reference a stable source cutoff and never observe later source appends. Initial inherited cutoffs/heads must be complete tool-exchange boundaries. Transcript chronology may record completion order while projection normalizes tool results to source call order.
 
-Prototype immutable entries with generic facets:
+There is no separately mutable canonical context vector.
+
+### R0.3 — generic Effect: rejected
+
+Do not create a generic `EffectId`/effect lifecycle in the fresh core.
+
+Use task identity + typed checkpoint + invocation generation + task-scoped attempt/usage evidence + an external reconciliation/idempotency identity where one exists.
+
+Recovery remains typed per task phase:
 
 ```text
-kind
-semantic data
-provider-neutral model projection
-optional context head
-optional constrained context edits
+retry-safe
+reconcile/adopt
+no-safe-retry -> indeterminate
 ```
 
-No mutable canonical context vector.
+Reopen this only if a concrete future operation exposes a truly independent identity/lifetime that task state cannot represent cleanly.
 
-Test:
+### R0.4 — IDs/sequence: accepted
 
-- append-only transcript;
-- reset/handoff by new head;
-- summary compaction with retained tail;
-- fork inherits only the source prefix and controls visible at its cutoff;
-- later source changes invisible;
-- source tasks not inherited;
-- two tool results settle B then A while provider projection is A then B;
-- cold/warm context reads and edit/head indexes are measurable.
-
-Start worker inheritance only at complete safe exchange boundaries. Arbitrary historical incomplete-exchange repair may be added later if worth the extra semantics.
-
-### R0.3 — Remove generic Effect
-
-Prototype provider/tool/job recovery using only task identity + typed checkpoint + invocation generation + attempt/usage records.
-
-Representative checkpoints must distinguish:
+Use one private monotonic local sequence per session store. Durable local objects and committed mutation batches receive successive values from that allocator, while Rust exposes distinct semantic wrappers:
 
 ```text
-prepared but not dispatched
-dispatched retry-safe attempt
-dispatched reconcile/adopt handle
-dispatched no-safe-retry operation
+ConversationId(LocalSeq)
+EntryId(LocalSeq)
+InputId(LocalSeq)
+TaskId(LocalSeq)
+ArtifactId(LocalSeq)
+CommitSeq(LocalSeq)
 ```
 
-Crash after external dispatch and before terminal commit. Reopen and verify retry/adopt/indeterminate behavior.
+A rejected transaction consumes/publishes no durable sequence values. A batch may mint several object IDs and then a later commit cursor. `SessionId` remains globally unique; cross-session references pair it with a typed local ID.
 
-Only keep a separate `Effect` entity if this prototype exposes a concrete identity/lifetime that cannot be represented cleanly as task + attempt/checkpoint.
+### R0.5 — minimal AI boundary: accepted
 
-### R0.4 — IDs and sequence
-
-Compare two private schema representations:
-
-A. typed object IDs + separate commit sequence;
-B. one session-local monotonic mutation sequence that also mints object IDs.
-
-Both must support:
-
-- several objects created and cross-referenced in one batch;
-- rejected batch consumes/publishes no visible IDs;
-- historical/fork cutoff ordering;
-- compact SQLite indexes;
-- stable typed Rust public handles;
-- `(SessionId, local ID)` cross-session references when required.
-
-Choose the simpler measured representation before the fresh production schema is declared.
-
-### R0.5 — Minimal AI port
-
-Specify only what the fresh generation task needs:
+Create a small independent `ion-ai` crate containing the provider-neutral generation contract and scripted service:
 
 ```text
 ModelRef
 ModelRequest
-provider-neutral Message/Content
+Message / Content
 ToolSpec
 ModelStreamEvent
 ModelResponse
 Usage
-ProviderErrorKind
+ProviderError / ProviderErrorKind
 ModelService::stream(...)
 ```
 
-The model service must not know session/task IDs or database commands.
-
-Use a scripted/faux implementation for the first core. Production provider catalog/auth/wire adapters are a separate component pass.
-
-The leading organization is a small independent `ion-ai` crate containing only this provider-neutral contract plus the scripted service. R0.5 may reject that crate split if it proves artificial, but do not put HTTP/OAuth/provider-catalog logic in `ion-core` merely to avoid one stable dependency boundary.
+The model service receives no session/task IDs or database commands. Production HTTP/auth/catalog adapters come later. Durable retry/backoff/usage policy belongs to generation tasks, not hidden provider/SDK retries.
 
 ## Rewrite boundary
 
-Once R0.1–R0.5 are accepted, remove the old core implementation and reconstruct `ion-core` around the target and `docs/source-layout.md`.
+R0 is closed. Remove the old core implementation and reconstruct `ion-core` around the target and `docs/source-layout.md`.
 
 ### Delete/rewrite
 
@@ -176,7 +138,7 @@ Do not create a replacement `runtime.rs` catch-all. The fresh implementation is 
 
 ### Application cutover
 
-The current `ion` application crate is tightly coupled to the old core. Do not preserve those dependencies just to keep the old binary running during the rewrite.
+The current `ion` application crate is tightly coupled to the old core. Do not preserve those dependencies merely to keep the old binary running during the rewrite.
 
 At the clean cutover, choose the smallest workspace that remains honest and green:
 
@@ -211,24 +173,30 @@ Copy or rewrite those pieces only after their new subsystem interface is defined
 
 Low-level terminal editor/rendering utilities may later be reused after P4 review.
 
-## Fresh `ion-core` implementation order
+## Fresh implementation order
 
-### K1 — Storage-independent domain types
+### K0 — establish `ion-ai` contract crate
+
+Promote the accepted R0.5 provider-neutral types and scripted service into a small independent crate. Keep it contract-only: no production HTTP/OAuth/catalog implementation yet.
+
+This is a dependency boundary, not an AI framework. `ion-core` may depend on it; `ion-ai` must not depend on session/task/store types.
+
+### K1 — storage-independent domain types
 
 Create the fresh module skeleton from `docs/source-layout.md` only as real behavior lands. Do not pre-create empty hierarchy for aesthetics.
 
-Add only target nouns:
+Add target identifiers backed by the accepted session-local sequence representation:
 
 ```text
 SessionId
+LocalSeq
 ConversationId
 EntryId
 InputId
 TaskId
 ArtifactId
+CommitSeq
 ```
-
-plus selected sequence representation.
 
 Add immutable:
 
@@ -237,9 +205,9 @@ Add immutable:
 - typed input/request receipt state;
 - task input/checkpoint/outcome records.
 
-No lanes, operations, agents or generic effects.
+No lanes, operations, durable agents or generic effects.
 
-### K2 — Session writer + in-memory store
+### K2 — session writer + in-memory store
 
 Build the serialized command line first against a deterministic in-memory store.
 
@@ -257,23 +225,23 @@ Required commands:
 
 Build observations from committed batches.
 
-### K3 — Task driver
+### K3 — task driver
 
-Implement pending claim, execute/recover/abort invocation ownership, invocation fencing, waits/dependencies and close/fault behavior.
+Implement pending claim, execute/recover/abort invocation ownership, generation fencing, local cancellation signalling, waits/dependencies and close/fault behavior.
 
 No real provider yet. Use deterministic task kinds.
 
 ### K4 — SQLite session store
 
-Implement the fresh schema as one database for one session. Do not migrate the old tables in place during core development.
+Implement the fresh schema as one database for one session. Do not migrate old tables in place during core development.
 
 Follow the SQLite module boundaries in `docs/source-layout.md`: connection/open policy, schema, atomic commit application and focused per-record reads/writes. Do not create another monolithic `sql.rs`/`queries.rs` file.
 
 For old development data, preserve/archive/refuse according to the pre-1.0 policy. A migration can be written later only if preserving old sessions is actually valuable.
 
-### K5 — Generation + tool chain
+### K5 — generation + tool chain
 
-Use the minimal scripted model service and narrow tool executor.
+Use `ion-ai`'s scripted model service and a narrow tool executor.
 
 Prove:
 
@@ -287,7 +255,7 @@ input
 
 with B settling before A while projected order remains A,B.
 
-### K6 — Workers
+### K6 — workers
 
 Create owned conversations through the same writer:
 
@@ -304,11 +272,11 @@ No separate agent registry.
 
 ### K7 — P2 physical/session-store pass
 
-Compare root-wide legacy SQLite against one-DB-per-session with production-like history/output load. Move to the per-session topology only after the measurement/fault evidence is recorded.
+Compare root-wide legacy SQLite evidence against one-DB-per-session with production-like history/output load. Move the production physical topology only on recorded measurement/fault evidence; the semantic session boundary is already fixed.
 
 ## AI subsystem pass after the kernel
 
-The later AI/model component should follow this logical split:
+The later AI/model component extends `ion-ai` using this logical split:
 
 ```text
 ModelService / registry
@@ -328,7 +296,7 @@ Strong ideas from `pi-ai` to evaluate:
 - provider-specific opaque replay metadata survives on otherwise provider-neutral assistant content;
 - faux provider for deterministic tests.
 
-Intentional Ion improvements:
+Ion requirements:
 
 - typed provider failure categories instead of retry policy based on message substrings;
 - generation task owns durable retry/backoff/usage accounting;
@@ -336,7 +304,7 @@ Intentional Ion improvements:
 - no session/task IDs inside provider API;
 - credentials never enter session storage.
 
-Do not implement the full provider catalog before the core can run one scripted model turn. If `ion-ai` was accepted by R0.5, extend that crate rather than moving provider/network logic back into the application binary or `ion-core`.
+Do not implement the full provider catalog before the core can run one scripted model turn.
 
 ## Subsequent subsystem passes
 
@@ -354,3 +322,5 @@ Each pass may reuse leaf code but starts from the target contract, not from the 
 ## Rule
 
 A clean rewrite is not permission to throw away evidence. Preserve the **invariants and failure cases** from old tests and previous prototypes; throw away implementation structure that no longer expresses them cleanly.
+
+The temporary R0 prototype files remain only until equivalent production invariants exist, then are deleted rather than becoming a parallel implementation.
