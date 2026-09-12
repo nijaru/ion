@@ -20,7 +20,9 @@ pub fn project(entries: &[Entry]) -> Result<ContextProjection, ContextError> {
         });
     }
 
-    let newest_head = entries.iter().rposition(|entry| entry.context.head.is_some());
+    let newest_head = entries
+        .iter()
+        .rposition(|entry| entry.context.head.is_some());
     let mut selected = if let Some(head_index) = newest_head {
         let head_entry = &entries[head_index];
         let boundary = head_entry.context.head.expect("head entry has boundary");
