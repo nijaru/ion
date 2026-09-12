@@ -222,13 +222,13 @@ impl PrototypeStore {
     fn compact_bytes(&mut self) -> rusqlite::Result<u64> {
         self.connection
             .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
-        let page_count: u64 = self
+        let page_count: i64 = self
             .connection
             .query_row("PRAGMA page_count", [], |row| row.get(0))?;
-        let page_size: u64 = self
+        let page_size: i64 = self
             .connection
             .query_row("PRAGMA page_size", [], |row| row.get(0))?;
-        Ok(page_count * page_size)
+        Ok((page_count as u64) * (page_size as u64))
     }
 
     fn create_separate(tx: &Transaction<'_>, body: &str) -> rusqlite::Result<BatchReceipt> {
