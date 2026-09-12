@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{Content, Message, Usage};
+use crate::{Message, ToolCall, Usage};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelResponse {
@@ -11,7 +11,7 @@ pub struct ModelResponse {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ModelStreamEvent {
     TextDelta(String),
-    ToolCall(Content),
+    ToolCall(ToolCall),
     Usage(Usage),
     Completed(ModelResponse),
 }
