@@ -3,6 +3,7 @@
 use thiserror::Error;
 
 use crate::ids::{EntryId, OperationId};
+use crate::input::RequestKey;
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum CommandError {
@@ -18,6 +19,8 @@ pub enum CommandError {
     RuntimeDropped,
     #[error("an operation is already running")]
     Busy { operation_id: OperationId },
+    #[error("request key {request_key} is already bound to different input")]
+    IdempotencyConflict { request_key: RequestKey },
     #[error("the lane already has a pending next run ({entry_id})")]
     NextRunQueued { entry_id: EntryId },
     #[error("entry {0} does not exist in this session")]
