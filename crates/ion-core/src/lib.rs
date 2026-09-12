@@ -1,4 +1,4 @@
-//! Durable core domain for Ion.
+//! Durable core domain and session kernel for Ion.
 //!
 //! The fresh kernel is built around sessions, conversations, immutable entries,
 //! admitted inputs and recoverable tasks. Legacy lane/agent/operation/effect
@@ -7,7 +7,10 @@
 mod artifact;
 pub mod conversation;
 mod id;
+pub mod session;
+mod store;
 pub mod task;
+pub mod view;
 
 pub use artifact::Artifact;
 pub use conversation::{
@@ -17,7 +20,12 @@ pub use conversation::{
 pub use id::{
     ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
 };
+pub use session::{
+    ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest, InputReceipt, InputRequest,
+    Session, SessionError, TaskReceipt, TaskRequest,
+};
 pub use task::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord,
     TaskStatus,
 };
+pub use view::{Change, CommitEvent, ObservationBatch, SessionSnapshot};
