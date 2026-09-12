@@ -4,25 +4,27 @@ This roadmap delivers the target in [DESIGN.md](DESIGN.md) and [TERMINAL.md](TER
 
 ## Current position
 
-The product goal is established: an idiomatic Rust coding agent, single-agent by default, with optional cooperating workers and full TUI control. The architecture is a proposal supported by the [research record](docs/research.md). Runtime authoring, output/storage details, extension boundaries, and renderer choices remain explicitly prototype-gated.
+The product goal is established: an idiomatic Rust coding agent, single-agent by default, with optional cooperating workers and full TUI control. The architecture is a proposal supported by the [research record](docs/research.md). Runtime authoring now has initial prototype evidence; output/storage details, extension boundaries, production execution integration, and renderer choices remain prototype-gated.
 
 | Deliverable | State | Evidence |
 |---|---|---|
 | Product contract, architecture, interaction specification | Drafted | DESIGN.md and TERMINAL.md |
 | Primary-source review and decision register | Recorded | docs/research.md; pinned references where available |
-| Rust task/transaction prototype P1 | Not started in this workstream | No prototype or measurement claimed |
+| Rust task/transaction prototype P1 | In progress; isolated proof validated, production promotion open | [docs/p1-execution-prototype.md](docs/p1-execution-prototype.md); CI at `78148e84` |
 | Output/storage prototype P2 | Not started in this workstream | No benchmark claimed |
 | Extension/authority prototype P3 | Not started in this workstream | No new runtime tests claimed |
-| Multi-agent TUI prototype P4 | Not started in this workstream | No new PTY or human acceptance claimed |
-| Target architecture implemented | Not established | Current source predates this redesign; reuse is assessed per slice |
+| Multi-agent TUI prototype P4 | In progress only at early target/draft reducer level | P1 prototype checks stable command targets and per-agent drafts; no PTY or human acceptance claimed |
+| Target architecture implemented | Not established | Current production runtime predates this redesign; reuse is assessed per slice |
 
 The documentation baseline is Ion commit `fca3346d0fa7aae82ffb77d02234b2f9b0d2975e`. That commit already addresses revision-witnessed peer authority and reload fencing; do not reopen it as a missing feature merely because earlier reviews described it as unfinished. Its commit-recorded test results are historical evidence, not tests rerun for this documentation change.
 
 ## 1. Immediate work: P1 with an early P4 trace
 
-Next task: implement the smallest executable proof of the proposed task/transaction boundary. Read DESIGN.md sections 3–6 and the exact Pico/Goose references attached to P1. A standalone experiment is allowed; it must not become a permanent second production runtime.
+The first isolated P1 proof is validated and recorded in [docs/p1-execution-prototype.md](docs/p1-execution-prototype.md). It selects a typed re-entrant checkpoint/step boundary for durable task authoring, while retaining async Rust inside effect adapters. This is evidence for the production direction, not permission to maintain a second runtime.
 
-Use a scripted provider and an instrumented tool, not a paid provider. Demonstrate:
+Next task: promote those semantics into the existing production ownership boundaries and complete the remaining P1 fault cases. Read DESIGN.md sections 3–6 and the exact Pico/Goose references attached to P1. Delete the isolated storage fixture as equivalent invariants become covered by `SessionRuntime`/`SessionStore` tests.
+
+The production slice must continue to demonstrate:
 
 1. Accept input durably; lose the reply; retry its key and receive the original receipt. Changed content with the same key rejects.
 2. Run a turn with two tool calls whose completion order differs from source order.
@@ -30,11 +32,11 @@ Use a scripted provider and an instrumented tool, not a paid provider. Demonstra
 4. Wait for that worker without retaining the only execution permit it needs.
 5. Race task settlement against cancellation in both orders, including late output.
 6. Reopen after provider/tool intent, distinguish retry-safe and uncertain effects, and preserve input disposition.
-7. Feed the same trace to a minimal group/focused-agent view, demonstrating stable target IDs and separate drafts.
+7. Feed the same runtime observations to a minimal group/focused-agent view, demonstrating stable target IDs and separate drafts.
 
-Compare async task methods with typed checkpoint/settlement commands against a re-entrant step API only as needed to choose one. Record which method has fewer duplicated states, clearer resource ownership, and simpler recovery tests. Lines of code alone do not decide. Resolve ID allocation, immutable input encoding, invocation fencing, and the commit/storage-thread boundary before promoting the prototype.
+The prototype comparison favors the re-entrant typed checkpoint/step API because durable continuation and recovery remain explicit and runtime-owned. Do not keep the async candidate as a second task framework. Resolve the still-open production ID allocation, immutable input encoding, invocation fencing, commit/storage-thread boundary, and schema migration behavior before promoting the prototype.
 
-Exit: one recommended Rust API, an explicit schema/transaction sketch for this slice, passing deterministic tests, and a short evidence entry below. A failed hypothesis changes the design rather than becoming a hidden exception in the implementation.
+Exit: one production Rust API, an explicit schema/transaction model for this slice, passing deterministic core P1 tests against production components, and an updated evidence entry below. A failed hypothesis changes the design rather than becoming a hidden exception in the implementation.
 
 ## 2. Remaining architecture gates
 
@@ -85,8 +87,8 @@ Maintain this matrix as implementation progresses. 'Existing code' is not target
 
 | Capability family | Target gate | Current target evidence |
 |---|---|---|
-| Prompt, stream, tools, cancel, resume | M1 | Not assessed against the new target |
-| Root/worker identity and human control | M1, U2–U4, U11 | Not assessed |
+| Prompt, stream, tools, cancel, resume | M1 | Prototype evidence only; production path not yet validated against P1 |
+| Root/worker identity and human control | M1, U2–U4, U11 | Prototype retained-worker and target/draft evidence only |
 | Model/auth/input modality and context | M2 | Not assessed |
 | Skills, prompts, completion, editing, shell UX | M2 | Not assessed |
 | Queues, branch/fork, compaction, export/import policy | M2 | Not assessed |
@@ -126,8 +128,10 @@ Do not maintain permanent old/new production runtimes or duplicate transcript au
 
 Deferred until a concrete use case requires them: distributed writable sessions, multi-user remote hosting, arbitrary dynamic Rust ABI plugins, backend proliferation, and a mandatory workflow/planner framework. These do not block local group operation or a clean future transport/environment boundary.
 
-The next work item is P1 with a thin P4 trace. Do not resume old roadmap tasks by priority alone: reconcile them with this target and preserve already-fixed correctness behavior.
+The next work item is production promotion of P1 semantics with a thin P4 trace. Do not resume old roadmap tasks by priority alone: reconcile them with this target and preserve already-fixed correctness behavior.
 
 ## Evidence log
 
 2026-09-11: Target architecture, terminal interaction contract, reference ledger, and staged roadmap drafted. Documentation only. No runtime prototype, compiler gate, fault-injection run, performance result, or new terminal acceptance is claimed by this entry.
+
+2026-09-12: Initial isolated P1 execution prototype validated at `78148e84d6120d5670a784ec3ecb07684577db1d`. It demonstrates durable idempotent admission/reopen, out-of-order effect settlement with call-order projection, retained worker lifetime, capacity-safe waiting, cancellation/invocation fencing, stable early-P4 command targets/drafts, and abruptly killed subprocess recovery that distinguishes retry-safe from indeterminate effects. The repository Rust 1.98.0 gates passed (`fmt`, strict workspace `clippy`, locked workspace tests). The evidence favors a typed re-entrant checkpoint/step task boundary with async confined to effect execution. See [docs/p1-execution-prototype.md](docs/p1-execution-prototype.md). P1 remains open until equivalent semantics and the remaining core fault cases are validated against production runtime/storage; no PTY or human terminal acceptance is claimed.
