@@ -154,11 +154,11 @@ impl TaskKind for ExternalRecoveryKind {
                         attempts: attempts.len() as u32,
                     }))
                 }
-                RecoveryClass::NoSafeRetry => Ok(TerminalPlan::failed(
-                    ExternalFailure::Indeterminate {
+                RecoveryClass::NoSafeRetry => {
+                    Ok(TerminalPlan::failed(ExternalFailure::Indeterminate {
                         attempts: attempts.len() as u32,
-                    },
-                )),
+                    }))
+                }
             }
         })
     }
@@ -258,7 +258,8 @@ fn crash_after_dispatch(
 #[tokio::test]
 async fn retry_safe_recovery_records_prior_uncertain_attempt_and_retries() {
     let directory = tempdir().expect("tempdir");
-    let (store, task_id, witness) = crash_after_dispatch(directory.path(), RecoveryClass::RetrySafe);
+    let (store, task_id, witness) =
+        crash_after_dispatch(directory.path(), RecoveryClass::RetrySafe);
     let mut registry = TaskRegistry::default();
     registry.register(ExternalRecoveryKind);
 
@@ -288,7 +289,8 @@ async fn retry_safe_recovery_records_prior_uncertain_attempt_and_retries() {
 #[tokio::test]
 async fn reconcile_recovery_adopts_by_durable_external_key_without_repeating() {
     let directory = tempdir().expect("tempdir");
-    let (store, task_id, witness) = crash_after_dispatch(directory.path(), RecoveryClass::Reconcile);
+    let (store, task_id, witness) =
+        crash_after_dispatch(directory.path(), RecoveryClass::Reconcile);
     let mut registry = TaskRegistry::default();
     registry.register(ExternalRecoveryKind);
 
