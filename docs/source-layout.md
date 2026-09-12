@@ -1,52 +1,38 @@
 # Source layout for the clean rewrite
 
-Status: active implementation layout, 2026-09-12.
+Status: active implementation layout; K0-K2 implemented and K3 in progress, 2026-09-12.
 
 This document owns source/module organization for the clean rewrite described in `docs/core-runtime-migration.md`. It is subordinate to `DESIGN.md`: if the semantic architecture changes, this layout changes with it. File boundaries are not compatibility promises.
 
-The goal is to prevent the new architecture from collapsing back into a few giant modules. The old tree concentrated unrelated responsibilities into files such as `runtime/mod.rs`, `store/sql.rs`, `tui.rs`, and `main.rs`. Their GitHub-reported sizes are bytes, not line counts, but the concentration is still evidence that ownership boundaries were too broad.
+The goal is to prevent the new architecture from collapsing back into a few giant modules. The removed tree concentrated unrelated responsibilities into files such as `runtime/mod.rs`, `store/sql.rs`, `tui.rs`, and `main.rs`. The clean core deliberately keeps semantic ownership narrow.
 
-Current Pico is useful evidence in the opposite direction: its clean-room foundation is split into narrow modules for entries, tasks, runtime capabilities, addresses and the core, rather than one monolithic harness file. Codex remains useful production evidence but also demonstrates that mature Rust code can still accumulate very large files if boundaries are not actively maintained. Ion should keep the small-kernel discipline deliberately.
-
-## 1. Workspace rule
+## 1. Current workspace
 
 Do not create a crate merely because a diagram can name one. Split crates only for a stable dependency/lifecycle boundary.
 
-Leading staged workspace:
+The active workspace is now:
 
 ```text
 crates/
-  ion-core/       durable agent/session kernel
+  ion-ai/         provider-neutral model contract + scripted service
+  ion-core/       durable session/conversation/task kernel
   ion-terminal/   low-level terminal primitives; independently reviewed later
-  ion/            application shell; old implementation is removed/rebuilt after core cutover
-
-  # introduced by R0.5 if the boundary holds
-  ion-ai/         provider-neutral model API first; providers/auth/catalog later
 ```
+
+The old application crate is intentionally absent. Reintroduce `crates/ion/` only when a genuinely useful shell can be built on the new command/view/store boundaries. Do not restore it as a compatibility bridge to removed runtime APIs.
 
 Potential later crates such as a protocol/server package or a separate execution-environment package require an accepted product boundary first. Do not pre-create them for symmetry.
 
-### Clean-rewrite cutover
+## 2. `ion-core` current and target tree
 
-After R0.1-R0.5 settle:
-
-- replace `ion-core` directly;
-- do not keep legacy and target runtime modules side by side;
-- remove old `ion` application code that only exists to drive the deleted runtime, or temporarily remove the app crate from the workspace until a minimal new shell is useful;
-- keep `ion-terminal` only insofar as it remains independently valid and compiling;
-- keep old behavior in Git history and in ported regression scenarios, not in compatibility adapters.
-
-A green workspace is still required. It is acceptable for the user-facing binary to be temporarily absent or minimal while the core is reconstructed.
-
-## 2. `ion-core` target tree
-
-Start with this shape after R0, adding modules only when the behavior exists:
+Create modules only when real behavior belongs there. Current implementation has already landed the core K1-K3 files; later entries below remain targets.
 
 ```text
 crates/ion-core/
   src/
     lib.rs
     id.rs
+    artifact.rs
 
     conversation/
       mod.rs
@@ -60,32 +46,34 @@ crates/ion-core/
 
     task/
       mod.rs
+      invocation.rs
+      record.rs
+      output.rs
       kind.rs
       context.rs
-      output.rs
-      phase.rs          # optional authoring helper, not another scheduler
       registry.rs
+      # phase.rs only if a typed authoring helper proves useful
 
     session/
       mod.rs
-      handle.rs
       owner.rs
       command.rs
       transaction.rs
       scheduler.rs
-      cancellation.rs
-      recovery.rs
-      lifecycle.rs
+      # add focused modules below when behavior is large enough:
+      # handle.rs
+      # cancellation.rs
+      # recovery.rs
+      # lifecycle.rs
 
     view/
       mod.rs
-      snapshot.rs
-      event.rs
-      watch.rs
+      # current snapshot/event/watch types may split as they grow
 
     store/
       mod.rs
-      memory.rs         # deterministic tests/prototypes; not a second product backend
+      memory.rs
+      # K4:
       sqlite/
         mod.rs
         connection.rs
@@ -97,31 +85,23 @@ crates/ion-core/
         task.rs
         artifact.rs
 
+    # K5+:
     builtin/
       mod.rs
       generation.rs
       tool.rs
       post_tools.rs
-      # collapse.rs / job.rs only when implemented
-
-    artifact.rs
 
   tests/
-    admission.rs
-    task_recovery.rs
-    cancellation.rs
-    context_forks.rs
-    workers.rs
-    sqlite_recovery.rs
+    k1_domain.rs
+    k2_session.rs
+    k3_driver.rs
+    # later focused recovery/sqlite/worker suites
     support/
-      mod.rs
-      model.rs
-      store.rs
-      clock.rs
-      crash.rs
+      # only when reusable deterministic fakes/fault injection are needed
 ```
 
-This is a target organization, not a request to create empty files. Create a module when the first real behavior belongs there.
+This is not a request to create empty files. The current `session/owner.rs`, `session/transaction.rs`, and `session/scheduler.rs` are still within reviewable size, but should split by semantic owner as K4/K5 behavior lands rather than growing into new catch-all modules.
 
 ## 3. Module ownership
 
@@ -129,7 +109,7 @@ This is a target organization, not a request to create empty files. Create a mod
 
 Only semantic identifiers and sequence/cursor types selected by R0.4.
 
-No database helpers, display policy beyond stable formatting, or runtime registries.
+No database helpers, runtime registries, or unrelated display policy.
 
 ### `conversation/`
 
@@ -143,39 +123,42 @@ Owns durable agent-thread semantics:
 
 It does **not** schedule tasks, execute models/tools, access SQLite directly, or own UI state.
 
-`conversation/context/` is intentionally pure. Given durable entries plus a cutoff it derives the effective provider-neutral context. It must not perform provider I/O or mutate canonical state.
+`conversation/context/` is intentionally pure. Given durable entries plus a cutoff it derives effective provider-neutral context. It must not perform provider I/O or mutate canonical state.
 
 ### `task/`
 
 Owns the generic durable work contract:
 
 - task record/status/outcome/checkpoint shape;
-- `TaskKind` trait;
-- invocation-scoped task capabilities exposed by `TaskContext`;
+- invocation kind/generation metadata;
+- `TaskKind` async execute/recover/abort contract;
+- invocation-scoped `TaskContext` and restricted `AbortContext`;
 - output/scratch contract;
-- optional typed phase helper;
-- task-kind registry contract.
+- task-kind registry.
 
-It does **not** contain the session scheduler. A task kind describes one recoverable operation; the session owner decides when an eligible task is invoked.
+It does **not** own session scheduling or persistence. A task kind describes one recoverable operation; the session driver decides when an eligible task is invoked.
 
-The optional `phase` helper must compile to the ordinary task contract. It cannot introduce another lifecycle, scheduler or persistence model.
+An optional phase helper may make complex typed checkpoints easier to author. It must compile to the ordinary task contract and cannot introduce another scheduler, lifecycle or persistence model.
 
 ### `session/`
 
-Owns canonical session mutation and scheduling.
+Owns canonical session mutation and task driving.
 
-- `handle.rs`: small public/client-facing session handle and command methods;
-- `owner.rs`: the one serialized semantic mutation owner and its run loop;
-- `command.rs`: typed command/receipt vocabulary;
-- `transaction.rs`: bounded semantic mutation builder and invariant validation;
-- `scheduler.rs`: readiness, dependencies, invocation reservation and capacity;
-- `cancellation.rs`: durable cancellation marks/fencing and scope rules;
+Current split:
+
+- `owner.rs`: resident session owner, public mutation methods, snapshots and bounded observations;
+- `command.rs`: typed command/receipt/error vocabulary;
+- `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
+- `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership and cancellation signaling.
+
+As behavior grows, split by real ownership:
+
+- `handle.rs`: small client-facing command handle once a separate owner loop/channel exists;
+- `cancellation.rs`: scope/barrier behavior when cancellation exceeds scheduler-local logic;
 - `recovery.rs`: reopen classification and explicit resume/drive decisions;
 - `lifecycle.rs`: open/close/fault/ownership transitions.
 
-`session/mod.rs` is wiring/re-exports, not an implementation dump.
-
-There is no `runtime.rs` catch-all module.
+`session/mod.rs` remains wiring/re-exports. There is no `runtime.rs` catch-all module.
 
 ### `view/`
 
@@ -183,7 +166,7 @@ Owns bounded client projections, not canonical execution state:
 
 - snapshots;
 - committed events;
-- watch/subscription cursors and overflow/reset semantics.
+- observation/watch cursors and overflow/reset semantics.
 
 TUI-specific focus, drafts, layout and rendering stay outside `ion-core`.
 
@@ -191,16 +174,32 @@ TUI-specific focus, drafts, layout and rendering stay outside `ion-core`.
 
 Owns persistence only.
 
-`store/mod.rs` exposes one crate-private semantic store interface used by the session owner. It is deliberately narrower than a generic database framework.
+The K2 `MemoryStore` intentionally combines resident state and commit application because it is the smallest deterministic proof. K4 should separate resident semantic state from durable persistence so SQLite does not become the semantic mutation owner.
 
-`memory.rs` exists only to make deterministic kernel tests cheap. It is not a promise of interchangeable production storage backends.
+Preferred K4 dependency shape:
 
-`store/sqlite/` owns all SQLite details. No other module imports `rusqlite`/raw SQL or holds a SQLite connection.
+```text
+Session owner
+  resident SessionState
+  transaction builder
+  observations
+  persistence store
+
+commit
+  build/validate against resident state
+  -> durable store commit
+  -> resident apply/index update
+  -> observation publish
+```
+
+Keep the store interface crate-private and narrow. It is not a promise of interchangeable public database backends.
+
+`store/sqlite/` owns all SQLite details. No other module imports `rusqlite`, raw SQL, or holds a SQLite connection.
 
 - `schema.rs`: schema/version/DDL only;
-- `connection.rs`: connection pragmas/open/close/transaction setup;
+- `connection.rs`: open policy, pragmas, transactions, ownership/lock setup;
 - `commit.rs`: application of one atomic semantic mutation batch;
-- per-record modules: focused point/range reads and persistence helpers for that record family;
+- per-record modules: focused point/range reads and persistence helpers;
 - `artifact.rs`: publication/reference metadata integration, not arbitrary filesystem tools.
 
 Do not create one giant `sql.rs` or `queries.rs` file.
@@ -209,7 +208,7 @@ Do not create one giant `sql.rs` or `queries.rs` file.
 
 Owns built-in task kinds, not kernel special cases.
 
-Initial built-ins:
+Initial K5 built-ins:
 
 - generation;
 - tool execution wrapper;
@@ -217,7 +216,7 @@ Initial built-ins:
 
 The generic scheduler must not branch on these names. If a built-in needs specialized behavior, it uses the same task capabilities available to an appropriate registered kind.
 
-Worker creation is primarily conversation ownership/admission mediated by a tool/task capability, not a separate swarm runtime.
+Worker creation is primarily conversation ownership/admission mediated by a trusted task/tool capability, not a separate swarm runtime.
 
 ### `artifact.rs`
 
@@ -228,7 +227,7 @@ Owns core artifact identity/reference/integrity semantics. Large-output file mec
 Keep dependencies one-way enough that a module can be understood without the entire application.
 
 ```text
-ion-ai contract (if R0.5 accepts it)
+ion-ai contract
         |
         v
 conversation records/context       task contract
@@ -247,69 +246,28 @@ view projections ------> committed core records
 
 More precisely:
 
-- model/provider code must never import `SessionId`, `TaskId`, store commands or SQLite types;
-- `conversation/context` must be pure and side-effect free;
-- `task` contracts must not import the concrete session owner;
-- `store` must not call models, tools, processes or UI;
-- `builtin` task kinds must not execute SQL directly;
-- session scheduling must not parse provider wire formats;
-- terminal/client code must not mutate canonical state except through session commands;
+- model/provider code never imports `SessionId`, `TaskId`, store commands or SQLite types;
+- `conversation/context` stays pure and side-effect free;
+- `task` contracts do not import the concrete session owner;
+- `store` never calls models, tools, processes or UI;
+- built-in task kinds never execute SQL directly;
+- session scheduling never parses provider wire formats;
+- terminal/client code mutates canonical state only through session commands/handles;
 - provider/environment callbacks cannot directly publish canonical session events.
 
 When a proposed dependency violates these directions, treat that as a design smell before adding an abstraction to hide it.
 
-## 5. `ion-ai` leading layout after R0.5
+## 5. `ion-ai`
 
-If R0.5 confirms a clean model boundary, make it a small independent crate immediately rather than rebuilding provider knowledge inside `ion-core` or the binary crate.
+`ion-ai` is an implemented small independent crate, not a future placeholder. Its current job is the provider-neutral contract and scripted deterministic service. It contains no production HTTP provider catalogue yet.
 
-Initial contract-only tree:
-
-```text
-crates/ion-ai/src/
-  lib.rs
-  model.rs
-  message.rs
-  content.rs
-  tool.rs
-  request.rs
-  response.rs
-  usage.rs
-  error.rs
-  service.rs
-  scripted.rs
-```
-
-The first version contains no production HTTP provider catalog. `scripted.rs` exists for deterministic agent tests.
-
-Later provider/auth pass may add:
+Later provider/auth work may add logical areas such as:
 
 ```text
-  auth/
-    mod.rs
-    credential.rs
-    store.rs
-    oauth.rs
-
-  catalog/
-    mod.rs
-    model.rs
-    cache.rs
-
-  provider/
-    mod.rs
-    registry.rs
-    openai.rs
-    anthropic.rs
-    openrouter.rs
-    local.rs
-    ...
-
-  api/
-    openai_responses/
-    openai_compatible/
-    anthropic_messages/
-    google/
-    ...
+auth/
+catalog/
+provider/
+api/
 ```
 
 Provider and API are separate concepts:
@@ -319,13 +277,13 @@ Provider and API are separate concepts:
 
 Several providers may reuse one API adapter. The model service exposes typed normalized failures; durable retry policy remains in generation-task logic.
 
-If an API adapter grows large, split by `request`, `stream`, `types` and `error` rather than making one provider file responsible for all four.
+If an API adapter grows large, split by request/stream/types/error rather than making one provider file responsible for all four.
 
-## 6. Application/TUI layout after the core boundary stabilizes
+## 6. Future application/TUI layout
 
-Do not port the current giant `tui.rs` in place. Rebuild the application as a client of the command/view API.
+Do not port the removed giant TUI application in place. Rebuild the application as a client of the command/view API after the core boundary stabilizes.
 
-Likely application organization:
+Likely shape:
 
 ```text
 crates/ion/src/
@@ -342,22 +300,12 @@ crates/ion/src/
     reducer.rs
     input.rs
     render/
-      mod.rs
-      transcript.rs
-      group.rs
-      composer.rs
-      status.rs
-      approvals.rs
     overlay/
-      mod.rs
-      model.rs
-      settings.rs
-      help.rs
   acp/                 # only after protocol pass
   export/              # only after format pass
 ```
 
-`main.rs` should never become an application state machine. It constructs services, dispatches the requested frontend and handles process-level exit/error reporting.
+`main.rs` must not become an application state machine. It constructs services, dispatches the requested frontend and handles process-level exit/error reporting.
 
 `ion-terminal` remains a low-level terminal/editor/renderer dependency. It must not know about conversations, tasks or model providers.
 
@@ -375,20 +323,18 @@ For hand-written Rust source:
 
 Tests count toward maintainability too. Prefer scenario-focused integration-test files instead of one omnibus regression file.
 
-Once the fresh core replaces the old one, add a lightweight CI/source-size check that reports files crossing the review threshold. Do not make the current legacy files satisfy the new threshold before they are deleted.
+The legacy large files are gone. Add a lightweight CI/source-size report only when it becomes useful; do not turn line-count thresholds into an architecture substitute.
 
 ## 8. Naming rules
 
 Prefer names that reveal semantic ownership:
 
-Good:
-
 ```text
 session/owner.rs
-session/cancellation.rs
+session/scheduler.rs
 conversation/context/projection.rs
 store/sqlite/commit.rs
-task/phase.rs
+task/registry.rs
 ```
 
 Avoid generic buckets:
@@ -407,7 +353,7 @@ state.rs      # unless the module really owns one explicit state object
 
 ## 9. Test organization
 
-Port old tests by invariant, not by old module name.
+Port historical tests by invariant, not by old module name.
 
 Examples:
 
@@ -416,9 +362,9 @@ Examples:
 - effect crash tests become task-recovery tests;
 - family/subagent tests become owned-conversation/worker tests.
 
-Use `tests/support/` for deterministic fakes and fault injection only. Test support must not become another runtime implementation.
+Use `tests/support/` for deterministic fakes and fault injection only when several focused suites need them. Test support must not become another runtime implementation.
 
-Keep process-death tests as actual subprocess termination. Keep storage barriers, controlled clocks and scripted model/environment services reusable across focused tests.
+Keep process-death tests as actual subprocess termination once K4 persistence exists. Keep storage barriers, controlled clocks and scripted model/environment services reusable across focused tests.
 
 ## 10. Reference posture
 
