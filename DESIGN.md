@@ -1,51 +1,44 @@
 # Ion design
 
-Status: proposed target architecture, revision 5, 2026-09-12 (America/Los_Angeles).
+Status: accepted target architecture, revision 6, 2026-09-12 (America/Los_Angeles).
 
-This document defines the core agent/runtime Ion should become. It is not a compatibility contract with the current implementation. The project is pre-1.0; when evidence disproves an internal design, change the design and implementation rather than preserving unfinished abstractions.
+This document defines the core agent/runtime Ion should become. It is not a description of the legacy implementation and not a compatibility contract with it. The project is pre-1.0; if production evidence disproves an internal design, change the design rather than preserving unfinished abstractions.
 
-Current Pico/Pi 2 work is the primary minimal-harness design reference. Codex is a primary production-engineering reference when its public implementation answers a concrete question. Other agents are mechanism-specific evidence, not baselines to copy.
+R0.1–R0.5 were validated together at `81c344d713f13b73e19232b4ad36dfe40ba663b9` in CI run `34718467220`. [R0 kernel gates](docs/r0-kernel-gates-2026-09-12.md) records the evidence. [ROADMAP.md](ROADMAP.md) owns work order, [docs/core-runtime-migration.md](docs/core-runtime-migration.md) owns the clean cutover, [docs/source-layout.md](docs/source-layout.md) owns module organization, and [TERMINAL.md](TERMINAL.md) owns interaction requirements.
 
-[TERMINAL.md](TERMINAL.md) owns interaction requirements. [ROADMAP.md](ROADMAP.md) owns validation gates. [Agent topology research](docs/research/agent-topology-context-2026-09-12.md), [storage research](docs/research/storage-engines-2026-09-12.md), and [Pico/core/AI review](docs/research/pico-core-and-ai-boundaries-2026-09-12.md) record the evidence behind this revision.
+Current Pico/Pi 2 remains a useful minimal-harness reference and Codex a useful production-engineering reference. Neither is an API or compatibility target.
 
-The scope is deliberately narrow: **sessions, conversations, immutable history/context controls, durable tasks, inputs, workers, external execution/recovery, authority and clients**. Long-term memory/knowledge stores, shared task boards, vector stores, planner layers and similar higher-level systems are outside the core.
+The core scope is deliberately narrow: **sessions, conversations, immutable history/context controls, durable tasks, inputs, workers, external execution/recovery, authority, persistence and clients**. Long-term memory/knowledge stores, shared task boards, vector stores, planner layers and similar higher-level systems are outside the core.
 
 ## 1. Product contract
 
-Ion is a provider-neutral Rust coding agent with a first-class terminal interface. It runs one primary conversation by default. Optional multi-agent mode lets the user and model create, observe, steer and control cooperating worker conversations through the same runtime.
+Ion is a provider-neutral Rust coding agent with a first-class terminal interface. It runs one primary conversation by default. Optional multi-agent mode lets the user or model create, observe, steer and control cooperating worker conversations through the same runtime.
 
 Root and workers use the same durable schema and task machinery. Researcher, reviewer, implementer and similar labels are configuration/instruction choices, not runtime subclasses.
 
 Single-agent use must not pay a hidden multi-agent prompt/tool tax. Multi-agent controls are exposed only when enabled.
 
-The core must support:
-
-- streaming model turns, tools, files, shell/process work, images where supported, model changes, approvals and compaction;
-- durable acceptance, crash recovery, cancellation and uncertain external effects;
-- fresh or history-inheriting workers, foreground/joined or retained/background lifetime, messages and results;
-- local macOS/Linux operation with no mandatory cloud daemon/account/telemetry service;
-- local models as ordinary provider choices;
-- one semantic command/observation contract for Rust/headless/TUI/JSON/ACP clients.
+The eventual product must support streaming model turns, tools/files/process work, images where supported, model changes, approvals and compaction; durable acceptance, crash recovery, cancellation and uncertain external actions; fresh or history-inheriting workers with joined or retained lifetime; local macOS/Linux operation with no mandatory cloud daemon/account/telemetry service; local models as ordinary provider choices; and one semantic command/observation contract for Rust/headless/TUI/JSON/ACP clients.
 
 The runtime does not mandate planning, reflection, voting, a task board, a memory system or a swarm policy.
 
 ## 2. Minimal durable domain
 
-The target canonical nouns are:
+The canonical nouns are:
 
 | Concept | Meaning |
 |---|---|
 | Session | Durable consistency, ownership and transaction boundary containing one primary conversation and related workers/branches. |
 | Conversation | Durable agent thread: immutable transcript plus context controls, configuration/authority/workspace state, optional history parent and optional execution owner. |
-| Entry | Immutable semantic transcript record with optional materialized model projection/context controls. |
-| Input | Admitted user/agent input with target, mode, request key and disposition. |
+| Entry | Immutable semantic transcript record with optional provider-neutral model projection/context controls. |
+| Input | Admitted user/agent/host input with target, sender, mode, request identity and disposition. |
 | Task | One recoverable async operation with immutable input, typed checkpoint, dependencies, ownership edges, invocation generation and terminal outcome. |
-| Task output | Durable/bounded result or progress state owned by a task; large opaque data may reference an artifact. |
+| Task output | Durable bounded task result/scratch/progress state; large opaque data may reference an artifact. |
 | Artifact | Retained externalized content/evidence with integrity metadata. |
 
-There is **no separate durable Agent object initially**. A worker is an owned `Conversation`. Public APIs may call a handle `AgentHandle` or `WorkerHandle`, but the durable identity is the conversation ID.
+There is **no separate durable Agent object**. A worker is an owned `Conversation`. Public APIs may use `WorkerHandle`/`AgentHandle` terminology, but durable identity is the conversation ID.
 
-There is also **no generic durable Effect object initially**. The new task model makes a generation request, tool call, job launch and similar external action their own recoverable task. A separate effect entity must earn its existence in a production prototype rather than survive from the old operation model.
+There is **no generic durable Effect object**. Generation requests, tool calls, jobs and similar external operations are recoverable tasks or child tasks. R0.3 found no independent generic effect identity/lifetime worth preserving.
 
 ## 3. Relationships are separate graphs
 
@@ -59,81 +52,78 @@ workspace binding:   Conversation/Task --binds--> Workspace
 communication:       Input(sender,target)
 ```
 
-A conversation can have both a history parent and an owner. Those relationships are independent.
+History controls inherited transcript/context. Ownership controls provenance/control scope. Task dependencies control readiness. Workspace binding controls external-state visibility/mutation. Messaging carries explicit sender/target identity.
 
-- history controls inherited transcript/context;
-- ownership controls execution/control provenance and scope;
-- task dependencies control readiness;
-- workspace binding controls external state visibility/mutation;
-- messaging carries explicit sender/target identity.
-
-A history fork grants no cancellation or authority rights. Workspace sharing grants neither supervision nor history inheritance.
-
-A task-created conversation records reciprocal ownership in the same atomic creation transaction. The task may later become terminal; the ownership/provenance edge remains so a retained worker stays addressable.
+A history fork grants no cancellation/authority rights. Workspace sharing grants neither supervision nor history inheritance. A task-created conversation records reciprocal ownership atomically; the creating task may later become terminal while a retained worker remains addressable.
 
 ## 4. Session is the consistency boundary
 
-A session is intentionally larger than one conversation. Root and cooperating workers stay in one session because ordinary operations may require atomic invariants across them:
+A session is intentionally larger than one conversation. Root and cooperating workers stay in one session because ordinary operations may require atomic invariants across them: child conversation + initial task creation, messaging/input admission, task dependencies/successors, cancellation barriers, ownership transitions, authority narrowing, usage/budget/resource accounting, workspace-conflict metadata and observation publication.
 
-- child conversation + initial input/task creation;
-- messaging/input admission;
-- task dependency/successor creation;
-- cancellation barriers and ownership transitions;
-- authority narrowing;
-- usage/budget/resource accounting;
-- workspace ownership/conflict metadata;
-- observation publication.
+Do not use one canonical database per worker. Clean model context is not a reason for another session.
 
-Do not use one canonical database per worker. That would turn common same-group operations into cross-database protocols.
-
-Use a separate top-level session only when the consistency/lifecycle domain is actually independent: a separate user goal/project, security/credential boundary, independently archived/deleted workspace, or future remote ownership domain. Clean model context alone is not a reason for another session.
+Use another top-level session when consistency/lifecycle is genuinely independent: another user goal/project, security/credential boundary, independently archived/deleted workspace, or future independent remote ownership domain.
 
 ## 5. One semantic writer per session
 
-One loaded session has one authoritative mutation line. External work is concurrent; canonical writes are serialized.
+One loaded session has one authoritative mutation line. External work may be concurrent; canonical writes are serialized.
 
 ```text
-caller/tool/model completion
-          |
-          v
-   session command line
-          |
-   validate/read/build
-          |
-     short DB commit
-          |
-  publish + dispatch outside line
+caller / task completion / external result
+                  |
+                  v
+          session command line
+                  |
+          validate/read/build
+                  |
+            short commit
+                  |
+         publish + dispatch
+          outside the line
 ```
 
 No model request, HTTP call, subprocess, filesystem operation, timer, user interaction or plugin callback runs while holding session mutation authority or a database write transaction.
-
-The host owns an exclusive cross-process writable-session lock and releases it last during close. A PID file, heartbeat or stale timestamp is not ownership.
 
 A command:
 
 1. validates lifecycle, authority, request identity and relevant revision;
 2. reads required committed state;
 3. builds a bounded typed mutation batch;
-4. validates cross-record invariants including earlier mutations in that batch;
+4. validates cross-record invariants including earlier mutations in the same batch;
 5. commits all-or-nothing;
-6. publishes the committed observation;
-7. dispatches admitted external work after the line is released.
+6. publishes committed observations;
+7. dispatches admitted external work only after mutation authority is released.
 
-A persistence result that is uncertain fences the session handle. Reopen and recover durable state; do not guess whether work committed.
+A persistence result that is uncertain fences the writable session handle. Reopen and recover durable state; never guess whether a batch committed.
+
+The host owns an exclusive cross-process writable-session lock and releases it last during close. PID/heartbeat/stale-timestamp heuristics are not ownership.
 
 ## 6. Identity and ordering
 
-`SessionId` is globally unique. Other durable IDs are session-scoped typed identities.
+`SessionId` is globally unique. All other durable IDs are session-scoped typed identities backed privately by one monotonic `LocalSeq` namespace per session store.
 
-The exact physical representation remains prototype-gated. Compact session-local integers are attractive with a per-session store; UUID-style IDs avoid allocator coupling. A single session mutation sequence that can also mint object IDs, as current Pico explores, is a valid candidate and should be compared against separate object IDs plus `CommitSeq`.
+Conceptually:
 
-Public behavior must not depend on the representation.
+```text
+ConversationId(LocalSeq)
+EntryId(LocalSeq)
+InputId(LocalSeq)
+TaskId(LocalSeq)
+ArtifactId(LocalSeq)
+CommitSeq(LocalSeq)
+```
 
-New identities cannot escape to callers or external services until their creating transaction is durable.
+These Rust types are not interchangeable. Sharing one physical ordered namespace does not make identity kinds equivalent.
+
+Within one atomic batch, the writer may reserve successive `LocalSeq` values for several new cross-referencing objects and then a later value for the batch's `CommitSeq`. Mutation-only commits still obtain a commit value. A rejected transaction publishes and consumes no durable sequence values.
+
+The ordering provides compact SQLite INTEGER keys, stable historical entry cutoffs and one authoritative local clock. Public behavior must not depend on numeric adjacency or assume an ID equals its commit cursor.
+
+New identities cannot escape to callers or external services until their creating transaction is durable. Cross-session references, when required, use `(SessionId, typed local ID)`.
 
 ## 7. Immutable transcript and derived context
 
-Canonical history is append-only. Do not persist a mutable vector of provider payloads and do not require a separately mutable canonical context list.
+Canonical history is append-only. Do not persist a mutable vector of provider payloads or a separately mutable canonical context list.
 
 An entry has stable identity/kind and may materialize generic facets:
 
@@ -150,144 +140,115 @@ Context for a request is derived from the conversation's fork-visible immutable 
 2. find the newest visible context head;
 3. read the visible range from that boundary;
 4. fold constrained context edits in transcript order;
-5. concatenate stored provider-neutral projections;
-6. normalize complete tool exchanges for the selected model/provider.
+5. concatenate provider-neutral projections;
+6. normalize complete tool exchanges for the chosen provider/model.
 
-A disposable in-memory cache may accelerate the current conversation. It is never a second source of truth.
+A disposable in-memory cache may accelerate current context construction. It is never a second source of truth.
 
 ### Compaction, handoff and reset
 
-Compaction appends a summary with a new context head. Handoff appends a model-visible new head. Reset appends a head that contributes no model message. Old entries remain queryable.
+Compaction appends a summary entry with a new head. Handoff appends a model-visible new head. Reset appends a head that contributes no model message. Old entries remain queryable.
 
-Context edits may omit or replace earlier model projections where required, but the public/control vocabulary stays constrained. Do not expose arbitrary reordering that can create impossible provider histories.
+Context edits may omit or replace earlier projections, but the vocabulary stays constrained. Do not expose arbitrary reordering capable of creating impossible provider histories.
 
-P2 measures cold context construction across long histories, dense edits and deep forks before choosing indexes/caches or claiming a complexity bound.
+A context head used as a retained boundary must land on a complete tool exchange. P2 measures cold construction across long histories, dense edits and deep forks before selecting indexes/caches or claiming complexity bounds.
 
 ### Historical forks
 
-A fork creates a new conversation with a history parent and stable cutoff. Source entries are shared logically, not copied. Later source changes are invisible and source tasks are never inherited.
+A fork creates a conversation with a history parent and immutable source cutoff. Source entries are shared logically, not copied. Later source appends are invisible and source tasks are never inherited.
 
-For initial worker creation, inherited context should select a safe complete exchange boundary. Arbitrary historical/user forks may later support incomplete-exchange request-local repair if that proves useful; the core does not need to fabricate successful results or inherit source tasks.
+Initial inherited workers use a complete exchange cutoff. Arbitrary historical incomplete-exchange repair may be added later only if it justifies its semantics; the core never fabricates successful tool results merely to make a fork valid.
 
-Configuration, authority and workspace inheritance are chosen separately from history inheritance.
+Configuration, authority and workspace inheritance are chosen independently from history inheritance.
 
 ## 8. Durable task model
 
 A task is one logical recoverable async operation.
 
-Generic status is deliberately small:
+Generic lifecycle stays small:
 
 ```text
 pending -> running -> terminal
 ```
 
-A durable abort/cancel mark can coexist with `running` while the old invocation is being joined and a fresh abort invocation is prepared.
+A durable cancellation/abort mark may coexist with `running` while the old invocation is joining and a fresh abort invocation is prepared.
 
-Terminal outcomes distinguish at least:
+Terminal outcomes distinguish at least completed, failed, aborted/cancelled and indeterminate, plus orphaned/unsupported when missing task implementation policy requires it.
 
-```text
-completed
-failed
-aborted/cancelled
-indeterminate
-orphaned/unsupported when required by missing implementation policy
-```
+A task records kind/schema revision, owning conversation, immutable typed input, optional complete typed checkpoint, fixed dependencies, owned child conversations, required foreground/background metadata, durable cancellation state, invocation generation/fencing metadata, bounded output reference and terminal outcome.
 
-A task records:
+### One authoring contract
 
-- kind + schema revision;
-- owning conversation;
-- immutable typed input;
-- optional complete typed checkpoint;
-- fixed dependencies (`after`);
-- owned child conversations;
-- foreground/turn/background metadata where required;
-- durable abort mark;
-- invocation generation/fencing metadata;
-- task output reference when the kind exposes one;
-- terminal outcome.
-
-### Authoring contract
-
-The kernel exposes one task framework:
+The kernel exposes one typed task framework:
 
 ```text
-execute(running_task, runtime, call) -> terminal closure/plan
-recover(running_task, runtime, call) -> terminal closure/plan
-abort(running_task, restricted_runtime, call) -> abort closure/plan
+TaskKind
+  Input
+  Checkpoint
+  Completed
+  Failure
+  Aborted
+
+  async execute(...)
+  async recover(...)
+  async abort(...)
 ```
 
-The methods are ordinary async Rust. Their stack is **not** durable state. A process loss discards the future; the replacement invocation enters `recover` with immutable input plus the last durable checkpoint/output.
+Async Rust stack state is process-local and **not durable continuation**. Process loss discards the future; replacement execution enters `recover` with immutable input plus the latest durable checkpoint/output.
 
-While running, trusted task code may make controlled durable commits through its `TaskContext`:
+Trusted task code receives an invocation-scoped `TaskContext`. Its durable commit path can replace the complete checkpoint and perform narrowly authorized canonical writes. Every commit revalidates task identity, invocation generation and cancellation authority on the session writer.
 
-- replace the complete checkpoint;
-- create child tasks/conversations under capability rules;
-- append authorized transcript entries for turn tasks;
-- update bounded task-scoped scratch/output;
-- read/wait/cancel only targets allowed by ownership/dependency scope.
+The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically.
 
-Every commit revalidates task identity, invocation generation and cancellation authority on the session writer.
+### Optional phase helper
 
-The returned terminal closure/plan executes on the mutation line and atomically stores terminal outcome, final writes, successors/ownership changes and scratch retirement.
+Complex task kinds may use a typed checkpoint/phase helper for exhaustive dispatch. It compiles to the ordinary task contract and introduces no second scheduler, lifecycle or persistence framework.
 
-### Optional phased authoring helper
+## 9. External actions and recovery
 
-Complex task kinds may use a typed phase/checkpoint helper that performs exhaustive dispatch over checkpoint variants. It compiles to the ordinary task trait and adds **no second scheduler/lifecycle model**.
+Task state is the recovery boundary. Before a repeat-sensitive external action, the task durably records enough checkpoint/attempt information to classify recovery.
 
-This supersedes P1's earlier conclusion that every production task must expose a mandatory re-entrant `step -> plan` API. P1's crash/race evidence remains valid; the stricter authoring surface is no longer assumed optimal.
-
-## 9. External effects and recovery
-
-There is no generic effect gate by default. The task is the logical recoverable operation.
-
-Before a repeat-sensitive external action, the task durably records enough checkpoint state to classify/recover that action. Examples:
-
-- provider/model request: exact model/request identity, attempt and any provider reconciliation handle;
-- shell/process spawn: prepared command/environment and durable external/process identity when one exists;
-- remote tool call: request/idempotency identity or explicit no-safe-retry classification.
-
-Task kinds define recovery semantics for each nonterminal checkpoint phase:
+Representative states include prepared/not-dispatched, dispatched retry-safe attempt, dispatched reconcile/adopt handle, and dispatched no-safe-retry operation.
 
 | Recovery class | Behavior |
 |---|---|
-| Retry-safe | execute another attempt; retain prior possible usage/cost. |
-| Reconcile/adopt | query the durable external identity and adopt its state/result. |
-| No safe retry | settle/park as indeterminate until explicitly resolved or abandoned. |
+| Retry-safe | record the uncertain prior attempt and perform another attempt. |
+| Reconcile/adopt | query/use durable external identity or evidence and adopt state/result without repeating. |
+| No safe retry | settle/park indeterminate rather than guessing or duplicating the action. |
 
-Attempt history/usage may use a ledger keyed by task + attempt. That is not a second effect lifecycle.
+Attempt/usage evidence may be a task-scoped ledger. It is not another generic effect lifecycle.
 
-If a task genuinely performs several independent repeat-sensitive operations, prefer child tasks. Otherwise it must checkpoint every uncertain boundary. Introduce a first-class `EffectId` only if a concrete case proves task identity is insufficient.
+If one logical task would perform several independent repeat-sensitive operations, prefer child tasks. Otherwise its checkpoint must encode every uncertain boundary. Add a first-class effect entity only if a future concrete operation demonstrates an independent identity/lifetime the task model cannot represent cleanly.
 
-Opening or inspecting a session starts no work. Explicit drive/resume claims pending/recoverable tasks.
+Opening or inspecting a session starts no work. Drive/resume is explicit.
 
 ## 10. Turns and tools
 
-The default coding turn is still:
+The default coding turn is composed from ordinary tasks:
 
 ```text
 input
-  -> generation task
+  -> generation
       -> tool task(s)
-          -> post-tools/join task
+          -> post-tools/join
               -> next generation or final answer
 ```
 
-One generation settlement atomically appends its successful assistant result and creates every required tool task plus the join/continuation before becoming terminal.
+A generation settlement atomically appends its successful assistant entry and creates every required tool child plus the join/continuation before becoming terminal.
 
-Tool tasks can finish in any order. Transcript chronology records completion order; model projection restores tool-result order to the originating assistant call order.
+Tool tasks may finish in any order. Transcript chronology records completion order; model projection restores tool-result order to the originating assistant call order.
 
-Independent read-only tools may run concurrently under resource limits. Mutating calls against one workspace serialize by default unless environment policy proves a stronger safe scheme.
+Independent read-only tools may run concurrently under resource limits. Mutating calls against one workspace serialize by default unless the execution-environment pass proves a stronger safe policy.
 
-Ordinary `ToolDefinition` code does not receive arbitrary session transaction authority. The trusted built-in tool task owns durability/cancellation and calls the tool through a narrow execution/environment capability. Worker/job creation is exposed through similarly narrow mediated capabilities rather than handing arbitrary mutation access to every extension.
+Ordinary tool definitions do not receive arbitrary session transaction authority. Trusted built-in task adapters mediate durable worker/job creation and other session-affecting operations.
 
 ## 11. Inputs and communication
 
-Input acceptance, placement, model consumption and answer settlement are distinct facts.
+Acceptance, placement, model consumption and answer settlement are distinct facts.
 
-An input stores target conversation, sender (user/host/conversation), mode, payload, optional request key and disposition/result reference.
+An input stores target conversation, sender, mode, payload, optional request key and disposition/result reference.
 
-Core modes begin with:
+Initial modes:
 
 | Mode | Busy conversation | Idle conversation |
 |---|---|---|
@@ -295,39 +256,32 @@ Core modes begin with:
 | Steer | place at next safe model boundary | start turn unless paused |
 | Follow-up | queue successor input | start turn unless paused |
 | Queue-only | remain queued | remain queued |
-| Notice/write | retain attributed entry/input according to policy | no implicit wake unless requested |
+| Notice/write | retain attributed input/entry according to policy | no implicit wake unless requested |
 
 Exact duplicate request-key replay returns the original receipt. Rebinding the same key to different target/content/mode rejects `IdempotencyConflict`.
 
-Inter-worker messages use this same substrate rather than a second mailbox truth model.
+Inter-worker communication uses this same input substrate rather than another mailbox truth model.
 
-Caller cancellation only cancels that caller's wait. It never cancels already accepted durable work.
+Caller/waiter cancellation only cancels that caller's wait. It never cancels accepted durable work.
 
 ## 12. Workers and delegation
 
 A worker is an owned conversation. Context seed and lifetime are orthogonal.
 
-### Context seed
+Context seed:
 
-**Fresh**: no history parent. Prefer for independent exploration/review, self-contained subtasks and work where parent reasoning would mostly add noise/anchoring.
+- **fresh** — no history parent;
+- **inherited** — stable parent/cutoff at a complete exchange boundary;
+- **reuse** — continue an existing retained worker when its specialized context remains useful.
 
-**Inherited**: history parent + cutoff. Prefer for nuanced continuation/debugging, exact shared requirements or alternative solutions from one established state.
+Lifetime:
 
-**Reuse** an existing worker for closely related follow-up work when its specialized accumulated context is useful. Reset/handoff it when the context becomes noisy.
+- **joined/foreground** — parent work depends on the child result;
+- **retained/background** — creator may settle while the worker remains addressable.
 
-Fresh/inherited/reuse all remain inside the same session unless the consistency/lifecycle boundary itself is independent.
+Fresh/inherited/reuse remain in the same session unless consistency/lifecycle itself is independent.
 
-### Lifetime
-
-**Joined/foreground**: parent work requires the child result before completion.
-
-**Retained/background**: creation returns the conversation ID; the creator may settle and the worker remains addressable.
-
-Same schema, different dependency/cancellation policy.
-
-### Control surface
-
-Keep the model/human surface small:
+Keep the human/model control surface small:
 
 ```text
 run/spawn
@@ -338,74 +292,74 @@ interrupt/cancel
 retire
 ```
 
-The primary conversation is the default synchronizer. Delegate bounded parallelizable work; do not treat more agents as automatically better.
+The primary conversation is the default synchronizer. Parallelism is bounded and purpose-driven; more agents are not assumed better.
 
-## 13. Model/provider subsystem boundary
+## 13. `ion-ai` model/provider boundary
 
-The session kernel must not contain HTTP/API-key/OAuth/provider-specific parsing logic.
+The provider-neutral model contract is a separate small crate, `ion-ai`. `ion-core` may depend on it; `ion-ai` must not depend on session/task/store types.
 
-Use a separate logical AI subsystem inspired by `pi-ai`'s strongest boundaries:
+Initial contract:
 
 ```text
-Model registry/service
+ModelRef
+Message / Content
+ToolSpec
+ModelRequest
+ModelStreamEvent
+ModelResponse
+Usage
+ProviderError / ProviderErrorKind
+ModelService::stream
+ScriptedModelService
+```
+
+The model service receives no `SessionId`, `ConversationId`, `TaskId`, database command, credential-store handle or runtime mutation signal.
+
+Provider-specific opaque replay metadata may be attached to otherwise provider-neutral assistant content. Another provider may ignore incompatible metadata safely.
+
+Typed provider failures cross the boundary as facts. Generation tasks own durable retry/backoff/compaction/usage policy. Hidden provider/SDK retries that bypass durable attempt accounting are disabled or controlled.
+
+The later provider pass extends `ion-ai` roughly as:
+
+```text
+ModelService / registry
   Provider
     auth + model catalog + endpoint policy
       API adapter
-        wire protocol (OpenAI Responses/compatible, Anthropic, Google, ...)
+        HTTP/SSE/WebSocket wire protocol
 ```
 
-A provider is the runtime/configuration unit. Multiple providers may reuse one wire/API adapter.
+Provider and wire API are separate concepts so multiple providers can reuse one adapter. The host/application owns credential persistence. Credentials are never session truth. Dynamic model catalog caches are not session storage.
 
-The AI subsystem owns:
-
-- provider-neutral message/content/tool/request/result/stream types;
-- provider/model registry and dynamic catalog refresh;
-- provider capabilities/pricing metadata;
-- auth resolution and app-owned credential-store interface;
-- wire API adapters and provider endpoint policy;
-- provider-specific opaque replay/continuation metadata.
-
-The host owns credential persistence. Credentials are never session truth.
-
-The session/conversation stores the selected model configuration and request-relevant durable snapshot needed for replay/recovery; it does not duplicate the global model catalog.
-
-The provider interface accepts a provider-neutral model request and returns a provider-neutral stream/result. It does **not** receive `SessionId`, `ConversationId`, `TaskId`, database commands or runtime mutation signals.
-
-Provider-specific opaque replay metadata may be attached to provider-neutral assistant content so the producing provider can preserve continuity and another provider can safely ignore incompatible hints.
-
-Provider adapters classify errors into typed facts (transport, timeout, rate-limit/retry-after, overload/server, auth, quota, invalid request, context overflow, unsupported, safety, cancelled, unknown). Generation behavior owns retry/backoff/compaction policy. Avoid hidden SDK retries that bypass durable attempt/usage accounting.
-
-The exact Rust crate/API layout for this subsystem is a separate component-design pass after the kernel contract is frozen.
-
-## 14. Authority, workspace and environment
+## 14. Authority, workspace and execution environment
 
 Authority is structured runtime state, never reconstructed from prose.
 
-Child authority is bounded by requested capability intersect parent ceiling intersect host policy. History inheritance, model changes, extension reload and identifier/name reuse cannot widen it.
+Child authority is bounded by requested capability intersect parent ceiling intersect host policy. History inheritance, model changes, extension reload and identifier reuse cannot widen it.
 
 Approvals bind the exact prepared invocation and relevant arguments/revision.
 
-Workspace identity is independent from history/ownership. Multiple read-only workers may share a workspace. Parallel mutating workers normally use isolated worktrees/snapshots unless a stronger conflict policy is proven.
+Workspace identity is independent from history and ownership. Multiple read-only workers may share a workspace. Parallel mutating workers normally use isolated worktrees/snapshots unless a stronger conflict policy is proven.
 
-Filesystem/process/job/sandbox behavior belongs to an execution-environment boundary, not the session scheduler. The environment may expose durable job identities/reconciliation, but session truth remains owned by the task/runtime.
+Filesystem/process/job/sandbox behavior belongs to an execution-environment boundary, not the session scheduler. The environment may expose durable job identities/reconciliation, but canonical session truth remains owned by the task/session runtime.
 
 ## 15. Cancellation and close
 
-Durable cancellation marks exact task/conversation scope on the writer, revokes the current invocation generation's normal write authority, then signals local execution.
+Durable cancellation marks exact task/conversation scope on the writer and revokes the current normal invocation's canonical write/settlement authority. The runtime then sends a process-local cancellation signal for prompt return.
 
-Settlement committed before the mark wins. Otherwise the old normal completion is fenced; after it returns/joins, a fresh abort invocation performs allowed cleanup and terminal settlement.
+Settlement committed before the durable mark wins. Otherwise late normal completion is fenced. After the old invocation returns/joins, a fresh higher-generation abort invocation performs allowed cleanup and terminal abort settlement.
 
 Cancellation is not rollback. If an external action may already have happened, retain the uncertainty.
 
-Group/subtree cancellation establishes its admission barrier before traversing descendants so concurrent creation cannot escape the target scope.
+Subtree/group cancellation establishes its admission barrier before traversing descendants so concurrent child creation cannot escape the target scope.
 
-Host close stops admission, joins current local invocations according to policy, preserves unfinished durable tasks for recovery, flushes committed state and releases the ownership lock last.
+Host close stops admission, signals/joins local invocations according to policy, preserves unfinished durable tasks for recovery, flushes committed state and releases the ownership lock last.
 
 ## 16. Observations and clients
 
 Frontends attach without becoming execution owners.
 
-A watch captures an atomic bounded view plus durable sequence/cursor, then receives committed changes and provisional output frames. Overflow requires resnapshot rather than silently presenting an incomplete state.
+A watch captures an atomic bounded view plus durable `CommitSeq`, then receives committed changes and provisional output frames. Overflow requires resnapshot rather than silently presenting incomplete state.
 
 Live model/tool output is provisional and coalescible. Final durable output replaces matching provisional presentation.
 
@@ -415,7 +369,9 @@ Conversation/session summaries must not require loading every historical transcr
 
 ## 17. Persistence
 
-Leading physical candidate:
+Semantic rule: one session has one crash-atomic canonical store boundary.
+
+Leading physical topology:
 
 ```text
 Ion data root/
@@ -427,61 +383,68 @@ Ion data root/
   catalog.sqlite   # optional rebuildable discovery cache if needed
 ```
 
-One `session.sqlite` contains every fact required for one session command transaction: conversations, entries/context controls, inputs, tasks/dependencies/checkpoints/outcomes, authority/approvals, usage/budgets/resource metadata and artifact references.
+One `session.sqlite` contains every fact required for one session transaction: local sequence, conversations, entries/context controls, inputs, tasks/dependencies/checkpoints/outcomes, authority/approvals, usage/budgets/resource metadata and artifact references.
 
-Do not split one session transaction across category-specific WAL databases. Independent top-level sessions may have independent owners/connections/WAL files.
+Do not split one session transaction across category-specific WAL databases. Independent sessions may have independent owners/connections/WAL files.
 
-SQLite remains the baseline engine. Turso is a P2 benchmark candidate only if measurements or a real sync requirement justify it. Keep the store interface private, but do not build a generic multi-backend framework before a second engine earns inclusion.
+SQLite is the baseline. P2 validates physical topology, indexes, WAL/checkpoint behavior, history scale, backup/repair and artifact publication before making performance claims. A second engine such as Turso must earn inclusion through measurements or a concrete sync requirement; do not build a generic multi-backend framework preemptively.
 
-Large opaque output may spill to files. Publish content safely before committing a required reference; a crash may leave reclaimable orphan files, never committed references to missing required data.
+Large opaque output may spill to files. Publish required content safely before committing its durable reference; crashes may leave reclaimable orphan files, never committed references to missing required data.
 
-## 18. Clean rewrite strategy
+## 18. Source/module architecture
 
-The current runtime's core abstractions no longer match this design: lane, durable `AgentId`, `OperationId`, singular open effect, operation-bound provider signals and root-wide schema are all replacement targets.
+`docs/source-layout.md` is authoritative for file organization. The fresh core is organized by semantic owner, not by a catch-all runtime:
 
-Do not perform a prolonged compatibility refactor.
+```text
+ion-ai          provider-neutral model contract
 
-Once the remaining pre-rewrite prototypes below settle, replace the core directly in `ion-core` and port only reviewed leaf algorithms/tests. Git history is the archive.
+ion-core
+  id
+  conversation
+  task
+  session
+  view
+  store
+  builtin
+  artifact
+```
 
-Likely rewrite/delete:
+The session module owns writer/scheduler/lifecycle, not everything asynchronous. SQLite is contained under `store/sqlite/`. Context projection is pure under `conversation/context/`. Built-in generation/tool/join behavior uses the ordinary task contract.
 
-- current agent/family/host orchestration;
-- lane/operation/runtime state machines;
-- old store schema and SQL tied to them;
-- current provider-to-operation contract;
-- generic effect orchestration;
-- old context machinery where it conflicts with immutable entry controls.
+Avoid broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, giant `sql.rs` or giant TUI files. Most hand-written Rust files should remain small/cohesive; files around 700–800 lines trigger a responsibility review and splitting is the default above roughly 1,000 lines unless a recorded cohesive exception exists.
 
-Potentially port after interface review:
+## 19. Clean rewrite strategy
 
-- path/sandbox/process safety algorithms;
-- output bounding/artifact handling;
-- provider wire parsing/auth logic into the later AI subsystem;
-- policy checks;
-- editor/rendering primitives;
-- fault/race test scenarios.
+The legacy runtime's core abstractions no longer match this design: lanes, durable Agent/Family identity, `OperationId`/`OperationMachine`, generic/singular effects, operation-bound provider signals and root-wide storage assumptions are replacement targets.
 
-MCP/extensions/ACP/RPC/TUI application layers are re-audited after the new command/observation boundaries exist.
+Do not perform a prolonged compatibility refactor and do not maintain old/new production runtimes side by side.
 
-## 19. Remaining gates before the rewrite
+Implementation order is:
 
-These are the last design/prototype questions that should block deleting the old core:
+```text
+K0  promote ion-ai contract
+K1  storage-independent target domain
+K2  one session writer + deterministic in-memory store
+K3  task driver/recovery/cancellation
+K4  fresh per-session SQLite schema/store
+K5  scripted generation -> tools -> join -> generation
+K6  workers as owned conversations
+```
 
-| Gate | Evidence required |
-|---|---|
-| K0.1 Task API | Rust prototype of async `execute/recover/abort`, invocation-fenced `commit`, scratch and terminal closure; optional typed phase adapter without a second scheduler. |
-| K0.2 Context | Immutable entry projection/head/edit prototype with compaction/reset/fork and out-of-order tool result normalization. |
-| K0.3 Task-level recovery | Provider/tool/job crash traces showing task checkpoint/attempt identity is sufficient without generic `EffectId`, or concrete evidence that an effect entity is required. |
-| K0.4 IDs/schema | Provisional session-local ID/sequence representation with same-batch references and rollback/no-ID-leak behavior. |
-| K0.5 AI port | Minimal provider-neutral model request/stream/result/error contract sufficient for a scripted generation task; no production provider catalog required yet. |
+Potentially useful old path/process/policy/output/provider-wire algorithms may be ported only after their new boundary exists. MCP/extensions/ACP/RPC/full TUI/app behavior is re-audited from the new command/observation contract outward.
 
-After these pass, the old core should be removed rather than gradually translated.
+The old application binary may temporarily be absent or minimal during cutover. Keeping obsolete runtime semantics alive merely to preserve temporary usability is not a goal. The workspace itself remains green.
 
-## 20. Core validation path
+Temporary R0 and historical P1 prototypes remain evidence only until equivalent fresh production invariants are covered, then are deleted.
 
-- **P1**: fresh production kernel: input idempotency, task execution/recovery/cancellation, two tools completing out of order, worker ownership/waits, process-loss recovery, missing task kind and writer ownership.
-- **P2**: per-session SQLite/storage/output/history/fork scaling and failure measurements; optionally compare Turso under the same workload.
-- **P3**: tool/extension contribution, authority/reload/failure/sandbox boundaries.
+## 20. Validation path
+
+- **K0–K6 / M1**: fresh production kernel, scripted model/tool chain, SQLite session store, one worker, crash/cancel tests; old core removed.
+- **P1**: durable execution correctness including admission idempotency, task races/recovery, writer ownership, missing task kind, close and worker races.
+- **P2**: physical storage/output/history/fork scaling and failure measurements.
+- **P3**: execution/tools/extensions/MCP/authority/sandbox contribution boundaries.
 - **P4**: TUI/group interaction, target-safe input, approvals, narrow layouts, overload/reconnect/terminal restoration.
 
-Higher-level knowledge/task-board systems remain outside these gates and require separate effectiveness evidence later.
+Higher-level knowledge/task-board/memory systems remain outside these gates and require separate effectiveness evidence later.
+
+No part of this document is a claim that the fresh production core already exists. Revision 6 fixes the accepted target after R0; implementation and production validation now have to catch up.
