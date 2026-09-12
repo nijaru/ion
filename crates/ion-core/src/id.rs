@@ -78,6 +78,12 @@ impl From<LocalSeq> for i64 {
     }
 }
 
+impl fmt::Display for LocalSeq {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.get().fmt(formatter)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum IdError {
     #[error("session-local sequence values must be positive, got {0}")]
