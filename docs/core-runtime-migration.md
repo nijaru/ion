@@ -1,291 +1,335 @@
-# Core runtime migration strategy
+# Core rewrite plan
 
 Status: active implementation plan, 2026-09-12.
 
-This document translates `DESIGN.md` into implementation slices. The plan is subordinate to design and evidence: change it when tests or measurements disprove a boundary.
+This document translates `DESIGN.md` revision 5 into implementation order. The old runtime is not a compatibility target. Git history is the archive.
 
-Scope is the **core agent/session runtime only**. Knowledge/memory systems, shared task boards, semantic/vector indexes and other higher-level coordination mechanisms are out of scope.
+## Decision
 
-## Goal
+Do **not** perform a prolonged lane/operation-to-task refactor.
 
-Replace the current lane/operation/agent-family execution core with the target **session + conversation + task** model without creating a permanent second runtime.
+The current implementation encodes several concepts the target removes:
 
-Preserve providers, tools, process ownership, authority code, tests and frontend work only where their contracts remain correct. Existing internal abstractions have no compatibility claim.
+```text
+AgentId / Family
+lane
+OperationId / OperationMachine
+single open effect
+operation-bound provider signals
+root-wide session schema
+```
 
-## Target nouns
-
-- **Session** — one durable coordination/transaction domain with a primary conversation and related worker/branch conversations.
-- **Conversation** — one durable agent thread: transcript/context, configuration/authority/workspace state, optional history parent and optional owner task.
-- **Entry** — immutable semantic transcript fact.
-- **Input** — admitted user/agent input with target/mode/request identity/disposition.
-- **Task** — generic durable executable unit with typed state, dependencies and terminal outcome.
-- **Effect** — durable external-work intent/attempt/settlement.
-- **Job** — environment-backed long-lived work represented through tasks/effects.
-- **Artifact** — retained output/evidence stored inline or by durable reference.
-
-There is **no separate target durable Agent row**. `Agent`/`Worker` may remain API/UI terminology wrapping a `ConversationId`.
-
-## Target topology
+Trying to rename/translate these in place would repeatedly preserve old ownership assumptions while the target now uses:
 
 ```text
 Session
-  primaryConversationId
-  |
-  +-- Conversation root
-  |     +-- entries
-  |     +-- inputs
-  |     +-- tasks/effects
-  |
-  +-- Conversation worker A
-  +-- Conversation worker B
-  +-- Conversation historical branch
+  Conversation
+    Entry
+    Input
+    Task
 ```
 
-Relationships remain independent:
+with workers as owned conversations, immutable context controls, task-level recovery and one per-session canonical store.
+
+After the five pre-rewrite gates below pass, replace `ion-core` directly. Do not maintain a production `old` and `new` runtime side by side.
+
+## Pre-rewrite gates
+
+### R0.1 — Task contract
+
+Prototype the final Rust task authoring interface in isolation.
+
+Required shape:
 
 ```text
-history:      Conversation --parent/cutoff--> Conversation
-ownership:    Task --owns--> Conversation
-readiness:    Task --depends-on--> Task
-workspace:    Conversation/Task --binds--> Workspace
-communication Input(sender,target)
+TaskKind
+  Input
+  Checkpoint
+  Completed
+  Failure
+  Aborted
+
+  execute(...)
+  recover(...)
+  abort(...)
 ```
 
-A task-created child may have both an owner and a history parent. A host-created historical fork may have a history parent and no owner.
+`execute/recover/abort` are async invocations, but the async stack is never durable continuation state. `TaskContext::commit` replaces the complete checkpoint and makes authorized canonical writes through the session writer. Each commit revalidates task identity + invocation generation + cancellation.
 
-## Why remove the separate Agent entity
+The terminal result is a closure/plan applied on the writer so outcome, successor work, ownership changes and scratch retirement are atomic.
 
-No established core use case currently requires one participant identity to own several simultaneous conversations:
+Also prototype an optional typed state/phase helper that compiles to the ordinary task trait. Reject any design that creates a second scheduler or public task framework.
 
-- related follow-ups continue the same conversation;
-- context reset/handoff can give that thread a clean model context;
-- true alternatives/branches should be independently addressable conversations;
-- root and workers should use identical scheduler/storage types.
+Test:
 
-Current Pico's normative implementation specification likewise models a subagent as an owned conversation rather than a second durable object; current Codex spawned-agent identity is a thread ID. Ion should add a separate persistent agent identity later only if a concrete invariant requires it.
+- checkpoint survives abrupt process loss;
+- stale invocation writes reject;
+- settle-before-cancel and cancel-before-settle;
+- abort uses a fresh invocation after old invocation joins;
+- cancelled waiter does not cancel durable task;
+- panic/failure cannot silently lose running work.
 
-During migration, existing `AgentId`, lane identity and hosted-family structures are legacy production concepts, not target API commitments.
+### R0.2 — Entries/context/forks
 
-## Session remains the consistency boundary
-
-Root and cooperating workers share one session/store because creation, messages, task dependencies, cancellation barriers, authority, usage and workspace metadata may require one atomic transition.
-
-A clean worker context does **not** require a new session. Create a fresh conversation inside the same session.
-
-New top-level sessions are reserved for genuinely independent lifecycle/security/ownership domains.
-
-## Worker creation model
-
-Worker context and worker lifetime are independent decisions.
-
-### Context
-
-- **fresh**: no history parent; explicit task prompt + selected initialization;
-- **inherit**: history parent/cutoff at a safe complete exchange boundary;
-- **reuse**: send a follow-up to an existing worker conversation when its accumulated context is useful.
-
-The first baseline should favor fresh context for independent delegation and require explicit inheritance when prior conversational context matters. Measure this before stabilizing model-facing defaults.
-
-### Lifetime
-
-- **joined/foreground**: parent work depends on child result;
-- **retained/background**: creator may settle immediately while child remains addressable;
-- later waits are durable dependencies/continuations, not held execution permits.
-
-Same conversation/task schema for all cases.
-
-## Migration decision
-
-Do not deepen:
+Prototype immutable entries with generic facets:
 
 ```text
-lane -> operation -> one open effect
-AgentId -> lane/session indirection
+kind
+semantic data
+provider-neutral model projection
+optional context head
+optional constrained context edits
 ```
 
-Target:
+No mutable canonical context vector.
+
+Test:
+
+- append-only transcript;
+- reset/handoff by new head;
+- summary compaction with retained tail;
+- fork inherits only the source prefix and controls visible at its cutoff;
+- later source changes invisible;
+- source tasks not inherited;
+- two tool results settle B then A while provider projection is A then B;
+- cold/warm context reads and edit/head indexes are measurable.
+
+Start worker inheritance only at complete safe exchange boundaries. Arbitrary historical incomplete-exchange repair may be added later if worth the extra semantics.
+
+### R0.3 — Remove generic Effect
+
+Prototype provider/tool/job recovery using only task identity + typed checkpoint + invocation generation + attempt/usage records.
+
+Representative checkpoints must distinguish:
 
 ```text
-ConversationId -> Inputs / Entries / Tasks
-TaskId         -> dependencies / owned Conversations / Effects
-SessionId      -> one mutation owner / canonical store
+prepared but not dispatched
+dispatched retry-safe attempt
+dispatched reconcile/adopt handle
+dispatched no-safe-retry operation
 ```
 
-Use incremental replacement. New core pieces remain crate-private until they replace old behavior. When target coverage has equivalent or stronger tests, delete the displaced path.
+Crash after external dispatch and before terminal commit. Reopen and verify retry/adopt/indeterminate behavior.
 
-## K0 — Freeze semantic identities and store boundary
+Only keep a separate `Effect` entity if this prototype exposes a concrete identity/lifetime that cannot be represented cleanly as task + attempt/checkpoint.
 
-1. Keep `SessionId`, `ConversationId`, `EntryId`, `InputId`, `TaskId`, `EffectId` as target semantic identities.
-2. Treat `AgentId` and `OperationId` as legacy migration identities.
-3. Keep `CommitSeq` independent from object identity.
-4. Keep physical UUID/integer representation reopenable until P1/P2 evidence.
-5. Define one narrow crate-private session-store interface that does not expose the current root-wide physical DB layout.
-6. Do not add memory/task-board abstractions.
+### R0.4 — IDs and sequence
 
-## K1 — Session command kernel
+Compare two private schema representations:
 
-Introduce one crate-private session kernel that owns serialized semantic mutation.
+A. typed object IDs + separate commit sequence;
+B. one session-local monotonic mutation sequence that also mints object IDs.
 
-Required initial commands:
+Both must support:
 
-- admit input with request key + exact equivalence check;
-- create/settle/cancel task;
-- add/remove task dependency with cycle checks;
-- open/settle/recover effect attempt;
-- append immutable entry/context control;
-- create conversation, optionally with history parent and/or owner task;
-- copy explicitly selected initialization state for a child.
+- several objects created and cross-referenced in one batch;
+- rejected batch consumes/publishes no visible IDs;
+- historical/fork cutoff ordering;
+- compact SQLite indexes;
+- stable typed Rust public handles;
+- `(SessionId, local ID)` cross-session references when required.
 
-A command never performs provider/tool/process work. It commits intent/state and returns post-commit dispatch work.
+Choose the simpler measured representation before the fresh production schema is declared.
 
-### First worker-creation transaction
+### R0.5 — Minimal AI port
 
-The kernel must support one atomic batch equivalent to:
+Specify only what the fresh generation task needs:
 
 ```text
-create child Conversation
-  + optional history parent/cutoff
-  + owner Task
-  + selected configuration/authority/workspace initialization
-  + initial Input
-  + first generation Task
+ModelRef
+ModelRequest
+provider-neutral Message/Content
+ToolSpec
+ModelStreamEvent
+ModelResponse
+Usage
+ProviderErrorKind
+ModelService::stream(...)
 ```
 
-No partially created worker becomes externally visible.
+The model service must not know session/task IDs or database commands.
 
-## K2 — One real turn as generic tasks
+Use a scripted/faux implementation for the first core. Production provider catalog/auth/wire adapters are a separate component pass.
 
-Implement:
+## Rewrite boundary
+
+Once R0.1–R0.5 are accepted, remove the old core implementation and reconstruct `ion-core` around the target.
+
+### Delete/rewrite
+
+Treat these as old-runtime code, not refactor anchors:
+
+- `src/agent.rs`
+- `src/agent_host.rs`
+- `src/operation/`
+- `src/runtime/`
+- `src/session/lane.rs`
+- old session tree/lane abstractions
+- old provider runtime contract in `src/provider.rs`
+- old generic effect orchestration
+- old context machinery that conflicts with immutable context controls
+- old store schema/SQL tied to agents/lanes/operations/effects
+
+### Review and port algorithms, not APIs
+
+Potentially useful implementation material:
+
+- `tool/`: path validation, output bounding, artifact mechanics;
+- `process.rs`: process cleanup/sandbox helpers;
+- `policy.rs`: policy checks;
+- provider adapters in `crates/ion`: wire parsing and auth knowledge;
+- existing crash/race tests as scenario inventories.
+
+Copy or rewrite those pieces only after their new subsystem interface is defined. Do not preserve a type because a leaf algorithm uses it today.
+
+### Defer until the new command/observation contract exists
+
+- `extensions.rs`
+- `mcp.rs`
+- `rpc.rs`
+- CLI ACP adapter
+- old session manager
+- TUI application integration
+- import/export compatibility
+
+Low-level terminal editor/rendering utilities may later be reused after P4 review.
+
+## Fresh `ion-core` implementation order
+
+### K1 — Storage-independent domain types
+
+Add only target nouns:
 
 ```text
-Input
-  -> generation G
-       +-> tool A --+
-       +-> tool B --+-> join P -> generation G2/final
+SessionId
+ConversationId
+EntryId
+InputId
+TaskId
+ArtifactId
 ```
 
-Generation settlement atomically creates all tool tasks + join. Tools settle independently in completion order; provider projection restores call order.
+plus selected sequence representation.
 
-Use real `SessionStore` transactions plus scripted providers/tools. The isolated P1 store is deleted as equivalent production tests land.
+Add immutable:
 
-## K3 — Recovery and cancellation
+- `Conversation { parent?, owner_task? }`;
+- entry generic facets;
+- typed input/request receipt state;
+- task input/checkpoint/outcome records.
 
-Promote P1 semantics:
+No lanes, operations, agents or generic effects.
 
-- effect intent before dispatch;
-- stable effect ID + attempt identity;
-- retry-safe/reconcile/no-safe-retry recovery;
-- open/inspect starts no work;
-- explicit drive/resume;
-- durable cancellation mark revokes invocation generation before signalling;
-- settlement-before-cancel wins, otherwise normal completion fences;
-- caller wait cancellation never cancels accepted work;
-- persistence uncertainty fences session until reopen/reconciliation.
+### K2 — Session writer + in-memory store
 
-## K4 — Owned conversations / workers
+Build the serialized command line first against a deterministic in-memory store.
 
-Implement workers on the same kernel:
+Required commands:
 
-- fresh child;
-- inherited child at complete boundary;
-- joined foreground child;
-- retained background child;
+- create root/session;
+- create conversation/fork/owned conversation;
+- append entry/context control;
+- accept/dedupe/place input;
+- create task/dependencies;
+- reserve task invocation;
+- checkpoint task;
+- mark cancellation;
+- terminal closure commit.
+
+Build observations from committed batches.
+
+### K3 — Task driver
+
+Implement pending claim, execute/recover/abort invocation ownership, invocation fencing, waits/dependencies and close/fault behavior.
+
+No real provider yet. Use deterministic task kinds.
+
+### K4 — SQLite session store
+
+Implement the fresh schema as one database for one session. Do not migrate the old tables in place during core development.
+
+For old development data, preserve/archive/refuse according to the pre-1.0 policy. A migration can be written later only if preserving old sessions is actually valuable.
+
+### K5 — Generation + tool chain
+
+Use the minimal scripted model service and narrow tool executor.
+
+Prove:
+
+```text
+input
+ -> generation
+ -> tool A + tool B
+ -> post-tools join
+ -> final generation
+```
+
+with B settling before A while projected order remains A,B.
+
+### K6 — Workers
+
+Create owned conversations through the same writer:
+
+- fresh context;
+- inherited context at safe cutoff;
+- joined run;
+- retained spawn;
 - send/follow-up;
-- read-only inspect/status;
-- durable wait without permit starvation;
-- interrupt/cancel and explicit retire;
-- nested owned conversations under limits.
+- wait without monopolizing model/tool capacity;
+- cancel/retire;
+- nested ownership limits.
 
-The root and worker use identical conversation/task schemas. Role/model/tool differences are configuration.
+No separate agent registry.
 
-Once covered, delete the existing agent-family/lane orchestration path.
+### K7 — P2 physical/session-store pass
 
-## K5 — Remove legacy execution concepts
+Compare root-wide legacy SQLite against one-DB-per-session with production-like history/output load. Move to the per-session topology only after the measurement/fault evidence is recorded.
 
-Likely deletion/replacement targets:
+## AI subsystem pass after the kernel
 
-- `OperationMachine` as main turn scheduler;
-- `OperationId` where object is a `TaskId`;
-- `AgentId` where object is a `ConversationId`;
-- lane as conversation/agent identity;
-- singular `open_effect` checkpoint;
-- `submit_if_idle_on_lane` as input admission;
-- duplicate retained-agent registry/state that can be derived from conversations/tasks.
-
-Convert callers to target semantics, then delete old code; do not rename old semantics in place.
-
-## Persistence topology
-
-Semantic interface assumes one authoritative store **per session**, even while migration still reads/writes the current root-wide database.
-
-Leading physical candidate:
+The later AI/model component should follow this logical split:
 
 ```text
-Ion data root/
-  sessions/
-    <SessionId>/
-      session.sqlite
-      artifacts/
-
-  catalog.sqlite   # optional rebuildable discovery cache only if needed
+ModelService / registry
+  Provider
+    auth + model catalog + endpoint policy
+      API adapter
+        HTTP/SSE/WebSocket protocol
 ```
 
-One `session.sqlite` contains all records that may participate in one session command: conversations/history, inputs, tasks/dependencies, effects, authority/approvals, usage/budgets, workspace correctness metadata and artifact refs.
+Strong ideas from `pi-ai` to evaluate:
 
-Do not split a session transaction by record category across WAL databases.
+- provider-neutral messages/tools/stream results;
+- provider runtime separated from reusable wire API implementations;
+- providers own auth resolution and model listing;
+- app owns credential persistence;
+- dynamic model catalogs refresh explicitly and cache outside agent sessions;
+- provider-specific opaque replay metadata survives on otherwise provider-neutral assistant content;
+- faux provider for deterministic tests.
 
-SQLite remains the default engine. Turso is a P2 benchmark candidate only if measurement or an accepted sync requirement makes it relevant. The semantic one-writer rule remains regardless of engine.
+Intentional Ion improvements:
 
-## Workspace policy
+- typed provider failure categories instead of retry policy based on message substrings;
+- generation task owns durable retry/backoff/usage accounting;
+- hidden SDK retries disabled/controlled;
+- no session/task IDs inside provider API;
+- credentials never enter session storage.
 
-Context inheritance and workspace isolation are independent.
+Do not implement the full provider catalog before the core can run one scripted model turn.
 
-- read-only workers may share the source workspace;
-- parallel mutating workers normally receive isolated worktrees/snapshots;
-- integration/apply is a separately admitted effect with current-base/dirty-state checks and re-verification.
+## Subsequent subsystem passes
 
-Do not infer workspace sharing from history parentage.
+After the core and AI boundary are stable, audit each subsystem from first principles in this order:
 
-## Observation/TUI trace
+1. execution environment + built-in tools + jobs/workspaces/sandbox;
+2. model/provider/auth/catalog implementation;
+3. TUI observation/rendering/input architecture;
+4. extensions/hooks/MCP and dynamic authority;
+5. ACP/JSON/RPC/external client adapters;
+6. settings/export/import/update packaging.
 
-P4 should consume the same runtime objects:
+Each pass may reuse leaf code but starts from the target contract, not from the current module layout.
 
-- session overview of conversation/worker status;
-- focused conversation transcript/tasks/tools;
-- stable per-conversation drafts;
-- replies/approvals routed by captured IDs;
-- inspection read-only;
-- no lane object required in durable state.
+## Rule
 
-A lane-shaped presentation, if useful, is a projection of one conversation's live tasks/output.
-
-## Effectiveness evaluation before freezing delegation defaults
-
-Core correctness is not evidence that workers improve coding success.
-
-Compare under equal model/token/time budgets:
-
-1. root works directly;
-2. one fresh worker;
-3. one inherited worker;
-4. reuse of an existing worker;
-5. bounded parallel workers on decomposable tasks.
-
-Task families should include repo exploration, debugging continuation, independent review, parallel implementation, sequential refactor and integration-heavy changes.
-
-Measure verified task success, elapsed time, tokens/cost, duplicated work, integration failures, incorrect/stale inherited assumptions and human intervention.
-
-The initial orchestration policy should remain centralized: the primary/root conversation delegates and validates bounded work. Peer swarms are not the default.
-
-## Promotion rule
-
-A kernel slice replaces old code only when:
-
-1. semantics match `DESIGN.md`;
-2. deterministic race/crash tests cover relevant P1/P2 cases;
-3. formatting, strict workspace clippy and locked workspace tests pass;
-4. no second public runtime/API remains;
-5. displaced implementation is deleted or has an explicit next-slice deletion dependency;
-6. evidence and known limitations are recorded.
-
-A failed slice changes the design. It is not a reason to add a compatibility layer.
+A clean rewrite is not permission to throw away evidence. Preserve the **invariants and failure cases** from old tests and previous prototypes; throw away implementation structure that no longer expresses them cleanly.
