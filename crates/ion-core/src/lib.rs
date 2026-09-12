@@ -18,5 +18,6 @@ pub use id::{
     ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
 };
 pub use task::{
-    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord, TaskStatus,
+    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord,
+    TaskStatus,
 };
