@@ -94,12 +94,7 @@ fn cancellation_fences_normal_invocation_and_abort_gets_fresh_generation() {
     assert!(cancellation.changed);
 
     let fenced = session
-        .checkpoint_task(
-            task.task_id,
-            execute.generation,
-            Some(json!("late")),
-            None,
-        )
+        .checkpoint_task(task.task_id, execute.generation, Some(json!("late")), None)
         .expect_err("normal invocation must be fenced");
     assert!(matches!(fenced, SessionError::CancellationFence(_)));
 
