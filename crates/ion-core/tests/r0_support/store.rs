@@ -131,7 +131,8 @@ impl PrototypeTaskStore {
             )
             .optional()?
             .ok_or(StoreError::Missing(task_id))?;
-        let (kind, input, checkpoint, status, generation, cancel_requested, outcome_kind, outcome) = row;
+        let (kind, input, checkpoint, status, generation, cancel_requested, outcome_kind, outcome) =
+            row;
         let status = match status.as_str() {
             "pending" => TaskStatus::Pending,
             "running" => TaskStatus::Running,
@@ -263,13 +264,11 @@ impl PrototypeTaskStore {
         self.validate_invocation(invocation)?;
         let checkpoint = match final_checkpoint {
             Some(value) => Some(serde_json::to_string(value)?),
-            None => self
-                .connection
-                .query_row(
-                    "SELECT checkpoint FROM tasks WHERE id = ?1",
-                    [invocation.task_id.0],
-                    |row| row.get::<_, Option<String>>(0),
-                )?,
+            None => self.connection.query_row(
+                "SELECT checkpoint FROM tasks WHERE id = ?1",
+                [invocation.task_id.0],
+                |row| row.get::<_, Option<String>>(0),
+            )?,
         };
         let changed = self.connection.execute(
             "UPDATE tasks
