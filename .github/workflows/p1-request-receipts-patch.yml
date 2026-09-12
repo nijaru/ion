@@ -1,0 +1,195 @@
+name: P1 request receipt patch
+
+on:
+  push:
+    branches: [p1-request-receipts]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: p1-request-receipts
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply exact source patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import re
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              found = text.count(old)
+              if found != count:
+                  raise SystemExit(f"{path}: expected {count} exact matches, found {found}: {old[:120]!r}")
+              p.write_text(text.replace(old, new, count))
+
+          def sub(path, pattern, replacement, count=1):
+              p = Path(path)
+              text = p.read_text()
+              new, found = re.subn(pattern, replacement, text, count=count, flags=re.S)
+              if found != count:
+                  raise SystemExit(f"{path}: expected {count} regex matches, found {found}: {pattern[:120]!r}")
+              p.write_text(new)
+
+          schema = "crates/ion-core/src/store/schema.rs"
+          replace(schema, "const SCHEMA_VERSION: i64 = 25;", "const SCHEMA_VERSION: i64 = 26;")
+          replace(
+              schema,
+              '''CREATE TABLE IF NOT EXISTS inbox_items (\n    id TEXT PRIMARY KEY,\n    session_id TEXT NOT NULL REFERENCES sessions(id),\n    operation_id TEXT NOT NULL REFERENCES operations(id),\n    kind TEXT NOT NULL,\n    text TEXT NOT NULL,\n    status TEXT NOT NULL,\n    accepted_at INTEGER NOT NULL\n);\n\nCREATE TABLE IF NOT EXISTS effects (''',
+              '''CREATE TABLE IF NOT EXISTS inbox_items (\n    id TEXT PRIMARY KEY,\n    session_id TEXT NOT NULL REFERENCES sessions(id),\n    operation_id TEXT NOT NULL REFERENCES operations(id),\n    kind TEXT NOT NULL,\n    text TEXT NOT NULL,\n    status TEXT NOT NULL,\n    accepted_at INTEGER NOT NULL\n);\n\n-- Durable caller identity for input admission. The key is scoped to a session\n-- and is bound to the exact target/mode/content that first committed.\nCREATE TABLE IF NOT EXISTS input_receipts (\n    session_id TEXT NOT NULL REFERENCES sessions(id),\n    request_key TEXT NOT NULL,\n    target TEXT NOT NULL,\n    mode TEXT NOT NULL,\n    content TEXT NOT NULL,\n    operation_id TEXT NOT NULL UNIQUE,\n    inbox_id TEXT NOT NULL UNIQUE REFERENCES inbox_items(id),\n    PRIMARY KEY (session_id, request_key),\n    FOREIGN KEY (session_id, operation_id) REFERENCES operations(session_id, id)\n);\n\nCREATE TABLE IF NOT EXISTS effects (''',
+          )
+
+          store = "crates/ion-core/src/store/mod.rs"
+          replace(
+              store,
+              "use crate::ids::{AgentId, EffectId, EntryId, InboxId, OperationId, SessionId};\nuse crate::operation::{InboxKind, OperationState, SessionEntry};",
+              "use crate::ids::{AgentId, EffectId, EntryId, InboxId, OperationId, SessionId};\nuse crate::input::{InputAdmission, InputReceipt, RequestKey};\nuse crate::operation::{InboxKind, OperationState, SessionEntry};",
+          )
+          replace(
+              store,
+              "#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]\npub enum StoreError {",
+              "#[derive(Debug, Clone, Copy, PartialEq, Eq)]\npub(crate) enum BeginOperationResult {\n    Accepted(Option<InputReceipt>),\n    Duplicate(InputReceipt),\n}\n\n#[derive(Debug, thiserror::Error, Clone, PartialEq, Eq)]\npub enum StoreError {",
+          )
+          replace(
+              store,
+              '''    #[error("injected store failure")]\n    Injected,\n    #[error("session {0} not found")]''',
+              '''    #[error("injected store failure")]\n    Injected,\n    #[error("request key {request_key} is already bound to different input")]\n    IdempotencyConflict { request_key: RequestKey },\n    #[error("session {0} not found")]''',
+          )
+          replace(
+              store,
+              '''    BeginOperation {\n        session_id: SessionId,\n        lane_name: String,\n        operation_id: OperationId,\n        root_inbox: InboxRecord,\n        checkpoint: CheckpointRecord,\n        entry: EntryRecord,\n        reply: oneshot::Sender<Result<(), StoreError>>,\n    },''',
+              '''    ResolveInputRequest {\n        session_id: SessionId,\n        admission: InputAdmission,\n        reply: oneshot::Sender<Result<Option<InputReceipt>, StoreError>>,\n    },\n    BeginOperation {\n        session_id: SessionId,\n        lane_name: String,\n        operation_id: OperationId,\n        root_inbox: InboxRecord,\n        checkpoint: CheckpointRecord,\n        entry: EntryRecord,\n        admission: Option<InputAdmission>,\n        reply: oneshot::Sender<Result<BeginOperationResult, StoreError>>,\n    },''',
+          )
+          sub(
+              store,
+              r'''    /// Durably accept an operation: the operation row, its root inbox\n    /// item, the initial total state, and the user entry commit as one\n    /// transaction before the caller is acknowledged \(DESIGN\.md §9\.1\)\.\n    pub\(crate\) async fn begin_operation\(.*?\n    pub\(crate\) async fn commit''',
+              '''    /// Resolve an already-committed request key before runtime busy checks.\n    /// The authoritative duplicate/conflict check is repeated by\n    /// `begin_operation` in the admission transaction.\n    pub(crate) async fn resolve_input_request(\n        &self,\n        session_id: SessionId,\n        admission: InputAdmission,\n    ) -> Result<Option<InputReceipt>, StoreError> {\n        self.request(|reply| StoreCommand::ResolveInputRequest {\n            session_id,\n            admission,\n            reply,\n        })\n        .await\n    }\n\n    /// Durably accept an operation: the operation row, root inbox, initial\n    /// state, semantic entry, and optional request-key binding commit as one\n    /// transaction before acknowledgment.\n    pub(crate) async fn begin_operation(\n        &self,\n        session_id: SessionId,\n        lane_name: impl Into<String>,\n        operation_id: OperationId,\n        root_inbox: InboxRecord,\n        checkpoint: CheckpointRecord,\n        entry: EntryRecord,\n        admission: Option<InputAdmission>,\n    ) -> Result<BeginOperationResult, StoreError> {\n        let lane_name = lane_name.into();\n        self.request(|reply| StoreCommand::BeginOperation {\n            session_id,\n            lane_name,\n            operation_id,\n            root_inbox,\n            checkpoint,\n            entry,\n            admission,\n            reply,\n        })\n        .await\n    }\n\n    pub(crate) async fn commit''',
+          )
+
+          sql = "crates/ion-core/src/store/sql.rs"
+          replace(
+              sql,
+              '''        StoreCommand::BeginOperation {\n            session_id,\n            lane_name,\n            operation_id,\n            root_inbox,\n            checkpoint,\n            entry,\n            reply,\n        } => {\n            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {\n                begin_operation(\n                    connection,\n                    session_id,\n                    &lane_name,\n                    operation_id,\n                    &root_inbox,\n                    &checkpoint,\n                    &entry,\n                )\n                .map_err(StoreError::from)\n            }));\n        }''',
+              '''        StoreCommand::ResolveInputRequest {\n            session_id,\n            admission,\n            reply,\n        } => {\n            let _ = reply.send(resolve_input_request(connection, session_id, &admission));\n        }\n        StoreCommand::BeginOperation {\n            session_id,\n            lane_name,\n            operation_id,\n            root_inbox,\n            checkpoint,\n            entry,\n            admission,\n            reply,\n        } => {\n            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {\n                begin_operation(\n                    connection,\n                    session_id,\n                    &lane_name,\n                    operation_id,\n                    &root_inbox,\n                    &checkpoint,\n                    &entry,\n                    admission.as_ref(),\n                )\n            }));\n        }''',
+          )
+          replace(
+              sql,
+              '        "DELETE FROM inbox_items WHERE session_id = ?1",\n        "DELETE FROM effects WHERE operation_id IN (',
+              '        "DELETE FROM input_receipts WHERE session_id = ?1",\n        "DELETE FROM inbox_items WHERE session_id = ?1",\n        "DELETE FROM effects WHERE operation_id IN (',
+          )
+          sub(
+              sql,
+              r'''fn begin_operation\(.*?\nfn commit\(''',
+              '''fn resolve_input_request(\n    connection: &Connection,\n    session_id: SessionId,\n    admission: &InputAdmission,\n) -> Result<Option<InputReceipt>, StoreError> {\n    let row = connection\n        .query_row(\n            "SELECT r.target, r.mode, r.content, r.operation_id, r.inbox_id, o.accepted_seq\n             FROM input_receipts r\n             JOIN operations o ON o.id = r.operation_id AND o.session_id = r.session_id\n             WHERE r.session_id = ?1 AND r.request_key = ?2",\n            rusqlite::params![\n                session_id.as_uuid().to_string(),\n                admission.request_key.as_uuid().to_string(),\n            ],\n            |row| {\n                Ok((\n                    row.get::<_, String>(0)?,\n                    row.get::<_, String>(1)?,\n                    row.get::<_, String>(2)?,\n                    row.get::<_, String>(3)?,\n                    row.get::<_, String>(4)?,\n                    row.get::<_, i64>(5)?,\n                ))\n            },\n        )\n        .optional()?;\n    let Some((target, mode, content, operation, inbox, accepted_seq)) = row else {\n        return Ok(None);\n    };\n    if target != admission.target\n        || mode != admission.mode.as_storage()\n        || content != admission.content\n    {\n        return Err(StoreError::IdempotencyConflict {\n            request_key: admission.request_key,\n        });\n    }\n    let operation_id = Uuid::parse_str(&operation)\n        .map(OperationId::from_uuid)\n        .map_err(|_| StoreError::Sqlite("request receipt operation id is not a uuid".to_owned()))?;\n    let inbox_id = Uuid::parse_str(&inbox)\n        .map(InboxId::from_uuid)\n        .map_err(|_| StoreError::Sqlite("request receipt inbox id is not a uuid".to_owned()))?;\n    let accepted_seq = u64::try_from(accepted_seq)\n        .map_err(|_| StoreError::Sqlite("request receipt accepted sequence is negative".to_owned()))?;\n    Ok(Some(InputReceipt {\n        request_key: admission.request_key,\n        operation_id,\n        inbox_id,\n        accepted_seq,\n    }))\n}\n\nfn begin_operation(\n    connection: &mut Connection,\n    session_id: SessionId,\n    lane_name: &str,\n    operation_id: OperationId,\n    root_inbox: &InboxRecord,\n    checkpoint: &CheckpointRecord,\n    entry: &EntryRecord,\n    admission: Option<&InputAdmission>,\n) -> Result<BeginOperationResult, StoreError> {\n    let tx = connection.transaction()?;\n    if let Some(admission) = admission\n        && let Some(receipt) = resolve_input_request(&tx, session_id, admission)?\n    {\n        return Ok(BeginOperationResult::Duplicate(receipt));\n    }\n\n    let session = session_id.as_uuid().to_string();\n    let operation = operation_id.as_uuid().to_string();\n    let entry_id = entry.id.as_uuid().to_string();\n    let (source_leaf, current, pending_entry, pending_prompt): (\n        Option<String>,\n        Option<String>,\n        Option<String>,\n        Option<String>,\n    ) = tx.query_row(\n        "SELECT leaf_id, current_operation_id, pending_entry_id, pending_prompt\n         FROM lanes WHERE session_id = ?1 AND name = ?2",\n        rusqlite::params![session, lane_name],\n        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),\n    )?;\n    if current.is_some() {\n        return Err(StoreError::Sqlite(format!(\n            "lane {lane_name:?} already has a current operation"\n        )));\n    }\n    let accepted_text = match (&root_inbox.kind, &entry.entry) {\n        (InboxKind::Prompt, SessionEntry::UserMessage { text }) => text,\n        (\n            InboxKind::AgentMessage { from },\n            SessionEntry::AgentMessage {\n                from: entry_from,\n                text,\n            },\n        ) if from == entry_from => text,\n        _ => {\n            return Err(StoreError::Sqlite(\n                "operation root inbox disagrees with its semantic entry".to_owned(),\n            ));\n        }\n    };\n    if accepted_text != &checkpoint.payload.prompt || root_inbox.text.as_str() != accepted_text {\n        return Err(StoreError::Sqlite(\n            "operation input disagrees with its accepted entry".to_owned(),\n        ));\n    }\n    if let Some(admission) = admission\n        && (admission.target != lane_name\n            || admission.mode != crate::input::InputMode::Submit\n            || admission.content.as_str() != accepted_text)\n    {\n        return Err(StoreError::Sqlite(\n            "request-key binding disagrees with operation input".to_owned(),\n        ));\n    }\n    match (pending_entry, pending_prompt) {\n        (None, None) => {}\n        (Some(reserved_entry), Some(reserved_prompt))\n            if matches!(&root_inbox.kind, InboxKind::Prompt)\n                && reserved_entry == entry_id\n                && reserved_prompt.as_str() == accepted_text => {}\n        _ => {\n            return Err(StoreError::Sqlite(\n                "operation does not match the lane's reserved next run".to_owned(),\n            ));\n        }\n    }\n\n    let accepted_seq: i64 = tx.query_row(\n        "SELECT COALESCE(MAX(accepted_seq), 0) + 1 FROM operations WHERE session_id = ?1",\n        [&session],\n        |row| row.get(0),\n    )?;\n    tx.execute(\n        "INSERT INTO operations (id, session_id, kind, accepted_at, accepted_seq)\n         VALUES (?1, ?2, 'run', ?3, ?4)",\n        rusqlite::params![operation, session, now_ms(), accepted_seq],\n    )?;\n    tx.execute(\n        "INSERT INTO operation_origins\n            (operation_id, session_id, lane_name, source_leaf_id)\n         VALUES (?1, ?2, ?3, ?4)",\n        rusqlite::params![operation, session, lane_name, source_leaf],\n    )?;\n    insert_inbox(&tx, session_id, operation_id, root_inbox)?;\n    insert_capability_snapshot(&tx, &checkpoint.capability_snapshot)?;\n    insert_checkpoint(&tx, operation_id, checkpoint)?;\n    insert_entry(&tx, session_id, lane_name, entry)?;\n    let changed = tx.execute(\n        "UPDATE lanes SET\n            current_operation_id = ?3,\n            pending_entry_id = NULL,\n            pending_prompt = NULL,\n            updated_at = ?4\n         WHERE session_id = ?1 AND name = ?2 AND current_operation_id IS NULL",\n        rusqlite::params![\n            session_id.as_uuid().to_string(),\n            lane_name,\n            operation_id.as_uuid().to_string(),\n            now_ms(),\n        ],\n    )?;\n    if changed != 1 {\n        return Err(StoreError::Sqlite(format!(\n            "lane {lane_name:?} lost operation admission"\n        )));\n    }\n\n    let receipt = if let Some(admission) = admission {\n        tx.execute(\n            "INSERT INTO input_receipts\n                (session_id, request_key, target, mode, content, operation_id, inbox_id)\n             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",\n            rusqlite::params![\n                session_id.as_uuid().to_string(),\n                admission.request_key.as_uuid().to_string(),\n                admission.target,\n                admission.mode.as_storage(),\n                admission.content,\n                operation_id.as_uuid().to_string(),\n                root_inbox.id.as_uuid().to_string(),\n            ],\n        )?;\n        let accepted_seq = u64::try_from(accepted_seq).map_err(|_| {\n            StoreError::Sqlite("accepted operation sequence is negative".to_owned())\n        })?;\n        Some(InputReceipt {\n            request_key: admission.request_key,\n            operation_id,\n            inbox_id: root_inbox.id,\n            accepted_seq,\n        })\n    } else {\n        None\n    };\n    tx.commit()?;\n    Ok(BeginOperationResult::Accepted(receipt))\n}\n\nfn commit(''',
+          )
+
+          runtime = "crates/ion-core/src/runtime/mod.rs"
+          replace(
+              runtime,
+              '''use crate::ids::{\n    AgentId, EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,\n};\nuse crate::operation::{''',
+              '''use crate::ids::{\n    AgentId, EffectId, EntryId, InboxId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId,\n};\nuse crate::input::{InputAdmission, InputReceipt, RequestKey};\nuse crate::operation::{''',
+          )
+          replace(
+              runtime,
+              '''    AssistantFrame, CheckpointPayload, CheckpointRecord, CommitRequest, EffectRecord, EntryRecord,\n    InboxRecord, InboxStatus, LoadedSession, SessionRecord, SessionStore, SettledEffect,\n    StoreError, ToolProgressCheckpoint, UsageRecord,\n};''',
+              '''    AssistantFrame, BeginOperationResult, CheckpointPayload, CheckpointRecord, CommitRequest,\n    EffectRecord, EntryRecord, InboxRecord, InboxStatus, LoadedSession, SessionRecord, SessionStore,\n    SettledEffect, StoreError, ToolProgressCheckpoint, UsageRecord,\n};''',
+          )
+          replace(
+              runtime,
+              '''#[derive(Clone)]\nstruct ActiveOperation {''',
+              '''enum OperationAdmission {\n    Accepted {\n        active: ActiveOperation,\n        entry_id: EntryId,\n        receipt: Option<InputReceipt>,\n    },\n    Duplicate(InputReceipt),\n}\n\n#[derive(Clone)]\nstruct ActiveOperation {''',
+          )
+          replace(
+              runtime,
+              '''    SubmitIfIdle {\n        lane_name: String,\n        prompt: String,\n        reply: oneshot::Sender<Result<OperationId, CommandError>>,\n    },''',
+              '''    SubmitIfIdle {\n        lane_name: String,\n        request_key: RequestKey,\n        prompt: String,\n        reply: oneshot::Sender<Result<InputReceipt, CommandError>>,\n    },''',
+          )
+          sub(
+              runtime,
+              r'''    /// Accept a prompt durably on main and open a new operation only when idle\.\n    pub async fn submit_if_idle\(.*?\n    /// Persist main's next-run input\.''',
+              '''    /// Accept a prompt durably on main and open a new operation only when idle.\n    /// Convenience callers get a fresh request key; use `submit_with_key`\n    /// when an unknown reply must be retried safely.\n    pub async fn submit_if_idle(\n        &self,\n        prompt: impl Into<String>,\n    ) -> Result<OperationId, CommandError> {\n        Ok(self\n            .submit_with_key(RequestKey::generate(), prompt)\n            .await?\n            .operation_id)\n    }\n\n    /// Retry-capable durable submit on the main lane.\n    pub async fn submit_with_key(\n        &self,\n        request_key: RequestKey,\n        prompt: impl Into<String>,\n    ) -> Result<InputReceipt, CommandError> {\n        self.submit_with_key_on_lane(crate::session::lane::MAIN, request_key, prompt)\n            .await\n    }\n\n    /// Accept a prompt durably on one named lane only when that lane is idle.\n    pub async fn submit_if_idle_on_lane(\n        &self,\n        lane_name: impl Into<String>,\n        prompt: impl Into<String>,\n    ) -> Result<OperationId, CommandError> {\n        Ok(self\n            .submit_with_key_on_lane(lane_name, RequestKey::generate(), prompt)\n            .await?\n            .operation_id)\n    }\n\n    /// Retry-capable durable submit on one named lane. The request key is\n    /// bound to the exact lane and prompt by the persistence transaction.\n    pub async fn submit_with_key_on_lane(\n        &self,\n        lane_name: impl Into<String>,\n        request_key: RequestKey,\n        prompt: impl Into<String>,\n    ) -> Result<InputReceipt, CommandError> {\n        let (reply, rx) = oneshot::channel();\n        self.tx\n            .try_send(SessionCommand::SubmitIfIdle {\n                lane_name: lane_name.into(),\n                request_key,\n                prompt: prompt.into(),\n                reply,\n            })\n            .map_err(command_send_error)?;\n        rx.await.map_err(|_| CommandError::RuntimeDropped)?\n    }\n\n    /// Persist main's next-run input.''',
+          )
+          replace(
+              runtime,
+              '''            SessionCommand::SubmitIfIdle {\n                lane_name,\n                prompt,\n                reply,\n            } => {\n                let _ = reply.send(self.submit_if_idle_on_lane(lane_name, prompt).await);\n                false\n            }''',
+              '''            SessionCommand::SubmitIfIdle {\n                lane_name,\n                request_key,\n                prompt,\n                reply,\n            } => {\n                let _ = reply.send(\n                    self.submit_with_key_on_lane(lane_name, request_key, prompt)\n                        .await,\n                );\n                false\n            }''',
+          )
+          sub(
+              runtime,
+              r'''    async fn submit_if_idle_on_lane\(.*?\n    /// Persist one next-run input durably\.''',
+              '''    async fn submit_with_key_on_lane(\n        &mut self,\n        lane_name: String,\n        request_key: RequestKey,\n        prompt: String,\n    ) -> Result<InputReceipt, CommandError> {\n        if self.closed {\n            return Err(CommandError::Closed);\n        }\n        if self.lane(&lane_name).is_none() {\n            return Err(CommandError::LaneNotFound(lane_name));\n        }\n        let admission = InputAdmission::submit(request_key, lane_name.clone(), prompt.clone());\n        if let Some(receipt) = self\n            .store\n            .resolve_input_request(self.session_id, admission.clone())\n            .await\n            .map_err(persistence_command_error)?\n        {\n            return Ok(receipt);\n        }\n        if let Some(operation_id) = self.lane_resident_id(&lane_name) {\n            return Err(CommandError::Busy { operation_id });\n        }\n        if let Some(pending) = self.lane_pending_next_run(&lane_name) {\n            return Err(CommandError::NextRunQueued {\n                entry_id: pending.entry_id,\n            });\n        }\n        if self.lane_pending_shell(&lane_name).is_some() {\n            return Err(CommandError::ShellPassthroughBusy);\n        }\n        match self\n            .accept_operation_record(&lane_name, prompt, None, Some(admission))\n            .await?\n        {\n            OperationAdmission::Accepted {\n                active,\n                receipt: Some(receipt),\n                ..\n            } => {\n                let operation_id = active.machine.operation_id();\n                self.start_active(&lane_name, active);\n                self.advance(operation_id).await;\n                Ok(receipt)\n            }\n            OperationAdmission::Duplicate(receipt) => Ok(receipt),\n            OperationAdmission::Accepted { receipt: None, .. } => Err(CommandError::Persistence(\n                "keyed operation admission committed without a receipt".to_owned(),\n            )),\n        }\n    }\n\n    /// Persist one next-run input durably.''',
+          )
+          replace(
+              runtime,
+              '''            let (active, entry_id) = self\n                .accept_operation_record(&lane_name, prompt, None)\n                .await?;\n            let operation_id = active.machine.operation_id();''',
+              '''            let (active, entry_id) = match self\n                .accept_operation_record(&lane_name, prompt, None, None)\n                .await?\n            {\n                OperationAdmission::Accepted {\n                    active, entry_id, ..\n                } => (active, entry_id),\n                OperationAdmission::Duplicate(_) => {\n                    unreachable!("next-run promotion has no request key")\n                }\n            };\n            let operation_id = active.machine.operation_id();''',
+          )
+          sub(
+              runtime,
+              r'''    /// Create the durable operation only when the lane is free\. A pending\n    /// next run supplies its pre-provisioned semantic entry identity but does\n    /// not pre-provision operation identity or freeze model/tool capability\n    /// state before this acceptance boundary\.\n    async fn accept_operation_record\(.*?\n    fn start_active''',
+              '''    /// Create the durable operation only when the lane is free. A pending\n    /// next run supplies its pre-provisioned semantic entry identity but does\n    /// not pre-provision operation identity or freeze model/tool capability\n    /// state before this acceptance boundary.\n    async fn accept_operation_record(\n        &mut self,\n        lane_name: &str,\n        prompt: String,\n        reservation: Option<crate::session::lane::NextRun>,\n        admission: Option<InputAdmission>,\n    ) -> Result<OperationAdmission, CommandError> {\n        self.accept_operation_input(\n            lane_name,\n            InboxItem {\n                kind: InboxKind::Prompt,\n                text: prompt,\n            },\n            reservation,\n            admission,\n        )\n        .await\n    }\n\n    async fn accept_operation_input(\n        &mut self,\n        lane_name: &str,\n        input: InboxItem,\n        reservation: Option<crate::session::lane::NextRun>,\n        admission: Option<InputAdmission>,\n    ) -> Result<OperationAdmission, CommandError> {\n        let configuration = Arc::new(self.tools.configuration().try_enter()?);\n        let operation_id = OperationId::generate();\n        let tool_registry = self\n            .tool_registry_for_lane(lane_name)\n            .expect("operation acceptance lane exists");\n        let (machine, applied) = match &input.kind {\n            InboxKind::Prompt => {\n                OperationMachine::accept(operation_id, input.text.clone(), tool_registry.specs())\n            }\n            InboxKind::AgentMessage { from } => OperationMachine::accept_agent_message(\n                operation_id,\n                *from,\n                input.text.clone(),\n                tool_registry.specs(),\n            ),\n            InboxKind::Steer => unreachable!("steer cannot open a new operation"),\n        };\n        let capability_snapshot = tool_registry.capability_snapshot();\n        let root_inbox = InboxRecord {\n            id: InboxId::generate(),\n            kind: input.kind,\n            text: input.text,\n            status: InboxStatus::Applied,\n        };\n        let entry = match reservation.as_ref() {\n            Some(next_run) => EntryRecord {\n                id: next_run.entry_id,\n                seq: self.next_entry_seq,\n                parent: self.lane_leaf(lane_name),\n                entry: applied.entries[0].clone(),\n            },\n            None => EntryRecord::provision(self.next_entry_seq, applied.entries[0].clone())\n                .after(self.lane_leaf(lane_name)),\n        };\n        let entry_id = entry.id;\n        let checkpoint = CheckpointRecord {\n            state_seq: 1,\n            payload: CheckpointPayload {\n                state: machine.state().clone(),\n                cancel_requested: false,\n                prompt: machine.prompt().to_owned(),\n                capability_snapshot_id: capability_snapshot.id.clone(),\n                open_effect: None,\n            },\n            capability_snapshot: capability_snapshot.clone(),\n        };\n        let persisted = self\n            .store\n            .begin_operation(\n                self.session_id,\n                lane_name,\n                operation_id,\n                root_inbox,\n                checkpoint,\n                entry.clone(),\n                admission,\n            )\n            .await\n            .map_err(persistence_command_error)?;\n        let receipt = match persisted {\n            BeginOperationResult::Accepted(receipt) => receipt,\n            BeginOperationResult::Duplicate(receipt) => {\n                return Ok(OperationAdmission::Duplicate(receipt));\n            }\n        };\n\n        let entry_leaf = entry.id;\n        self.install_tree_entries(vec![entry]);\n        self.next_entry_seq += 1;\n        let lane = self\n            .lane_mut(lane_name)\n            .expect("accepted operation lane remains resident");\n        lane.state.leaf = Some(entry_leaf);\n        lane.state.current_operation = Some(operation_id);\n        if reservation.is_some() {\n            lane.state.pending_next_run = None;\n        }\n        Ok(OperationAdmission::Accepted {\n            active: ActiveOperation {\n                _configuration: configuration,\n                machine,\n                capability_snapshot,\n                tool_registry,\n                cancel: self.cancel_root.child_token(),\n                state_seq: 1,\n                open_effect: None,\n                pending_inputs: Vec::new(),\n            },\n            entry_id,\n            receipt,\n        })\n    }\n\n    fn start_active''',
+          )
+          sub(
+              runtime,
+              r'''    async fn promote_pending_next_run\(.*?\n    async fn switch_model_on_lane''',
+              '''    async fn promote_pending_next_run(&mut self, lane_name: &str) -> Option<OperationId> {\n        if self.lane_resident_id(lane_name).is_some() {\n            return None;\n        }\n        let next_run = self.lane_pending_next_run(lane_name)?.clone();\n        match self\n            .accept_operation_record(\n                lane_name,\n                next_run.prompt.clone(),\n                Some(next_run.clone()),\n                None,\n            )\n            .await\n        {\n            Ok(OperationAdmission::Accepted { active, .. }) => {\n                let operation_id = active.machine.operation_id();\n                self.start_active(lane_name, active);\n                Some(operation_id)\n            }\n            Ok(OperationAdmission::Duplicate(_)) => {\n                error!(\n                    session = %self.session_id,\n                    lane = lane_name,\n                    entry = %next_run.entry_id,\n                    "unkeyed next-run promotion resolved as a duplicate; fencing"\n                );\n                self.closed = true;\n                None\n            }\n            Err(err) => {\n                error!(\n                    session = %self.session_id,\n                    lane = lane_name,\n                    entry = %next_run.entry_id,\n                    %err,\n                    "could not promote the durable next run; fencing until reopen"\n                );\n                self.closed = true;\n                None\n            }\n        }\n    }\n\n    async fn switch_model_on_lane''',
+          )
+          replace(
+              runtime,
+              '''        let (active, _) = self.accept_operation_input(&lane_name, input, None).await?;\n        let operation_id = active.machine.operation_id();\n        self.start_active(&lane_name, active);''',
+              '''        let active = match self\n            .accept_operation_input(&lane_name, input, None, None)\n            .await?\n        {\n            OperationAdmission::Accepted { active, .. } => active,\n            OperationAdmission::Duplicate(_) => {\n                unreachable!("agent-message admission has no request key")\n            }\n        };\n        let operation_id = active.machine.operation_id();\n        self.start_active(&lane_name, active);''',
+          )
+          replace(
+              runtime,
+              '''fn persistence_command_error(err: StoreError) -> CommandError {\n    CommandError::Persistence(err.to_string())\n}''',
+              '''fn persistence_command_error(err: StoreError) -> CommandError {\n    match err {\n        StoreError::IdempotencyConflict { request_key } => {\n            CommandError::IdempotencyConflict { request_key }\n        }\n        other => CommandError::Persistence(other.to_string()),\n    }\n}''',
+          )
+
+          reconcile = "crates/ion-core/src/tests/reconcile.rs"
+          replace(
+              reconcile,
+              '''            checkpoint,\n            entry,\n        )''',
+              '''            checkpoint,\n            entry,\n            None,\n        )''',
+          )
+
+          # The source should have no old private submit path or old begin signature left.
+          checks = {
+              runtime: ["async fn submit_if_idle_on_lane(\n        &mut self", "Result<(ActiveOperation, crate::ids::EntryId), CommandError>"],
+              store: ["reply: oneshot::Sender<Result<(), StoreError>>,\n    },\n    Commit {\n        request: CommitRequest"],
+          }
+          for path, needles in checks.items():
+              text = Path(path).read_text()
+              for needle in needles:
+                  if needle in text:
+                      raise SystemExit(f"{path}: stale admission surface remains: {needle!r}")
+          PY
+      - run: cargo fmt --all
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No patch changes to commit"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/ion-core
+          git commit -m "feat: add durable request receipt admission"
+          git push origin HEAD:p1-request-receipts
