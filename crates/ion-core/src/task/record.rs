@@ -16,10 +16,38 @@ pub struct TaskRecord {
     pub input: Value,
     pub checkpoint: Option<Value>,
     pub dependencies: Vec<TaskId>,
+    pub owned_conversations: Vec<ConversationId>,
     pub generation: u64,
     pub cancel_requested: bool,
     pub status: TaskStatus,
     pub output: Option<TaskOutput>,
+}
+
+impl TaskRecord {
+    #[must_use]
+    pub fn pending(
+        id: TaskId,
+        conversation_id: ConversationId,
+        kind: TaskKindName,
+        schema_version: u32,
+        input: Value,
+        dependencies: Vec<TaskId>,
+    ) -> Self {
+        Self {
+            id,
+            conversation_id,
+            kind,
+            schema_version,
+            input,
+            checkpoint: None,
+            dependencies,
+            owned_conversations: Vec::new(),
+            generation: 0,
+            cancel_requested: false,
+            status: TaskStatus::Pending,
+            output: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
