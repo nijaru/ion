@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
 
 use super::store::{
     Invocation, InvocationMode, PrototypeTaskStore, StoreError, StoredTask, TaskId,
@@ -106,16 +107,27 @@ impl<C> TaskCommit<C> {
 pub struct TaskContext<C> {
     store: SharedStore,
     invocation: Invocation,
+    cancellation: CancellationToken,
     marker: PhantomData<fn() -> C>,
 }
 
 impl<C: JsonPayload> TaskContext<C> {
-    fn new(store: SharedStore, invocation: Invocation) -> Self {
+    fn new(store: SharedStore, invocation: Invocation, cancellation: CancellationToken) -> Self {
         Self {
             store,
             invocation,
+            cancellation,
             marker: PhantomData,
         }
+    }
+
+    /// Wait for process-local cancellation of this invocation.
+    ///
+    /// This signal is only a prompt for the running implementation to stop.
+    /// Durable cancellation is the separately committed task mark that fences
+    /// normal mutation authority.
+    pub async fn cancelled(&self) {
+        self.cancellation.cancelled().await;
     }
 
     /// Prototype of the only mutation path available to a running task.
@@ -181,6 +193,7 @@ trait ErasedTaskKind: Send + Sync {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>>;
 
     fn recover<'a>(
@@ -188,6 +201,7 @@ trait ErasedTaskKind: Send + Sync {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>>;
 
     fn abort<'a>(
@@ -195,6 +209,7 @@ trait ErasedTaskKind: Send + Sync {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>>;
 }
 
@@ -241,10 +256,11 @@ impl<K: TaskKind> ErasedTaskKind for TaskKindAdapter<K> {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>> {
         Box::pin(async move {
             let task = self.typed_task(task)?;
-            let context = TaskContext::new(store, invocation);
+            let context = TaskContext::new(store, invocation, cancellation);
             Self::erase_terminal(self.0.execute(task, context).await?)
         })
     }
@@ -254,10 +270,11 @@ impl<K: TaskKind> ErasedTaskKind for TaskKindAdapter<K> {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>> {
         Box::pin(async move {
             let task = self.typed_task(task)?;
-            let context = TaskContext::new(store, invocation);
+            let context = TaskContext::new(store, invocation, cancellation);
             Self::erase_terminal(self.0.recover(task, context).await?)
         })
     }
@@ -267,10 +284,11 @@ impl<K: TaskKind> ErasedTaskKind for TaskKindAdapter<K> {
         task: StoredTask,
         store: SharedStore,
         invocation: Invocation,
+        cancellation: CancellationToken,
     ) -> BoxFuture<'a, Result<ErasedTerminalPlan, TaskError>> {
         Box::pin(async move {
             let task = self.typed_task(task)?;
-            let context = TaskContext::new(store, invocation);
+            let context = TaskContext::new(store, invocation, cancellation);
             let plan = self.0.abort(task, context).await?;
             Ok(ErasedTerminalPlan {
                 checkpoint: plan.checkpoint.map(serde_json::to_value).transpose()?,
@@ -316,12 +334,15 @@ pub async fn execute_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
+    cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
     let invocation = lock_store(&store)?.reserve_execute(task_id)?;
     debug_assert_eq!(invocation.mode, InvocationMode::Execute);
     let task = lock_store(&store)?.task(task_id)?;
     let kind = registry.get(&task.kind)?;
-    let plan = kind.execute(task, Arc::clone(&store), invocation).await?;
+    let plan = kind
+        .execute(task, Arc::clone(&store), invocation, cancellation)
+        .await?;
     lock_store(&store)?.apply_terminal(
         invocation,
         plan.checkpoint.as_ref(),
@@ -335,12 +356,15 @@ pub async fn recover_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
+    cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
     let invocation = lock_store(&store)?.reserve_recover(task_id)?;
     debug_assert_eq!(invocation.mode, InvocationMode::Recover);
     let task = lock_store(&store)?.task(task_id)?;
     let kind = registry.get(&task.kind)?;
-    let plan = kind.recover(task, Arc::clone(&store), invocation).await?;
+    let plan = kind
+        .recover(task, Arc::clone(&store), invocation, cancellation)
+        .await?;
     lock_store(&store)?.apply_terminal(
         invocation,
         plan.checkpoint.as_ref(),
@@ -354,12 +378,15 @@ pub async fn abort_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
+    cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
     let invocation = lock_store(&store)?.reserve_abort(task_id)?;
     debug_assert_eq!(invocation.mode, InvocationMode::Abort);
     let task = lock_store(&store)?.task(task_id)?;
     let kind = registry.get(&task.kind)?;
-    let plan = kind.abort(task, Arc::clone(&store), invocation).await?;
+    let plan = kind
+        .abort(task, Arc::clone(&store), invocation, cancellation)
+        .await?;
     lock_store(&store)?.apply_terminal(
         invocation,
         plan.checkpoint.as_ref(),
