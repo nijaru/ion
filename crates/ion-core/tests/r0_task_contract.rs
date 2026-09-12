@@ -9,11 +9,12 @@ use std::time::Duration;
 use r0_support::{
     AbortPlan, BoxFuture, Completion, PrototypeTaskStore, RunningTask, StoreError, TaskContext,
     TaskError, TaskKind, TaskRegistry, TaskStatus, TerminalPlan, abort_task, create_task,
-    execute_task, mark_cancel, recover_task, shared_store, task,
+    execute_task, execute_task_with_cancellation, mark_cancel, recover_task, shared_store, task,
 };
 use serde::{Deserialize, Serialize};
 use tempfile::tempdir;
 use tokio::sync::{Notify, oneshot};
+use tokio_util::sync::CancellationToken;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 struct SimpleInput {
@@ -45,6 +46,8 @@ impl TaskKind for ImmediateKind {
         Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
     > {
         Box::pin(async move {
+            assert!(task.id.0 > 0);
+            assert_eq!(task.generation, 1);
             context.commit(|tx| tx.checkpoint(SimpleCheckpoint::Started))?;
             Ok(TerminalPlan::completed(format!("done:{}", task.input.text)))
         })
@@ -109,8 +112,10 @@ impl TaskKind for BlockingKind {
         Box::pin(async move {
             context.commit(|tx| tx.checkpoint(BlockingCheckpoint::Waiting))?;
             started.notify_one();
-            release.notified().await;
-            Ok(TerminalPlan::completed("normal".to_owned()))
+            tokio::select! {
+                () = context.cancelled() => Ok(TerminalPlan::completed("cancel-observed".to_owned())),
+                () = release.notified() => Ok(TerminalPlan::completed("normal".to_owned())),
+            }
         })
     }
 
@@ -235,6 +240,7 @@ impl TaskKind for CrashCheckpointKind {
     > {
         Box::pin(async move {
             assert_eq!(task.checkpoint, Some(CrashCheckpoint::DurableBeforeCrash));
+            assert!(task.generation > 1);
             Ok(TerminalPlan::completed("recovered-after-crash".to_owned()))
         })
     }
@@ -371,6 +377,7 @@ async fn cancel_before_settlement_fences_normal_completion_then_runs_fresh_abort
     let store = new_store(&directory.path().join("cancel.sqlite"));
     let started = Arc::new(Notify::new());
     let release = Arc::new(Notify::new());
+    let cancellation = CancellationToken::new();
     let task_id = create_task::<BlockingKind>(
         &store,
         &SimpleInput {
@@ -388,14 +395,17 @@ async fn cancel_before_settlement_fences_normal_completion_then_runs_fresh_abort
     let running = tokio::spawn({
         let registry = Arc::clone(&registry);
         let store = Arc::clone(&store);
-        async move { execute_task(&registry, store, task_id).await }
+        let cancellation = cancellation.clone();
+        async move {
+            execute_task_with_cancellation(&registry, store, task_id, cancellation).await
+        }
     });
     tokio::time::timeout(Duration::from_secs(1), started.notified())
         .await
         .expect("task starts");
     assert!(mark_cancel(&store, task_id).expect("cancel mark"));
     let generation_before_abort = task(&store, task_id).expect("task").generation;
-    release.notify_one();
+    cancellation.cancel();
     let completion = running.await.expect("driver join");
     assert!(matches!(
         completion,
@@ -616,7 +626,6 @@ async fn abrupt_process_loss_recovers_from_latest_durable_checkpoint() {
         .arg("r0_crash_child_checkpoint")
         .arg("--nocapture")
         .env("ION_R0_TASK_DB", &db)
-        .env("ION_R0_TASK_WITNESS", &witness)
         .env("ION_R0_TASK_ID", task_id.0.to_string())
         .env("ION_R0_TASK_CHILD", "checkpoint")
         .status()
