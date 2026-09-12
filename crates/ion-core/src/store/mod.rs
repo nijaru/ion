@@ -1,6 +1,6 @@
 mod memory;
 
-pub(crate) use memory::{MemoryStore, StoreError};
+pub(crate) use memory::MemoryStore;
 
 use std::collections::{BTreeMap, HashMap};
 
