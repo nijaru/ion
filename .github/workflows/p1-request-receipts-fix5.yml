@@ -1,0 +1,75 @@
+name: P1 request receipt refined patch v5
+
+on:
+  push:
+    branches: [p1-request-receipts]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: p1-request-receipts
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply refined source patch
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/p1_request_receipts_refine.py')
+          text = path.read_text()
+          text = text.replace(
+              '    "                self.start_active(&lane_name, *active);",\n    count=2,\n)',
+              '    "                self.start_active(&lane_name, *active);",\n    count=1,\n)',
+              1,
+          )
+          marker = '\nreconcile = "crates/ion-core/src/tests/reconcile.rs"\n'
+          prefix, found, _ = text.partition(marker)
+          if not found:
+              raise SystemExit('reconcile refinement marker missing')
+          path.write_text(prefix + '\n')
+          PY
+          python3 .github/scripts/p1_request_receipts_refine.py
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          path = Path('crates/ion-core/src/tests/reconcile.rs')
+          text = path.read_text()
+          pattern = r'''\.begin_operation\(\s*session_id,\s*crate::session::lane::MAIN,\s*operation_id,\s*root_inbox,\s*checkpoint,\s*entry,\s*None,\s*\)'''
+          replacement = '''.begin_operation(crate::store::BeginOperationRequest {
+              session_id,
+              lane_name: crate::session::lane::MAIN.to_owned(),
+              operation_id,
+              root_inbox,
+              checkpoint,
+              entry,
+              admission: None,
+          })'''
+          text, count = re.subn(pattern, replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one reconcile begin_operation call, found {count}')
+          path.write_text(text)
+          PY
+      - run: cargo fmt --all
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/ion-core
+          git commit -m "feat: add durable request receipt admission"
+          git push origin HEAD:p1-request-receipts
