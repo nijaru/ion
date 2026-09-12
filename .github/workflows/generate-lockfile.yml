@@ -5,7 +5,7 @@ on:
     branches: [main]
     paths:
       - Cargo.toml
-      - crates/ion-ai/Cargo.toml
+      - crates/ion-ai/**
       - .github/workflows/generate-lockfile.yml
 
 permissions:
