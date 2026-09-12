@@ -1,143 +1,152 @@
 # Ion architecture research
 
-Evidence reviewed for the proposed target on 2026-09-11, America/Los_Angeles. [DESIGN.md](../DESIGN.md) contains recommendations; [ROADMAP.md](../ROADMAP.md) identifies the work needed to validate them. This is a decision-oriented source review, not a runtime benchmark or a complete audit of the referenced projects.
+Evidence reviewed for the proposed target through 2026-09-12, America/Los_Angeles. [DESIGN.md](../DESIGN.md) contains recommendations; [ROADMAP.md](../ROADMAP.md) identifies the work needed to validate them. This is a decision-oriented source review, not a runtime benchmark or a ranking of agent products.
 
 ## 1. Evidence rules
 
-Source code establishes what a specific revision implements. Tests establish the cases asserted, not that those tests passed in this review. Specifications establish intended contracts. Product documentation establishes the public behavior claimed by its publisher. Performance claims require reproducible workloads and measurements; none of the referenced harnesses was benchmarked in this documentation change.
+Source code establishes what a specific revision implements. Tests establish the cases asserted, not that those tests passed in this review. Specifications establish intended contracts. Product documentation establishes the public behavior claimed by its publisher. Performance and effectiveness claims require reproducible workloads and measurements.
 
 Record both the reference revision and the exact inspected path. A moving branch is a discovery surface, not a compatibility target. An upstream change can reopen a decision when it supplies new evidence; it does not automatically change Ion's requirements.
 
-The existing Ion implementation is not scored against these references. It will be inspected for reuse only when implementing an accepted slice. Its historical design and recent fixes remain available in Git and the historical document index.
+Do not flatten projects into a generic "SOTA agents" set. Current Pico/Pi 2 work is the primary minimal-harness design reference because it directly explores many of Ion's core lifecycle questions. Codex is a primary production-engineering reference when its public Rust implementation answers a concrete runtime, storage, client, or multi-agent question. Ordinary shipping Pi is practical product/workflow evidence, not the architectural baseline for future Ion. Goose, OpenHands, DSH, Grok Build, Oh My Pi, and other systems are consulted only when a specific mechanism is relevant; age, popularity, or feature count is neither positive nor negative architectural evidence.
 
-## 2. Pi's three relevant layers
+The existing Ion implementation is not scored against references. Reuse is decided against the accepted target contract for each slice. Historical design and fixes remain available in Git.
 
-At the inspected revisions, the ordinary coding-agent SDK still constructs Agent and AgentSession. The earlier durable AgentHarness exists separately and is exercised by the experimental mini client. Mini is explicitly an incomplete application built to investigate the harness and presentation boundary. Code being present on main therefore does not mean the regular CLI uses it. [R2](#references)
+## 2. Pi/Pico evidence layers
 
-Pico is a clean-room harness design and initial implementation under packages/agent/src/harness/pico/. Its current authority is pico-simple-handoff.md, not the older pico-v3.md or preserved prototypes. The status file records compile-time declarations and tests as WP1, with mutation algebra and MemoryStorage next. Provider, tool, and client integration still contain gated interfaces. This supports studying Pico as a candidate future foundation; it does not establish that it is the shipped Pi runtime or a final release commitment. [R1](#references)
+At revision `71dca871bc80b6bc97be37f0ca3189399d651fff`, ordinary Pi still supplies useful product/workflow evidence while `packages/agent/docs/pico2.md` is the current forward design under review. Pico2 explicitly says it is a design, not an implementation claim. It replaces older resident-tree/fold experiments with separately-lived transcript, tasks, typed values/lists, and an explicit context list. [R1, R2](#references)
 
-Use the ordinary Pi application for practical workflow evidence, the earlier AgentHarness for durable-operation contracts and failure cases, and Pico for the proposed redesign. Do not flatten them into a single 'Pi 2' baseline.
+Pico2's important architectural properties for Ion are:
+
+- a session-global serialized command line and committed sequence;
+- immutable transcript entries distinct from mutable durable tasks;
+- explicit model context rather than equating transcript with prompt state;
+- tasks with start/inflight/waiting/terminal roles and explicit recovery/cancellation stories;
+- one atomic command for settlement plus required successors;
+- working scopes/scratch that are durable state but not conversation history;
+- bounded read models rather than reconstructing all historical state into residency;
+- private physical storage representation, with SQLite/JSONL described as alternative backends rather than part of the public agent model.
+
+Ion should use those as design evidence, not compatibility requirements. In particular, Pico2 identifies entries/tasks/conversations by journal sequence; Ion currently prefers distinct typed identities plus a separate CommitSeq. The P1 prototype supports that separation, and production schema work must still validate its physical cost. [R1](#references)
+
+Older AgentHarness and Pico documents remain useful for failure-case inventories and rationale, but they do not override the current Pico2 design when the two differ. Do not call ordinary Pi, the old AgentHarness, and Pico2 one implementation named "Pi 2".
 
 ## 3. Findings and Ion decisions
 
 ### Durable lifecycle versus agent behavior
 
-Pico places immutable inputs, complete checkpoints, task ownership, and execution/recovery/abort methods behind a common lifecycle. It makes settlement and successor work atomic. Its scheduler is not supposed to interpret generation or compaction phases. [R1](#references)
+Pico2 keeps task lifecycle generic while kind-specific state/code owns generation, tools, jobs, subagents, collapse, and approvals. Settlement and successors belong in one command; an unowned inflight task recovers rather than blindly rerunning. [R1](#references)
 
-Recommendation: a small execution lifecycle with typed Rust behavior state is the leading design. Keep model/tool/compaction details out of the generic scheduler. The task implementation still needs exact effect intent when it performs repeat-sensitive work; a generic running marker is not a universal recovery strategy.
+Ion P1 independently compared an async task-authoring candidate against an explicit typed re-entrant step/checkpoint boundary. The prototype selected the re-entrant boundary: durable continuation is explicit typed state; async Rust remains inside providers, tools, processes, timers, and other effect adapters. Keeping both as public task frameworks would duplicate lifecycle state. See [P1 evidence](p1-execution-prototype.md).
 
-Competing option: Goose's state-machine module describes an ordered re-entrant pipeline over persisted conversation state, with concrete operations separate from the protocol. Its new path is enabled through GOOSE_STATE_MACHINE; the migration is not evidence that every user runs the new path. [R5](#references)
-
-P1 compares the API clarity and failure behavior of these approaches on the same small workload. It does not build two entire harnesses or preserve both public APIs indefinitely.
+Goose's re-entrant state-machine work was useful corroborating evidence during that comparison, but it is no longer an unresolved peer architecture that Ion needs to follow. Its broader product architecture is not treated as a baseline. [R5](#references)
 
 ### History and context
 
-Pico materializes model projections and context controls on immutable entries. Forks share a fixed prefix, and later source changes do not affect them. Its SQLite direction avoids loading all terminal history into execution residency. [R1](#references)
+Pico2 sharply separates transcript, context, task state, and versioned values/lists. That is stronger evidence for Ion's existing direction than the older "conversation as provider-message vector" model. [R1](#references)
 
-Recommendation: keep historical meaning locally reconstructable, support indexed range reads, and separate history from live work. Measure deep forks and dense context edits; a small final prompt does not imply cheap cold reconstruction. Exact caches and physical indexes are P2 decisions.
+Recommendation: keep canonical historical facts append-only, model context explicit and reconstructable, and execution state separate from both. Support indexed range/point reads and keep cold historical state out of live residency. Measure deep forks, dense context edits, large task histories, and context rebuild costs before selecting physical indexes or caches.
 
-Do not adopt Pico's ID allocation merely for resemblance. Ion's proposal separates object identity from commit sequence while retaining writer-owned allocation and durable-before-visible identity. P1 must settle the representation.
+Do not adopt Pico's sequence-as-identity allocation merely for resemblance. Ion's P1 direction keeps object identity and commit order distinct unless production measurements show a concrete cost that outweighs the semantic separation.
 
-### Input and cancellation
+### Input, cancellation, and uncertain effects
 
-Pico distinguishes input acceptance, placement, and final result. It serializes cancellation marks, invocation authority, terminal commits, and watcher capture. Its request-key rule returns the first receipt even when the retry changes the payload. [R1](#references)
+Pico's designs distinguish admission from placement/execution, serialize cancellation with task authority, and make caller disappearance distinct from cancellation. Ion retains those principles but intentionally rejects request-key reuse when the same key is rebound to different target/content/mode.
 
-Recommendation: retain durable input dispositions and scoped cancellation, but reject conflicting key reuse in Ion. A caller timeout is not cancellation of durable work. Terminal outcomes must preserve uncertain external effects.
-
-Ion also proposes retaining cancelled-turn queued inputs in a paused state for explicit withdrawal/resubmission. This is an intentional product choice, not a claim of matching Pico's conversation-abort queue policy.
-
-### Composition and extensions
-
-DSH's Cordis architecture makes the model adapter, tool registry, persistence, and loop replaceable plugins. Registrations unwind with plugin lifetime. Its application profiles distinguish live-reload applications from one-shot and stdio applications that compose once at startup. [R3](#references)
-
-Recommendation: make meaningful behavior and environment boundaries replaceable, with explicit lifetimes and atomic publication. Do not reproduce a universal dynamic context graph merely because the reference uses one. Runtime invariants must remain enforced when behavior changes.
-
-A subprocess RPC boundary is an API and lifecycle boundary, not automatically a security sandbox. Code running with the host user's privileges can access resources outside the protocol unless an OS sandbox actually constrains it. P3 must define trusted local plugins versus restricted extensions, credential/environment filtering, and the effective OS authority of every execution path.
+Ion also makes external-effect uncertainty an explicit first-class contract: retry-safe, reconcilable, or no-safe-retry. A durable `running` marker alone is not sufficient evidence that an interrupted shell/process/provider effect can be repeated. Cancellation is not rollback, and late results are fenced by task identity plus invocation generation. P1 validated the basic race/recovery shape; production promotion remains open.
 
 ### Agent identity and cooperation
 
-Codex's inspected spawn implementation separates persisted identity restoration from runtime reopening and excludes parent cumulative token usage from child model context. These are narrow observations from the named functions, not a blanket claim about all its scheduling or accounting. [R4](#references)
+Codex's inspected spawn/restoration code separates persistent identity restoration from runtime residency and provides useful production evidence for retained-agent semantics. DSH's team subsystem independently distinguishes membership, attributed messaging, revisioned assignments, dependency edges, and advisory path scopes. [R3, R4](#references)
 
-DSH's team documentation independently represents durable membership, attributed messages with target-side deduplication, and revisioned assignments with dependency edges. Its advisory path scopes are not locks. [R3](#references)
+Recommendation: retained agents outlive turns; supervision, messaging, assignment dependencies, task dependencies, conversation ancestry, and workspace sharing remain different relationships. Waiting must not consume the execution capacity needed by the dependency. A spawn tool finishing does not kill a retained worker.
 
-Recommendation: retained agents outlive turns; supervision, messaging, assignment dependencies, and workspace sharing are independent. A spawn tool finishing must not implicitly kill a retained worker. Messaging peers does not grant access to their tools or cancellation authority. Prefer one session writer for an initial local group so internal message admission can be atomic; design a real outbox only when cross-session delivery is needed.
+Child authority is request intersect parent ceiling intersect host policy. History forks, model/config changes, plugin reload, or name reuse cannot widen it.
 
-Child authority must be the intersection of the request, the parent's current ceiling, and host policy. It can narrow but cannot expand through a model override, history fork, configuration reload, or name reuse. This is an Ion requirement to test, not an assumption inferred from a role called 'read-only'.
+### Optional coordination and knowledge
+
+A task/assignment board can improve multi-agent synchronization, but it is an optional coordination mechanism rather than part of the minimal harness contract. Same-session assignment mutations that influence ownership/messaging belong inside that session's transaction boundary. Whether model-facing assignment tools improve task success enough to justify their context/coordination cost is an effectiveness experiment, not an architectural assumption. DSH is evidence for revisioned assignment semantics, not a mandate to copy its team implementation. [R3](#references)
+
+Longer-lived knowledge/memory is a separate concern from session history. Codex now has dedicated goal, queue, and memory stores and an experimental memory pipeline; that establishes that a production agent can benefit from independently-lived state categories, but it does not establish the right extraction/retrieval policy for Ion. [R11](#references)
+
+Ion should experiment later with project/workspace-scoped knowledge that carries provenance, revisions/freshness, supersession/invalidation, and explicit bounded retrieval. Candidate agent-written knowledge should not silently become trusted system state. Exact lexical/semantic retrieval, consolidation, contradiction resolution, and prompt/tool presentation require controlled effectiveness evaluation. The feature remains disabled by default until it earns its cost.
 
 ### Workspaces and integration
 
-Grok Build documents background children, explicit worktree isolation, root-to-child messaging, and continuation from completed child history. On continuation it rebuilds prompt/tools from current definitions. Worktree changes remain separate until an apply operation integrates them. [R6](#references)
+Grok Build documents background children, explicit worktree isolation, root-to-child messaging, continuation, and apply-style integration. These are useful product contracts for workspace semantics, not proof of its runtime architecture. [R6](#references)
 
-Recommendation: make environment binding independent of agent type and context origin. Record exactly what is retained versus re-resolved. Review and apply worker changes as a separate effect with a known base and fresh verification. Worktrees do not remove logical integration conflicts or automatically include uncommitted parent changes.
+Recommendation: environment binding remains independent of agent type and context origin. Parallel mutating workers should normally use isolated workspaces/worktrees from explicit bases. Applying a worker result is a separate admitted effect with fresh base/dirty-state checks and post-apply verification.
 
 ### TUI as an agent-group client
 
-Oh My Pi's Agent Hub documents a flat/tree roster, per-agent inspection, narrow-terminal switching, transcript access, and direct steering. It also revives parked agents when focused. [R7](#references)
+Oh My Pi's Agent Hub provides useful interaction evidence for roster/inspection/narrow-terminal behavior. Current Codex client/command-center work is also relevant when it exposes concrete production behavior. Neither UI defines Ion's execution semantics. [R7, R11](#references)
 
-Recommendation: borrow the visibility and responsive layout, not focus-triggered execution. Ion inspection is read-only. Input routing, approvals, and delayed replies must retain stable targets across focus changes. Session summaries and selected transcript pages should replace directory scans or full-history loading as the authoritative observation path.
-
-Pico's whole-commit watch delivery and reconnect-on-overflow provide a useful correctness model. Ion's proposal deliberately distinguishes durable commits from provisional output frames, so a consumer must use channel offsets and an observation epoch rather than treat all frames as durable commit events. P2 and P4 test this trade-off. [R1](#references)
+Recommendation: inspection is read-only; focus does not implicitly wake an agent. Inputs, approvals, and delayed replies carry stable target identities independent of current focus. Frontends consume bounded runtime observations rather than loading every transcript.
 
 ### Managed-agent APIs and model-facing effectiveness
 
-OpenAI's September 10 Agents API announcement describes managed Codex harness execution, compaction, deferred tool discovery, programmatic tool calling, and optional subagents. The architecture documentation separates harness, environment, and application server. Self-hosting the environment is not self-hosting that managed harness. [R8](#references)
+OpenAI's Agents API separates managed harness, environment, and application-server concerns and exposes compaction, deferred tool discovery, programmatic calling, and optional subagents. This is useful product/architecture evidence without requiring Ion to depend on the managed service. [R8](#references)
 
-Recommendation: keep Ion's behavior, environment, and clients separable, and evaluate deferred discovery and programmatic calling as optional model-facing capabilities. No API dependency is required. Customer testimonials are not comparative evidence that those capabilities improve Ion's coding tasks.
+Recommendation: keep behavior, environment, and clients separable. Evaluate tool-result shaping, editing representation, deferred discovery, programmatic tool use, context strategy, and single/group policies through controlled task outcomes. Runtime engineering can improve reliability, control, recovery, and coordination; it does not by itself prove the model solves more coding tasks.
 
-### Rust and storage boundaries
+### Storage ownership and database boundaries
 
-Tokio documents that already-running spawn_blocking work cannot generally be aborted, and a shutdown timeout stops waiting rather than stopping that work. This constrains database and process cleanup design. [R9](#references)
+Tokio documents that already-running blocking work cannot generally be aborted, which supports keeping SQLite behind bounded blocking ownership rather than pretending an async wrapper makes database mutation cancellable. [R9](#references)
 
-SQLite documents WAL's synchronization and backup implications. FULL adds commit synchronization; WAL can still require checkpoint maintenance, and the application must not discard uncheckpointed WAL data. SQLite guarantees are conditional on the filesystem/VFS honoring them. [R10](#references)
+SQLite WAL is a good local substrate, but database partitioning must follow atomicity and lifecycle. SQLite documents that multi-file transactions using attached databases are crash-atomic only under conditions that exclude WAL; in WAL mode individual files remain atomic but a host crash can leave an attached multi-file transaction partially committed across files. Therefore Ion must not split one session's core transaction across several WAL databases. [R10](#references)
 
-Recommendation: use bounded blocking ownership and local SQLite first, explicitly configure and verify durability, and test storage failure rather than assuming an async wrapper makes I/O cancellable. Do not add storage backends before a concrete requirement.
+The leading topology is one authoritative SQLite database per session/group, plus its artifact directory. A small global catalog may index/discover sessions but must be rebuildable and cannot be required for session correctness. Optional project knowledge, global/search indexes, caches, or similar independently-lived state can use separate stores and synchronize through explicit idempotent/outbox protocols when authoritative.
+
+This is a change from the current implementation, which uses one SQLite database per Ion data root. The target is not yet validated. P2 must measure independent concurrent sessions, lock/checkpoint behavior, backup/archive/delete, large histories, output spooling, restart, and catalog repair before the topology is treated as stable.
+
+Current Codex provides supporting but non-prescriptive evidence: its Rust state runtime opens separate SQLite stores for state, logs/history, goals, memories, and queue, and explicitly separates logs/history to reduce lock contention. Those categories have independent lifecycles; Ion should adopt the principle, not the schema. [R11](#references)
 
 ## 4. Decision register
 
-These are recommended choices for validation, not claims of completed implementation.
+These are recommended choices for validation, not immutable architecture promises.
 
 | Decision | Proposed choice | Reopen when |
 |---|---|---|
-| Runtime composition | Shared durable task lifecycle; typed behavior internals | P1 exposes awkward APIs, duplicated mechanisms, or harder recovery than a re-entrant pipeline |
-| Group boundary | One writer per local session containing the root and workers | Measured contention or a real independent-session deployment requires another boundary |
-| Collaboration | Explicit messages and optional assignment board; supervision remains separate | An evaluated policy requires additional primitives |
-| Context | Immutable entries, stored projections/controls, bounded indexed reads | P2 identifies unsound projection or unacceptable fork/edit costs |
-| IDs | Typed session-local identities; commit sequence separate | P1 selects the physical schema and allocation method |
+| Runtime composition | Shared durable task lifecycle; typed re-entrant behavior state | Production P1 exposes duplicated state, awkward APIs, or worse recovery |
+| Group boundary | One writer and one authoritative core database per local session/group | Measured contention or a real independent-session deployment requires another ownership boundary |
+| Collaboration | Explicit messages; optional revisioned assignment board; supervision separate | Controlled tasks justify different primitives |
+| Knowledge | Optional project/workspace service with provenance and bounded retrieval | E2 evidence favors another scope/model or shows no benefit |
+| Context | Immutable historical facts plus explicit context controls and bounded indexed reads | P2 identifies unsound projection or unacceptable fork/edit costs |
+| IDs | Typed identities; commit sequence separate | Production P1/P2 shows a concrete representation cost that outweighs separation |
+| Storage partition | Core session state together; independent-lifecycle stores separate | Atomicity, contention, backup, or measurement evidence contradicts the boundary |
 | Plugins | Trusted compiled interfaces plus supervised versioned subprocess contributions | A concrete dynamic task-authoring or stronger isolation requirement justifies a new boundary |
 | Output | Durable facts/checkpoints plus provisional incremental presentation | P2 cannot provide coherent recovery/reconnect within acceptable cost |
-| TUI | Inline-first conversation, responsive group/worker views, explicit control | P4 usability and PTY evidence favors a different renderer/layout |
-| Swarm policy | Optional, bounded, measurable; no required coordinator workflow | Controlled tasks show a better default at the same budget or deadline |
+| TUI | Inline-first conversation, responsive group/worker views, explicit control | P4 usability and PTY evidence favors another renderer/layout |
+| Agent policy | Single agent default; optional bounded delegation | Controlled tasks show another default wins at equal resource/deadline budgets |
 
 ## 5. Remaining focused research
 
-The core draft does not depend on an exhaustive survey. Before a corresponding implementation boundary is stabilized, inspect its specific competing implementation and tests:
+The core draft does not depend on an exhaustive agent survey. Before stabilizing a boundary, inspect only references that answer its unresolved question:
 
-- P1: Goose's underlying goose-agent machine and Codex's capacity/residency, wait, and cancellation implementations beyond the spawn excerpt.
-- P2: Pico's output/watch/storage specification and relevant legacy regression tests; current SQLite query plans and fork representations.
-- P3: DSH's scoped resource disposal and failure paths, Codex's permission intersection, and concrete OS sandbox boundaries.
-- P4: Actual Pi/Oh My Pi/Grok event and rendering code, not just their product guides.
-- Provider/environment milestones: Kimi's Wire/KAOS and OpenHands' conversation/workspace boundaries; exact ACP schema and capability negotiation.
-- Effectiveness milestones: editing representations, tool-result shaping, deferred discovery, and programmatic execution, including Oh My Pi and Prime Agent where reproducible evidence is available.
+- P1 production promotion: current Pico2 task/line semantics and Codex capacity/residency/cancellation only where they expose a concrete unresolved race or API question.
+- P2: Pico2 storage/read-model/output rules, SQLite WAL/backup/ATTACH behavior, current Codex storage partitioning, and Ion query plans/benchmarks. Validate per-session databases rather than assuming them.
+- P3: scoped contribution disposal/failure paths, Codex permission/authority handling, and concrete OS sandbox boundaries.
+- P4: current Pi/Pico, Codex, Oh My Pi, and other terminal clients only for specific interaction/event questions.
+- Provider/environment milestones: inspect Kimi/Wire/KAOS, ACP, or another implementation only when an exact provider/environment/protocol question requires it.
+- Effectiveness: editing representations, tool-result shaping, context/compaction, deferred discovery, programmatic execution, delegation policy, assignment tools, and knowledge retrieval using reproducible task evidence.
 
-These are narrow follow-through tasks attached to gates, not authorization for an indefinite new framework survey. Additional agents earn inclusion by answering an unresolved question. Neither rewrite history nor popularity is sufficient to dismiss or select a design.
+Goose and OpenHands are not default comparison targets. They remain available if a concrete mechanism becomes relevant. Additional projects earn inclusion by answering an unresolved question, not by being established or feature-rich. Neither rewrite history nor popularity is sufficient to dismiss or select a design.
 
 ## References
 
-### R1 — Pi/Pico foundation
+### R1 — Current Pico2 design
 
-Publisher: earendil-works/pi. Revision: `7a2647f32a11864d0c2f98bd2278d18fdf524f9a`, pico, inspected September 11, 2026.
+Publisher: earendil-works/pi. Revision: `71dca871bc80b6bc97be37f0ca3189399d651fff`, inspected September 12, 2026.
 
-- [Current implementation specification](https://github.com/earendil-works/pi/blob/7a2647f32a11864d0c2f98bd2278d18fdf524f9a/packages/agent/docs/pico/pico-simple-handoff.md): entries/context, scoped state, tasks, transactions, admission, cancellation, outputs, watches, storage, and race requirements.
-- [Implementation status and authority](https://github.com/earendil-works/pi/blob/7a2647f32a11864d0c2f98bd2278d18fdf524f9a/packages/agent/docs/pico/pico-simple-blockers.md): WP1 and gated interfaces.
-- [Task declarations](https://github.com/earendil-works/pi/blob/7a2647f32a11864d0c2f98bd2278d18fdf524f9a/packages/agent/src/harness/pico/tasks.ts): typed input/checkpoint/outcome contract. Most runtime claims in this review are specifications, not tested implementations.
+- [pico2.md](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/agent/docs/pico2.md): current design under review; transcript/tasks/values/context, task roles and recovery, single session line, working scopes, storage/read models, watches, and open decisions. This is a specification, not an implementation claim.
 
-### R2 — Ordinary Pi and earlier AgentHarness
+### R2 — Ordinary Pi and earlier harness evidence
 
-Publisher: earendil-works/pi. Revision: `71dca871bc80b6bc97be37f0ca3189399d651fff`, inspected September 11, 2026.
+Publisher: earendil-works/pi. Revision: `71dca871bc80b6bc97be37f0ca3189399d651fff`, inspected September 12, 2026.
 
-- [Coding-agent SDK construction](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/sdk.ts): Agent and AgentSession path.
+- [Coding-agent SDK construction](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/core/sdk.ts): current ordinary coding-agent path at the inspected revision.
 - [Experimental mini](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/coding-agent/src/experimental/mini/README.md): experimental client/host/worker topology and declared omissions.
-- [Earlier harness specification](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/agent/docs/harness.md): lanes, operations, durability, recovery, and invariant catalog. Some implementation-status text is historical; verify a specific claim against source before porting it.
+- [Earlier harness specification](https://github.com/earendil-works/pi/blob/71dca871bc80b6bc97be37f0ca3189399d651fff/packages/agent/docs/harness.md): historical durable-operation contracts and failure cases. Use for rationale/regressions when compatible with Pico2; it is not the current future design authority.
 
 ### R3 — DSH/Cordis and teams
 
@@ -148,35 +157,34 @@ Publisher: deepseek-ai/deepseek-harness. Revision: `c291e7961a515f6d7af9304e7fd1
 
 ### R4 — Codex agent identity and spawn
 
-Publisher: OpenAI. Inspected source revision: `89c8bcf37d64be69e4c8286f4541c1a84ed312a4`; not claimed to be a release or the latest branch head.
+Publisher: OpenAI. Inspected source revision: `89c8bcf37d64be69e4c8286f4541c1a84ed312a4`.
 
-- [Agent spawn and restoration](https://github.com/openai/codex/blob/89c8bcf37d64be69e4c8286f4541c1a84ed312a4/codex-rs/core/src/agent/control/spawn.rs): restore_v2_agent_metadata and keep_forked_rollout_item. The inspected functions separate identity residency and inherited context/accounting; broader lifecycle conclusions require adjacent source/tests.
+- [Agent spawn and restoration](https://github.com/openai/codex/blob/89c8bcf37d64be69e4c8286f4541c1a84ed312a4/codex-rs/core/src/agent/control/spawn.rs): narrow evidence for identity restoration, residency, and inherited context/accounting. Broader conclusions require adjacent source/tests.
 
-### R5 — Goose's alternative execution design
+### R5 — Goose re-entrant execution evidence
 
 Publisher: aaif-goose/goose. Revision: `50666ae0b9a51e260b52b7efbab2e4e020346e94`, inspected September 11, 2026.
 
-- [State-machine module](https://github.com/aaif-goose/goose/blob/50666ae0b9a51e260b52b7efbab2e4e020346e94/crates/goose/src/agents/state_machine/mod.rs): ordered re-entrant pipeline, exported operations, and opt-in switch.
-- [Migration instructions](https://github.com/aaif-goose/goose/blob/50666ae0b9a51e260b52b7efbab2e4e020346e94/AGENTS.md): old/new path coexistence. This is a candidate to test, not a claim that its recovery semantics match Pico.
+- [State-machine module](https://github.com/aaif-goose/goose/blob/50666ae0b9a51e260b52b7efbab2e4e020346e94/crates/goose/src/agents/state_machine/mod.rs): historical corroborating evidence for an ordered re-entrant pipeline. Not an Ion baseline or claim that Goose has equivalent durability/recovery semantics.
 
 ### R6 — Grok Build subagents and workspaces
 
 Publisher: xai-org/grok-build. Revision: `37949780c144e37df692e3d669051a21fec24f20`, inspected September 11, 2026.
 
-- [Subagents and personas](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md): background, resume, messaging, inherited MCP, and worktree application. These are documented product contracts; no Grok runtime was executed in this review.
+- [Subagents and personas](https://github.com/xai-org/grok-build/blob/37949780c144e37df692e3d669051a21fec24f20/crates/codegen/xai-grok-pager/docs/user-guide/16-subagents.md): documented background/resume/messaging/worktree behavior. Product contract evidence, not a runtime benchmark.
 
 ### R7 — Oh My Pi Agent Hub
 
 Publisher: can1357/oh-my-pi. Revision: `f97fa5c95010b62ac34c7357f9a1cae6975e12d6`, inspected September 11, 2026.
 
-- [Agent Hub](https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/docs/agent-hub.md): responsive roster/inspector, steering, persisted workers, and focus-triggered revival. Product guide, not a TUI benchmark.
+- [Agent Hub](https://github.com/can1357/oh-my-pi/blob/f97fa5c95010b62ac34c7357f9a1cae6975e12d6/docs/agent-hub.md): responsive roster/inspector, steering, persisted workers, and focus-triggered revival. Useful UI evidence; Ion intentionally keeps inspection read-only.
 
 ### R8 — OpenAI Agents API
 
 Publisher: OpenAI. Announcement dated September 10, 2026; official documentation inspected September 11, 2026. Web documentation is not commit-pinned.
 
 - [Introducing the Agents API](https://openai.com/index/introducing-the-agents-api/): managed Codex harness, context management, tool discovery, programmatic calling, and optional multi-agent operation.
-- [Architecture](https://developers.openai.com/api/docs/guides/agents-api/architecture): harness, environment, and application-server boundaries. Architectural evidence, not a dependency proposal or an independent performance comparison.
+- [Architecture](https://developers.openai.com/api/docs/guides/agents-api/architecture): harness, environment, and application-server boundaries. Architectural/product evidence, not a dependency proposal.
 
 ### R9 — Tokio cancellation and blocking work
 
@@ -184,9 +192,17 @@ Publisher: Tokio maintainers. Documentation for Tokio 1.53.1 inspected September
 
 - [spawn_blocking](https://docs.rs/tokio/1.53.1/tokio/task/fn.spawn_blocking.html): running blocking tasks are not generally abortable; timeout limits waiting, not execution.
 
-### R10 — SQLite durability and WAL
+### R10 — SQLite durability, WAL, and multi-database transactions
 
-Publisher: SQLite project. Official living documentation inspected September 11, 2026; exact SQLite version must be selected and verified with the implementation.
+Publisher: SQLite project. Official living documentation inspected September 12, 2026; exact SQLite version must be selected and verified with the implementation.
 
 - [PRAGMA synchronous](https://www.sqlite.org/pragma.html#pragma_synchronous): synchronization modes and WAL durability.
-- [Write-ahead logging](https://www.sqlite.org/wal.html): WAL lifecycle, checkpoints, file handling, and local-host constraints. Read the current release/advisory information when selecting the library; this review does not certify a version.
+- [Write-ahead logging](https://www.sqlite.org/wal.html): WAL lifecycle, checkpoints, file handling, and local-host constraints.
+- [ATTACH DATABASE](https://www.sqlite.org/lang_attach.html): multi-database transaction guarantee; crash-atomicity across attached files excludes WAL-mode main databases. This is why one session transaction must not be split across multiple WAL files.
+
+### R11 — Current Codex state/storage subsystems
+
+Publisher: OpenAI. Revision: `ee6814bfa4889fe9b2b3dcc9cc8bdd91effa8ab8`, inspected September 12, 2026.
+
+- [State runtime](https://github.com/openai/codex/blob/ee6814bfa4889fe9b2b3dcc9cc8bdd91effa8ab8/codex-rs/state/src/runtime.rs): separate SQLite pools/stores for state, logs/thread history, goals, memories, and queue; source comment explicitly cites lock-contention reduction for logs/history separation.
+- Adjacent goals/memories/queue modules are evidence of independently-lived state surfaces, not a schema template for Ion. Their effectiveness is not inferred from their existence.
