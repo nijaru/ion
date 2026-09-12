@@ -1,8 +1,8 @@
 # Ion design
 
-Status: proposed target architecture, revision 1, 2026-09-11 (America/Los_Angeles).
+Status: proposed target architecture, revision 2, 2026-09-12 (America/Los_Angeles).
 
-This document specifies the agent Ion should become. It is not a description of the current implementation or a claim of demonstrated state-of-the-art performance. Product requirements below are established; architecture choices are proposals to validate through the gates in [ROADMAP.md](ROADMAP.md). Pi and Pico are primary references, not compatibility contracts. Existing Ion code does not constrain the design.
+This document specifies the agent Ion should become. It is not a description of the current implementation or a claim of demonstrated state-of-the-art performance. Product requirements below are established; architecture choices are proposals to validate through the gates in [ROADMAP.md](ROADMAP.md). Current Pico/Pi 2 work is the primary minimal-harness design reference; Codex is a primary production-engineering reference where its public implementation answers a concrete runtime, storage, multi-agent, or client question. Other agents are evidence only for specific mechanisms, not peers that Ion must imitate. Existing Ion code does not constrain the design.
 
 [TERMINAL.md](TERMINAL.md) owns interaction and presentation. [Research](docs/research.md) records sources, alternatives, and evidence limits. [Historical documents](docs/history/README.md) describe the preceding design and are not a second target. Source and tests remain the evidence for what the current binary does.
 
@@ -10,7 +10,7 @@ This document specifies the agent Ion should become. It is not a description of 
 
 Ion is a user-owned, provider-neutral Rust coding agent with a first-class terminal interface. It runs one agent by default. Enabling multi-agent operation lets that agent and the user create, observe, steer, and supervise cooperating workers through the same runtime.
 
-A worker is an ordinary agent with its own identity, conversation, configuration, authority, and assignments. Researcher, implementer, and reviewer are configurations, not special runtime types. Single-agent use needs no coordinator prompt, task board, or swarm configuration. Multi-agent mechanisms exist without adding their tool definitions or instructions to a single-agent model request.
+A worker is an ordinary agent with its own identity, conversation, configuration, authority, and assignments. Researcher, implementer, and reviewer are configurations, not special runtime types. Single-agent use needs no coordinator prompt, task board, memory system, or swarm configuration. Multi-agent mechanisms exist without adding their tool definitions or instructions to a single-agent model request.
 
 The product must support:
 
@@ -20,7 +20,7 @@ The product must support:
 - The same semantics through the Rust library, TUI, print/JSON, and ACP adapters. The terminal owns presentation, not execution truth.
 - Local operation on macOS and Linux first; no mandatory cloud service, telemetry, account, or daemon. Local models are ordinary providers.
 
-Runtime capabilities and orchestration policy are separate. The runtime does not mandate planning, reflection, voting, role taxonomies, or a particular swarm strategy. These may be supplied as behavior and evaluated. An agent group is not presumed better than one agent at an equal budget.
+Runtime capabilities and orchestration policy are separate. The runtime does not mandate planning, reflection, voting, role taxonomies, a task board, long-term memory, or a particular swarm strategy. These may be supplied as optional behavior/services and evaluated. An agent group is not presumed better than one agent at an equal budget.
 
 ## 2. Architecture direction
 
@@ -32,9 +32,12 @@ Use a small durable execution runtime with typed behavior implementations, a pro
 | Session runtime | Serialized mutation, durable acceptance, task lifecycle, invocation fencing, grants, reservations, observation | Provider-specific payloads or terminal layout |
 | Agent behavior | Turns, request preparation, tool exchanges, compaction, delegation policy | Raw database writes or another scheduler |
 | Environment | Files, commands, jobs, sandbox enforcement, workspace and artifact operations | Conversation topology or agent roles |
+| Optional services | Assignment/coordination state, project knowledge, derived search/indexes when enabled | Core turn semantics or hidden mandatory prompts |
 | Frontends | Input drafts, focus, rendering, inspection, explicit commands | Provider clients, session persistence, agent lifecycle ownership |
 
-Pico motivates the lifecycle/behavior separation; its foundation remains early implementation rather than a proven replacement. Goose provides a competing composable-operation approach. The preferred Ion design keeps typed behavior state machines behind a common execution boundary instead of translating either project's interfaces. [R1, R5](docs/research.md#references)
+Current Pico/Pi 2 work is the main design comparison for keeping the harness small while making transcript, task lifecycle, context, working state, and session mutation explicit. Ion deliberately does not inherit Pico interfaces or representation choices. Codex is useful as a production-engineering comparison, including its separation of state, logs/history, goals/queues, memories, clients, and agent command surfaces. Goose, OpenHands, and other systems are consulted only when a specific unresolved mechanism warrants it; project age, popularity, or feature count is not evidence of architectural quality. [R1, R4](docs/research.md#references)
+
+The architecture should be cohesive rather than minimal for its own sake: additional machinery is justified when it creates a concrete correctness, recovery, observation, isolation, or extensibility property. It is not justified merely to mirror a larger framework. Conversely, implementation convenience never freezes a weak abstraction. Prototype or production evidence may reopen any choice in this document.
 
 Initially, a CLI may embed the host. A later local service or remote transport uses the same session command boundary. Logical separation does not require a process or crate per layer.
 
@@ -50,8 +53,9 @@ Initially, a CLI may embed the host. A later local service or remote transport u
 | Assignment | Optional shared objective with an owner, revision, dependencies, and result references. It is not the runtime task graph. |
 | Job | Environment-backed work that may outlast its initiating tool or turn. Its durable task owns execution from the first effect. |
 | Artifact | Retained content or an immutable reference to evidence, output, or a proposed change. |
+| Knowledge item | Optional project/workspace-scoped retained information with provenance. It is not canonical conversation history. |
 
-Use distinct Rust ID newtypes. The proposal uses a globally unique SessionId and opaque session-local identifiers for agents, conversations, entries, tasks, inputs, and artifacts. IDs are allocated by the writer and returned only after commit. Cross-session references include SessionId. CommitSeq orders atomic batches and is not a substitute for an object's identity. Prototype P1 must settle the numeric representation and allocation mechanics before a durable schema is declared stable.
+Use distinct Rust ID newtypes. The target uses a globally unique SessionId and opaque session-local identifiers for agents, conversations, entries, tasks, inputs, and artifacts. IDs are allocated by the writer and returned only after commit. Cross-session references include SessionId. CommitSeq orders atomic batches and is not a substitute for an object's identity. The P1 prototype supports this separation; production allocation and physical representation remain subject to schema evidence.
 
 Keep four relationships separate: conversation ancestry, agent supervision, task dependencies, and workspace sharing. A history fork confers neither ownership nor permission. Peer communication is not a supervision edge. An assignment dependency does not automatically create a runtime dependency.
 
@@ -82,9 +86,9 @@ The common task lifecycle is pending, running, terminal. Terminal outcomes disti
 
 A task records its kind and schema revision, immutable input, owning agent and optional parent task, dependencies, invocation generation, optional full checkpoint, output references, and terminal outcome. Kind-specific phases are typed Rust enums inside the behavior implementation. The scheduler does not interpret model/tool/compaction checkpoints.
 
-The preferred authoring shape is a typed task contract with associated Input, Checkpoint, and Output types, execution/recovery methods, and cancellation cleanup. A private erased adapter supports registry dispatch. Do not expose a JSON-first API or replicate TypeScript type-witness machinery. Prototype P1 must compare an async authoring method with typed checkpoint/settlement commands against an explicit re-entrant step method. Choose one production path, not two public frameworks.
+P1 selected an explicit typed re-entrant step/checkpoint boundary as the durable task authoring model. A task kind has associated typed input, checkpoint, and output; one step inspects committed state and returns a bounded plan such as effects to admit, a durable wait/checkpoint, or completion. A private erased adapter supports registry dispatch. Async Rust remains appropriate inside provider, tool, process, timer, and other effect adapters, but an async stack frame is not a durable continuation and there is no second public async-task framework. This choice remains reopenable if production promotion demonstrates duplicated state or worse recovery semantics. See [P1 evidence](docs/p1-execution-prototype.md).
 
-Task creation commits before capacity acquisition. Running reservation and invocation identity commit before external work. A task may replace its full checkpoint at explicit recovery boundaries. Execution returns a typed completion plan; the writer validates the current invocation and commits the outcome, semantic entries, successor work, and scratch retirement atomically.
+Task creation commits before capacity acquisition. Running reservation and invocation identity commit before external work. A task may replace its full checkpoint at explicit recovery boundaries. Execution returns a typed transition/completion plan; the writer validates the current invocation and commits the outcome, semantic entries, successor work, and scratch retirement atomically.
 
 A pending task has not begun effects. A running task found after process loss invokes recovery, never blindly invokes execute again. Opening and inspecting a session start no tasks; drive/resume is an explicit host action. A temporarily missing task kind blocks recovery visibly while retaining its data. It does not silently erase output or substitute unrelated code. Explicit abandonment records its own terminal decision.
 
@@ -154,7 +158,7 @@ On turn cancellation, unplaced steer/follow-up inputs remain durable and paused 
 
 Retries are bounded and classified, with durable attempt identity, deadline/backoff information, and usage uncertainty. A scheduling timer is not a busy-poll loop. Protocol-required status polling is allowed only in an owned adapter with a bounded backoff and cancellation path.
 
-## 9. Optional agent groups
+## 9. Optional agent groups and coordination services
 
 Multi-agent enablement controls the model-facing capability set. It does not create a different runtime. Disabling new spawning while workers exist does not hide them, lose their results, or remove the user's control surface.
 
@@ -166,7 +170,15 @@ Fresh and forked contexts are explicit. Nested spawning is allowed only within d
 
 Within a session, messages and target inbox admission can commit atomically under the same writer. Repeated delivery uses the same message identity. Future cross-session delivery needs an outbox/inbox acknowledgment protocol; it is not emulated by writing directly into another session's history.
 
-A shared assignment board is optional. Claims and updates compare expected revisions; dependencies must remain acyclic. Advisory file scopes produce conflict warnings, not filesystem locks. Completing an assignment attaches result/evidence references and does not automatically approve or merge changes. The board is human-visible even when its model-facing tools are disabled. DSH is evidence for these distinctions, not a mandate to copy its delivery behavior. [R3](docs/research.md#references)
+### Experimental coordination layer
+
+The core harness must be useful without a task board or long-term knowledge system. Coordination features therefore form an optional layer with explicit feature/tool enablement and no hidden prompt tax in ordinary single-agent sessions.
+
+A shared assignment board is the leading task-coordination primitive for one agent group. Claims and updates compare expected revisions; dependencies must remain acyclic. Advisory file scopes produce conflict warnings, not filesystem locks. Completing an assignment attaches result/evidence references and does not automatically approve or merge changes. Because assignment mutation can affect same-session ownership, messaging, and agent decisions, the durable board belongs inside that session's atomic store when enabled. It is human-visible even if its model-facing tools are disabled.
+
+Longer-lived project knowledge is a different concern. It must not be disguised as conversation history or silently injected into every request. A future knowledge service should store scoped items with source/provenance, revision/freshness information, and explicit invalidation or supersession. Retrieval can combine exact/lexical search and optional derived semantic indexes; the model sees only selected results through a bounded context/tool boundary. Agent-written knowledge may be candidate or verified state depending on policy. The exact extraction, consolidation, contradiction, trust, and retrieval policy remains an effectiveness experiment rather than a runtime invariant.
+
+Cross-session/project coordination must not require a distributed transaction with the session database. A session can atomically record an outbox/event describing a requested external update; a separate service applies it idempotently and records its own receipt. Shared services may become unavailable without corrupting or blocking inspection of the core session. If later evidence requires stronger coupling, that is a new storage/ownership design rather than an implicit ATTACH-based shortcut.
 
 Agent inspection is read-only. Resume, restart, reassign, cancel, and retire are explicit and distinct. A retired agent remains inspectable; starting over creates a new identity and records lineage. A supervisor turn finishing does not kill its retained workers. Explicit supervisor retirement must reparent or settle its descendants first.
 
@@ -210,9 +222,36 @@ Begin with a small effective tool set. Deferred discovery and programmatic tool 
 
 ## 13. Persistence and observation
 
-Use SQLite on local storage for the first durable backend, with WAL, explicit FULL synchronization, foreign keys, ownership locking, and a supported patched SQLite version. Keep the backend interface narrow and private until another implementation proves its need. SQLite transactions protect the database; correct fsync/filesystem behavior remains part of the durability assumption. Backups must include committed WAL state through a supported backup path. [R10](docs/research.md#references)
+SQLite remains the local durable substrate, with WAL, explicit synchronization policy, foreign keys, ownership locking, and a supported patched SQLite version. Keep physical storage private to the runtime. SQLite guarantees still depend on correct filesystem/VFS behavior, and backups must use a supported path that includes committed WAL state. [R10](docs/research.md#references)
 
-Proposed logical records:
+### Storage topology
+
+The physical database boundary should follow the semantic atomicity/ownership boundary rather than table category. The leading topology is:
+
+```text
+Ion data root/
+  catalog.sqlite                 # small rebuildable global discovery/index metadata
+  sessions/
+    <SessionId>/
+      session.sqlite             # authoritative core state for exactly one session/group
+      artifacts/                 # large retained outputs/evidence referenced by session.sqlite
+  projects/
+    <Project-or-KnowledgeSpace>/
+      knowledge.sqlite           # optional experimental cross-session knowledge
+  indexes/                       # optional rebuildable global/search/vector indexes
+```
+
+`session.sqlite` contains every fact that must participate in one session command transaction: agents, conversations, entries/context controls, durable tasks and effects, inputs/messages/receipts, grants/approvals, reservations/usage, and any enabled in-session assignment board. Splitting those records across databases would weaken the principal correctness property. In WAL mode SQLite does not provide crash-atomic commit across multiple attached database files, so Ion must not use ATTACH to simulate one core transaction across category databases. [R10](docs/research.md#references)
+
+A database-per-session aligns the physical writer lock with Ion's semantic single-writer boundary, isolates corruption/recovery and WAL/checkpoint work, permits unrelated sessions to write independently, and makes session archival/deletion/backup bounded. The current implementation still uses one database per data root; migration to the target topology is implementation work, not evidence that the old layout is part of the contract.
+
+The global catalog is not an additional source of session truth. It stores discovery/presentation metadata such as session id, title, project hint, timestamps, and path. Creation publishes a complete session store before catalog visibility; catalog loss or staleness must be repairable by scanning valid session stores. No core effect depends on a catalog write committing atomically with a session write.
+
+Large artifacts live outside SQLite when that avoids pathological row/WAL growth. Publish a durable file reference only after its content and required directory metadata are safely retained. A crash may leave a reclaimable orphan file, never a committed reference to missing required content. Small semantic payloads that are exactly what the model must replay may stay inside the session database. Truncation and quota exhaustion are explicit results.
+
+Optional project knowledge, global search, embeddings, logs, telemetry caches, and similar data use separate stores only when their lifecycle is truly independent. Derived stores are rebuildable. Authoritative cross-session stores synchronize through explicit idempotent messages/outbox records rather than pretending cross-file atomicity. Credentials remain outside these databases under the host's credential mechanism.
+
+Proposed logical session records:
 
 | Records | Required constraints/indexes |
 |---|---|
@@ -222,13 +261,11 @@ Proposed logical records:
 | Input/message/receipt | Unique scoped request key and message identity; ordered target inbox; explicit disposition |
 | Grant and approval | Current authority revision, narrowing lineage, immutable approved action binding |
 | Reservation and usage | Unique attempt charges, ancestor accounts, retained uncertain reservations |
-| Assignment and artifact | Revision-based mutation; retained results; base/workspace/evidence references |
+| Assignment and artifact metadata | Revision-based mutation; retained results; base/workspace/evidence references |
 
 These are a logical schema, not an instruction to create every table before the first working slice. Version the actual schema and serialized kind payloads separately. Before an incompatible change, choose and test migration or explicit archive/refusal; never silently reinterpret old bytes or delete old sessions.
 
-Large outputs use bounded buffers and owned spool/artifact files. Publish a durable file reference only after its content and required directory metadata are safely retained. A crash may leave a reclaimable orphan file, never a committed reference to missing required content. Truncation and quota exhaustion are explicit results.
-
-Three classes of data remain distinct:
+Three classes of output/state remain distinct:
 
 1. Semantic facts and control decisions: durable before acknowledgment/publication.
 2. Recovery output/checkpoints: bounded, periodically persisted, never proof of completion.
@@ -242,7 +279,7 @@ Overflow closes the affected subscription and requires a new atomic snapshot; it
 
 ## 14. Public contract and interoperability
 
-Expose session/agent/conversation commands and bounded queries with stable IDs, typed errors, receipts, and explicit cancellation scopes. Keep database rows, codecs, invocation tokens, raw tool registries, and transaction builders crate-private unless a demonstrated embedding use requires otherwise.
+Expose session/agent/conversation commands and bounded queries with stable IDs, typed errors, receipts, and explicit cancellation scopes. Optional assignment/knowledge services expose separate capability surfaces; enabling them must not change the meaning of the core commands. Keep database rows, codecs, invocation tokens, raw tool registries, and transaction builders crate-private unless a demonstrated embedding use requires otherwise.
 
 A frontend attaches without becoming an execution owner. Prompt acceptance and eventual completion are separately observable. A compatibility adapter may wait for completion when its protocol requires that response shape. Pin the negotiated ACP schema/version and test its actual prompt, cancellation, permission, resume, and close semantics; do not assume all protocol revisions mean the same thing.
 
@@ -254,9 +291,11 @@ The recommended direction is a single-owner, task-based durable runtime with typ
 
 | Gate | Decision to resolve | Required evidence |
 |---|---|---|
-| P1 | Async task authoring versus re-entrant typed steps; transaction/ID representation | One turn, two tools, child wait, cancel/settle races, reopen, and clear Rust APIs without duplicated mechanisms |
-| P2 | Output checkpoint cadence, channel sharing, spill thresholds, query/index strategy | Long output and deep forks; RSS, write amplification, restart cost, and loss-boundary tests |
+| P1 | Production promotion of the selected re-entrant typed task model; exact ID/transaction representation | One turn, two tools, child wait, cancel/settle races, reopen, and clear Rust APIs without duplicated mechanisms |
+| P2 | Per-session storage topology, output checkpoint cadence, channel sharing, spill thresholds, query/index strategy | Independent concurrent sessions, long output and deep forks; RSS, lock contention, write amplification, restart/backup cost, and loss-boundary tests |
 | P3 | Extension hooks and reload authority | Replace/remove during execution; required-hook failure; no stale approval or grant resurrection |
 | P4 | TUI layout, terminal substrate, and keymap | Main plus worker; narrow/wide layouts, target-safe input, approvals, overload, resize, and reconnect |
+| E1 | Optional assignment/task-coordination surface | Multi-agent tasks showing less duplicated/missed work without unacceptable model-context or coordination overhead |
+| E2 | Optional project knowledge/memory surface | Cross-session tasks showing useful retrieval, provenance/freshness behavior, contradiction handling, bounded context cost, and safe disable/reset |
 
-No existing Ion crate, renderer, ID scheme, or storage schema wins by default. Reuse is decided after these contracts, based on the cost and correctness of the implementation slice. No claim of optimality follows from a design document; the evaluation plan in ROADMAP.md supplies the evidence.
+P1–P4 build the core agent. E1/E2 are experiments layered on that core and are not prerequisites for single-agent usability. No existing Ion crate, renderer, ID scheme, storage schema, or optional coordination mechanism wins by default. Reuse is decided after these contracts, based on correctness and measured cost. No claim of optimality follows from a design document; the evaluation plan in ROADMAP.md supplies the evidence.
