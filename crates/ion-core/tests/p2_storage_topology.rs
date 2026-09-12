@@ -55,15 +55,13 @@ impl StorageFixture {
     }
 
     fn session_path(&self, id: &str) -> PathBuf {
-        self.root()
-            .join("sessions")
-            .join(id)
-            .join("session.sqlite")
+        self.root().join("sessions").join(id).join("session.sqlite")
     }
 
     fn create_session(&self, id: &str, title: &str, created_at: i64) -> PathBuf {
         let path = self.session_path(id);
-        fs::create_dir_all(path.parent().expect("session parent")).expect("session parent directory");
+        fs::create_dir_all(path.parent().expect("session parent"))
+            .expect("session parent directory");
         let connection = Connection::open(&path).expect("open session database");
         connection
             .pragma_update(None, "journal_mode", "WAL")
@@ -101,15 +99,11 @@ impl StorageFixture {
             .execute_batch(CATALOG_SCHEMA)
             .expect("create catalog schema");
         for session in &discovered {
+            let path = session.path.to_string_lossy().into_owned();
             connection
                 .execute(
                     "INSERT INTO sessions (id, title, created_at, path) VALUES (?1, ?2, ?3, ?4)",
-                    params![
-                        session.id,
-                        session.title,
-                        session.created_at,
-                        session.path.to_string_lossy()
-                    ],
+                    params![session.id, session.title, session.created_at, path],
                 )
                 .expect("publish discovered session");
         }
@@ -254,15 +248,14 @@ fn catalog_can_be_rebuilt_from_authoritative_session_stores() {
     catalog
         .execute_batch(CATALOG_SCHEMA)
         .expect("create initial catalog");
+    let stale_path = fixture
+        .session_path("session-a")
+        .to_string_lossy()
+        .into_owned();
     catalog
         .execute(
             "INSERT INTO sessions (id, title, created_at, path) VALUES (?1, ?2, ?3, ?4)",
-            params![
-                "session-a",
-                "stale title",
-                0_i64,
-                fixture.session_path("session-a").to_string_lossy()
-            ],
+            params!["session-a", "stale title", 0_i64, stale_path],
         )
         .expect("insert deliberately stale catalog row");
     drop(catalog);
@@ -280,7 +273,9 @@ fn catalog_can_be_rebuilt_from_authoritative_session_stores() {
     let rows = rebuilt
         .prepare("SELECT id, title FROM sessions ORDER BY id")
         .expect("prepare catalog query")
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .expect("query rebuilt catalog")
         .collect::<rusqlite::Result<Vec<_>>>()
         .expect("collect rebuilt catalog");
