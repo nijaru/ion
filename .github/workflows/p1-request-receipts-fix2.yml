@@ -1,0 +1,37 @@
+name: P1 request receipt refined patch v2
+
+on:
+  push:
+    branches: [p1-request-receipts]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: p1-request-receipts
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: python3 .github/scripts/p1_request_receipts_refine.py
+      - run: cargo fmt --all
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/ion-core
+          git commit -m "feat: add durable request receipt admission"
+          git push origin HEAD:p1-request-receipts
