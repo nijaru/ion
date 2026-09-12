@@ -1,8 +1,6 @@
 mod r0_support;
 
-use r0_support::{
-    ContextEdit, ContextError, ContextStore, ModelMessage, ToolCall,
-};
+use r0_support::{ContextEdit, ContextError, ContextStore, ModelMessage, ToolCall};
 
 fn user(text: &str) -> Vec<ModelMessage> {
     vec![ModelMessage::User(text.to_owned())]
@@ -284,7 +282,10 @@ fn fork_shares_source_prefix_but_never_observes_later_source_appends() {
         vec![first, cutoff, child_local]
     );
     assert_eq!(
-        store.project(child, None).expect("child projection").messages,
+        store
+            .project(child, None)
+            .expect("child projection")
+            .messages,
         vec![
             ModelMessage::User("one".to_owned()),
             ModelMessage::Assistant {
@@ -338,6 +339,34 @@ fn worker_style_fork_rejects_incomplete_tool_exchange() {
 }
 
 #[test]
+fn context_head_rejects_incomplete_tool_exchange_boundary() {
+    let mut store = ContextStore::default();
+    let root = store.create_root();
+    store
+        .append(root, "user", user("inspect"), None, Vec::new())
+        .expect("user");
+    let assistant = store
+        .append(
+            root,
+            "assistant",
+            assistant_with_calls("", &[("a", "read")]),
+            None,
+            Vec::new(),
+        )
+        .expect("assistant");
+    assert_eq!(
+        store.append(
+            root,
+            "summary",
+            user("invalid summary"),
+            Some(assistant),
+            Vec::new(),
+        ),
+        Err(ContextError::IncompleteExchange(assistant))
+    );
+}
+
+#[test]
 fn context_heads_are_monotonic() {
     let mut store = ContextStore::default();
     let root = store.create_root();
@@ -351,7 +380,13 @@ fn context_heads_are_monotonic() {
         .append(root, "summary", user("summary"), Some(second), Vec::new())
         .expect("first head");
     assert_eq!(
-        store.append(root, "summary", user("backwards"), Some(first), Vec::new()),
+        store.append(
+            root,
+            "summary",
+            user("backwards"),
+            Some(first),
+            Vec::new()
+        ),
         Err(ContextError::HeadMovedBackwards {
             previous: second,
             next: first,
