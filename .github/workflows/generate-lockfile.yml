@@ -1,0 +1,22 @@
+name: Generate lockfile
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - Cargo.toml
+      - crates/ion-ai/Cargo.toml
+      - .github/workflows/generate-lockfile.yml
+
+jobs:
+  generate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.98.0
+      - run: cargo generate-lockfile
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-lock
+          path: Cargo.lock
+          if-no-files-found: error
