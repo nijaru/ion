@@ -31,12 +31,7 @@ fn admission_retry_after_reopen_returns_original_receipt_and_rejects_rebinding()
         Err(AdmissionError::Conflict)
     ));
     assert!(matches!(
-        reopened.admit(
-            "R1",
-            reopened.root(),
-            "hello",
-            AdmissionMode::SpawnWorker
-        ),
+        reopened.admit("R1", reopened.root(), "hello", AdmissionMode::SpawnWorker),
         Err(AdmissionError::Conflict)
     ));
 }
@@ -64,12 +59,20 @@ fn reentrant_turn_separates_completion_order_from_model_projection_order() {
         .set_checkpoint(receipt.task_id, turn.checkpoint())
         .expect("persist checkpoint");
 
-    assert!(store.settle_effect(effects[1], "B-result").expect("settle B"));
+    assert!(
+        store
+            .settle_effect(effects[1], "B-result")
+            .expect("settle B")
+    );
     assert!(matches!(
         turn.step(&store).expect("waiting step"),
         BehaviorStep::Wait
     ));
-    assert!(store.settle_effect(effects[0], "A-result").expect("settle A"));
+    assert!(
+        store
+            .settle_effect(effects[0], "A-result")
+            .expect("settle A")
+    );
     assert_eq!(
         store
             .settlement_order(receipt.task_id)
@@ -117,12 +120,7 @@ fn retained_worker_outlives_spawn_task_and_inspection_dispatches_nothing() {
     let db = directory.path().join("p1.sqlite");
     let mut store = PrototypeStore::open(&db).expect("store");
     let receipt = store
-        .admit(
-            "R2",
-            store.root(),
-            "worker job",
-            AdmissionMode::SpawnWorker,
-        )
+        .admit("R2", store.root(), "worker job", AdmissionMode::SpawnWorker)
         .expect("spawn admission");
     let worker = receipt.created_agent.expect("worker id");
     let worker_task = receipt.worker_task.expect("worker task");
@@ -183,12 +181,7 @@ fn settlement_and_cancellation_are_generation_fenced_in_both_orders() {
     let mut store = PrototypeStore::open(&db).expect("store");
 
     let first = store
-        .admit(
-            "settle-first",
-            store.root(),
-            "one",
-            AdmissionMode::Prompt,
-        )
+        .admit("settle-first", store.root(), "one", AdmissionMode::Prompt)
         .expect("admit first");
     let first_generation = store.start_task(first.task_id).expect("start first");
     assert!(
@@ -203,12 +196,7 @@ fn settlement_and_cancellation_are_generation_fenced_in_both_orders() {
     );
 
     let second = store
-        .admit(
-            "cancel-first",
-            store.root(),
-            "two",
-            AdmissionMode::Prompt,
-        )
+        .admit("cancel-first", store.root(), "two", AdmissionMode::Prompt)
         .expect("admit second");
     let old_generation = store.start_task(second.task_id).expect("start second");
     assert!(
