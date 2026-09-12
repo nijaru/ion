@@ -1,84 +1,22 @@
-//! Durable core for Ion's provider-neutral coding harness.
+//! Durable core domain for Ion.
 //!
-//! Authoritative session state has one mutation owner; provider, tool, and
-//! agent effects execute concurrently outside that mutation line and become
-//! authoritative only through durable transitions. The target model separates
-//! retained agents, conversations, admitted inputs, generic tasks, effects, and
-//! commit ordering; legacy lane/operation code remains only while equivalent
-//! target slices are promoted.
+//! The fresh kernel is built around sessions, conversations, immutable entries,
+//! admitted inputs and recoverable tasks. Legacy lane/agent/operation/effect
+//! runtime APIs are intentionally not preserved during the pre-1.0 clean rewrite.
 
-mod agent;
-mod agent_host;
-mod configuration;
-mod context;
-mod effect;
-mod error;
-mod extensions;
-mod harness;
-mod ids;
-mod mcp;
-mod operation;
-mod peer;
-mod policy;
-mod process;
-mod provider;
-mod rpc;
-mod runtime;
-mod session;
-mod store;
-mod tool;
+mod artifact;
+pub mod conversation;
+mod id;
+pub mod task;
 
-pub use agent::{
-    Error as AgentError, Family as AgentFamily, Observation as AgentObservation,
-    Status as AgentStatus,
+pub use artifact::Artifact;
+pub use conversation::{
+    Conversation, Entry, EntryKind, EntryKindError, HistoryParent, Input, InputBody,
+    InputDisposition, InputMode, InputSender, RequestKey, RequestKeyError,
 };
-pub use agent_host::{
-    HostedAgentConfig, HostedAgentRuntimes, agent_host_tools, hosted_agent_budget_default,
-    hosted_agent_runtimes, install_agent_host_tools,
+pub use id::{
+    ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
 };
-pub use configuration::{ConfigurationLease, ConfigurationUpdate, HostConfiguration};
-pub use context::{
-    CapabilitySnapshot, ContextManifest, ContextMessage, ContextPlan, SYSTEM_SECTION,
-    TrustedResource, load_trusted_resources, project, project_with_manifest_for_model, sha256_of,
+pub use task::{
+    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord, TaskStatus,
 };
-pub use error::{CommandError, RuntimeError};
-pub use extensions::{
-    DialogAnswer, DialogProperty, DialogPropertyKind, ExtensionCommand, ExtensionDef,
-    ExtensionDialog, ExtensionService, ExtensionUiEvent, ExtensionUiHub, ExtensionUiUpdate,
-    MAX_EXTENSION_WIDGET_LINES,
-};
-pub use ids::{
-    AgentId, ConversationId, EntryId, InputId, OperationId, RuntimeCursor, RuntimeInstanceId,
-    SessionId, TaskId,
-};
-pub use mcp::{McpService, ServerDef};
-pub use operation::{OperationOutcome, OperationState, SessionEntry};
-pub use peer::{PeerCleanupError, PeerServiceError};
-pub use policy::{
-    AllowlistPolicy, DefaultPolicy, PI_PROTECTED_PATHS, PolicyDecision, PolicyEngine,
-    ProtectedPathsPolicy,
-};
-pub use process::SandboxMode;
-pub use provider::{
-    EngineSignal, ModelCapabilities, ModelConfig, ModelPricing, Provider, ProviderRequest,
-    RetryPolicy, ScriptedMessage, ScriptedProvider, SwitchingProvider, TokenUsage,
-    is_non_retryable_limit_error, is_retryable_provider_error,
-};
-pub use runtime::{
-    EventSubscription, HostedRuntimeConfig, IndeterminateWarning, LiveOperationState, NextRunInput,
-    OperationSettlement, OperationStatus, PendingTool, Runtime, RuntimeBudget, RuntimeEvent,
-    SessionHandle, SessionSnapshot,
-};
-pub use store::{
-    EntryRecord, ExportedEntry, ExportedSession, ImportError, LoadedSession, ModelUsage,
-    SessionRecord, SessionStats, SessionStore, SessionSummary, StoreError, default_db_path,
-};
-pub use tool::{
-    BashTool, CanonicalTarget, EditTool, FindTool, ReadTool, RecoveryClass, SearchTool, Tool,
-    ToolArtifact, ToolCall, ToolCallId, ToolCatalogError, ToolOutcome, ToolRegistry, ToolResult,
-    ToolSpec, WorkspacePolicy, WriteTool,
-};
-pub use tool::{ToolCatalog, target_from_arguments};
-
-#[cfg(test)]
-mod tests;
