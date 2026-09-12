@@ -22,7 +22,7 @@ jobs:
         with:
           components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
-      - name: Apply refined source patch
+      - name: Apply corrected refined source patch
         shell: bash
         run: |
           python3 - <<'PY'
