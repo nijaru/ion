@@ -65,9 +65,10 @@ jobs:
           runtime = Path('crates/ion-core/src/runtime/mod.rs')
           text = runtime.read_text()
           old = '        self.start_active(&lane_name, active);'
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one remaining boxed start_active call, found {text.count(old)}')
-          text = text.replace(old, '        self.start_active(&lane_name, *active);', 1)
+          count = text.count(old)
+          if count != 2:
+              raise SystemExit(f'expected two remaining boxed start_active calls, found {count}')
+          text = text.replace(old, '        self.start_active(&lane_name, *active);')
           old = '''            .try_send(SessionCommand::SubmitIfIdle {
                 lane_name: crate::session::lane::MAIN.to_owned(),'''
           new = '''            .try_send(SessionCommand::SubmitIfIdle {
