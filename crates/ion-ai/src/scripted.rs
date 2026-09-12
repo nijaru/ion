@@ -45,7 +45,11 @@ impl ModelService for ScriptedModelService {
 
             match script {
                 Script::OpenError(error) => Err(error),
-                Script::Stream(events) => Ok(Box::pin(stream::iter(events.into_iter().map(Ok)))),
+                Script::Stream(events) => {
+                    let stream: ModelStream =
+                        Box::pin(stream::iter(events.into_iter().map(Ok)));
+                    Ok(stream)
+                }
             }
         })
     }
