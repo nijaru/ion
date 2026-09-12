@@ -1,6 +1,6 @@
 # Ion roadmap
 
-This roadmap delivers [DESIGN.md](DESIGN.md) revision 5 and [TERMINAL.md](TERMINAL.md). It deliberately prioritizes a correct, cohesive core over preserving the current implementation.
+This roadmap delivers [DESIGN.md](DESIGN.md) and [TERMINAL.md](TERMINAL.md). It deliberately prioritizes a correct, cohesive core over preserving the current implementation.
 
 Long-term/project memory, knowledge stores, shared task boards, vector stores and planner layers are outside the core roadmap. They may be evaluated later against a stable baseline and must not shape the core prematurely.
 
@@ -8,88 +8,42 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| Core architecture | Revision 5 drafted; still evidence-gated | DESIGN.md |
-| Worker/fork/session topology | Recommended | docs/research/agent-topology-context-2026-09-12.md |
-| Storage topology/engine | Per-session SQLite leading candidate; comparative P2 work open | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
-| Pico/core/AI boundary review | Recorded against current Pico normative spec and pi-ai | docs/research/pico-core-and-ai-boundaries-2026-09-12.md |
-| Historical P1 prototype | Valuable fault/race evidence; its mandatory step-plan API is no longer the target | docs/p1-execution-prototype.md |
+| Core architecture | R0 kernel contracts accepted; clean rewrite active | DESIGN.md; docs/r0-kernel-gates-2026-09-12.md |
+| Worker/fork/session topology | Accepted target | docs/research/agent-topology-context-2026-09-12.md; R0.2 |
+| Task execution/recovery | Accepted target contract; production implementation open | R0.1/R0.3; docs/r0-kernel-gates-2026-09-12.md |
+| IDs/order | Session-local unified sequence selected; production schema open | R0.4 |
+| AI boundary | Independent provider-neutral `ion-ai` contract selected; production crate open | R0.5 |
+| Storage topology/engine | Per-session SQLite leading physical candidate; comparative P2 work open | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
 | Fresh production core | Not implemented | current `ion-core` still contains lane/agent/operation/effect-era machinery |
 | TUI/group target | Interaction requirements drafted; old application not target-validated | TERMINAL.md |
 
-The design is deliberately reopenable. A failed prototype changes the target; it does not become a compatibility exception.
+R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`: fmt, strict Clippy and the full workspace tests passed, including real subprocess crash/recovery. The design remains reopenable if production evidence disproves a contract, but the old runtime is no longer a reason to delay cutover.
 
-## 1. Immediate work: settle the five pre-rewrite gates
+## 1. Immediate work: clean rewrite
 
-Follow [docs/core-runtime-migration.md](docs/core-runtime-migration.md), which now defines a clean rewrite rather than a gradual migration.
+Follow [docs/core-runtime-migration.md](docs/core-runtime-migration.md) and [docs/source-layout.md](docs/source-layout.md). The five pre-rewrite gates are closed; their evidence and decisions are recorded in [docs/r0-kernel-gates-2026-09-12.md](docs/r0-kernel-gates-2026-09-12.md).
 
-### R0.1 — Task API
+Accepted R0 decisions:
 
-Prototype one Rust task framework:
+1. one typed async `TaskKind` contract with durable complete checkpoints, invocation-generation fencing, durable cancellation mark + local signal, and fresh abort invocation;
+2. append-only immutable entries with derived head/edit context and stable fork cutoffs;
+3. no generic durable `Effect` entity in the fresh core;
+4. one session-local monotonic sequence privately mints typed local IDs and commit cursors;
+5. a small independent provider-neutral `ion-ai` crate owns model request/stream/result/error types and a scripted service.
 
-```text
-execute(running_task, context) -> terminal closure/plan
-recover(running_task, context) -> terminal closure/plan
-abort(running_task, restricted_context) -> abort closure/plan
-```
+Do not add another prototype round before K0/K1 unless a production implementation exposes a concrete contradiction.
 
-Async stack state is never durable. Controlled `TaskContext::commit` calls replace the complete checkpoint and make authorized canonical writes through the session writer; every commit revalidates task ID, invocation generation and cancellation authority.
-
-Also test an optional typed checkpoint/phase helper that compiles to the same task trait. It must not introduce a second scheduler or lifecycle.
-
-Required evidence: abrupt process loss, checkpoint recovery, stale-write fencing, cancel/settle both orders, fresh abort invocation after join, caller-wait cancellation, panic/failure handling and atomic final settlement.
-
-### R0.2 — Immutable entries/context/forks
-
-Prototype immutable entries with materialized semantic data, provider-neutral model projection, optional context head and constrained omit/replace edits.
-
-Do not persist a separately mutable canonical context vector.
-
-Required evidence: append-only transcript, compaction/reset/handoff, fork cutoffs, later-source isolation, no task inheritance, provider-safe tool exchange projection, B-before-A tool settlement normalized to A-before-B, and measurable cold/warm reads.
-
-### R0.3 — Task-level external recovery
-
-Prototype model/tool/job recovery without a generic `Effect` object.
-
-Checkpoint phases must distinguish prepared/not-dispatched, retry-safe dispatched attempt, reconcile/adopt handle and no-safe-retry uncertainty. Preserve attempt/usage evidence keyed by task + attempt.
-
-Keep `EffectId` only if this exposes a real identity/lifetime that cannot be represented cleanly by task + checkpoint/attempt.
-
-### R0.4 — IDs and sequence
-
-Compare privately:
-
-1. typed object IDs plus separate `CommitSeq`;
-2. one session-local monotonic mutation sequence that also mints local object IDs.
-
-Both must support same-batch cross-references, rollback without visible ID leakage, historical cutoffs, compact SQLite indexes and stable typed Rust handles.
-
-### R0.5 — Minimal AI port
-
-Specify only the model surface needed by the first generation task:
-
-```text
-ModelRef
-ModelRequest
-Message / Content
-ToolSpec
-ModelStreamEvent
-ModelResponse
-Usage
-ProviderErrorKind
-ModelService::stream
-```
-
-No HTTP/OAuth/catalog implementation is required here. Use a scripted model service. The model service receives no session/task/store mutation identifiers.
-
-**Exit for R0:** one accepted kernel contract with no unresolved old-runtime dependency. Then delete/rewrite the old core instead of translating it.
-
-## 2. Clean `ion-core` rewrite
+## 2. Clean production core
 
 Do not maintain old/new production runtimes in parallel. Git history preserves the old implementation.
 
-### K1 — Storage-independent domain
+### K0 — `ion-ai` contract crate
 
-Build only the target nouns:
+Promote only the accepted R0.5 provider-neutral model contract plus scripted service. No production HTTP/auth/catalog implementation yet.
+
+### K1 — storage-independent domain
+
+Build only target nouns:
 
 ```text
 Session
@@ -101,11 +55,13 @@ TaskOutput
 Artifact
 ```
 
+Identifiers use distinct Rust wrappers over one session-local ordered namespace; `SessionId` is global.
+
 No durable Agent row, lane, Operation, or generic Effect.
 
 A `Conversation` may have a history parent/cutoff and/or owning task. Those are different edges.
 
-### K2 — Session writer + deterministic in-memory store
+### K2 — session writer + deterministic in-memory store
 
 Implement one serialized mutation line and atomic batch model first against an in-memory store.
 
@@ -122,21 +78,21 @@ First capabilities:
 - apply terminal/abort closure;
 - produce bounded committed observations.
 
-### K3 — Task driver
+### K3 — task driver
 
-Implement claim/drive, execute/recover/abort ownership, invocation fencing, waits, dependencies, close and fail-stop behavior using deterministic task kinds.
+Implement claim/drive, execute/recover/abort ownership, invocation fencing, local cancellation signalling, waits, dependencies, close and fail-stop behavior using deterministic task kinds.
 
 Opening/inspection starts no task effects.
 
-### K4 — Fresh SQLite session store
+### K4 — fresh SQLite session store
 
 Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
 
 Development-era old databases may be archived/refused under the pre-1.0 policy. A later migration is written only if preserving old sessions is actually worth the complexity.
 
-### K5 — One generation/tool chain
+### K5 — one generation/tool chain
 
-Use the scripted model service and a narrow tool executor:
+Use `ion-ai`'s scripted model service and a narrow tool executor:
 
 ```text
 input
@@ -148,7 +104,7 @@ input
 
 Generation settlement atomically creates all tool children plus the join. Tool B may settle before A; provider projection still emits A then B.
 
-### K6 — Workers as owned conversations
+### K6 — workers as owned conversations
 
 Implement through the same session/task kernel:
 
@@ -164,7 +120,7 @@ Implement through the same session/task kernel:
 
 There is no separate agent registry.
 
-**Exit for K1–K6:** a new production core replaces the old lane/operation/agent/effect machinery; old core files are removed rather than left as a permanent compatibility path.
+**Exit for K0–K6:** a new production core replaces the old lane/operation/agent/effect machinery; old core files and temporary R0/P1 prototype implementations are removed rather than left as permanent compatibility paths.
 
 ## 3. P1 — durable execution correctness
 
@@ -186,7 +142,7 @@ The fresh production core closes P1 when deterministic tests cover:
 14. explicit durable input disposition;
 15. worker creation/message/cancellation races under one session writer.
 
-The historical isolated P1 prototype remains regression evidence but not an API compatibility requirement.
+Historical isolated P1/R0 prototypes remain regression evidence only until the fresh core covers these invariants.
 
 ## 4. P2 — storage, output and history
 
@@ -233,7 +189,7 @@ Port path-safety, process-cleanup, output-bounding and policy algorithms only af
 
 ## 6. Component pass B — AI/model/provider/auth subsystem
 
-Follow the useful separation seen in `pi-ai` without copying its TypeScript API:
+Extend the accepted `ion-ai` boundary using the useful separation seen in `pi-ai` without copying its TypeScript API:
 
 ```text
 ModelService / model registry
@@ -256,7 +212,7 @@ Ion-specific requirements:
 - opaque provider replay metadata may survive on provider-neutral assistant content for same-provider continuity;
 - deterministic faux/scripted provider for tests.
 
-Only after this contract is accepted should OpenRouter/OpenAI-Codex/current auth code be selectively ported.
+Only after the fresh core can run scripted generation should OpenRouter/OpenAI-Codex/current auth code be selectively ported.
 
 ## 7. Component pass C — TUI/client architecture
 
@@ -304,8 +260,10 @@ Agent-effectiveness optimization starts from a stable M1/M2 baseline. More conte
 
 ## Evidence log
 
-2026-09-12: isolated P1 prototype at `78148e84d6120d5670a784ec3ecb07684577db1d` validated idempotent reopen, out-of-order effect settlement/call-order projection, retained worker lifetime, capacity-safe wait, cancellation fencing and abrupt-process recovery. Its failure/race evidence is retained; revision 5 reopens/supersedes the mandatory `step -> plan` authoring API.
+2026-09-12: isolated historical P1 prototype at `78148e84d6120d5670a784ec3ecb07684577db1d` validated idempotent reopen, out-of-order effect settlement/call-order projection, retained worker lifetime, capacity-safe wait, cancellation fencing and abrupt-process recovery. Its failure/race evidence is retained; its mandatory `step -> plan` authoring API is superseded.
 
 2026-09-12: P2 structural prototype at `0c45553538e0244e27cc13ac0719f8afb7d73cbb` validated atomic rollback within a session DB, independent writer-lock domains for separate session files, and rebuildable discovery metadata. No performance claim is attached.
 
-2026-09-12: architecture revisions 3–5 removed knowledge/task-board systems from core, converged workers onto owned conversations, made fresh versus inherited context independent from session/lifetime, moved toward immutable transcript-derived context controls, reopened task authoring around async execute/recover/abort + durable commits, and made generic Effect removal an explicit pre-rewrite gate. See the research files under `docs/research/` and the clean rewrite plan.
+2026-09-12: architecture revisions 3–5 removed knowledge/task-board systems from core, converged workers onto owned conversations, made fresh versus inherited context independent from session/lifetime, moved toward immutable transcript-derived context controls, reopened task authoring around async execute/recover/abort + durable commits, and made generic Effect removal an explicit pre-rewrite gate.
+
+2026-09-12: R0.1–R0.5 passed together at `81c344d713f13b73e19232b4ad36dfe40ba663b9` in CI run `34718467220`. Accepted: typed async task contract with durable checkpoints/generation fencing; immutable entry/head/edit context + safe fork cutoffs; task-level external recovery without generic Effect; one session-local sequence backing typed local IDs and commit cursors; independent provider-neutral `ion-ai` boundary. See `docs/r0-kernel-gates-2026-09-12.md`.
