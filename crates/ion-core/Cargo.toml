@@ -5,27 +5,20 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Ion durable runtime, session, tool, and frontend contract"
+description = "Ion durable session, conversation, and task kernel"
 
 [dependencies]
-globset = "0.4.20"
-libc = "0.2.189"
-nix = { version = "0.31.3", features = ["fs"] }
-regex = "1.13.1"
-rmcp = { version = "3.1.4", default-features = false, features = ["client", "transport-child-process"] }
-rusqlite = { version = "0.40.2", features = ["bundled"] }
+ion-ai.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
-sha2 = "0.11.0"
 thiserror.workspace = true
-tokio = { workspace = true, features = ["fs", "io-util", "process"] }
-tokio-util.workspace = true
-tracing.workspace = true
 uuid = { version = "1.24.1", features = ["v7", "serde"] }
 
 [dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 tempfile = "3.27.0"
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "sync", "time", "test-util"] }
+tokio-util.workspace = true
 
 [lints]
 workspace = true
