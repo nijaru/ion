@@ -87,6 +87,9 @@ pub enum TaskError {
     },
 }
 
+pub type TaskRunResult<C, R, F> = Result<TerminalPlan<C, R, F>, TaskError>;
+pub type TaskAbortResult<C, A> = Result<AbortPlan<C, A>, TaskError>;
+
 pub struct TaskCommit<C> {
     checkpoint: Option<C>,
 }
@@ -159,25 +162,19 @@ pub trait TaskKind: Send + Sync + 'static {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<
-        'a,
-        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
-    >;
+    ) -> BoxFuture<'a, TaskRunResult<Self::Checkpoint, Self::Completed, Self::Failure>>;
 
     fn recover<'a>(
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<
-        'a,
-        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
-    >;
+    ) -> BoxFuture<'a, TaskRunResult<Self::Checkpoint, Self::Completed, Self::Failure>>;
 
     fn abort<'a>(
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<AbortPlan<Self::Checkpoint, Self::Aborted>, TaskError>>;
+    ) -> BoxFuture<'a, TaskAbortResult<Self::Checkpoint, Self::Aborted>>;
 }
 
 #[derive(Debug)]
