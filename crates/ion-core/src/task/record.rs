@@ -46,6 +46,7 @@ pub enum TaskOutcomeKind {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct TaskKindName(String);
 
 impl TaskKindName {
@@ -60,6 +61,20 @@ impl TaskKindName {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl TryFrom<String> for TaskKindName {
+    type Error = TaskKindNameError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<TaskKindName> for String {
+    fn from(value: TaskKindName) -> Self {
+        value.0
     }
 }
 
