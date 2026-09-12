@@ -1,22 +1,23 @@
 # Working on Ion
 
-Ion's target is a provider-neutral Rust coding agent: one primary conversation by default, with optional cooperating worker conversations and a first-class TUI. Current Pico/Pi 2 is the leading minimal-harness reference; Codex is a production-engineering reference. Neither is a compatibility target. Existing Ion code is evidence and source material, not an architectural constraint.
+Ion's target is a provider-neutral Rust coding agent: one primary conversation by default, with optional cooperating worker conversations and a first-class TUI. Current Pico/Pi 2 is a leading minimal-harness reference; Codex is a production-engineering reference. Neither is a compatibility target. Existing Ion code is evidence and source material, not an architectural constraint.
 
 ## Read and choose work
 
-- `DESIGN.md` owns the current core architecture and vocabulary.
-- `docs/core-runtime-migration.md` is the active **clean rewrite plan** despite its historical filename.
-- `docs/source-layout.md` owns source/module organization for the clean rewrite.
-- `ROADMAP.md` owns work order, gates, validation status and later subsystem passes.
+- `DESIGN.md` owns the accepted core architecture and vocabulary.
+- `docs/core-runtime-migration.md` is the active clean rewrite plan.
+- `docs/source-layout.md` owns source/module organization.
+- `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
+- `ROADMAP.md` owns work order, validation status and later subsystem passes.
 - `TERMINAL.md` owns interaction/control/presentation requirements.
 - `docs/research/` and `docs/research.md` record exact source findings and rationale.
-- Current source/tests establish what the old binary implements and provide regression evidence; they do not override the target.
+- Current legacy source/tests establish what the old binary implemented and provide regression evidence; they do not override the target.
 
-Check recent commits/status before editing because the design is moving quickly. Read the current rewrite gate before touching production code. Proposed, implemented and validated are distinct states.
+Check recent commits/status before editing because the rewrite is active. Proposed, implemented and validated are distinct states.
 
 ## Current rewrite rule
 
-Do **not** deepen or gradually translate the legacy lane/agent/operation/effect runtime.
+R0.1–R0.5 are closed. Do **not** deepen or gradually translate the legacy lane/agent/operation/effect runtime and do not reopen the gates merely because old code has a different shape.
 
 The target core is:
 
@@ -28,31 +29,31 @@ Session
     Task
 ```
 
-Workers are owned conversations. History parentage, task ownership/dependencies, workspace binding and communication are separate relationships. There is no separate durable Agent object or generic Effect object in the leading design unless a pre-rewrite prototype proves one necessary.
+Workers are owned conversations. History parentage, task ownership/dependencies, workspace binding and communication are separate relationships. There is no separate durable Agent object or generic Effect object.
 
-Before deleting/rebuilding the old core, close the five R0 gates in `docs/core-runtime-migration.md`:
+Accepted kernel contracts:
 
-1. async `execute/recover/abort` task contract with durable invocation-fenced commits and optional phase helper;
-2. immutable entry projection/head/edit context and fork semantics;
-3. task-level external recovery without generic Effect, unless disproved;
-4. session-local ID/sequence representation;
-5. minimal provider-neutral scripted model-service contract.
+1. async typed `execute/recover/abort` tasks with complete durable checkpoints, invocation-generation fencing, durable cancellation mark + local signal, and a fresh abort invocation;
+2. immutable transcript entries with derived heads/edits and stable safe fork cutoffs;
+3. task-level external recovery without a generic Effect lifecycle;
+4. one private session-local monotonic sequence backing distinct typed local IDs and commit cursors;
+5. a small independent provider-neutral `ion-ai` contract crate with scripted model service.
 
-After those settle, replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port implementation algorithms only after their new boundary is accepted.
+Proceed through K0/K1 onward in `docs/core-runtime-migration.md`. Replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port leaf algorithms only after their new boundary exists.
 
-Follow `docs/source-layout.md` when the fresh tree is created. Do not recreate broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, or giant SQL/TUI buckets. A module should have one semantic owner and few reasons to change; file size is a review signal, not something to game by moving code into generic helper files.
+Follow `docs/source-layout.md`. Do not recreate broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, or giant SQL/TUI buckets. A module should have one semantic owner and few reasons to change; file size is a review signal, not something to game by moving code into generic helper files.
 
 ## Scope discipline
 
 The core roadmap excludes long-term/project knowledge, memory systems, shared task boards, vector stores and planner layers. Do not shape the core around them. They require separate effectiveness evidence after the baseline agent works.
 
-Likewise, do not prematurely redesign every peripheral subsystem during the kernel rewrite. The roadmap schedules first-principles passes for execution/tools, AI/providers/auth, TUI, extensions/MCP, external protocols and the application shell after the relevant core boundary exists.
+Do not prematurely redesign every peripheral subsystem during the kernel rewrite. The roadmap schedules first-principles passes for execution/tools, production AI/providers/auth, TUI, extensions/MCP, external protocols and the application shell after the relevant core boundary exists.
 
 ## Changes
 
 For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Prefer the smallest coherent primitive that preserves the target invariant.
 
-A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths.
+A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths. R0 prototype code is deleted once equivalent fresh-core invariants are covered.
 
 When a contract changes, update `DESIGN.md`; when work order/evidence changes, update `ROADMAP.md`; put detailed comparisons/source findings in `docs/research/` rather than turning instructions into a second architecture document.
 
