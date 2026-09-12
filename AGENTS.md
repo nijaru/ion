@@ -1,30 +1,63 @@
 # Working on Ion
 
-Ion's target is a provider-neutral Rust coding agent: single-agent by default, with optional cooperating workers and a first-class TUI. Pi/Pico is the leading reference, not a compatibility requirement. Existing code is reusable evidence, not an architectural constraint.
+Ion's target is a provider-neutral Rust coding agent: one primary conversation by default, with optional cooperating worker conversations and a first-class TUI. Current Pico/Pi 2 is the leading minimal-harness reference; Codex is a production-engineering reference. Neither is a compatibility target. Existing Ion code is evidence and source material, not an architectural constraint.
 
 ## Read and choose work
 
-- `DESIGN.md` owns the proposed architecture, domain vocabulary, ownership, and runtime contracts.
-- `TERMINAL.md` owns single-agent and group interaction, control, and presentation.
-- `ROADMAP.md` owns the next work item, prototype gates, capability coverage, and validation status.
-- `docs/research.md` records exact sources, rationale, alternatives, and unresolved decisions.
-- Current source/tests establish what the binary implements. `docs/history/` and older central briefs describe the preceding design, not another target.
+- `DESIGN.md` owns the current core architecture and vocabulary.
+- `docs/core-runtime-migration.md` is the active **clean rewrite plan** despite its historical filename.
+- `ROADMAP.md` owns work order, gates, validation status and later subsystem passes.
+- `TERMINAL.md` owns interaction/control/presentation requirements.
+- `docs/research/` and `docs/research.md` record exact source findings and rationale.
+- Current source/tests establish what the old binary implements and provide regression evidence; they do not override the target.
 
-Start with the roadmap's current position and immediate work section, then read the design sections relevant to the task. Check `git status --short` and recent commits before editing. Consult existing `tk` tasks where available, but reconcile their scope with this roadmap before choosing work; an old Pi-parity priority does not override the new target.
+Check recent commits/status before editing because the design is moving quickly. Read the current rewrite gate before touching production code. Proposed, implemented and validated are distinct states.
 
-The immediate architecture work is P1 with a thin P4 TUI trace. Resolve a gate with a small executable test and an evidence entry; do not turn unresolved details into broad, unvalidated implementation. Proposed, implemented, and validated are different states. Do not claim the target is already present because a related old feature exists.
+## Current rewrite rule
+
+Do **not** deepen or gradually translate the legacy lane/agent/operation/effect runtime.
+
+The target core is:
+
+```text
+Session
+  Conversation
+    Entry
+    Input
+    Task
+```
+
+Workers are owned conversations. History parentage, task ownership/dependencies, workspace binding and communication are separate relationships. There is no separate durable Agent object or generic Effect object in the leading design unless a pre-rewrite prototype proves one necessary.
+
+Before deleting/rebuilding the old core, close the five R0 gates in `docs/core-runtime-migration.md`:
+
+1. async `execute/recover/abort` task contract with durable invocation-fenced commits and optional phase helper;
+2. immutable entry projection/head/edit context and fork semantics;
+3. task-level external recovery without generic Effect, unless disproved;
+4. session-local ID/sequence representation;
+5. minimal provider-neutral scripted model-service contract.
+
+After those settle, replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port implementation algorithms only after their new boundary is accepted.
+
+## Scope discipline
+
+The core roadmap excludes long-term/project knowledge, memory systems, shared task boards, vector stores and planner layers. Do not shape the core around them. They require separate effectiveness evidence after the baseline agent works.
+
+Likewise, do not prematurely redesign every peripheral subsystem during the kernel rewrite. The roadmap schedules first-principles passes for execution/tools, AI/providers/auth, TUI, extensions/MCP, external protocols and the application shell after the relevant core boundary exists.
 
 ## Changes
 
-Name the observable behavior, its owner, its failure/recovery boundary, and its acceptance test. Keep a coherent production path and preserve useful regressions. Reuse or replace components based on the target, not style alone. Prototype code needs a promotion or removal decision.
+For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Prefer the smallest coherent primitive that preserves the target invariant.
 
-Update the owning design when a contract changes and the roadmap when evidence changes. Keep detailed source findings in the research record rather than duplicating architecture in instructions. A deliberate departure from an upstream reference is permitted; record the reason.
+A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths.
 
-The `last-go` tag is historical recovery material, not an acceptance reference. Do not restore it or derive new requirements from it without an explicit task.
+When a contract changes, update `DESIGN.md`; when work order/evidence changes, update `ROADMAP.md`; put detailed comparisons/source findings in `docs/research/` rather than turning instructions into a second architecture document.
+
+The `last-go` tag and `docs/history/` are historical recovery/reference material, not acceptance targets.
 
 ## Validation
 
-For Rust changes, use the checked-in toolchain and run the relevant tests plus:
+For Rust changes use the checked-in toolchain and run:
 
 ```sh
 cargo fmt --all -- --check
@@ -32,6 +65,8 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-Terminal changes also require relevant PTY/reducer checks and `scripts/smoke.sh` before a dogfood request. Reopen human terminal acceptance when behavior that requires it changes. Match crash, cancellation, permission, storage, and provider tests to the slice. Performance claims need measurements.
+Run smaller targeted tests during iteration, but do not claim a Rust slice validated until the required repository gates pass.
 
-For documentation-only changes, validate links, references, authority, and status consistency. Preserve previous authoritative documents in Git/history when replacing them. Do not report compiler, runtime, or live-model checks that were not run.
+Crash/cancellation/storage/provider work needs deterministic fault tests appropriate to the boundary. Terminal changes additionally require relevant reducer/PTY checks and `scripts/smoke.sh`; human terminal behavior is not established by unit tests alone.
+
+For documentation-only changes, validate authority/status consistency and do not claim compiler/runtime/live-model checks that were not run. Performance/effectiveness claims require measurements.
