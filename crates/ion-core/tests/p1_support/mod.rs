@@ -7,7 +7,7 @@ use tokio::sync::oneshot;
 
 pub use store::{
     AdmissionError, AdmissionMode, AgentId, AgentStatus, EffectId, EffectSpec, PrototypeStore,
-    Receipt, Recovery, RecoveryDecision, TaskId,
+    Recovery, RecoveryDecision,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
