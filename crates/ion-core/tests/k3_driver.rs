@@ -172,6 +172,18 @@ async fn cancellation_signals_live_task_then_runs_fresh_abort_invocation() {
 }
 
 #[tokio::test]
+async fn settlement_committing_before_cancellation_wins() {
+    let (driver, task_id) = driver_with_kind("checkpoint", Arc::new(CheckpointKind));
+
+    let outcome = driver.drive_task(task_id).await.expect("drive task");
+    let cancellation = driver.cancel_task(task_id).await.expect("cancel task");
+
+    assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Completed);
+    assert!(!cancellation.changed);
+    assert_eq!(cancellation.commit_seq, outcome.settlement_commit);
+}
+
+#[tokio::test]
 async fn missing_task_kind_settles_unsupported_without_data_loss() {
     let mut session = Session::new().expect("session");
     let task = task(&mut session, "missing");
