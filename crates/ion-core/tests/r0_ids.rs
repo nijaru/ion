@@ -174,10 +174,9 @@ impl PrototypeStore {
                 Self::meta_connection(&self.connection, "next_id")?,
                 Some(Self::meta_connection(&self.connection, "commit_seq")?),
             )),
-            Representation::UnifiedSequence => Ok((
-                Self::meta_connection(&self.connection, "sequence")?,
-                None,
-            )),
+            Representation::UnifiedSequence => {
+                Ok((Self::meta_connection(&self.connection, "sequence")?, None))
+            }
         }
     }
 
@@ -221,7 +220,8 @@ impl PrototypeStore {
     }
 
     fn compact_bytes(&mut self) -> rusqlite::Result<u64> {
-        self.connection.execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
+        self.connection
+            .execute_batch("PRAGMA wal_checkpoint(TRUNCATE); VACUUM;")?;
         let page_count: u64 = self
             .connection
             .query_row("PRAGMA page_count", [], |row| row.get(0))?;
@@ -271,14 +271,7 @@ impl PrototypeStore {
             "UPDATE meta SET value = ?1 WHERE key = 'sequence'",
             [commit_seq.0],
         )?;
-        Self::insert_batch(
-            tx,
-            conversation_id,
-            entry_id,
-            task_id,
-            commit_seq,
-            body,
-        )?;
+        Self::insert_batch(tx, conversation_id, entry_id, task_id, commit_seq, body)?;
         Ok(BatchReceipt {
             conversation_id,
             entry_id,
@@ -337,8 +330,7 @@ fn exercise(path: &Path, representation: Representation) -> rusqlite::Result<u64
     store.reject_batch()?;
     assert_eq!(store.current_clock()?, before_reject);
 
-    let (second_entry, second_commit) =
-        store.append_entry(first.conversation_id, "second")?;
+    let (second_entry, second_commit) = store.append_entry(first.conversation_id, "second")?;
     assert!(second_entry > first.entry_id);
     assert!(second_commit > first.commit_seq);
     assert_eq!(
@@ -364,8 +356,8 @@ fn unified_session_sequence_meets_id_invariants_without_sqlite_footprint_penalty
 
     let separate_bytes = exercise(&separate_path, Representation::SeparateCounters)
         .expect("exercise separate counters");
-    let unified_bytes =
-        exercise(&unified_path, Representation::UnifiedSequence).expect("exercise unified sequence");
+    let unified_bytes = exercise(&unified_path, Representation::UnifiedSequence)
+        .expect("exercise unified sequence");
 
     // Both representations use compact INTEGER keys. The unified form should not
     // require materially more storage; its advantage is one authoritative clock
