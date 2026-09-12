@@ -8,7 +8,9 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use serde_json::Value;
 
-use super::store::{Invocation, InvocationMode, PrototypeTaskStore, StoreError, StoredTask, TaskId};
+use super::store::{
+    Invocation, InvocationMode, PrototypeTaskStore, StoreError, StoredTask, TaskId,
+};
 
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub type SharedStore = Arc<Mutex<PrototypeTaskStore>>;
@@ -135,10 +137,7 @@ impl<C: JsonPayload> TaskContext<C> {
     /// The builder is process-local. The produced checkpoint is persisted only
     /// after the store revalidates task identity, invocation generation and
     /// cancellation authority.
-    pub fn commit<T>(
-        &self,
-        build: impl FnOnce(&mut TaskCommit<C>) -> T,
-    ) -> Result<T, TaskError> {
+    pub fn commit<T>(&self, build: impl FnOnce(&mut TaskCommit<C>) -> T) -> Result<T, TaskError> {
         let mut commit = TaskCommit::default();
         let result = build(&mut commit);
         if let Some(checkpoint) = commit.checkpoint {
@@ -162,13 +161,19 @@ pub trait TaskKind: Send + Sync + 'static {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>>;
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    >;
 
     fn recover<'a>(
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>>;
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    >;
 
     fn abort<'a>(
         &'a self,
@@ -185,8 +190,6 @@ struct ErasedTerminalPlan {
 }
 
 trait ErasedTaskKind: Send + Sync {
-    fn kind(&self) -> &'static str;
-
     fn execute<'a>(
         &'a self,
         task: StoredTask,
@@ -212,7 +215,10 @@ trait ErasedTaskKind: Send + Sync {
 struct TaskKindAdapter<K>(K);
 
 impl<K: TaskKind> TaskKindAdapter<K> {
-    fn typed_task(&self, task: StoredTask) -> Result<RunningTask<K::Input, K::Checkpoint>, TaskError> {
+    fn typed_task(
+        &self,
+        task: StoredTask,
+    ) -> Result<RunningTask<K::Input, K::Checkpoint>, TaskError> {
         if task.kind != K::KIND {
             return Err(TaskError::KindMismatch {
                 stored: task.kind,
@@ -244,10 +250,6 @@ impl<K: TaskKind> TaskKindAdapter<K> {
 }
 
 impl<K: TaskKind> ErasedTaskKind for TaskKindAdapter<K> {
-    fn kind(&self) -> &'static str {
-        K::KIND
-    }
-
     fn execute<'a>(
         &'a self,
         task: StoredTask,
@@ -300,9 +302,7 @@ pub struct TaskRegistry {
 
 impl TaskRegistry {
     pub fn register<K: TaskKind>(&mut self, kind: K) {
-        let previous = self
-            .kinds
-            .insert(K::KIND, Arc::new(TaskKindAdapter(kind)));
+        let previous = self.kinds.insert(K::KIND, Arc::new(TaskKindAdapter(kind)));
         assert!(previous.is_none(), "duplicate task kind {}", K::KIND);
     }
 
@@ -318,7 +318,10 @@ pub fn shared_store(store: PrototypeTaskStore) -> SharedStore {
     Arc::new(Mutex::new(store))
 }
 
-pub fn create_task<K: TaskKind>(store: &SharedStore, input: &K::Input) -> Result<TaskId, TaskError> {
+pub fn create_task<K: TaskKind>(
+    store: &SharedStore,
+    input: &K::Input,
+) -> Result<TaskId, TaskError> {
     let input = serde_json::to_value(input)?;
     Ok(lock_store(store)?.create_task(K::KIND, &input)?)
 }
