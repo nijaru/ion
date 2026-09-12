@@ -1,7 +1,8 @@
 use futures_util::StreamExt;
 use ion_ai::{
     Content, Message, ModelRef, ModelRequest, ModelResponse, ModelService, ModelStreamEvent,
-    ProviderError, ProviderErrorKind, Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
+    ProviderError, ProviderErrorKind, Role, Script, ScriptedModelService, ToolCall, ToolSpec,
+    Usage,
 };
 
 fn request() -> ModelRequest {
