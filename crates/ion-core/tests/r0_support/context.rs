@@ -28,7 +28,9 @@ pub enum ModelMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ContextEdit {
-    Omit { target: EntryId },
+    Omit {
+        target: EntryId,
+    },
     Replace {
         target: EntryId,
         messages: Vec<ModelMessage>,
@@ -79,13 +81,10 @@ pub enum ContextError {
     #[error("context head {head:?} is not visible before entry {entry:?}")]
     InvalidHead { entry: EntryId, head: EntryId },
     #[error("context head would move backwards from {previous:?} to {next:?}")]
-    HeadMovedBackwards {
-        previous: EntryId,
-        next: EntryId,
-    },
+    HeadMovedBackwards { previous: EntryId, next: EntryId },
     #[error("context edit target {target:?} is not visible before entry {entry:?}")]
     InvalidEditTarget { entry: EntryId, target: EntryId },
-    #[error("fork cutoff {0:?} splits a tool exchange")]
+    #[error("fork/context cutoff {0:?} splits a tool exchange")]
     IncompleteExchange(EntryId),
     #[error("duplicate tool result for call {0}")]
     DuplicateToolResult(String),
@@ -111,7 +110,8 @@ impl ContextStore {
     pub fn create_root(&mut self) -> ConversationId {
         self.next_conversation += 1;
         let id = ConversationId(self.next_conversation);
-        self.conversations.insert(id, Conversation { id, parent: None });
+        self.conversations
+            .insert(id, Conversation { id, parent: None });
         id
     }
 
@@ -154,9 +154,11 @@ impl ContextStore {
         let visible_ids: Vec<_> = visible_before.iter().map(|entry| entry.id).collect();
 
         if let Some(head) = head {
-            let Some(head_position) = visible_ids.iter().position(|candidate| *candidate == head) else {
+            let Some(head_position) = visible_ids.iter().position(|candidate| *candidate == head)
+            else {
                 return Err(ContextError::InvalidHead { entry: id, head });
             };
+            self.require_complete_exchange(conversation_id, head)?;
             if let Some(previous_head) = visible_before.iter().rev().find_map(|entry| entry.head) {
                 let previous_position = visible_ids
                     .iter()
@@ -382,7 +384,10 @@ fn normalize_tool_results(messages: Vec<ModelMessage>) -> Result<Vec<ModelMessag
                     let ModelMessage::ToolResult { call_id, .. } = &messages[index] else {
                         break;
                     };
-                    if results.insert(call_id.clone(), messages[index].clone()).is_some() {
+                    if results
+                        .insert(call_id.clone(), messages[index].clone())
+                        .is_some()
+                    {
                         return Err(ContextError::DuplicateToolResult(call_id.clone()));
                     }
                     index += 1;
