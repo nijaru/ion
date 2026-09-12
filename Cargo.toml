@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ion", "crates/ion-core", "crates/ion-terminal"]
+members = ["crates/ion", "crates/ion-ai", "crates/ion-core", "crates/ion-terminal"]
 
 [workspace.package]
 version = "0.0.0"
@@ -14,6 +14,7 @@ unsafe_code = "deny"
 
 [workspace.dependencies]
 clap = { version = "4.6.6", features = ["derive"] }
+ion-ai = { path = "crates/ion-ai" }
 ion-core = { path = "crates/ion-core" }
 ion-terminal = { path = "crates/ion-terminal" }
 thiserror = "2.0.20"
