@@ -1258,6 +1258,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ion-ai"
+version = "0.0.0"
+dependencies = [
+ "futures-core",
+ "futures-util",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.20",
+ "tokio",
+]
+
+[[package]]
 name = "ion-core"
 version = "0.0.0"
 dependencies = [
