@@ -44,8 +44,9 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import re
-          path = Path('crates/ion-core/src/tests/reconcile.rs')
-          text = path.read_text()
+
+          reconcile = Path('crates/ion-core/src/tests/reconcile.rs')
+          text = reconcile.read_text()
           pattern = r'''\.begin_operation\(\s*session_id,\s*crate::session::lane::MAIN,\s*operation_id,\s*root_inbox,\s*checkpoint,\s*entry,\s*None,\s*\)'''
           replacement = '''.begin_operation(crate::store::BeginOperationRequest {
               session_id,
@@ -59,7 +60,22 @@ jobs:
           text, count = re.subn(pattern, replacement, text, count=1)
           if count != 1:
               raise SystemExit(f'expected one reconcile begin_operation call, found {count}')
-          path.write_text(text)
+          reconcile.write_text(text)
+
+          runtime = Path('crates/ion-core/src/runtime/mod.rs')
+          text = runtime.read_text()
+          old = '        self.start_active(&lane_name, active);'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one remaining boxed start_active call, found {text.count(old)}')
+          text = text.replace(old, '        self.start_active(&lane_name, *active);', 1)
+          old = '''            .try_send(SessionCommand::SubmitIfIdle {
+                lane_name: crate::session::lane::MAIN.to_owned(),'''
+          new = '''            .try_send(SessionCommand::SubmitIfIdle {
+                lane_name: crate::session::lane::MAIN.to_owned(),
+                request_key: RequestKey::generate(),'''
+          if text.count(old) != 1:
+              raise SystemExit(f'expected one direct SubmitIfIdle test initializer, found {text.count(old)}')
+          runtime.write_text(text.replace(old, new, 1))
           PY
       - run: cargo fmt --all
       - run: cargo fmt --check
