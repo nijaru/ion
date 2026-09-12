@@ -97,7 +97,6 @@ pub struct InputReceipt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InvocationReceipt {
-    pub(crate) task_id: TaskId,
     pub(crate) generation: u64,
     pub(crate) kind: InvocationKind,
     pub(crate) commit_seq: CommitSeq,

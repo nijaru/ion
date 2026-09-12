@@ -11,7 +11,7 @@ use crate::store::MemoryStore;
 use crate::view::{CommitEvent, ObservationBatch, SessionSnapshot};
 use crate::{
     CommitSeq, ConversationId, InputDisposition, InputId, InvocationKind, RequestKey, SessionId,
-    TaskId, TaskOutcome, TaskOutput, TaskStatus,
+    TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
 };
 
 const OBSERVATION_CAPACITY: usize = 128;
@@ -140,6 +140,10 @@ impl Session {
         }
     }
 
+    pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
+        self.store.state().tasks.get(&task_id).cloned()
+    }
+
     pub(crate) fn set_input_disposition(
         &mut self,
         input_id: InputId,
@@ -158,7 +162,6 @@ impl Session {
         let (generation, commit_seq) =
             self.transact(|transaction| transaction.reserve_task(task_id, kind))?;
         Ok(InvocationReceipt {
-            task_id,
             generation,
             kind,
             commit_seq,

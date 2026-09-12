@@ -1,5 +1,6 @@
 mod command;
 mod owner;
+mod scheduler;
 pub(crate) mod transaction;
 
 pub use command::{
@@ -7,6 +8,7 @@ pub use command::{
     SessionError, TaskReceipt, TaskRequest,
 };
 pub use owner::Session;
+pub use scheduler::{DriveOutcome, TaskCancellation, TaskDriver, TaskDriverError};
 
 #[cfg(test)]
 mod tests;
