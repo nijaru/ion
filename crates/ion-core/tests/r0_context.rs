@@ -380,13 +380,7 @@ fn context_heads_are_monotonic() {
         .append(root, "summary", user("summary"), Some(second), Vec::new())
         .expect("first head");
     assert_eq!(
-        store.append(
-            root,
-            "summary",
-            user("backwards"),
-            Some(first),
-            Vec::new()
-        ),
+        store.append(root, "summary", user("backwards"), Some(first), Vec::new()),
         Err(ContextError::HeadMovedBackwards {
             previous: second,
             next: first,
