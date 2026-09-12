@@ -46,6 +46,7 @@ pub enum InputDisposition {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct RequestKey(String);
 
 impl RequestKey {
@@ -60,6 +61,20 @@ impl RequestKey {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl TryFrom<String> for RequestKey {
+    type Error = RequestKeyError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<RequestKey> for String {
+    fn from(value: RequestKey) -> Self {
+        value.0
     }
 }
 
