@@ -61,13 +61,11 @@ impl TaskDriver {
             })),
         };
 
-        if running.invocation_kind != InvocationKind::Abort
-            && self.cancel_requested(task_id).await?
-        {
-            return self.run_abort(task_id, handler).await;
+        if running.invocation_kind == InvocationKind::Abort {
+            return self.settle(running, completion).await;
         }
 
-        self.settle(running, completion).await
+        self.finish_normal(running, completion, handler).await
     }
 
     pub async fn cancel_task(&self, task_id: TaskId) -> Result<TaskCancellation, TaskDriverError> {
@@ -108,6 +106,41 @@ impl TaskDriver {
     ) -> Result<CommitSeq, TaskDriverError> {
         let mut session = self.session.lock().await;
         Ok(session.set_input_disposition(input_id, InputDisposition::Consumed(entry_id))?)
+    }
+
+    async fn finish_normal(
+        &self,
+        running: RunningTask,
+        completion: TaskCompletion,
+        handler: Option<Arc<dyn TaskKind>>,
+    ) -> Result<DriveOutcome, TaskDriverError> {
+        let task_id = running.id;
+        {
+            let mut session = self.session.lock().await;
+            let task = session
+                .task_record(task_id)
+                .ok_or(SessionError::UnknownTask(task_id))?;
+            if !task.cancel_requested {
+                let TaskCompletion { outcome, output } = completion;
+                let (_, commit_seq) = session.settle_task_with(
+                    running.id,
+                    running.generation,
+                    outcome.clone(),
+                    output,
+                    |_| Ok(()),
+                )?;
+                return Ok(DriveOutcome {
+                    task_id: running.id,
+                    invocation_kind: running.invocation_kind,
+                    generation: running.generation,
+                    reservation_commit: running.reservation_commit,
+                    settlement_commit: commit_seq,
+                    outcome,
+                });
+            }
+        }
+
+        self.run_abort(task_id, handler).await
     }
 
     async fn run_abort(
@@ -193,14 +226,6 @@ impl TaskDriver {
             settlement_commit: commit_seq,
             outcome,
         })
-    }
-
-    async fn cancel_requested(&self, task_id: TaskId) -> Result<bool, TaskDriverError> {
-        let session = self.session.lock().await;
-        let task = session
-            .task_record(task_id)
-            .ok_or(SessionError::UnknownTask(task_id))?;
-        Ok(task.cancel_requested)
     }
 }
 
