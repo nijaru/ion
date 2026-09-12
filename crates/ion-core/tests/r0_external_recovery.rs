@@ -1,4 +1,4 @@
-mod r0_support;
+pub mod r0_support;
 
 use std::fs::{self, OpenOptions};
 use std::io::Write;
