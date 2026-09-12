@@ -334,6 +334,14 @@ pub async fn execute_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
+) -> Result<(), TaskError> {
+    execute_task_with_cancellation(registry, store, task_id, CancellationToken::new()).await
+}
+
+pub async fn execute_task_with_cancellation(
+    registry: &TaskRegistry,
+    store: SharedStore,
+    task_id: TaskId,
     cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
     let invocation = lock_store(&store)?.reserve_execute(task_id)?;
@@ -356,8 +364,8 @@ pub async fn recover_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
-    cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
+    let cancellation = CancellationToken::new();
     let invocation = lock_store(&store)?.reserve_recover(task_id)?;
     debug_assert_eq!(invocation.mode, InvocationMode::Recover);
     let task = lock_store(&store)?.task(task_id)?;
@@ -378,8 +386,8 @@ pub async fn abort_task(
     registry: &TaskRegistry,
     store: SharedStore,
     task_id: TaskId,
-    cancellation: CancellationToken,
 ) -> Result<(), TaskError> {
+    let cancellation = CancellationToken::new();
     let invocation = lock_store(&store)?.reserve_abort(task_id)?;
     debug_assert_eq!(invocation.mode, InvocationMode::Abort);
     let task = lock_store(&store)?.task(task_id)?;
