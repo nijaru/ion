@@ -11,7 +11,7 @@ use crate::task::{ContextFuture, TaskRuntime};
 use crate::{
     AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, RunningTask,
     Session, SessionError, SessionSnapshot, TaskCompletion, TaskContext, TaskContextError, TaskId,
-    TaskKind, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskRegistry, TaskStatus,
+    TaskKind, TaskOutcome, TaskRecord, TaskRegistry, TaskStatus,
 };
 
 #[derive(Clone)]
@@ -343,7 +343,7 @@ pub enum TaskDriverError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ConversationId, TaskKindName};
+    use crate::{ConversationId, TaskKindName, TaskOutcomeKind};
 
     fn task(status: TaskStatus, cancel_requested: bool) -> TaskRecord {
         let mut task = TaskRecord::pending(
