@@ -6,6 +6,7 @@ Ion's target is a provider-neutral Rust coding agent: one primary conversation b
 
 - `DESIGN.md` owns the current core architecture and vocabulary.
 - `docs/core-runtime-migration.md` is the active **clean rewrite plan** despite its historical filename.
+- `docs/source-layout.md` owns source/module organization for the clean rewrite.
 - `ROADMAP.md` owns work order, gates, validation status and later subsystem passes.
 - `TERMINAL.md` owns interaction/control/presentation requirements.
 - `docs/research/` and `docs/research.md` record exact source findings and rationale.
@@ -38,6 +39,8 @@ Before deleting/rebuilding the old core, close the five R0 gates in `docs/core-r
 5. minimal provider-neutral scripted model-service contract.
 
 After those settle, replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port implementation algorithms only after their new boundary is accepted.
+
+Follow `docs/source-layout.md` when the fresh tree is created. Do not recreate broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, or giant SQL/TUI buckets. A module should have one semantic owner and few reasons to change; file size is a review signal, not something to game by moving code into generic helper files.
 
 ## Scope discipline
 
