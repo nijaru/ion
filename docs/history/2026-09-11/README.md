@@ -1,27 +1,11 @@
 # Ion
 
-Ion is a Rust terminal coding agent. Its target is a provider-neutral,
-user-owned agent that works alone by default and can supervise cooperating
-workers when multi-agent operation is enabled.
+Ion is a terminal coding agent: a small model-facing agent loop inside
+a durable, single-writer session runtime.
 
-## Design and current implementation
-
-The project is realigning its architecture around that target, using Pi/Pico
-as the primary reference alongside other inspected agents. It is not aiming
-for exact Pi compatibility, and no existing Ion component is mandatory.
-
-- [DESIGN.md](DESIGN.md): proposed architecture, ownership, durable state,
-  execution, context, agent groups, and decision gates.
-- [TERMINAL.md](TERMINAL.md): single-agent and group interaction, approvals,
-  changes, and frontend behavior.
-- [ROADMAP.md](ROADMAP.md): the next work item, prototype gates, milestones,
-  and evidence of progress.
-- [Research](docs/research.md): cited sources, revisions, and trade-offs.
-
-The new design is not fully implemented or benchmarked. The usage below
-covers the existing binary. Previous design and terminal acceptance records
-are preserved in [history](docs/history/README.md). The last Go implementation
-is tagged `last-go`; it is historical recovery material, not a migration target.
+This is a clean-sheet Rust rewrite at v0. The authoritative target
+design is [DESIGN.md](DESIGN.md). The last Go implementation is tagged
+`last-go` and is not a design, behavior, or migration reference.
 
 ## Quickstart
 
@@ -44,12 +28,11 @@ cargo run -p ion -- --model openai-codex/gpt-5.6-luna
 ```
 
 For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
-`OPENAI_CODEX_ACCOUNT_ID`. Ion stores login credentials in its configuration
-directory at `ion/auth.json` (`ION_AUTH_FILE` overrides the path). To reuse
-Pi credentials read-only, explicitly set `ION_PI_AUTH` to its auth file.
-Ion never refreshes or rewrites that file. `/logout` removes only Ion-stored
-credentials; explicit environment credentials and read-only Pi reuse remain
-configured until their environment variables are unset.
+`OPENAI_CODEX_ACCOUNT_ID`. Ion stores login credentials in its configuration directory at `ion/auth.json`
+(`ION_AUTH_FILE` overrides the path). To reuse Pi credentials read-only, explicitly
+set `ION_PI_AUTH` to its auth file. Ion never refreshes or rewrites that file.
+`/logout` removes only Ion-stored credentials; explicit environment credentials
+and read-only Pi reuse remain configured until their environment variables are unset.
 
 ## Usage
 
@@ -91,13 +74,8 @@ Print mode and `--no-session` do not capture retained checkpoints.
 previous descendants. It changes the conversation branch, not workspace files.
 `/settings` saves typed TOML values; thinking changes also save the future
 default. The startup view setting takes effect on the next launch.
-
-`/reload` validates configuration and reconciles peer definitions under a host
-configuration guard. Removal or replacement invalidates earlier revision-bound
-peer grants; reusing a scope name does not resurrect them. The active main lane
-adopts the reconciled configured scopes. A failed application is reported and
-leaves conflicting admission fenced until successful reconciliation. This does
-not undo external effects that already ran.
+`/reload` validates configuration before applying it. Removing peers stops their
+availability but currently retains lane authority; it is not a revocation tool.
 
 Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
 platform default) and are replayed on resume; compaction, steering,
@@ -124,31 +102,31 @@ desktopBaseUrl = "http://desktop:8080/v1"
 modelCatalog = ["qwen3.8:27b"]
 defaultThinkingLevel = "xhigh"
 sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
-# Where native file tools may resolve paths. "off" (default)
+# Where native file tools may resolve paths. "off" (default, pi parity)
 # resolves any absolute path — protecting sensitive paths is the policy
 # layer's job. "workspace" confines mutations to the project root.
 workspaceSandbox = "off"
 # Optional; model-facing subagent controls are disabled by default.
 # enableAgents = true
 
-# Keep the model-facing MCP set explicit and small.
-activeMcpServers = ["docs"]
-
 [[mcpServers]]
 name = "docs"
 command = "npx"
 args = ["-y", "@some/mcp-docs-server"]
+
+# Keep the model-facing MCP set explicit and small.
+activeMcpServers = ["docs"]
 ```
 
 Malformed settings are a hard error, never silently ignored.
 `auto` selects Seatbelt on macOS or Bubblewrap on Linux when available;
 explicit sandbox modes fail closed if their backend is unavailable.
-By default the native file tools resolve any absolute path
-(`write ~/notes.txt` and `/etc/hosts` reads both work; OS
+By default the native file tools resolve any absolute path, exactly
+like pi (`write ~/notes.txt` and `/etc/hosts` reads both work; OS
 permissions are the enforcement). Set `workspaceSandbox = "workspace"`
 to confine write/edit/search to the project root with `.git`
-protected. Project-local extensions load only behind explicit
-`--trust-project`.
+protected — ion's fail-closed posture for tighter setups.
+Project-local extensions load only behind explicit `--trust-project`.
 
 ## Development
 
@@ -160,8 +138,8 @@ cargo test --locked --workspace
 
 CI runs these required formatting, lint, and test gates on pushes and pull
 requests. A separate scheduled job performs the dependency advisory audit.
-Current design work and validation status live in [ROADMAP.md](ROADMAP.md);
-[AGENTS.md](AGENTS.md) describes how to work on the repository.
+Current work and status live in [AGENTS.md](AGENTS.md) and the central
+`agent-context` brief.
 
 ## License
 
