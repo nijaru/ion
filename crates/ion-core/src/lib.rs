@@ -14,6 +14,7 @@ mod error;
 mod extensions;
 mod harness;
 mod ids;
+mod input;
 mod mcp;
 mod operation;
 mod peer;
@@ -46,6 +47,7 @@ pub use extensions::{
     MAX_EXTENSION_WIDGET_LINES,
 };
 pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
+pub use input::{InputReceipt, RequestKey};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
 pub use peer::{PeerCleanupError, PeerServiceError};
