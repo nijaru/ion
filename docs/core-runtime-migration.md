@@ -1,14 +1,16 @@
 # Core rewrite plan
 
-Status: R0 accepted; clean production rewrite is active, 2026-09-12.
+Status: K0-K2 implemented; K3 core task driver validated and still in progress, 2026-09-12.
 
 This document translates `DESIGN.md` into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation. `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
 
+The clean cutover has already happened. The legacy `ion-core` lane/agent/operation/effect runtime and prototype harnesses were physically removed at cleanup commit `2d273f78`; the active workspace now contains only `ion-ai`, `ion-core` and `ion-terminal`.
+
 ## Decision
 
-Do **not** perform a prolonged lane/operation-to-task refactor.
+Do **not** reintroduce a lane/operation compatibility layer.
 
-The current implementation encodes several concepts the target removes:
+The removed implementation encoded concepts the target intentionally dropped:
 
 ```text
 AgentId / Family
@@ -19,7 +21,7 @@ operation-bound provider signals
 root-wide session schema
 ```
 
-Trying to rename/translate these in place would repeatedly preserve old ownership assumptions while the target uses:
+The fresh implementation instead uses:
 
 ```text
 Session
@@ -31,7 +33,7 @@ Session
 
 with workers as owned conversations, immutable context controls, task-level recovery and one per-session canonical store.
 
-The five pre-rewrite gates passed at `81c344d713f13b73e19232b4ad36dfe40ba663b9` under CI run `34718467220`. Replace `ion-core` directly. Do not maintain production `old` and `new` runtimes side by side.
+The five pre-rewrite gates passed at `81c344d713f13b73e19232b4ad36dfe40ba663b9` under CI run `34718467220`. Current clean-core code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` passes format, strict Clippy and full workspace tests under CI run `34725190754`.
 
 ## Accepted R0 contracts
 
@@ -52,7 +54,7 @@ TaskKind
   async abort(...)
 ```
 
-The async stack is process-local, never durable continuation. `TaskContext::commit` replaces the complete typed checkpoint and performs authorized canonical writes through the session writer after revalidating task identity, invocation generation and cancellation authority.
+The async stack is process-local, never durable continuation. `TaskContext` checkpoint commits replace the complete durable checkpoint/output through the session writer after revalidating task identity, invocation generation and cancellation authority.
 
 Cancellation is durable mark + process-local signal. The durable mark revokes the old invocation's normal authority; after that invocation joins, a fresh higher-generation abort invocation owns cleanup and terminal abort settlement.
 
@@ -99,7 +101,7 @@ A rejected transaction consumes/publishes no durable sequence values. A batch ma
 
 ### R0.5 — minimal AI boundary: accepted
 
-Create a small independent `ion-ai` crate containing the provider-neutral generation contract and scripted service:
+The independent `ion-ai` crate contains the provider-neutral generation contract and scripted service:
 
 ```text
 ModelRef
@@ -117,59 +119,55 @@ The model service receives no session/task IDs or database commands. Production 
 
 ## Rewrite boundary
 
-R0 is closed. Remove the old core implementation and reconstruct `ion-core` around the target and `docs/source-layout.md`.
+The old core has already been removed. Do not rebuild it beside the fresh core or add compatibility aliases that reproduce its ownership model.
 
-### Delete/rewrite
+### Deleted/replaced
 
-Treat these as old-runtime code, not refactor anchors:
+The following old-runtime areas are now Git-history-only reference material:
 
-- `src/agent.rs`
-- `src/agent_host.rs`
-- `src/operation/`
-- `src/runtime/`
-- `src/session/lane.rs`
-- old session tree/lane abstractions
-- old provider runtime contract in `src/provider.rs`
-- old generic effect orchestration
-- old context machinery that conflicts with immutable context controls
-- old store schema/SQL tied to agents/lanes/operations/effects
+- old `agent.rs` / `agent_host.rs` family runtime;
+- `operation/` and `runtime/` orchestration;
+- lanes and old session tree abstractions;
+- old provider runtime contract;
+- generic effect orchestration;
+- mutable context machinery that conflicted with immutable controls;
+- old store schema/SQL tied to agents/lanes/operations/effects;
+- old tool/runtime unit/integration suites and R0/P1/P2 prototype support trees.
 
 Do not create a replacement `runtime.rs` catch-all. The fresh implementation is organized around semantic modules (`conversation`, `task`, `session`, `view`, `store`, built-ins) as defined in `docs/source-layout.md`.
 
 ### Application cutover
 
-The current `ion` application crate is tightly coupled to the old core. Do not preserve those dependencies merely to keep the old binary running during the rewrite.
+The old `crates/ion` application crate has been removed from the active workspace rather than bridged to deleted core APIs. The workspace currently contains:
 
-At the clean cutover, choose the smallest workspace that remains honest and green:
+```text
+crates/ion-ai
+crates/ion-core
+crates/ion-terminal
+```
 
-- delete/replace old application code that only drives removed core APIs;
-- temporarily remove `crates/ion` from the workspace if no useful new shell exists yet, **or** replace it with a genuinely minimal new shell once the new command/view API exists;
-- keep `ion-terminal` only as an independently compiling low-level terminal crate pending its later first-principles review;
-- reintroduce the full application/TUI incrementally from the new core outward.
-
-User-facing temporary unusability is acceptable; a compatibility bridge to the obsolete runtime is not.
+Reintroduce a minimal application shell only after the new command/view/store boundaries are useful enough to drive honestly. Keep `ion-terminal` as an independently compiling low-level terminal crate pending its later first-principles review.
 
 ### Review and port algorithms, not APIs
 
-Potentially useful implementation material:
+Potentially useful historical implementation material remains in Git history:
 
-- `tool/`: path validation, output bounding, artifact mechanics;
-- `process.rs`: process cleanup/sandbox helpers;
-- `policy.rs`: policy checks;
-- provider adapters in `crates/ion`: wire parsing and auth knowledge;
-- existing crash/race tests as scenario inventories.
+- tool path validation, output bounding and artifact mechanics;
+- process cleanup/sandbox helpers;
+- policy checks;
+- provider wire parsing/auth knowledge;
+- crash/race tests as scenario inventories.
 
-Copy or rewrite those pieces only after their new subsystem interface is defined. Do not preserve a type because a leaf algorithm uses it today.
+Copy or rewrite those pieces only after their new subsystem interface is defined. Do not preserve a type because a leaf algorithm used it previously.
 
-### Defer until the new command/observation contract exists
+### Still deferred
 
-- `extensions.rs`
-- `mcp.rs`
-- `rpc.rs`
-- CLI ACP adapter
-- old session manager
-- TUI application integration
-- import/export compatibility
+- extensions;
+- MCP;
+- RPC/ACP/JSON adapters;
+- full session manager/application shell;
+- TUI application integration;
+- import/export compatibility.
 
 Low-level terminal editor/rendering utilities may later be reused after P4 review.
 
@@ -177,15 +175,17 @@ Low-level terminal editor/rendering utilities may later be reused after P4 revie
 
 ### K0 — establish `ion-ai` contract crate
 
-Promote the accepted R0.5 provider-neutral types and scripted service into a small independent crate. Keep it contract-only: no production HTTP/OAuth/catalog implementation yet.
+**Implemented and validated.**
 
-This is a dependency boundary, not an AI framework. `ion-core` may depend on it; `ion-ai` must not depend on session/task/store types.
+The accepted R0.5 provider-neutral types and scripted service live in a small independent crate. It remains contract-only: no production HTTP/OAuth/catalog implementation yet.
+
+`ion-core` depends on it; `ion-ai` does not depend on session/task/store types.
 
 ### K1 — storage-independent domain types
 
-Create the fresh module skeleton from `docs/source-layout.md` only as real behavior lands. Do not pre-create empty hierarchy for aesthetics.
+**Implemented and validated.**
 
-Add target identifiers backed by the accepted session-local sequence representation:
+The fresh domain contains the accepted identifiers and durable target nouns only:
 
 ```text
 SessionId
@@ -196,46 +196,97 @@ InputId
 TaskId
 ArtifactId
 CommitSeq
+
+Session
+Conversation
+Entry
+Input
+Task
+TaskOutput
+Artifact
 ```
 
-Add immutable:
+Conversations have independent history-parent/cutoff and owner-task edges. Entries are immutable and carry provider-neutral projections/context controls. Tasks contain kind/schema, immutable input, checkpoint/output, dependency, ownership, cancellation, generation/invocation and terminal state.
 
-- `Conversation { parent?, owner_task? }`;
-- entry generic facets;
-- typed input/request receipt state;
-- task input/checkpoint/outcome records.
-
-No lanes, operations, durable agents or generic effects.
+No lanes, operations, durable agents or generic effects remain.
 
 ### K2 — session writer + in-memory store
 
-Build the serialized command line first against a deterministic in-memory store.
+**Implemented and validated.**
 
-Required commands:
+The deterministic in-memory kernel now provides:
 
-- create root/session;
-- create conversation/fork/owned conversation;
-- append entry/context control;
-- accept/dedupe/place input;
-- create task/dependencies;
-- reserve task invocation;
-- checkpoint task;
-- mark cancellation;
-- terminal closure commit.
+- root/session creation;
+- independent/forked/owned conversation creation;
+- immutable entry/context commits;
+- exact request-key input admission replay/conflict;
+- explicit input disposition;
+- task/dependency creation;
+- execute/recover/abort reservation;
+- generation-fenced checkpoint/output replacement;
+- durable cancellation mark;
+- atomic terminal closure with successor/ownership writes;
+- bounded committed observations and resnapshot-on-overflow;
+- rejected-transaction rollback with no published sequence consumption.
 
-Build observations from committed batches.
+K2 lifecycle primitives are exercised by K3 production code instead of being test-only helpers.
 
 ### K3 — task driver
 
-Implement pending claim, execute/recover/abort invocation ownership, generation fencing, local cancellation signalling, waits/dependencies and close/fault behavior.
+**In progress; core driver slice validated.**
 
-No real provider yet. Use deterministic task kinds.
+Implemented:
+
+- explicit `TaskDriver::drive_task` with no automatic work on snapshot/inspection;
+- registry by task kind + schema revision;
+- pending -> execute, running -> recover, cancelled -> abort invocation selection;
+- async task futures outside the session mutation lock;
+- invocation-scoped `TaskContext` checkpoint commits through the writer;
+- durable cancellation mark plus process-local `CancellationToken` signal;
+- fresh abort generation after the old invocation joins;
+- local duplicate-drive rejection;
+- dependency readiness check at reservation;
+- missing implementation -> durable `Unsupported`;
+- task error/panic -> durable `Failed`;
+- serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup.
+
+Still open:
+
+- first-class wait/dependency subscriptions and wakeups;
+- explicit execution/resource capacity accounting and capacity-safe waits;
+- host close/fault/join policy for live invocations;
+- session/store fail-stop propagation to task drivers;
+- persistence-backed reopen/recovery tests once K4 exists.
+
+Do not add a second scheduler to solve these. Extend the same session/task driver boundary.
 
 ### K4 — SQLite session store
 
-Implement the fresh schema as one database for one session. Do not migrate old tables in place during core development.
+**Next major stage.**
+
+Implement a fresh schema as one database for one session. Do not migrate old tables in place during core development.
 
 Follow the SQLite module boundaries in `docs/source-layout.md`: connection/open policy, schema, atomic commit application and focused per-record reads/writes. Do not create another monolithic `sql.rs`/`queries.rs` file.
+
+Before adding SQL, cleanly separate resident semantic state from the persistence sink/source. The current `MemoryStore` owns both the resident `SessionState` and commit application because it was intentionally the cheapest K2 proof. K4 should avoid teaching the session writer to query SQLite as its mutation authority. Preferred direction:
+
+```text
+Session owner
+  resident SessionState
+  transaction builder
+  observations
+  persistence store
+
+commit path
+  validate/build batch against resident state
+  -> store.commit(batch) durably
+  -> apply batch to resident state/indexes
+  -> publish observation
+```
+
+The exact private Rust shape may be a narrow store trait, enum or another simpler representation; do not generalize it into a public pluggable database framework. The important invariant is persistence-before-resident-apply/publish with exactly one semantic writer.
+
+On open, SQLite reconstructs or lazily supplies the resident state needed by the kernel. Opening/inspection must not drive tasks. Running tasks remain durable records and are entered through explicit recovery drive.
 
 For old development data, preserve/archive/refuse according to the pre-1.0 policy. A migration can be written later only if preserving old sessions is actually valuable.
 
@@ -317,10 +368,10 @@ After the core and AI boundary are stable, audit each subsystem from first princ
 5. ACP/JSON/RPC/external client adapters;
 6. settings/export/import/update packaging.
 
-Each pass may reuse leaf code but starts from the target contract, not from the current module layout.
+Each pass may reuse leaf code but starts from the target contract, not from the old module layout.
 
 ## Rule
 
 A clean rewrite is not permission to throw away evidence. Preserve the **invariants and failure cases** from old tests and previous prototypes; throw away implementation structure that no longer expresses them cleanly.
 
-The temporary R0 prototype files remain only until equivalent production invariants exist, then are deleted rather than becoming a parallel implementation.
+The historical prototypes are evidence inventories only. Do not restore them as parallel production implementations.
