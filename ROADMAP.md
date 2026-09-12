@@ -8,16 +8,18 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| Core architecture | R0 kernel contracts accepted; clean rewrite active | DESIGN.md; docs/r0-kernel-gates-2026-09-12.md |
-| Worker/fork/session topology | Accepted target | docs/research/agent-topology-context-2026-09-12.md; R0.2 |
-| Task execution/recovery | Accepted target contract; production implementation open | R0.1/R0.3; docs/r0-kernel-gates-2026-09-12.md |
-| IDs/order | Session-local unified sequence selected; production schema open | R0.4 |
-| AI boundary | Independent provider-neutral `ion-ai` contract selected; production crate open | R0.5 |
-| Storage topology/engine | Per-session SQLite leading physical candidate; comparative P2 work open | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
-| Fresh production core | Not implemented | current `ion-core` still contains lane/agent/operation/effect-era machinery |
-| TUI/group target | Interaction requirements drafted; old application not target-validated | TERMINAL.md |
+| Core architecture | Clean rewrite active; K0-K2 implemented, K3 core driver validated | DESIGN.md; docs/core-runtime-migration.md; code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` |
+| Worker/fork/session topology | Accepted target; fork/ownership domain + writer primitives implemented, worker runtime open | docs/research/agent-topology-context-2026-09-12.md; K1/K2 |
+| Task execution/recovery | K2 lifecycle boundary implemented; K3 async execute/recover/abort driver in progress | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs` |
+| IDs/order | Session-local unified sequence implemented in fresh core; SQLite representation open | R0.4; K1/K2 |
+| AI boundary | Independent provider-neutral `ion-ai` contract crate implemented | R0.5; `crates/ion-ai/` |
+| Storage topology/engine | Deterministic in-memory writer implemented; fresh per-session SQLite store is K4 | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
+| Fresh production core | Old lane/agent/operation/effect runtime physically removed; K0-K2 complete, K3 in progress | cleanup commit `2d273f78`; code checkpoint `a33e0fb2` |
+| TUI/group target | Interaction requirements drafted; fresh application/TUI not yet rebuilt | TERMINAL.md |
 
-R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`: fmt, strict Clippy and the full workspace tests passed, including real subprocess crash/recovery. The design remains reopenable if production evidence disproves a contract, but the old runtime is no longer a reason to delay cutover.
+R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`. The old core was then physically removed instead of retained as a compatibility runtime. The current clean-core code checkpoint is `a33e0fb22073857cc724244b23f99e0c12249147`, validated by CI run `34725190754`: format, strict Clippy and the full workspace tests all pass.
+
+The design remains reopenable if production evidence disproves a contract. Do not preserve an implementation merely because it has now been rewritten once.
 
 ## 1. Immediate work: clean rewrite
 
@@ -31,7 +33,7 @@ Accepted R0 decisions:
 4. one session-local monotonic sequence privately mints typed local IDs and commit cursors;
 5. a small independent provider-neutral `ion-ai` crate owns model request/stream/result/error types and a scripted service.
 
-Do not add another prototype round before K0/K1 unless a production implementation exposes a concrete contradiction.
+The rewrite is now past the pre-rewrite/prototype stage. Continue from the production kernel; add another isolated prototype only when a concrete production design question is cheaper to answer that way.
 
 ## 2. Clean production core
 
@@ -39,11 +41,15 @@ Do not maintain old/new production runtimes in parallel. Git history preserves t
 
 ### K0 — `ion-ai` contract crate
 
-Promote only the accepted R0.5 provider-neutral model contract plus scripted service. No production HTTP/auth/catalog implementation yet.
+**Status: implemented and validated.**
+
+The accepted R0.5 provider-neutral model contract plus scripted service lives in the independent `ion-ai` crate. No production HTTP/auth/catalog implementation belongs here yet.
 
 ### K1 — storage-independent domain
 
-Build only target nouns:
+**Status: implemented and validated.**
+
+The fresh core contains only the target durable nouns:
 
 ```text
 Session
@@ -57,38 +63,66 @@ Artifact
 
 Identifiers use distinct Rust wrappers over one session-local ordered namespace; `SessionId` is global.
 
-No durable Agent row, lane, Operation, or generic Effect.
+No durable Agent row, lane, Operation, or generic Effect remains in the production core.
 
 A `Conversation` may have a history parent/cutoff and/or owning task. Those are different edges.
 
 ### K2 — session writer + deterministic in-memory store
 
-Implement one serialized mutation line and atomic batch model first against an in-memory store.
+**Status: implemented and validated.**
 
-First capabilities:
+The current kernel has one serialized semantic mutation line, typed atomic mutation batches and a deterministic in-memory store. Implemented capabilities include:
 
 - create session/root conversation;
-- create independent/forked/owned conversations;
+- create independent/forked/owned conversations with reciprocal task ownership;
 - append immutable entries/context controls;
-- accept/dedupe/place inputs;
-- create tasks and acyclic dependencies;
-- reserve invocation;
-- checkpoint task;
-- mark cancellation;
-- apply terminal/abort closure;
-- produce bounded committed observations.
+- accept/dedupe/place inputs with exact request-key replay/conflict;
+- create tasks and dependency edges;
+- reserve execute/recover/abort invocations with generation fencing;
+- replace durable task checkpoints/output;
+- durably mark cancellation and fence stale/normal writes;
+- apply terminal/abort closure atomically with successor writes;
+- explicit input disposition transitions;
+- produce bounded committed observations with resnapshot-on-overflow semantics;
+- reject failed transactions without publishing IDs, commits or partial successor state.
+
+K2's lifecycle paths are exercised through the K3 production driver so they are not test-only dead code.
 
 ### K3 — task driver
 
-Implement claim/drive, execute/recover/abort ownership, invocation fencing, local cancellation signalling, waits, dependencies, close and fail-stop behavior using deterministic task kinds.
+**Status: in progress; core driver slice validated.**
 
-Opening/inspection starts no task effects.
+Implemented now:
+
+- explicit `drive_task`; inspection/snapshot does not start work;
+- task-kind registry keyed by kind + schema revision;
+- execute for pending tasks, recover for already-running durable tasks and abort for cancelled work;
+- task futures run outside the session mutation lock;
+- invocation-scoped `TaskContext` checkpoint commits re-enter the session writer briefly;
+- durable cancellation mark + process-local cancellation signal + fresh abort generation after the old invocation joins;
+- local duplicate-drive rejection for one task;
+- dependency readiness enforcement at reservation;
+- missing task kind settles `Unsupported` without deleting the record;
+- task errors and panics settle durable `Failed` outcomes;
+- cancellation/settlement ordering is serialized under the writer: settlement wins if it commits first, otherwise abort owns cleanup.
+
+Still open before K3 is considered complete:
+
+- first-class task/dependency wait APIs and wakeups that do not consume execution capacity;
+- explicit capacity/resource scheduling rather than caller-driven retries;
+- host close/fault/join behavior for live invocations;
+- fail-stop behavior if the session owner/store faults while tasks are live;
+- persisted reopen/crash recovery and explicit resume/drive, which require K4 storage to test honestly.
 
 ### K4 — fresh SQLite session store
+
+**Status: next major implementation stage.**
 
 Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
 
 Development-era old databases may be archived/refused under the pre-1.0 policy. A later migration is written only if preserving old sessions is actually worth the complexity.
+
+K4 should preserve the K2 ordering contract: validate/build against resident state, durably commit the complete mutation batch, update resident indexes/state, then publish committed observations. SQLite I/O must not become an alternate semantic writer.
 
 ### K5 — one generation/tool chain
 
@@ -141,6 +175,8 @@ The fresh production core closes P1 when deterministic tests cover:
 13. panic/failure/host-close join policy;
 14. explicit durable input disposition;
 15. worker creation/message/cancellation races under one session writer.
+
+Fresh-core coverage now includes exact request-key replay/conflict, atomic terminal successor rollback/commit, explicit input disposition, generation/cancellation fencing, missing task kind, panic/error settlement, no-work-on-inspection and both high-level cancel/settle orderings. The remaining items are not implied complete by the historical prototypes.
 
 Historical isolated P1/R0 prototypes remain regression evidence only until the fresh core covers these invariants.
 
@@ -267,3 +303,7 @@ Agent-effectiveness optimization starts from a stable M1/M2 baseline. More conte
 2026-09-12: architecture revisions 3–5 removed knowledge/task-board systems from core, converged workers onto owned conversations, made fresh versus inherited context independent from session/lifetime, moved toward immutable transcript-derived context controls, reopened task authoring around async execute/recover/abort + durable commits, and made generic Effect removal an explicit pre-rewrite gate.
 
 2026-09-12: R0.1–R0.5 passed together at `81c344d713f13b73e19232b4ad36dfe40ba663b9` in CI run `34718467220`. Accepted: typed async task contract with durable checkpoints/generation fencing; immutable entry/head/edit context + safe fork cutoffs; task-level external recovery without generic Effect; one session-local sequence backing typed local IDs and commit cursors; independent provider-neutral `ion-ai` boundary. See `docs/r0-kernel-gates-2026-09-12.md`.
+
+2026-09-12: legacy production `ion-core` runtime/store/operation/tool code and historical prototype harnesses were physically removed at cleanup commit `2d273f78`; Git history remains the archive. The clean core no longer carries lane/agent/operation/effect compatibility paths.
+
+2026-09-12: clean K0-K2 plus the first K3 task driver are validated at code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` by CI run `34725190754`. Fresh-core evidence includes exact request-key replay/conflict, immutable fork/context checks, atomic owned-conversation/task links, bounded observations, invocation generation fencing, checkpoints, cancellation + fresh abort generation, terminal successor rollback/commit, dependency readiness, missing-kind preservation, panic/error settlement, no-work-on-inspection, duplicate local-drive rejection and serialized cancellation/settlement ordering.
