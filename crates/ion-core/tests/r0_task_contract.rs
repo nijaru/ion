@@ -40,7 +40,10 @@ impl TaskKind for ImmediateKind {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             context.commit(|tx| tx.checkpoint(SimpleCheckpoint::Started))?;
             Ok(TerminalPlan::completed(format!("done:{}", task.input.text)))
@@ -51,10 +54,15 @@ impl TaskKind for ImmediateKind {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         _context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             match task.checkpoint {
-                Some(SimpleCheckpoint::Started) => Ok(TerminalPlan::completed("recovered".to_owned())),
+                Some(SimpleCheckpoint::Started) => {
+                    Ok(TerminalPlan::completed("recovered".to_owned()))
+                }
                 None => Ok(TerminalPlan::failed("missing checkpoint".to_owned())),
             }
         })
@@ -92,7 +100,10 @@ impl TaskKind for BlockingKind {
         &'a self,
         _task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         let started = Arc::clone(&self.started);
         let release = Arc::clone(&self.release);
         Box::pin(async move {
@@ -107,7 +118,10 @@ impl TaskKind for BlockingKind {
         &'a self,
         _task: RunningTask<Self::Input, Self::Checkpoint>,
         _context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async { Ok(TerminalPlan::completed("recovered".to_owned())) })
     }
 
@@ -141,13 +155,12 @@ impl TaskKind for LeakyContextKind {
         &'a self,
         _task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         let release = Arc::clone(&self.release);
-        let sender = self
-            .context_tx
-            .lock()
-            .expect("context sender mutex")
-            .take();
+        let sender = self.context_tx.lock().expect("context sender mutex").take();
         Box::pin(async move {
             context.commit(|tx| tx.checkpoint(BlockingCheckpoint::Waiting))?;
             if let Some(sender) = sender {
@@ -162,7 +175,10 @@ impl TaskKind for LeakyContextKind {
         &'a self,
         _task: RunningTask<Self::Input, Self::Checkpoint>,
         _context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async { Ok(TerminalPlan::completed("recovered".to_owned())) })
     }
 
@@ -195,10 +211,16 @@ impl TaskKind for CrashCheckpointKind {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             context.commit(|tx| tx.checkpoint(CrashCheckpoint::DurableBeforeCrash))?;
-            append_witness(std::path::Path::new(&task.input.text), "checkpoint committed");
+            append_witness(
+                std::path::Path::new(&task.input.text),
+                "checkpoint committed",
+            );
             std::process::exit(83)
         })
     }
@@ -207,7 +229,10 @@ impl TaskKind for CrashCheckpointKind {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         _context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             assert_eq!(task.checkpoint, Some(CrashCheckpoint::DurableBeforeCrash));
             Ok(TerminalPlan::completed("recovered-after-crash".to_owned()))
@@ -238,7 +263,10 @@ impl TaskKind for PanicThenRecoverKind {
         &'a self,
         _task: RunningTask<Self::Input, Self::Checkpoint>,
         context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             context.commit(|tx| tx.checkpoint(SimpleCheckpoint::Started))?;
             panic!("simulated task implementation panic")
@@ -249,7 +277,10 @@ impl TaskKind for PanicThenRecoverKind {
         &'a self,
         task: RunningTask<Self::Input, Self::Checkpoint>,
         _context: TaskContext<Self::Checkpoint>,
-    ) -> BoxFuture<'a, Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>> {
+    ) -> BoxFuture<
+        'a,
+        Result<TerminalPlan<Self::Checkpoint, Self::Completed, Self::Failure>, TaskError>,
+    > {
         Box::pin(async move {
             assert_eq!(task.checkpoint, Some(SimpleCheckpoint::Started));
             Ok(TerminalPlan::completed("panic-recovered".to_owned()))
@@ -328,7 +359,10 @@ async fn settlement_before_cancel_wins() {
         .expect("execute");
     assert!(!mark_cancel(&store, task_id).expect("late cancel"));
     let (kind, value) = terminal_value(task(&store, task_id).expect("task").status);
-    assert_eq!((kind, value), ("completed", serde_json::json!("done:first")));
+    assert_eq!(
+        (kind, value),
+        ("completed", serde_json::json!("done:first"))
+    );
 }
 
 #[tokio::test]
@@ -374,7 +408,10 @@ async fn cancel_before_settlement_fences_normal_completion_then_runs_fresh_abort
     let stored = task(&store, task_id).expect("stored task");
     assert!(stored.generation > generation_before_abort);
     let (kind, value) = terminal_value(stored.status);
-    assert_eq!((kind, value), ("aborted", serde_json::json!("abort-cleanup")));
+    assert_eq!(
+        (kind, value),
+        ("aborted", serde_json::json!("abort-cleanup"))
+    );
 }
 
 #[tokio::test]
@@ -463,7 +500,10 @@ async fn cancelling_a_waiter_does_not_cancel_the_durable_task() {
         let terminal_wake = Arc::clone(&terminal_wake);
         async move {
             loop {
-                if matches!(task(&store, task_id).expect("task").status, TaskStatus::Terminal { .. }) {
+                if matches!(
+                    task(&store, task_id).expect("task").status,
+                    TaskStatus::Terminal { .. }
+                ) {
                     return;
                 }
                 terminal_wake.notified().await;
@@ -517,7 +557,10 @@ async fn task_implementation_panic_leaves_recoverable_running_state() {
         .await
         .expect("recover after panic");
     let (kind, value) = terminal_value(task(&store, task_id).expect("task").status);
-    assert_eq!((kind, value), ("completed", serde_json::json!("panic-recovered")));
+    assert_eq!(
+        (kind, value),
+        ("completed", serde_json::json!("panic-recovered"))
+    );
 }
 
 fn append_witness(path: &std::path::Path, text: &str) {
@@ -538,7 +581,6 @@ async fn r0_crash_child_checkpoint() {
     if std::env::var("ION_R0_TASK_CHILD").ok().as_deref() != Some("checkpoint") {
         return;
     }
-    let witness = std::env::var_os("ION_R0_TASK_WITNESS").expect("witness");
     let task_id = r0_support::TaskId(
         std::env::var("ION_R0_TASK_ID")
             .expect("task id")
@@ -548,7 +590,6 @@ async fn r0_crash_child_checkpoint() {
     let store = new_store(std::path::Path::new(&db));
     let mut registry = TaskRegistry::default();
     registry.register(CrashCheckpointKind);
-    let _ = witness;
     execute_task(&registry, store, task_id)
         .await
         .expect("child execution exits before returning");
@@ -618,9 +659,6 @@ fn checkpoint_enum_gives_exhaustive_phase_typing_without_a_second_task_framework
     }
 
     assert_eq!(next(None), "start");
-    assert_eq!(
-        next(Some(SimpleCheckpoint::Started)),
-        "recover-or-finish"
-    );
+    assert_eq!(next(Some(SimpleCheckpoint::Started)), "recover-or-finish");
     let _ = Completion::<String, String>::Failed("typed failure".to_owned());
 }
