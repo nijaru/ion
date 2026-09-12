@@ -9,7 +9,8 @@ use thiserror::Error;
 use crate::session::transaction::Mutation;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation, TaskRecord, TaskStatus,
+    InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation, TaskRecord,
+    TaskStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -364,7 +365,9 @@ pub(crate) enum StateError {
         task_id: TaskId,
         kind: InvocationKind,
     },
-    #[error("task {task_id} invocation generation {generation} is stale; current generation is {current}")]
+    #[error(
+        "task {task_id} invocation generation {generation} is stale; current generation is {current}"
+    )]
     StaleInvocation {
         task_id: TaskId,
         generation: u64,
