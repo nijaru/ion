@@ -65,7 +65,11 @@ impl TaskKind for BlockingKind {
 struct ErrorKind;
 
 impl TaskKind for ErrorKind {
-    fn execute<'a>(&'a self, _task: ion_core::RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+    fn execute<'a>(
+        &'a self,
+        _task: ion_core::RunningTask,
+        _context: TaskContext,
+    ) -> TaskFuture<'a> {
         Box::pin(async move { Err(TaskRunError::new("expected failure")) })
     }
 
@@ -81,7 +85,11 @@ impl TaskKind for ErrorKind {
 struct PanicKind;
 
 impl TaskKind for PanicKind {
-    fn execute<'a>(&'a self, _task: ion_core::RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+    fn execute<'a>(
+        &'a self,
+        _task: ion_core::RunningTask,
+        _context: TaskContext,
+    ) -> TaskFuture<'a> {
         Box::pin(async move { panic!("expected task panic") })
     }
 
@@ -107,16 +115,15 @@ fn task(session: &mut Session, kind: &str) -> ion_core::TaskReceipt {
         .expect("task")
 }
 
-fn driver_with_kind(kind: &str, implementation: Arc<dyn TaskKind>) -> (TaskDriver, ion_core::TaskId) {
+fn driver_with_kind(
+    kind: &str,
+    implementation: Arc<dyn TaskKind>,
+) -> (TaskDriver, ion_core::TaskId) {
     let mut session = Session::new().expect("session");
     let task = task(&mut session, kind);
     let mut registry = TaskRegistry::new();
     registry
-        .register(
-            TaskKindName::new(kind).expect("kind"),
-            1,
-            implementation,
-        )
+        .register(TaskKindName::new(kind).expect("kind"), 1, implementation)
         .expect("register");
     (TaskDriver::new(session, registry), task.task_id)
 }
