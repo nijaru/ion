@@ -109,10 +109,10 @@ pub(crate) fn apply_mutation(
             if state.inputs.insert(input.id, input.clone()).is_some() {
                 return Err(StateError::DuplicateInput(input.id));
             }
-            if let Some(key) = &input.request_key {
-                if state.request_keys.insert(key.clone(), input.id).is_some() {
-                    return Err(StateError::DuplicateRequestKey(key.clone()));
-                }
+            if let Some(key) = &input.request_key
+                && state.request_keys.insert(key.clone(), input.id).is_some()
+            {
+                return Err(StateError::DuplicateRequestKey(key.clone()));
             }
         }
         Mutation::CreateTask(task) => {

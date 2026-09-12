@@ -27,13 +27,13 @@ impl MemoryStore {
                 last_seq: batch.last_seq,
             });
         }
-        if let Some(current) = self.state.last_seq {
-            if batch.last_seq <= current {
-                return Err(StoreError::SequenceRegression {
-                    current,
-                    proposed: batch.last_seq,
-                });
-            }
+        if let Some(current) = self.state.last_seq
+            && batch.last_seq <= current
+        {
+            return Err(StoreError::SequenceRegression {
+                current,
+                proposed: batch.last_seq,
+            });
         }
 
         let mut next = self.state.clone();

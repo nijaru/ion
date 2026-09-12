@@ -77,10 +77,10 @@ impl Session {
     }
 
     pub fn admit_input(&mut self, request: InputRequest) -> Result<InputReceipt, SessionError> {
-        if let Some(key) = request.request_key.as_ref() {
-            if let Some(receipt) = self.replay_input(key, &request)? {
-                return Ok(receipt);
-            }
+        if let Some(key) = request.request_key.as_ref()
+            && let Some(receipt) = self.replay_input(key, &request)?
+        {
+            return Ok(receipt);
         }
 
         let (input_id, commit_seq) =
@@ -185,10 +185,10 @@ impl Session {
     }
 
     fn publish(&mut self, event: CommitEvent) {
-        if self.observations.len() == OBSERVATION_CAPACITY {
-            if let Some(dropped) = self.observations.pop_front() {
-                self.dropped_through = Some(dropped.commit_seq);
-            }
+        if self.observations.len() == OBSERVATION_CAPACITY
+            && let Some(dropped) = self.observations.pop_front()
+        {
+            self.dropped_through = Some(dropped.commit_seq);
         }
         self.observations.push_back(event);
     }

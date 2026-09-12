@@ -79,10 +79,10 @@ impl Transaction {
                 .map_err(map_state)?;
             validate_fork_cutoff(&visible, parent.at)?;
         }
-        if let Some(owner_task) = spec.owner_task {
-            if !self.draft.tasks.contains_key(&owner_task) {
-                return Err(SessionError::UnknownTask(owner_task));
-            }
+        if let Some(owner_task) = spec.owner_task
+            && !self.draft.tasks.contains_key(&owner_task)
+        {
+            return Err(SessionError::UnknownTask(owner_task));
         }
 
         let id = ConversationId::new(self.allocate()?.get())?;
@@ -123,10 +123,10 @@ impl Transaction {
             .visible_entries(request.conversation_id)
             .map_err(map_state)?;
         let visible_ids: HashSet<_> = visible.iter().map(|entry| entry.id).collect();
-        if let Some(head) = request.context.head {
-            if !visible_ids.contains(&head) {
-                return Err(SessionError::InvisibleContextReference(head));
-            }
+        if let Some(head) = request.context.head
+            && !visible_ids.contains(&head)
+        {
+            return Err(SessionError::InvisibleContextReference(head));
         }
         for edit in &request.context.edits {
             if !visible_ids.contains(&edit.target()) {
