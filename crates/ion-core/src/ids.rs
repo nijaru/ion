@@ -1,7 +1,9 @@
 //! Durable identity newtypes.
 //!
-//! Durable semantic identities use UUIDv7 and stay independent from storage
-//! ordering. Live runtime events keep a separate in-memory cursor.
+//! Durable semantic identities currently use UUIDv7 and stay independent from
+//! storage ordering. The target architecture keeps this semantic separation;
+//! P1/P2 may still change the physical representation before schema stability.
+//! Live runtime events keep a separate in-memory cursor.
 
 use std::fmt;
 
@@ -76,6 +78,114 @@ impl fmt::Display for AgentId {
     }
 }
 
+/// Durable identity of one semantic conversation.
+///
+/// Conversation ancestry and agent supervision are separate relationships; a
+/// conversation id therefore never doubles as an agent id or commit position.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct ConversationId(Uuid);
+
+impl ConversationId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for ConversationId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "conversation-{}", self.0)
+    }
+}
+
+/// Durable identity of one generic runtime task.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct TaskId(Uuid);
+
+impl TaskId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for TaskId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "task-{}", self.0)
+    }
+}
+
+/// Durable identity of one admitted input, independent from a caller supplied
+/// idempotency/request key.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+pub struct InputId(Uuid);
+
+impl InputId {
+    #[must_use]
+    pub fn generate() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn from_uuid(uuid: Uuid) -> Self {
+        Self(uuid)
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+
+    #[must_use]
+    pub fn parse(text: &str) -> Option<Self> {
+        Uuid::parse_str(text).ok().map(Self)
+    }
+}
+
+impl fmt::Display for InputId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "input-{}", self.0)
+    }
+}
+
+/// Legacy operation identity retained while the operation/lane execution path
+/// is replaced by generic durable tasks.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub struct OperationId(Uuid);
 
@@ -239,11 +349,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn entry_identity_is_uuid_v7_and_independent_from_ordering() {
-        let first = EntryId::generate();
-        let second = EntryId::generate();
-        assert_ne!(first, second);
-        assert_eq!(EntryId::parse(&first.as_uuid().to_string()), Some(first));
-        assert_eq!(first.as_uuid().get_version_num(), 7);
+    fn semantic_identity_is_uuid_v7_and_independent_from_ordering() {
+        let entry = EntryId::generate();
+        let conversation = ConversationId::generate();
+        let task = TaskId::generate();
+        let input = InputId::generate();
+
+        assert_eq!(EntryId::parse(&entry.as_uuid().to_string()), Some(entry));
+        assert_eq!(
+            ConversationId::parse(&conversation.as_uuid().to_string()),
+            Some(conversation)
+        );
+        assert_eq!(TaskId::parse(&task.as_uuid().to_string()), Some(task));
+        assert_eq!(InputId::parse(&input.as_uuid().to_string()), Some(input));
+        assert_eq!(entry.as_uuid().get_version_num(), 7);
+        assert_eq!(conversation.as_uuid().get_version_num(), 7);
+        assert_eq!(task.as_uuid().get_version_num(), 7);
+        assert_eq!(input.as_uuid().get_version_num(), 7);
     }
 }
