@@ -1,0 +1,332 @@
+name: P1 request receipt refined patch
+
+on:
+  push:
+    branches: [p1-request-receipts]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  patch:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: p1-request-receipts
+      - uses: dtolnay/rust-toolchain@1.98.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Apply base patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+          import textwrap
+
+          workflow = Path('.github/workflows/p1-request-receipts-patch.yml').read_text()
+          start = "          python3 <<'PY'\n"
+          end = "\n          PY\n"
+          body = workflow.split(start, 1)[1].split(end, 1)[0]
+          Path('/tmp/base_patch.py').write_text(textwrap.dedent(body))
+          PY
+          python3 /tmp/base_patch.py
+      - name: Refine internal admission types
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace(path, old, new, count=1):
+              p = Path(path)
+              text = p.read_text()
+              found = text.count(old)
+              if found != count:
+                  raise SystemExit(f"{path}: expected {count} exact matches, found {found}: {old[:160]!r}")
+              p.write_text(text.replace(old, new, count))
+
+          store = 'crates/ion-core/src/store/mod.rs'
+          replace(
+              store,
+              '''#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BeginOperationResult {
+    Accepted(Option<InputReceipt>),
+    Duplicate(InputReceipt),
+}
+''',
+              '''#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BeginOperationResult {
+    Accepted(Option<InputReceipt>),
+    Duplicate(InputReceipt),
+}
+
+pub(crate) struct BeginOperationRequest {
+    pub(crate) session_id: SessionId,
+    pub(crate) lane_name: String,
+    pub(crate) operation_id: OperationId,
+    pub(crate) root_inbox: InboxRecord,
+    pub(crate) checkpoint: CheckpointRecord,
+    pub(crate) entry: EntryRecord,
+    pub(crate) admission: Option<InputAdmission>,
+}
+''',
+          )
+          replace(
+              store,
+              '''    BeginOperation {
+        session_id: SessionId,
+        lane_name: String,
+        operation_id: OperationId,
+        root_inbox: InboxRecord,
+        checkpoint: CheckpointRecord,
+        entry: EntryRecord,
+        admission: Option<InputAdmission>,
+        reply: oneshot::Sender<Result<BeginOperationResult, StoreError>>,
+    },''',
+              '''    BeginOperation {
+        request: BeginOperationRequest,
+        reply: oneshot::Sender<Result<BeginOperationResult, StoreError>>,
+    },''',
+          )
+          replace(
+              store,
+              '''    pub(crate) async fn begin_operation(
+        &self,
+        session_id: SessionId,
+        lane_name: impl Into<String>,
+        operation_id: OperationId,
+        root_inbox: InboxRecord,
+        checkpoint: CheckpointRecord,
+        entry: EntryRecord,
+        admission: Option<InputAdmission>,
+    ) -> Result<BeginOperationResult, StoreError> {
+        let lane_name = lane_name.into();
+        self.request(|reply| StoreCommand::BeginOperation {
+            session_id,
+            lane_name,
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+            admission,
+            reply,
+        })
+        .await
+    }''',
+              '''    pub(crate) async fn begin_operation(
+        &self,
+        request: BeginOperationRequest,
+    ) -> Result<BeginOperationResult, StoreError> {
+        self.request(|reply| StoreCommand::BeginOperation { request, reply })
+            .await
+    }''',
+          )
+
+          sql = 'crates/ion-core/src/store/sql.rs'
+          replace(
+              sql,
+              '''        StoreCommand::BeginOperation {
+            session_id,
+            lane_name,
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+            admission,
+            reply,
+        } => {
+            let _ = reply.send(check_injected(fail_next_write).and_then(|()| {
+                begin_operation(
+                    connection,
+                    session_id,
+                    &lane_name,
+                    operation_id,
+                    &root_inbox,
+                    &checkpoint,
+                    &entry,
+                    admission.as_ref(),
+                )
+            }));
+        }''',
+              '''        StoreCommand::BeginOperation { request, reply } => {
+            let _ = reply.send(
+                check_injected(fail_next_write)
+                    .and_then(|()| begin_operation(connection, &request)),
+            );
+        }''',
+          )
+          replace(
+              sql,
+              '''fn begin_operation(
+    connection: &mut Connection,
+    session_id: SessionId,
+    lane_name: &str,
+    operation_id: OperationId,
+    root_inbox: &InboxRecord,
+    checkpoint: &CheckpointRecord,
+    entry: &EntryRecord,
+    admission: Option<&InputAdmission>,
+) -> Result<BeginOperationResult, StoreError> {
+    let tx = connection.transaction()?;''',
+              '''fn begin_operation(
+    connection: &mut Connection,
+    request: &BeginOperationRequest,
+) -> Result<BeginOperationResult, StoreError> {
+    let session_id = request.session_id;
+    let lane_name = request.lane_name.as_str();
+    let operation_id = request.operation_id;
+    let root_inbox = &request.root_inbox;
+    let checkpoint = &request.checkpoint;
+    let entry = &request.entry;
+    let admission = request.admission.as_ref();
+    let tx = connection.transaction()?;''',
+          )
+          replace(
+              sql,
+              '''        begin_operation(
+            &mut connection,
+            session_id,
+            "worker",
+            operation_id,
+            &root_inbox,
+            &checkpoint,
+            &entry,
+        )''',
+              '''        begin_operation(
+            &mut connection,
+            &BeginOperationRequest {
+                session_id,
+                lane_name: "worker".to_owned(),
+                operation_id,
+                root_inbox,
+                checkpoint,
+                entry,
+                admission: None,
+            },
+        )''',
+          )
+          replace(
+              sql,
+              '''            begin_operation(
+                &mut connection,
+                session_id,
+                "missing",
+                operation_id,
+                &root_inbox,
+                &checkpoint,
+                &entry,
+            )''',
+              '''            begin_operation(
+                &mut connection,
+                &BeginOperationRequest {
+                    session_id,
+                    lane_name: "missing".to_owned(),
+                    operation_id,
+                    root_inbox,
+                    checkpoint,
+                    entry,
+                    admission: None,
+                },
+            )''',
+          )
+
+          runtime = 'crates/ion-core/src/runtime/mod.rs'
+          replace(
+              runtime,
+              '''    AssistantFrame, BeginOperationResult, CheckpointPayload, CheckpointRecord, CommitRequest,
+    EffectRecord, EntryRecord, InboxRecord, InboxStatus, LoadedSession, SessionRecord, SessionStore,
+    SettledEffect, StoreError, ToolProgressCheckpoint, UsageRecord,
+};''',
+              '''    AssistantFrame, BeginOperationRequest, BeginOperationResult, CheckpointPayload,
+    CheckpointRecord, CommitRequest, EffectRecord, EntryRecord, InboxRecord, InboxStatus,
+    LoadedSession, SessionRecord, SessionStore, SettledEffect, StoreError, ToolProgressCheckpoint,
+    UsageRecord,
+};''',
+          )
+          replace(runtime, '        active: ActiveOperation,', '        active: Box<ActiveOperation>,')
+          replace(
+              runtime,
+              '''            .begin_operation(
+                self.session_id,
+                lane_name,
+                operation_id,
+                root_inbox,
+                checkpoint,
+                entry.clone(),
+                admission,
+            )''',
+              '''            .begin_operation(BeginOperationRequest {
+                session_id: self.session_id,
+                lane_name: lane_name.to_owned(),
+                operation_id,
+                root_inbox,
+                checkpoint,
+                entry: entry.clone(),
+                admission,
+            })''',
+          )
+          replace(runtime, '            active: ActiveOperation {', '            active: Box::new(ActiveOperation {')
+          replace(
+              runtime,
+              '''                pending_inputs: Vec::new(),
+            },
+            entry_id,''',
+              '''                pending_inputs: Vec::new(),
+            }),
+            entry_id,''',
+          )
+          replace(runtime, '                self.start_active(&lane_name, active);', '                self.start_active(&lane_name, *active);', count=2)
+          replace(runtime, '                } => (active, entry_id),', '                } => (*active, entry_id),')
+          replace(runtime, '                self.start_active(lane_name, active);', '                self.start_active(lane_name, *active);')
+
+          reconcile = 'crates/ion-core/src/tests/reconcile.rs'
+          # The base patch has already added the trailing None. Collapse this
+          # direct store call into the same typed request used by production.
+          old = '''        .begin_operation(
+            session_id,
+            crate::session::lane::MAIN,
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+            None,
+        )'''
+          new = '''        .begin_operation(BeginOperationRequest {
+            session_id,
+            lane_name: crate::session::lane::MAIN.to_owned(),
+            operation_id,
+            root_inbox,
+            checkpoint,
+            entry,
+            admission: None,
+        })'''
+          replace(reconcile, old, new)
+          replace(
+              reconcile,
+              '''use crate::store::{
+    CheckpointPayload, CheckpointRecord, EffectKind, EffectRecord, EntryRecord, InboxRecord,
+    InboxStatus, OpenEffect, SessionStore,
+};''',
+              '''use crate::store::{
+    BeginOperationRequest, CheckpointPayload, CheckpointRecord, EffectKind, EffectRecord,
+    EntryRecord, InboxRecord, InboxStatus, OpenEffect, SessionStore,
+};''',
+          )
+          PY
+      - run: cargo fmt --all
+      - run: cargo fmt --check
+      - run: cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
+      - run: cargo test --locked --workspace
+      - name: Commit validated patch
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add crates/ion-core
+          git commit -m "feat: add durable request receipt admission"
+          git push origin HEAD:p1-request-receipts
