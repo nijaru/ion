@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ion", "crates/ion-ai", "crates/ion-core", "crates/ion-terminal"]
+members = ["crates/ion-ai", "crates/ion-core", "crates/ion-terminal"]
 
 [workspace.package]
 version = "0.0.0"
