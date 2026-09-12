@@ -42,6 +42,7 @@ impl FromStr for SessionId {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "i64", into = "i64")]
 pub struct LocalSeq(NonZeroI64);
 
 impl LocalSeq {
@@ -60,6 +61,20 @@ impl LocalSeq {
     pub fn next(self) -> Result<Self, IdError> {
         let next = self.get().checked_add(1).ok_or(IdError::Exhausted)?;
         Self::new(next)
+    }
+}
+
+impl TryFrom<i64> for LocalSeq {
+    type Error = IdError;
+
+    fn try_from(value: i64) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<LocalSeq> for i64 {
+    fn from(value: LocalSeq) -> Self {
+        value.get()
     }
 }
 
@@ -137,6 +152,18 @@ mod tests {
         assert_eq!(task.get(), 42);
         assert!(EntryId::new(0).is_err());
         assert!(TaskId::new(-1).is_err());
+    }
+
+    #[test]
+    fn serde_rejects_non_positive_local_sequence() {
+        assert!(serde_json::from_str::<LocalSeq>("0").is_err());
+        assert!(serde_json::from_str::<LocalSeq>("-1").is_err());
+        assert_eq!(
+            serde_json::from_str::<LocalSeq>("7")
+                .expect("positive local sequence")
+                .get(),
+            7
+        );
     }
 
     #[test]
