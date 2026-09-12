@@ -4,9 +4,7 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::process::Command;
 
-use p1_support::{
-    AdmissionMode, EffectSpec, PrototypeStore, Recovery, RecoveryDecision,
-};
+use p1_support::{AdmissionMode, EffectSpec, PrototypeStore, Recovery, RecoveryDecision};
 use tempfile::tempdir;
 
 fn append_witness(path: &std::path::Path, text: &str) {
