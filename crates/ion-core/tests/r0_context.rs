@@ -1,4 +1,4 @@
-mod r0_support;
+pub mod r0_support;
 
 use r0_support::{ContextEdit, ContextError, ContextStore, ModelMessage, ToolCall};
 
