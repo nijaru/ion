@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
@@ -63,14 +63,12 @@ pub enum StoreError {
 }
 
 pub struct PrototypeTaskStore {
-    path: PathBuf,
     connection: Connection,
 }
 
 impl PrototypeTaskStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
-        let path = path.as_ref().to_path_buf();
-        let connection = Connection::open(&path)?;
+        let connection = Connection::open(path)?;
         connection.execute_batch(
             r#"
             PRAGMA foreign_keys = ON;
@@ -91,11 +89,7 @@ impl PrototypeTaskStore {
             );
             "#,
         )?;
-        Ok(Self { path, connection })
-    }
-
-    pub fn path(&self) -> &Path {
-        &self.path
+        Ok(Self { connection })
     }
 
     pub fn create_task(&mut self, kind: &str, input: &Value) -> Result<TaskId, StoreError> {
