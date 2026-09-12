@@ -4,6 +4,8 @@ Status: active implementation plan, 2026-09-12.
 
 This document turns the target contracts in `DESIGN.md` into an implementation sequence. It is deliberately subordinate to the design and evidence gates: if production tests or measurements invalidate a boundary, change the plan rather than preserving an implementation artifact.
 
+The scope of this plan is the **core agent/session runtime only**. Shared task boards, long-term/project knowledge, memory systems, semantic indexes, and similar higher-level coordination mechanisms are not part of the core target. They may be researched later against a working baseline. Do not pre-shape the core around speculative future services.
+
 ## Goal
 
 Replace the current lane/operation-centric execution core with the target conversation/task/session model without creating a permanent second runtime or preserving compatibility with internal abstractions that no longer fit.
@@ -58,19 +60,37 @@ frontends / adapters
 
 The session owner is the only semantic writer. Storage is an atomic persistence mechanism, not another scheduler. Effect adapters are asynchronous and concurrent but cannot directly mutate canonical session state.
 
+This distinction is fundamental to the storage decision: provider calls, tool execution, subprocess I/O, waiting, and other slow work never run while a database write transaction is held. The serialized writer should perform short validation/commit transitions and immediately release the store.
+
 ## Core nouns to converge on
 
-- **Session**: one durable coordination and transaction boundary.
+- **Session**: one durable coordination and transaction boundary containing one root agent and any cooperating retained agents created within that group.
 - **Agent**: retained identity with configuration, authority and a current conversation.
 - **Conversation**: immutable transcript plus explicit model-context state and fork provenance.
 - **Input**: admitted user/agent input with delivery mode, request identity and disposition.
 - **Task**: generic durable executable unit with typed kind state, dependencies, invocation generation and terminal outcome.
 - **Effect**: durable external-effect intent plus attempt/recovery classification and settlement.
 - **Job**: environment-backed long-lived work represented through durable tasks/effects.
-- **Assignment**: optional coordination state, not scheduler state.
-- **Knowledge item**: optional project/workspace information, not transcript or task state.
+- **Artifact**: retained output/evidence referenced by durable session state when it should not live inline.
 
 Do not introduce another permanent synonym for these concepts during migration.
+
+## Session is the consistency boundary
+
+A session is deliberately larger than a single conversation or agent. Root agent and retained workers in one cooperating group share one session transaction boundary because operations across them can require atomic invariants:
+
+- spawning an agent together with its initial conversation/input/task;
+- parent/child supervision and cancellation barriers;
+- task dependencies and successor creation;
+- messages and target inbox admission;
+- authority/grant narrowing;
+- usage/reservation accounting;
+- shared workspace ownership or conflict metadata;
+- durable observations derived from one committed transition.
+
+Do **not** use one database per agent. That would turn ordinary same-group transitions into cross-database protocols and make crash recovery harder for no semantic benefit.
+
+Independent top-level sessions do not require those transactions with one another. They should be separate ownership/failure domains and may be active concurrently.
 
 ## Migration decision
 
@@ -96,6 +116,7 @@ Before adding more old-runtime features:
 2. Add target identity types needed by the core (`ConversationId`, `TaskId`, `InputId`, and any receipt/message IDs that survive as first-class objects).
 3. Keep `CommitSeq` separate from semantic identity. The physical integer/UUID representation remains an implementation decision until P1/P2 measure it.
 4. Define crate-private read/write interfaces around one session store so the later root-wide -> per-session physical migration does not leak through runtime APIs.
+5. Keep higher-level coordination/memory ideas outside this boundary until the core provides a stable baseline to evaluate them against.
 
 ### K1 — Session command kernel
 
@@ -182,22 +203,22 @@ Do not rename these in place while retaining their old semantics. Convert caller
 
 ## Persistence topology
 
-The implementation interface should assume one authoritative store **per session**, even while the current backend is still physically root-wide during transition.
+The implementation interface should assume one authoritative store **per session/group**, even while the current backend is still physically root-wide during transition.
 
-Target candidate:
+Leading candidate:
 
 ```text
 Ion data root/
-  catalog.sqlite
   sessions/
     <SessionId>/
       session.sqlite
       artifacts/
-  projects/
-    <KnowledgeSpace>/
-      knowledge.sqlite       # optional, later
-  indexes/                   # optional/rebuildable
+
+  # optional derived discovery cache once needed
+  catalog.sqlite
 ```
+
+`catalog.sqlite` is not required for correctness and should not be part of initial session semantics. A filesystem scan is a valid simple baseline. If listing/opening many sessions justifies a catalog, it remains rebuildable derived metadata rather than another source of truth.
 
 ### What belongs together in `session.sqlite`
 
@@ -209,54 +230,98 @@ Anything that can be part of one semantic session command transaction:
 - effect intents, attempts, recovery metadata and settlements;
 - input/message admission, request-key receipts and disposition;
 - grants, approvals, reservations, usage and budgets;
-- same-session coordination/assignment state if E1 is enabled;
+- workspace/resource ownership metadata needed for session correctness;
 - artifact metadata/reference publication.
 
 Splitting these by category into multiple WAL databases would weaken crash atomicity and complicate recovery for no useful semantic gain.
 
-### What can live separately
+### Large artifacts and provisional output
 
-A separate database/store is justified when its lifecycle and failure domain are genuinely independent:
+Large opaque output may live outside SQLite when this avoids pathological row/WAL growth. The session database stores the durable reference and integrity metadata. Publication ordering must ensure a crash can leave an orphan file to reclaim, but cannot commit a required reference to missing content.
 
-- `catalog.sqlite`: rebuildable session discovery metadata only;
-- `knowledge.sqlite`: optional project/workspace-scoped cross-session knowledge, if E2 earns inclusion;
-- search/vector indexes: rebuildable derived data;
-- logs/telemetry caches: optional independent data, if introduced;
-- credentials: host credential storage, not these databases.
+Live display deltas are not canonical session truth. They may be coalesced or lost and reconstructed from a fresh snapshot/final durable result. P2 selects checkpoint/spill policy from measurements.
 
-Cross-store authoritative publication uses explicit idempotent/outbox protocols. Ion must not pretend an attached-WAL multi-file transaction gives one crash-atomic commit.
+### Independent sessions
 
-## Optional coordination and knowledge
+Each top-level session may have its own session owner, storage worker/connection and WAL file. That allows unrelated sessions to make progress independently while keeping one deterministic mutation line *inside* each session. Concurrency therefore comes from partitioning at the semantic ownership boundary, not from allowing competing writers to one session's canonical state.
 
-These systems should be designed into the boundaries now without being implemented as mandatory core behavior.
+## Storage engine posture
 
-### Assignment/task coordination (E1)
+### SQLite: default candidate
 
-A future assignment board may expose owner/claim state, revisions, dependencies, evidence/result refs, and optional advisory path scopes. It is **not** the durable task scheduler. If an assignment belongs to one session/group and needs atomic coordination with messages/ownership, it lives in that session database. Model-facing assignment tools are independently toggleable.
+Plain SQLite remains the default engine for the core prototype and initial production path because Ion's intended workload matches its strengths:
 
-The baseline to beat is simply `spawn/send/wait/result`. E1 graduates only if controlled tests show less duplicated/missed work for acceptable token/tool/latency cost.
+- local embedded storage;
+- short atomic transactions;
+- many reads plus one intentional semantic writer per session;
+- relational constraints and indexed point/range queries;
+- mature crash behavior, tooling and backup support;
+- no daemon or network dependency.
 
-### Project knowledge (E2)
+WAL's one-writer-per-database rule is not currently a design limitation because Ion intentionally has one semantic writer per session. The writer must never hold a transaction while waiting on model/tool/process work.
 
-Cross-session knowledge has a different lifetime and should not be placed in every `session.sqlite`. Candidate records require provenance, revision/freshness, supersession/invalidation and explicit trust status. Retrieval is bounded and inspectable; no hidden automatic prompt injection.
+### Turso Database: evaluate, do not adopt yet
 
-Start with exact/lexical retrieval. Embeddings/vector indexes are derived optional machinery only if measured task/retrieval quality justifies them. Publication from a session uses an idempotent durable outbox; knowledge-store failure must not make the source session unrecoverable.
+Turso Database is relevant and should remain on the P2 comparison list. Its Rust implementation, SQLite compatibility, async I/O, MVCC/`BEGIN CONCURRENT`, CDC and future sync capabilities are potentially useful.
+
+However, concurrent writers do not justify changing Ion's semantic ownership model. If canonical state transitions race through multiple write transactions, the database's conflict machinery would replace a deterministic command line with optimistic conflict/retry logic while still requiring Ion to define ordering, cancellation, authority and recovery semantics above it.
+
+Use Turso only if measurements show an engine-level benefit under Ion's actual design, for example:
+
+- SQLite commit/lock/checkpoint overhead becomes material despite per-session partitioning and short transactions;
+- asynchronous storage materially improves runtime behavior versus a dedicated blocking worker;
+- a future local/remote sync requirement is accepted as a product requirement;
+- another Turso capability solves a measured core problem without forcing weaker semantics.
+
+P2 may build an isolated equivalent-schema benchmark against Turso after the core session workload is representative. Do **not** add Turso/libSQL as a production dependency merely to preserve optionality.
+
+### libSQL
+
+libSQL is not a preferred core candidate. It retains SQLite's fundamental single-writer model while adding replication/remote machinery Ion does not currently need. If remote embedded replication becomes a concrete requirement later, reassess the then-current Turso/libSQL options rather than designing around them now.
+
+### Client/server databases
+
+Postgres or another server database would make sense only if Ion adopts a multi-host or multi-user writable-session architecture. That is outside the local-first core. Do not introduce a server just to obtain write concurrency that the session ownership model intentionally does not use.
+
+### No generic storage framework yet
+
+Keep the store implementation private and its semantic interface narrow, but do not build a general multi-backend abstraction before a second engine earns inclusion. Avoid SQLite-specific assumptions in public runtime APIs; inside the store implementation, use SQLite directly and well.
+
+## Why not one global database?
+
+One root-wide SQLite database is operationally simple, but all independent sessions share one writer-lock/WAL/checkpoint/failure domain. That coupling is unnecessary because separate top-level sessions do not require atomic transactions with each other.
+
+The current root-wide database remains valid migration source/evidence. P2 must measure it against per-session stores rather than assuming per-session is faster. The architectural argument for per-session partitioning is primarily **ownership and isolation**; performance is a hypothesis to verify.
+
+## Why not one database per agent?
+
+Agents in one group are not independent persistence domains. Spawning, messaging, supervision, cancellation, task dependencies, budgets and workspace ownership can cross agent boundaries. A database per agent would force distributed transactions/outboxes into the most common coordination path.
+
+The session/group is therefore the smallest useful core database boundary unless P1/P2 evidence disproves that model.
+
+## Experimental systems are deferred
+
+Do not add assignment boards, durable project knowledge, embeddings, vector stores, memory consolidation, or cross-session synchronization to the core migration. First establish a clean single-agent and retained-worker baseline.
+
+Later experiments can ask whether explicit coordination or cross-session information improves verified task outcomes. They must integrate through stable session APIs rather than require a redesign of core execution truth. A feature that harms prompt quality, adds stale state, or duplicates what the root agent already coordinates should be removable without affecting session correctness.
 
 ## Storage questions intentionally still open
 
 Do not freeze these until P2 evidence exists:
 
 - UUIDv7 versus compact session-local integer representation for non-session IDs;
+- root-wide SQLite versus one SQLite database per session under measured workloads;
+- SQLite versus Turso under the *same* representative session workload, if an engine comparison becomes worthwhile;
+- whether a rebuildable catalog is needed at all for initial scale;
 - output checkpoint frequency and exact provisional-loss bound;
 - spill threshold between SQLite and artifact files;
 - WAL checkpoint policy;
 - page/cache settings;
 - transcript/context index shapes;
 - artifact retention and GC;
-- backup/archive/clone mechanics;
-- derived search/vector engine choice, if any.
+- backup/archive/clone mechanics.
 
-The architectural constraint is stronger than any one physical choice: atomic session truth has one owner/store boundary; independently-lived data can be separated.
+The architectural constraint is stronger than any one physical choice: one session has one semantic mutation owner and one crash-atomic canonical store boundary; independent sessions can be physically independent.
 
 ## Promotion rule
 
