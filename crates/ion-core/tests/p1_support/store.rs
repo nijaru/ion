@@ -227,7 +227,11 @@ impl PrototypeStore {
             params![
                 task_id.0,
                 target.0,
-                if terminal.is_some() { "terminal" } else { "accepted" },
+                if terminal.is_some() {
+                    "terminal"
+                } else {
+                    "accepted"
+                },
                 terminal,
             ],
         )?;
@@ -282,11 +286,10 @@ impl PrototypeStore {
     }
 
     fn allocate_id(transaction: &Transaction<'_>) -> rusqlite::Result<i64> {
-        let id = transaction.query_row(
-            "SELECT value FROM meta WHERE key = 'next_id'",
-            [],
-            |row| row.get(0),
-        )?;
+        let id =
+            transaction.query_row("SELECT value FROM meta WHERE key = 'next_id'", [], |row| {
+                row.get(0)
+            })?;
         transaction.execute(
             "UPDATE meta SET value = value + 1 WHERE key = 'next_id'",
             [],
@@ -335,10 +338,7 @@ impl PrototypeStore {
         Ok(())
     }
 
-    pub fn checkpoint<T: for<'de> Deserialize<'de>>(
-        &self,
-        task_id: TaskId,
-    ) -> rusqlite::Result<T> {
+    pub fn checkpoint<T: for<'de> Deserialize<'de>>(&self, task_id: TaskId) -> rusqlite::Result<T> {
         let payload: String = self.connection.query_row(
             "SELECT checkpoint FROM tasks WHERE id = ?1",
             [task_id.0],
@@ -386,11 +386,7 @@ impl PrototypeStore {
         Ok(effects)
     }
 
-    pub fn settle_effect(
-        &mut self,
-        effect_id: EffectId,
-        result: &str,
-    ) -> rusqlite::Result<bool> {
+    pub fn settle_effect(&mut self, effect_id: EffectId, result: &str) -> rusqlite::Result<bool> {
         let transaction = self.connection.transaction()?;
         let current: Option<(i64, i64)> = transaction
             .query_row(
@@ -589,7 +585,9 @@ impl PrototypeStore {
 
     pub fn group_summary(&self) -> rusqlite::Result<Vec<(AgentId, AgentStatus)>> {
         let agents = {
-            let mut statement = self.connection.prepare("SELECT id FROM agents ORDER BY id")?;
+            let mut statement = self
+                .connection
+                .prepare("SELECT id FROM agents ORDER BY id")?;
             statement
                 .query_map([], |row| Ok(AgentId(row.get(0)?)))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
