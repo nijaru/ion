@@ -82,13 +82,21 @@ pub(crate) fn apply_mutation(
             if state.root_conversation.is_some() {
                 return Err(StateError::RootAlreadyExists);
             }
-            if state.conversations.insert(conversation.id, *conversation).is_some() {
+            if state
+                .conversations
+                .insert(conversation.id, *conversation)
+                .is_some()
+            {
                 return Err(StateError::DuplicateConversation(conversation.id));
             }
             state.root_conversation = Some(conversation.id);
         }
         Mutation::CreateConversation(conversation) => {
-            if state.conversations.insert(conversation.id, *conversation).is_some() {
+            if state
+                .conversations
+                .insert(conversation.id, *conversation)
+                .is_some()
+            {
                 return Err(StateError::DuplicateConversation(conversation.id));
             }
         }

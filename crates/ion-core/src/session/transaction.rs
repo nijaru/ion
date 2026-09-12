@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use crate::conversation::context::validate_fork_cutoff;
-use crate::session::command::{ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest};
+use crate::session::command::{
+    ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
+};
 use crate::store::{SessionState, apply_mutation};
 use crate::view::{Change, CommitEvent};
 use crate::{
@@ -56,7 +58,9 @@ impl Transaction {
 
     pub(crate) fn create_root(&mut self) -> Result<ConversationId, SessionError> {
         if self.draft.root_conversation.is_some() {
-            return Err(SessionError::Invariant("root conversation already exists".to_owned()));
+            return Err(SessionError::Invariant(
+                "root conversation already exists".to_owned(),
+            ));
         }
         let id = ConversationId::new(self.allocate()?.get())?;
         let conversation = Conversation::root(id);
@@ -107,7 +111,11 @@ impl Transaction {
     }
 
     pub(crate) fn append_entry(&mut self, request: EntryRequest) -> Result<EntryId, SessionError> {
-        if !self.draft.conversations.contains_key(&request.conversation_id) {
+        if !self
+            .draft
+            .conversations
+            .contains_key(&request.conversation_id)
+        {
             return Err(SessionError::UnknownConversation(request.conversation_id));
         }
         let visible = self
@@ -140,7 +148,11 @@ impl Transaction {
     }
 
     pub(crate) fn create_task(&mut self, request: TaskRequest) -> Result<TaskId, SessionError> {
-        if !self.draft.conversations.contains_key(&request.conversation_id) {
+        if !self
+            .draft
+            .conversations
+            .contains_key(&request.conversation_id)
+        {
             return Err(SessionError::UnknownConversation(request.conversation_id));
         }
         let mut dependencies = HashSet::with_capacity(request.dependencies.len());

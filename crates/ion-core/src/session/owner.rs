@@ -144,10 +144,9 @@ impl Session {
         let Some(input_id) = state.request_keys.get(key).copied() else {
             return Ok(None);
         };
-        let existing = state
-            .inputs
-            .get(&input_id)
-            .ok_or_else(|| SessionError::Invariant("request key points to missing input".to_owned()))?;
+        let existing = state.inputs.get(&input_id).ok_or_else(|| {
+            SessionError::Invariant("request key points to missing input".to_owned())
+        })?;
         if existing.target != request.target
             || existing.sender != request.sender
             || existing.mode != request.mode

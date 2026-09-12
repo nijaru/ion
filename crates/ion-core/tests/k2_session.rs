@@ -72,7 +72,9 @@ fn request_key_replay_returns_original_receipt_without_new_commit() {
         body: InputBody::Text("ship it".to_owned()),
     };
 
-    let first = session.admit_input(request.clone()).expect("first admission");
+    let first = session
+        .admit_input(request.clone())
+        .expect("first admission");
     let second = session.admit_input(request).expect("replay");
     assert!(!first.replayed);
     assert!(second.replayed);
@@ -97,31 +99,32 @@ fn request_key_replay_returns_original_receipt_without_new_commit() {
 #[test]
 fn owned_conversation_and_reciprocal_task_link_commit_atomically() {
     let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
     let task = session
         .create_task(TaskRequest {
-            conversation_id: session.root_conversation(),
+            conversation_id: root,
             kind: TaskKindName::new("worker.spawn").expect("task kind"),
             schema_version: 1,
             input: serde_json::Value::Null,
             dependencies: Vec::new(),
         })
         .expect("task");
+    let parent_entry = session
+        .append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: serde_json::Value::Null,
+            projection: vec![user_message("context")],
+            context: ContextControl::none(),
+        })
+        .expect("entry");
 
     let worker = session
         .create_conversation(ConversationSpec::owned(
             task.task_id,
             Some(HistoryParent {
-                conversation_id: session.root_conversation(),
-                at: session
-                    .append_entry(EntryRequest {
-                        conversation_id: session.root_conversation(),
-                        kind: EntryKind::new("user").expect("entry kind"),
-                        data: serde_json::Value::Null,
-                        projection: vec![user_message("context")],
-                        context: ContextControl::none(),
-                    })
-                    .expect("entry")
-                    .entry_id,
+                conversation_id: root,
+                at: parent_entry.entry_id,
             }),
         ))
         .expect("worker");
