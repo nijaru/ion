@@ -285,10 +285,7 @@ impl Transaction {
         )
     }
 
-    pub(crate) fn mark_task_cancellation(
-        &mut self,
-        task_id: TaskId,
-    ) -> Result<(), SessionError> {
+    pub(crate) fn mark_task_cancellation(&mut self, task_id: TaskId) -> Result<(), SessionError> {
         self.stage(
             Mutation::MarkTaskCancellation(task_id),
             Change::TaskCancellationMarked(task_id),
@@ -366,9 +363,9 @@ fn authorize_task_write(task: &TaskRecord, generation: u64) -> Result<(), Sessio
             current: task.generation,
         });
     }
-    let invocation = task
-        .invocation
-        .ok_or_else(|| SessionError::Invariant("running task has no active invocation".to_owned()))?;
+    let invocation = task.invocation.ok_or_else(|| {
+        SessionError::Invariant("running task has no active invocation".to_owned())
+    })?;
     if task.cancel_requested && invocation.kind != InvocationKind::Abort {
         return Err(SessionError::CancellationFence(task.id));
     }
@@ -383,7 +380,9 @@ fn map_state(error: crate::store::StateError) -> SessionError {
         crate::store::StateError::TaskNotPending(id) => SessionError::TaskNotPending(id),
         crate::store::StateError::TaskNotRunning(id) => SessionError::TaskNotRunning(id),
         crate::store::StateError::TaskAlreadyTerminal(id) => SessionError::TaskAlreadyTerminal(id),
-        crate::store::StateError::DependenciesNotReady(id) => SessionError::DependenciesNotReady(id),
+        crate::store::StateError::DependenciesNotReady(id) => {
+            SessionError::DependenciesNotReady(id)
+        }
         crate::store::StateError::InvalidInvocationKind { task_id, kind } => {
             SessionError::InvalidInvocationKind { task_id, kind }
         }
