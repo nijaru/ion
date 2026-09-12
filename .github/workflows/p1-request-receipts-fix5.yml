@@ -69,14 +69,13 @@ jobs:
           if count != 2:
               raise SystemExit(f'expected two remaining boxed start_active calls, found {count}')
           text = text.replace(old, '        self.start_active(&lane_name, *active);')
-          old = '''            .try_send(SessionCommand::SubmitIfIdle {
-                lane_name: crate::session::lane::MAIN.to_owned(),'''
-          new = '''            .try_send(SessionCommand::SubmitIfIdle {
-                lane_name: crate::session::lane::MAIN.to_owned(),
-                request_key: RequestKey::generate(),'''
-          if text.count(old) != 1:
-              raise SystemExit(f'expected one direct SubmitIfIdle test initializer, found {text.count(old)}')
-          runtime.write_text(text.replace(old, new, 1))
+
+          pattern = r'''(SessionCommand::SubmitIfIdle\s*\{\s*lane_name:\s*crate::session::lane::MAIN\.to_owned\(\),\s*)(?!request_key:)'''
+          replacement = r'''\1request_key: RequestKey::generate(),\n                '''
+          text, count = re.subn(pattern, replacement, text, count=1)
+          if count != 1:
+              raise SystemExit(f'expected one direct SubmitIfIdle test initializer, found {count}')
+          runtime.write_text(text)
           PY
       - run: cargo fmt --all
       - run: cargo fmt --check
