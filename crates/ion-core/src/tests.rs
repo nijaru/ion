@@ -8,6 +8,7 @@ mod context_usage;
 mod crash_recovery;
 mod hosted_agent_invariants;
 mod hosted_agent_lifecycle;
+mod idempotency;
 mod mcp;
 mod multi_lane;
 mod native_tools;
