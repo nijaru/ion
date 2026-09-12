@@ -1,301 +1,496 @@
 # Ion design
 
-Status: proposed target architecture, revision 2, 2026-09-12 (America/Los_Angeles).
+Status: proposed target architecture, revision 3, 2026-09-12 (America/Los_Angeles).
 
-This document specifies the agent Ion should become. It is not a description of the current implementation or a claim of demonstrated state-of-the-art performance. Product requirements below are established; architecture choices are proposals to validate through the gates in [ROADMAP.md](ROADMAP.md). Current Pico/Pi 2 work is the primary minimal-harness design reference; Codex is a primary production-engineering reference where its public implementation answers a concrete runtime, storage, multi-agent, or client question. Other agents are evidence only for specific mechanisms, not peers that Ion must imitate. Existing Ion code does not constrain the design.
+This document specifies the core agent/runtime Ion should become. It is not a description of the current implementation or a claim of demonstrated state-of-the-art performance. Architecture remains reopenable when implementation evidence disproves a choice.
 
-[TERMINAL.md](TERMINAL.md) owns interaction and presentation. [Research](docs/research.md) records sources, alternatives, and evidence limits. [Historical documents](docs/history/README.md) describe the preceding design and are not a second target. Source and tests remain the evidence for what the current binary does.
+Current Pico/Pi 2/Pico v3 work is the primary minimal-harness design reference. Codex is a primary production-engineering reference where its public implementation answers a concrete runtime, storage, multi-agent, or client question. Other agents are consulted only for specific unresolved mechanisms. Existing Ion code does not constrain the target.
+
+[TERMINAL.md](TERMINAL.md) owns interaction and presentation. [Research](docs/research.md) records sources and evidence limits. [ROADMAP.md](ROADMAP.md) defines validation gates. [Core runtime migration](docs/core-runtime-migration.md) translates this design into implementation slices.
+
+The scope here is deliberately narrow: **agent execution, sessions, conversations, tools, durable state, retained workers, recovery, and clients**. Long-term/project knowledge, memory systems, shared task boards, semantic/vector stores, autonomous planning layers, and similar higher-level systems are not part of the core design. They may be evaluated later against a working baseline and must remain removable without changing core session correctness.
 
 ## 1. Product contract
 
-Ion is a user-owned, provider-neutral Rust coding agent with a first-class terminal interface. It runs one agent by default. Enabling multi-agent operation lets that agent and the user create, observe, steer, and supervise cooperating workers through the same runtime.
+Ion is a user-owned, provider-neutral Rust coding agent with a first-class terminal interface. It runs one agent by default. When multi-agent operation is enabled, the root agent and user may create, observe, steer, and supervise cooperating retained workers through the same runtime.
 
-A worker is an ordinary agent with its own identity, conversation, configuration, authority, and assignments. Researcher, implementer, and reviewer are configurations, not special runtime types. Single-agent use needs no coordinator prompt, task board, memory system, or swarm configuration. Multi-agent mechanisms exist without adding their tool definitions or instructions to a single-agent model request.
+A worker is an ordinary agent with its own identity, conversation, configuration and authority. Researcher, implementer, reviewer, and similar roles are behavior/configuration choices rather than scheduler types.
 
-The product must support:
+Single-agent use must not pay a hidden multi-agent prompt/tool tax. Multi-agent capabilities are exposed only when enabled.
 
-- A complete coding conversation: streaming, files, shell, images where supported, model changes, editing, approvals, context management, durable history, and recovery.
-- Optional agent groups: fresh or forked context, nested delegation under limits, peer messages, structured results, background jobs, and explicit workspace choices.
-- Human control of every agent from the TUI, including its transcript, tools, approvals, budget, changes, and cancellation. Narrow terminals retain these capabilities.
-- The same semantics through the Rust library, TUI, print/JSON, and ACP adapters. The terminal owns presentation, not execution truth.
-- Local operation on macOS and Linux first; no mandatory cloud service, telemetry, account, or daemon. Local models are ordinary providers.
+The core must support:
 
-Runtime capabilities and orchestration policy are separate. The runtime does not mandate planning, reflection, voting, role taxonomies, a task board, long-term memory, or a particular swarm strategy. These may be supplied as optional behavior/services and evaluated. An agent group is not presumed better than one agent at an equal budget.
+- complete coding turns with streaming, provider-neutral messages, files, shell/process work, images where supported, approvals, model changes, context management, durable history and crash recovery;
+- retained workers with fresh or forked context, nested delegation under explicit limits, direct messages/results and explicit workspace choices;
+- human control of every retained agent through the same runtime semantics used by library/headless clients;
+- local operation on macOS and Linux without a required cloud service, account, daemon or telemetry backend;
+- local models as ordinary providers;
+- deterministic, inspectable handling of acceptance, cancellation, uncertain external effects and process loss.
 
-## 2. Architecture direction
+Runtime capability and model strategy are separate. The core does not mandate planning, reflection, voting, a task board, memory retrieval, role taxonomies, or a swarm policy. Those may be evaluated later without changing the execution kernel.
 
-Use a small durable execution runtime with typed behavior implementations, a provider-neutral conversation model, an explicit execution environment, and client projections.
+## 2. Architecture
+
+Use a small durable execution runtime with one semantic mutation owner per session, typed behavior implementations, provider-neutral conversation state, explicit effect adapters and bounded client projections.
+
+```text
+frontends / adapters
+TUI / CLI / JSON / ACP / Rust API
+              |
+              v
++-------------------------------+
+| Host                          |
+| residency / locks / providers |
+| credentials / client attach   |
++---------------+---------------+
+                |
+                v
++-------------------------------+
+| Session owner                 |
+| one serialized mutation line  |
+| commands / scheduling / view  |
++----------+--------------------+
+           |
+           | short atomic commits
+           v
++-------------------------------+
+| Canonical session store       |
+| entries / context / agents    |
+| inputs / tasks / effects      |
+| grants / usage / references   |
++-------------------------------+
+           ^
+           |
+           | post-commit settlement
+           |
++----------+--------------------+
+| Effect adapters               |
+| model / tool / process / job  |
+| timers / user approval        |
++-------------------------------+
+```
+
+Layer responsibilities:
 
 | Layer | Owns | Does not own |
 |---|---|---|
-| Host | Session residency, OS ownership locks, provider/plugin lifetimes, client attachments, credentials | Model decisions or a second transcript |
-| Session runtime | Serialized mutation, durable acceptance, task lifecycle, invocation fencing, grants, reservations, observation | Provider-specific payloads or terminal layout |
-| Agent behavior | Turns, request preparation, tool exchanges, compaction, delegation policy | Raw database writes or another scheduler |
-| Environment | Files, commands, jobs, sandbox enforcement, workspace and artifact operations | Conversation topology or agent roles |
-| Optional services | Assignment/coordination state, project knowledge, derived search/indexes when enabled | Core turn semantics or hidden mandatory prompts |
-| Frontends | Input drafts, focus, rendering, inspection, explicit commands | Provider clients, session persistence, agent lifecycle ownership |
+| Host | loaded-session residency, cross-process ownership locks, provider/plugin/process lifetimes, credentials, client attachments | model decisions, canonical transcript |
+| Session owner | serialized semantic mutation, durable acceptance, task lifecycle, dependency scheduling, invocation fencing, authority checks, observations | provider I/O, terminal layout |
+| Behavior | typed task-specific state and transitions such as generation, tool join, compaction | raw database mutation, a second scheduler |
+| Environment/effects | files, commands, jobs, sandbox/workspace enforcement, external APIs | agent supervision or conversation truth |
+| Frontends | drafts, focus, rendering, inspection and explicit commands | providers, persistence, hidden execution state |
 
-Current Pico/Pi 2 work is the main design comparison for keeping the harness small while making transcript, task lifecycle, context, working state, and session mutation explicit. Ion deliberately does not inherit Pico interfaces or representation choices. Codex is useful as a production-engineering comparison, including its separation of state, logs/history, goals/queues, memories, clients, and agent command surfaces. Goose, OpenHands, and other systems are consulted only when a specific unresolved mechanism warrants it; project age, popularity, or feature count is not evidence of architectural quality. [R1, R4](docs/research.md#references)
+Logical separation does not require one process or crate per layer.
 
-The architecture should be cohesive rather than minimal for its own sake: additional machinery is justified when it creates a concrete correctness, recovery, observation, isolation, or extensibility property. It is not justified merely to mirror a larger framework. Conversely, implementation convenience never freezes a weak abstraction. Prototype or production evidence may reopen any choice in this document.
+### Core principle: concurrency outside mutation
 
-Initially, a CLI may embed the host. A later local service or remote transport uses the same session command boundary. Logical separation does not require a process or crate per layer.
+Slow work must never execute while holding session mutation authority or a database write transaction. Provider requests, tools, subprocesses, timers, network calls and user interaction run concurrently outside the writer.
 
-## 3. Domain and identity
+The writer performs short transitions:
 
-| Concept | Meaning and lifetime |
+```text
+read committed state
+    -> validate command
+    -> build bounded mutation batch
+    -> commit atomically
+    -> publish observation
+    -> dispatch admitted effects outside the writer
+```
+
+This lets Ion support many concurrent effects and workers without creating multiple competing authorities for canonical session state.
+
+## 3. Domain model
+
+| Concept | Meaning |
 |---|---|
-| Session | Durable coordination boundary containing one root agent and its group. It outlives process residency. |
-| Agent | Addressable, retained participant. Owns configuration, grants, workspace binding, and a current conversation. Outlives any one turn or assignment. |
-| Conversation | Immutable transcript with a fixed inherited prefix and local appends. It can be inspected without activating an agent. |
-| Turn | One foreground input-to-answer lifecycle, identified by its root task. Its behavior owns the active input group and tool-exchange boundaries. |
-| Task | Recoverable unit of execution with typed input, checkpoint, and outcome. A durable task is not a Tokio task. |
-| Assignment | Optional shared objective with an owner, revision, dependencies, and result references. It is not the runtime task graph. |
-| Job | Environment-backed work that may outlast its initiating tool or turn. Its durable task owns execution from the first effect. |
-| Artifact | Retained content or an immutable reference to evidence, output, or a proposed change. |
-| Knowledge item | Optional project/workspace-scoped retained information with provenance. It is not canonical conversation history. |
+| Session | Durable coordination, ownership and transaction boundary containing one root agent and its cooperating retained workers. |
+| Agent | Addressable retained participant with configuration, authority, workspace binding and current conversation. |
+| Conversation | Immutable transcript plus explicit model-context state and optional historical fork provenance. |
+| Turn | One foreground input-to-answer lifecycle represented by a root task and its dependent tasks. |
+| Input | Admitted user/agent input with sender, target, delivery mode, request identity and disposition. |
+| Task | Recoverable unit of execution with typed kind state, dependencies, invocation generation and terminal outcome. A durable task is not a Tokio task. |
+| Effect | Durable intent for external work plus attempt/recovery classification and settlement. |
+| Job | Environment-backed work that may outlive the initiating tool/turn and is represented through durable tasks/effects. |
+| Entry | Immutable semantic transcript fact. |
+| Artifact | Retained content/evidence stored inline or by durable external reference. |
 
-Use distinct Rust ID newtypes. The target uses a globally unique SessionId and opaque session-local identifiers for agents, conversations, entries, tasks, inputs, and artifacts. IDs are allocated by the writer and returned only after commit. Cross-session references include SessionId. CommitSeq orders atomic batches and is not a substitute for an object's identity. The P1 prototype supports this separation; production allocation and physical representation remain subject to schema evidence.
+Keep these relationships separate:
 
-Keep four relationships separate: conversation ancestry, agent supervision, task dependencies, and workspace sharing. A history fork confers neither ownership nor permission. Peer communication is not a supervision edge. An assignment dependency does not automatically create a runtime dependency.
+```text
+conversation ancestry
+agent supervision
+task dependencies
+workspace sharing
+```
 
-An agent's supervisor is another retained agent, or the session root authority. A short-lived spawn tool does not own the child's entire lifetime. Temporary child work may instead be task-owned with explicit cleanup on owner settlement. Admission records which lifetime applies; no unowned detached work exists.
+A history fork grants neither supervision nor authority. A task dependency does not imply conversation ancestry. Sharing a workspace does not make two agents one execution identity.
 
-## 4. Mutation and process ownership
+### Session versus agent
 
-One loaded session has one authoritative writer. Slow effects execute concurrently outside its mutation path. The host acquires an exclusive cross-process session lock before opening a writable runtime and holds it through shutdown. A PID file, heartbeat, or stale timestamp is not ownership. No timed takeover while the old writer might still run.
+A session is intentionally larger than one agent. Root and retained workers that cooperate closely belong to one session because ordinary operations may need to commit atomically across them:
 
-The writer processes typed commands. A command supplies its target IDs, authority, and, where relevant, expected revision and request key. One transition:
+- spawn identity + conversation + initial input/task;
+- message admission;
+- task dependencies and successor creation;
+- supervision/cancellation barriers;
+- authority narrowing;
+- resource/budget accounting;
+- workspace ownership/conflict metadata.
 
-1. Checks lifecycle, authority, expected revision, and duplicate-request identity.
-2. Reads the required committed state and constructs a bounded typed batch.
-3. Validates references and constraints against committed state plus earlier mutations in the batch.
-4. Persists the complete batch.
-5. Applies it to resident indexes, captures corresponding events, and acknowledges acceptance.
-6. Dispatches effects and observer callbacks outside the mutation path.
+Do not create one canonical database per agent. That would turn common same-group transitions into cross-database coordination problems.
 
-A task's settlement, successor creation, and ownership transfer commit together. Observers and scheduling never see a false idle interval between them.
+Independent top-level sessions need no such atomicity and may run concurrently under separate owners.
 
-No provider request, process start, plugin callback, timer wait, or user interaction runs while holding mutation authority. SQLite access may block a dedicated storage thread, never the Tokio executor or the TUI. The storage worker executes transactions; it does not become a second semantic state owner. Reads used to decide writes carry revisions that the writer revalidates.
+## 4. Identity and ordering
 
-A dropped caller before admission creates no work. After admission starts, dropping its response future cannot abandon an in-progress commit. Durable acceptance and completed execution have separate receipts. Repeating an identical request key returns its original receipt; reusing it with different target, content, or mode rejects as IdempotencyConflict. This deliberately differs from Pico's first-receipt-wins policy. [R1](docs/research.md#references)
+Use distinct Rust newtypes for semantic identities. `SessionId` is globally unique. Agent, conversation, entry, input, task, effect and artifact identities are scoped by the session unless a concrete external boundary requires global identity.
 
-## 5. Durable execution and recovery
+`CommitSeq` orders successful atomic session mutations. It is not an object's semantic identity.
 
-The common task lifecycle is pending, running, terminal. Terminal outcomes distinguish completed, failed, cancelled, and indeterminate. Readiness, missing code, paused admission, and waiting are separate reasons/status projections, not dozens of kernel phases.
+The physical representation of local IDs remains a P1/P2 implementation decision. Compact session-local integers are attractive once the per-session store is established; UUID-style identities avoid central allocation. Do not expose representation-dependent behavior in public APIs.
 
-A task records its kind and schema revision, immutable input, owning agent and optional parent task, dependencies, invocation generation, optional full checkpoint, output references, and terminal outcome. Kind-specific phases are typed Rust enums inside the behavior implementation. The scheduler does not interpret model/tool/compaction checkpoints.
+IDs created by a command must not escape to callers or external effects before the creating transaction commits. A persistence outcome that is uncertain fences the current session handle; reopen storage and recover the last durable state rather than guessing which IDs or effects committed.
 
-P1 selected an explicit typed re-entrant step/checkpoint boundary as the durable task authoring model. A task kind has associated typed input, checkpoint, and output; one step inspects committed state and returns a bounded plan such as effects to admit, a durable wait/checkpoint, or completion. A private erased adapter supports registry dispatch. Async Rust remains appropriate inside provider, tool, process, timer, and other effect adapters, but an async stack frame is not a durable continuation and there is no second public async-task framework. This choice remains reopenable if production promotion demonstrates duplicated state or worse recovery semantics. See [P1 evidence](docs/p1-execution-prototype.md).
+## 5. One writer per session
 
-Task creation commits before capacity acquisition. Running reservation and invocation identity commit before external work. A task may replace its full checkpoint at explicit recovery boundaries. Execution returns a typed transition/completion plan; the writer validates the current invocation and commits the outcome, semantic entries, successor work, and scratch retirement atomically.
+One loaded session has one authoritative semantic writer. Concurrent independent writers to the same session are not supported.
 
-A pending task has not begun effects. A running task found after process loss invokes recovery, never blindly invokes execute again. Opening and inspecting a session start no tasks; drive/resume is an explicit host action. A temporarily missing task kind blocks recovery visibly while retaining its data. It does not silently erase output or substitute unrelated code. Explicit abandonment records its own terminal decision.
+The host acquires an exclusive cross-process session ownership lock before writable open and holds it through shutdown. A PID file, heartbeat or stale timestamp is not ownership. Never perform a timed takeover while the prior writer may still execute.
 
-### Effect uncertainty
+A command carries its target identities, authority and, where relevant, expected revision/request key. One transition:
 
-A running task record alone is not enough for a task that performs multiple repeat-sensitive effects. Each such effect needs a durable invocation identity and intent before dispatch, and a durable result or reconciliation handle afterward. Prefer one primary external effect per tool/job task. Compound implementations must checkpoint each uncertain boundary or create child tasks.
+1. validates lifecycle, authority, revision and duplicate-request identity;
+2. reads the required committed state;
+3. constructs a bounded typed mutation batch;
+4. validates cross-record invariants against committed state plus earlier mutations in the batch;
+5. persists the complete batch;
+6. applies/publishes committed observations;
+7. dispatches effects outside mutation authority.
 
-Each adapter declares one recovery policy for the captured effect:
+Task settlement, successor creation and required ownership transfer commit together. Observers and scheduling must not see a false idle gap between them.
 
-| Policy | Recovery contract |
+The storage worker may block on SQLite. It is a persistence mechanism, not a second semantic owner. Reads that inform a later write carry revisions or are repeated/revalidated on the writer.
+
+## 6. Durable tasks
+
+The generic lifecycle is deliberately small:
+
+```text
+pending/ready -> running/inflight -> waiting or terminal
+```
+
+Terminal outcomes distinguish at least completed, failed, cancelled and indeterminate. Domain-specific phases live inside the task kind's typed state; the scheduler does not know generation/tool/compaction semantics.
+
+A task records:
+
+- kind and schema revision;
+- immutable input;
+- owning agent/conversation;
+- optional parent/provenance task;
+- dependencies;
+- invocation generation;
+- typed durable checkpoint/state;
+- output references;
+- terminal outcome;
+- timing/permit/cancellation metadata where needed.
+
+P1 selected an explicit typed re-entrant step/checkpoint boundary as the durable task authoring model. A behavior step inspects committed state and returns a bounded transition plan such as:
+
+```text
+create/admit effects
+persist wait/dependencies + checkpoint
+complete with outcome + successor plan
+```
+
+Async Rust remains appropriate inside model/tool/process/timer adapters. An async stack frame is not the durable continuation. Do not maintain a second public async-task framework.
+
+### Dependency semantics
+
+Dependencies mean that named tasks must reach terminal state before a dependent becomes eligible. The dependent interprets whether those terminal outcomes represent success/failure acceptable for its behavior.
+
+Dependency updates must reject self-dependency and cycles.
+
+Waiting for a child is therefore durable state, not a Tokio future held for the child's entire lifetime.
+
+## 7. Turns and tool exchanges
+
+The default coding turn remains conceptually simple:
+
+```text
+input
+  -> generation
+      -> zero or more tools
+          -> join/post-tools
+              -> next generation or final answer
+```
+
+When one generation returns calls `[A, B, C]`, one atomic settlement creates the tool tasks and their join task before the generation becomes terminal.
+
+```text
+generation G
+     |
+     +--> tool A --+
+     +--> tool B --+--> join P --> generation G2
+     +--> tool C --+
+```
+
+Tools may complete in any order. Each result becomes durable immediately when settled. Model projection restores source call order rather than rewriting transcript history to completion order.
+
+Independent read-only tools may execute concurrently within resource limits. Mutating calls against a shared workspace serialize by default unless the environment can prove a stronger safe policy. Tool-name labels alone are not isolation guarantees.
+
+A tool settles only its own task/effect. The join task owns exchange continuation; tools do not scan siblings or manufacture the next generation after noticing they happened to be last.
+
+## 8. Effects and uncertainty
+
+External work requires durable intent before dispatch whenever repeating it may matter.
+
+Effect identity and attempt identity are separate. Recovery class is explicit:
+
+| Class | Recovery |
 |---|---|
-| Retry-safe | Re-execution is permitted. A new attempt is recorded; prior possible billing is not erased. |
-| Reconcile | Query/adopt an external operation using its durable identity and authenticated environment. Never infer identity from an arbitrary PID. |
-| No safe retry | Record an indeterminate outcome and stop automatic dependent action until it is resolved or explicitly abandoned. |
+| Retry-safe | A new attempt may execute. Prior possible usage/billing is retained. |
+| Reconcile | Query/adopt the external operation using durable authenticated identity. |
+| No safe retry | Mark indeterminate and stop dependent automatic action until explicitly resolved/abandoned. |
 
-An interrupted mutating shell command is not retry-safe merely because it returned no result. A successful spawn call is not proof that its job later completed. A checkpoint of partial output is not a terminal assistant message.
+An interrupted mutating shell command is not retry-safe merely because no result was persisted. A spawn effect succeeding does not prove the spawned job later completed.
 
-Ordinary provider/tool failures settle as task outcomes. Persistence uncertainty, corrupt durable state, or a violated mutation invariant fences the session and prevents further effects. A failing observer closes that observer, not the session. A task implementation panic must be surfaced and handled under a tested ownership policy; ignoring a JoinError is not recovery.
+A running task found after process loss invokes its recovery behavior. Opening or inspecting a session dispatches no work; `drive`/resume is explicit.
 
-## 6. Cancellation, pause, and shutdown
+Ordinary provider/tool failures become task outcomes. Persistence uncertainty, corrupted canonical state or invariant violation fences the session against further effects.
 
-Semantic cancellation is durable. The writer marks its exact target and scope, revokes the current invocation's normal write authority, and then signals execution. It joins the old invocation before permitting recovery or cancellation cleanup. Late completions are fenced by task ID and invocation generation.
+## 9. Input admission and idempotency
 
-Cleanup can release resources and settle cancellation evidence; it cannot start a replacement model turn or regain revoked permissions. Cancellation is not rollback. When an effect might already have happened, preserve that uncertainty rather than reporting a clean cancellation with invented certainty.
+Admission is separate from eventual execution/completion.
 
-The race rule is explicit: settlement committed before the cancel mark wins; otherwise the normal completion plan is rejected and cleanup owns the outcome. Caller wait cancellation only removes the waiter. It does not cancel accepted work.
+An input records identity, sender, target agent/conversation, mode, payload reference/content, request key when supplied and disposition.
 
-Pause prevents new model/tool dispatch in its declared scope and lets already-dispatched effects reach a safe boundary. The TUI shows pausing until that boundary; pause is not an immediate process stop. Cancellation remains available. Group cancellation records its admission barrier before traversing descendants, so concurrent spawn cannot escape the target subtree.
+Core modes initially cover:
 
-Tokio cancellation tokens carry process-local signals; they are not durable facts. Aborting or dropping a future does not establish that a subprocess or blocking operation stopped. In particular, running spawn_blocking work cannot generally be aborted. Keep bounded ownership and explicit join/escalation paths. [R9](docs/research.md#references)
-
-Host close stops admission, quiesces or terminates owned execution according to adapter policy, flushes admitted commits, joins resources, and releases the ownership lock last. It preserves recoverable tasks rather than marking every task user-cancelled. Terminal restoration does not wait indefinitely for runtime cleanup; the host can continue cleanup after restoring terminal modes. Unsupported detach must not pretend work will continue after process exit.
-
-## 7. History and context
-
-Store append-only entries with identity, conversation, attribution, typed data, and an optional materialized provider-neutral model projection. Context changes are explicit stored controls: summary/head, reset/handoff, or omit/replace edits. Canonical history is not a mutable vector of provider payloads. [R1](docs/research.md#references)
-
-A conversation fork records a source conversation and inclusive cutoff. Inherited entries keep their identity; later source appends, edits, and compactions are invisible. No live tasks, approvals, pending inbox, or execution authority are inherited. Cross-session export/import is a separate remapping operation, not a cheap in-session fork.
-
-For each request, derive context from the fork-visible transcript, newest applicable head, and ordered edits. Preserve complete tool exchanges and source call order. A historical fork cutting an unfinished exchange may use explicitly labelled request-local missing-result errors, never fabricate successful results or restart source tools. Head movement cannot split a live exchange.
-
-Compaction prepares a summary against a captured context cutoff and head revision. Commit validates the boundary and competing-head revision. Ordinary tail appends remain visible. Security/configuration changes are checked separately; compaction cannot revive revoked instructions or tools. The default implementation starts with boundary compaction; speculative compaction must pass its own races before being enabled.
-
-Persist the effective managed instructions and tool definitions used at the request boundary, with their source revisions. Missing renderers must not make historical context unreadable. Unknown custom entry kinds retain their stored model projection and a safe generic display. Security decisions never rely on parsing prose.
-
-Conversation state may be historical or current-only. Grant state, budget consumption, cancellation, and credentials never rewind with history. Fork initialization chooses history, configuration, and authority separately and records that choice.
-
-Large sessions use indexed range/point queries. Current context and live execution may be resident; old transcripts and terminal tasks do not remain loaded simply because they were once viewed. Cold context construction can depend on candidate range, edit density, and fork depth, not just final prompt length. Do not claim O(context) performance without measuring those cases.
-
-## 8. Agent turns and input
-
-The default behavior remains request, tools, request again, finish. One foreground turn owns a conversation's input group and exchange boundaries. Its trusted generation/tool children share that turn authority. Unrelated tasks use input admission rather than directly appending model-visible content into an active exchange.
-
-| Input mode | Active conversation | Idle conversation |
+| Mode | Active conversation | Idle conversation |
 |---|---|---|
-| Submit | Reject busy unless the caller explicitly selects another mode | Start a new turn |
-| Steer | Join at the next safe model boundary, after the current tool exchange | Start a turn unless paused |
-| Follow-up | Queue for a successor turn after the current turn settles | Start a turn unless paused |
-| Queue-only | Remain queued for explicit start or later eligible submit | Remain queued |
-| Notice | Retain an attributed notification; model visibility is explicit | No model wake-up |
+| Submit | Reject busy unless another mode is selected | start turn |
+| Steer | place at next safe model boundary | start turn unless paused |
+| Follow-up | queue successor input | start turn unless paused |
+| Queue-only | remain queued | remain queued |
+| Notice | retain attributed notification; model visibility explicit | no automatic wake |
 
-Admission persists identity, sender, target, delivery mode, payload reference, and receipt. Placement into history and input-group ownership transfer are atomic. Acceptance, delivery, consumption by a request, and final answer are different facts. Every placed input eventually references a terminal answer or an explicit unanswered reason.
+Repeating the same request key with equivalent target/content/mode returns the original durable receipt. Reusing the key for different semantics rejects with `IdempotencyConflict`.
 
-Tool calls carry stable call IDs. Independent read-only calls may execute concurrently within a bound. Mutating calls in a shared workspace serialize by default; broader concurrency requires a proven environment policy. Tool-name labels are not sandbox guarantees. Complete outcomes become durable immediately, even if earlier calls are still running; request projection presents results in call order and waits for the exchange's required settlements.
+A caller disappearing before admission creates no work. Once admission has begun, dropping its response future cannot abandon the in-progress commit. Cancellation of a caller's wait is not cancellation of accepted work.
 
-On turn cancellation, unplaced steer/follow-up inputs remain durable and paused for explicit withdrawal or resubmission; they do not silently start a new turn. Cancelling one turn does not automatically retire its agent or unrelated background jobs. The caller can explicitly include turn-owned jobs or the agent subtree.
+Acceptance, placement, model consumption and final answer are distinct facts. Every placed input eventually references a terminal answer or an explicit unanswered disposition.
 
-Retries are bounded and classified, with durable attempt identity, deadline/backoff information, and usage uncertainty. A scheduling timer is not a busy-poll loop. Protocol-required status polling is allowed only in an owned adapter with a bounded backoff and cancellation path.
+## 10. Conversations, history and context
 
-## 9. Optional agent groups and coordination services
+Canonical history is append-only semantic entries, not a mutable vector of provider messages.
 
-Multi-agent enablement controls the model-facing capability set. It does not create a different runtime. Disabling new spawning while workers exist does not hide them, lose their results, or remove the user's control surface.
+A conversation owns an immutable transcript. Model context is explicit state selecting/projecting transcript material. Projection is provider-neutral and side-effect free.
 
-Agent admission atomically records identity, supervisor, conversation seed, effective configuration, authority ceiling, budget account, workspace request, and initial assignment/input. Provisioning failure remains visible under that identity. Execution starts only after the environment and capability requirements are satisfied.
+Context operations should remain small and constrained:
 
-The initial model-facing control surface should cover spawn, inspect, send, wait, cancel, and result retrieval. Exact tool schemas are a milestone decision and must be evaluated for discoverability and context cost. The host API provides the same underlying operations. No special role-specific executors or model-dependent lifecycle states.
+```text
+append selected new entries
+replace a context prefix with a summary/handoff
+reset to an empty or bootstrap context
+```
 
-Fresh and forked contexts are explicit. Nested spawning is allowed only within depth, retained-agent, execution, budget, and permission bounds. Peer messaging is an explicit group capability independent of supervision. Supervisors control their subtree; ordinary peers do not acquire cancellation or read authority merely by knowing an ID.
+Do not expose arbitrary history reordering that can split tool exchanges or produce impossible provider state.
 
-Within a session, messages and target inbox admission can commit atomically under the same writer. Repeated delivery uses the same message identity. Future cross-session delivery needs an outbox/inbox acknowledgment protocol; it is not emulated by writing directly into another session's history.
+Compaction appends a summary/handoff entry and updates context atomically against a captured context/revision boundary. Tail entries appended after summary preparation remain visible; competing context rewrites invalidate stale preparation when required.
 
-### Experimental coordination layer
+### Forks
 
-The core harness must be useful without a task board or long-term knowledge system. Coordination features therefore form an optional layer with explicit feature/tool enablement and no hidden prompt tax in ordinary single-agent sessions.
+A historical fork shares immutable source history through a committed boundary, then appends locally. Later source changes do not affect it.
 
-A shared assignment board is the leading task-coordination primitive for one agent group. Claims and updates compare expected revisions; dependencies must remain acyclic. Advisory file scopes produce conflict warnings, not filesystem locks. Completing an assignment attaches result/evidence references and does not automatically approve or merge changes. Because assignment mutation can affect same-session ownership, messaging, and agent decisions, the durable board belongs inside that session's atomic store when enabled. It is human-visible even if its model-facing tools are disabled.
+Forking history does not copy live tasks, pending approvals, cancellation state, credentials or execution authority.
 
-Longer-lived project knowledge is a different concern. It must not be disguised as conversation history or silently injected into every request. A future knowledge service should store scoped items with source/provenance, revision/freshness information, and explicit invalidation or supersession. Retrieval can combine exact/lexical search and optional derived semantic indexes; the model sees only selected results through a bounded context/tool boundary. Agent-written knowledge may be candidate or verified state depending on policy. The exact extraction, consolidation, contradiction, trust, and retrieval policy remains an effectiveness experiment rather than a runtime invariant.
+A fork target resolves to a complete committed historical boundary. Do not expose an impossible partial transaction as a historical snapshot. A fork used as model context must not split an unresolved tool-call/result exchange.
 
-Cross-session/project coordination must not require a distributed transaction with the session database. A session can atomically record an outbox/event describing a requested external update; a separate service applies it idempotently and records its own receipt. Shared services may become unavailable without corrupting or blocking inspection of the core session. If later evidence requires stronger coupling, that is a new storage/ownership design rather than an implicit ATTACH-based shortcut.
+Configuration/authority inheritance and history inheritance are separate choices.
 
-Agent inspection is read-only. Resume, restart, reassign, cancel, and retire are explicit and distinct. A retired agent remains inspectable; starting over creates a new identity and records lineage. A supervisor turn finishing does not kill its retained workers. Explicit supervisor retirement must reparent or settle its descendants first.
+### Residency
 
-## 10. Capacity, budgets, and liveness
+Old transcript entries and terminal tasks remain queryable but do not stay resident merely because they were once observed. Live execution may retain its active state/context; cold history uses indexed point/range reads.
 
-Separate retained identity from active execution capacity. Model-request permits are held only for real requests, not while a coordinator awaits workers. Process/job permits and output/disk limits are separate. Waiting must not consume the resource needed by the dependency.
+P2 must measure large histories, dense context edits and deep forks before claims about memory or context-build complexity become contractual.
 
-Scheduling uses event-driven readiness with bounded fairness across agents. Admission, cancellation, settlement, and approval control traffic cannot be starved by streaming output. Bound queued inputs, retained agents, active tasks, pending approvals, output memory, and disk artifacts as well as model concurrency.
+## 11. Retained agents
 
-Budgets are hierarchical reservations, not copied balances. A child allocation reduces available parent capacity; charging a child is not charged twice again in totals. Check available balance and reserve an attempt atomically before dispatch. Settle with reported usage and release only the unused portion. After an uncertain external attempt, retain an uncertain debit/reservation until reconciliation or explicit administrative resolution; never restore a full balance simply because the process restarted.
+Multi-agent mode uses the same runtime and task system, not a separate swarm engine.
 
-Use integer token/usage counters and an explicit money unit, not floating-point balances. An estimated cost is not a billing guarantee. A hard spend policy requires a known conservative bound and an adapter that can enforce the relevant request limit; otherwise reject that policy or expose a token/request limit honestly. Provider price changes and unreported billing must remain visible.
+Agent creation atomically records the retained identity and the state needed to make that identity meaningful: supervisor/root authority, conversation seed, effective configuration/authority ceiling, workspace request and initial input/task where applicable.
 
-Detect explicit dependency cycles and self-waits at admission. Apply cancellation/deadline semantics to waits. Hidden dependencies in user code or model plans cannot all be inferred; expose stalled work and the dependency evidence the runtime actually knows. Do not promise generic deadlock freedom.
+A spawn task/tool may finish while the retained worker remains alive and addressable.
 
-## 11. Workspace and result integration
+The minimal control surface is:
 
-Workspace binding is independent of conversation and supervision. Support shared read-only inspection, shared mutation under policy, and isolated Git worktrees. The proposed default for parallel mutating workers is separate worktrees; read-only workers can share an environment. An unrestricted shell invalidates a claim of read-only execution unless the environment enforces it.
+```text
+spawn
+inspect
+send
+wait
+cancel
+get result/status
+```
 
-An isolated worker starts from an explicit base: a clean commit or a deliberately captured local snapshot. A worktree from HEAD does not contain arbitrary uncommitted or untracked user files. Dirty-checkout handling is a product decision surfaced before provisioning, not a hidden best guess.
+Inspection is read-only and never resumes work.
 
-A change result names the base revision/snapshot, resulting revision or patch artifact, changed paths, environment identity, and verification records. Verification binds to concrete revisions/content, command, exit status, relevant inputs, and output artifacts. A global workspace generation counter cannot prove that external edits did not happen.
+Nested spawning is constrained by explicit depth, retained-agent, active-execution, budget and permission limits. Peer communication does not grant supervision authority merely because an agent knows another ID.
 
-Integration is a separate admitted effect. Recheck the target base and current dirty state; serialize Ion's integrations, show conflicts, preserve unrelated changes, and request approval when policy requires it. Never silently reset, overwrite, or discard the user's checkout. Tests that passed in a worker do not prove the integrated result passes. Reverify after application. Worktree removal requires confirmed result retention and explicit cleanup policy. [R6](docs/research.md#references)
+Waiting on another agent/task parks as durable dependency/continuation state and must not retain the execution capacity required by the dependency.
 
-## 12. Tools, providers, and extensions
+A supervisor turn finishing does not automatically destroy retained workers. Retirement/cancellation is explicit.
 
-Provider adapters translate canonical requests and streams. They expose capability information, supported input/output types, context limits, effort semantics, usage, and stop reasons. Unknown capabilities are not silently assumed. Provider/model identifiers are data, never architectural enum variants.
+## 12. Authority, approvals and workspace
 
-Preserve provider-native opaque continuation/reasoning data with its origin where needed, while retaining portable semantic history. Switching providers may invalidate acceleration or opaque continuation; report the limitation instead of claiming lossless transfer or fabricating reasoning. Freeze actual model identity and adapter/configuration revision for each attempt.
+Authority is structured runtime state, not prose inferred from a transcript.
 
-Tool admission resolves the exact tool implementation, validates arguments, evaluates authority/policy, captures execution and recovery class, reserves resources, and records intent before dispatch. Approval is bound to the canonical action, agent, workspace, grant revision, and argument digest. A later decision cannot approve different arguments or bypass a revoked grant.
+Child effective authority is bounded by:
 
-Use compiled Rust traits for trusted runtime behaviors and provider/environment interfaces. User/agent-authored extensions start as versioned, supervised subprocess RPC with explicit contributions: tools, commands, skills/prompts, context providers, observational events, and limited typed hooks. MCP tools use the same admission/effect path. ACP is a frontend adapter, not a second agent loop.
+```text
+requested capability
+INTERSECT parent ceiling
+INTERSECT host policy
+```
 
-Extensions do not receive raw storage mutation, terminal control, ambient credentials, or unrestricted session handles. Hooks return typed decisions. Pure preparation can repeat; effectful hooks must be idempotent or run as identified durable work. Cancellation, response-size limits, deadlines, and failure policy belong to each hook contract. Required security hooks fail closed; optional presentation failures must not stop a healthy agent.
+Model/configuration changes, history forks, plugin reload or identifier/name reuse cannot widen authority.
 
-Registration availability and durable authority differ. A transient peer outage does not revoke a grant. Explicit replacement/removal creates a new authority revision or tombstone. New effects and recovery recheck that revision; reusing a name does not resurrect an old grant. Prepare replacement privately, close conflicting admission, publish its grants/definitions atomically for the target session, then drain old resources. In-flight irreversible actions remain possible; state that boundary and report teardown failures.
+Approvals bind the exact action/effect identity and relevant arguments/revision. A stale approval cannot authorize a materially changed action.
 
-Begin with a small effective tool set. Deferred discovery and programmatic tool calling are evaluated additions, not prerequisites for simple coding. Programmatic calls must cross the same capability, budget, approval, and durable-effect boundaries as direct calls. A persistent interpreter's heap is not durable session truth. OpenAI's Agents API makes these useful comparison topics without requiring Ion to depend on that managed service. [R8](docs/research.md#references)
+Workspace binding is independent of agent role and history source. Multiple read-only agents may share one workspace. Parallel mutating agents normally use explicitly isolated workspaces/worktrees unless a stronger conflict policy is selected.
 
-## 13. Persistence and observation
+Applying or integrating a worker result is a separate admitted effect with current base/dirty-state validation and post-apply verification.
 
-SQLite remains the local durable substrate, with WAL, explicit synchronization policy, foreign keys, ownership locking, and a supported patched SQLite version. Keep physical storage private to the runtime. SQLite guarantees still depend on correct filesystem/VFS behavior, and backups must use a supported path that includes committed WAL state. [R10](docs/research.md#references)
+## 13. Cancellation, pause and shutdown
 
-### Storage topology
+Semantic cancellation is durable.
 
-The physical database boundary should follow the semantic atomicity/ownership boundary rather than table category. The leading topology is:
+The writer records the exact cancellation scope, revokes the current invocation generation's normal write authority, commits, then signals local execution. Late normal completions are fenced by task identity + invocation generation.
+
+Race rule:
+
+```text
+settlement committed before cancel mark -> settlement wins
+otherwise -> normal completion rejected; cancellation cleanup owns outcome
+```
+
+Cancellation is not rollback. If an external effect may already have happened, preserve uncertainty.
+
+Group/subtree cancellation must establish its admission barrier before traversing descendants so a concurrent spawn cannot escape the selected scope.
+
+Pause prevents new effect dispatch in scope and lets already-dispatched work reach defined safe boundaries. It is not equivalent to killing a process.
+
+Tokio cancellation tokens are process-local signals, not durable facts. Dropping/aborting a future does not prove a subprocess or blocking action stopped.
+
+Host close stops new admission, drains/settles owned writes as defined by adapter policy, preserves recoverable unfinished tasks, joins owned resources and releases the session ownership lock last.
+
+## 14. Observations and frontends
+
+Frontends consume the same command/observation contract. TUI focus is presentation state, not execution identity.
+
+A watch/subscription captures an atomic bounded snapshot and then committed events/live-output frames from that point. Durable event ordering derives from `CommitSeq`, not wall-clock time.
+
+Live streaming output is provisional presentation. It carries invocation/channel identity and offsets. It may be coalesced. Overflow closes/resets the affected subscription and requires a fresh snapshot rather than silently dropping correctness-visible state.
+
+Final durable output replaces the matching provisional presentation once.
+
+Per-agent drafts and delayed replies are keyed by stable captured target IDs. Changing UI focus cannot reroute an already submitted command.
+
+Session/group summaries must be obtainable without loading every worker transcript.
+
+## 15. Persistence
+
+### Semantic boundary
+
+One session has one canonical crash-atomic store boundary. All records that may participate in one session command transaction belong together semantically.
+
+Logical records include:
+
+- session metadata;
+- retained agents and conversations;
+- immutable entries and context controls;
+- inputs/messages/request receipts;
+- tasks and dependencies;
+- effect intents/attempts/settlements;
+- authority/grants/approvals;
+- reservations/usage/budgets;
+- workspace/resource metadata required for correctness;
+- artifact references.
+
+This does not require one table for every bullet. The schema should follow query/constraint evidence rather than object-oriented table proliferation.
+
+### Leading physical topology
+
+The strongest current candidate is one database file per top-level session/group:
 
 ```text
 Ion data root/
-  catalog.sqlite                 # small rebuildable global discovery/index metadata
   sessions/
     <SessionId>/
-      session.sqlite             # authoritative core state for exactly one session/group
-      artifacts/                 # large retained outputs/evidence referenced by session.sqlite
-  projects/
-    <Project-or-KnowledgeSpace>/
-      knowledge.sqlite           # optional experimental cross-session knowledge
-  indexes/                       # optional rebuildable global/search/vector indexes
+      session.sqlite
+      artifacts/
+
+  # optional, rebuildable discovery cache if scale justifies it
+  catalog.sqlite
 ```
 
-`session.sqlite` contains every fact that must participate in one session command transaction: agents, conversations, entries/context controls, durable tasks and effects, inputs/messages/receipts, grants/approvals, reservations/usage, and any enabled in-session assignment board. Splitting those records across databases would weaken the principal correctness property. In WAL mode SQLite does not provide crash-atomic commit across multiple attached database files, so Ion must not use ATTACH to simulate one core transaction across category databases. [R10](docs/research.md#references)
+Independent sessions then have independent writer/WAL/checkpoint/failure domains. Root agent and workers inside one session share the same database so their coordination remains locally transactional.
 
-A database-per-session aligns the physical writer lock with Ion's semantic single-writer boundary, isolates corruption/recovery and WAL/checkpoint work, permits unrelated sessions to write independently, and makes session archival/deletion/backup bounded. The current implementation still uses one database per data root; migration to the target topology is implementation work, not evidence that the old layout is part of the contract.
+The current production implementation uses one database per Ion data root. P2 must compare it against the per-session candidate before physical migration is declared final.
 
-The global catalog is not an additional source of session truth. It stores discovery/presentation metadata such as session id, title, project hint, timestamps, and path. Creation publishes a complete session store before catalog visibility; catalog loss or staleness must be repairable by scanning valid session stores. No core effect depends on a catalog write committing atomically with a session write.
+Do not split one core session transaction into category-specific WAL databases. SQLite does not provide host-crash atomicity across multiple attached WAL databases as one set.
 
-Large artifacts live outside SQLite when that avoids pathological row/WAL growth. Publish a durable file reference only after its content and required directory metadata are safely retained. A crash may leave a reclaimable orphan file, never a committed reference to missing required content. Small semantic payloads that are exactly what the model must replay may stay inside the session database. Truncation and quota exhaustion are explicit results.
+### SQLite versus Turso
 
-Optional project knowledge, global search, embeddings, logs, telemetry caches, and similar data use separate stores only when their lifecycle is truly independent. Derived stores are rebuildable. Authoritative cross-session stores synchronize through explicit idempotent messages/outbox records rather than pretending cross-file atomicity. Credentials remain outside these databases under the host's credential mechanism.
+Plain SQLite is the default core engine candidate. Ion intentionally has one semantic writer per session, and that writer performs short transactions only; therefore SQLite's one-writer-per-database rule is not presently a mismatch.
 
-Proposed logical session records:
+Turso Database is a valid P2 engine candidate because it offers a Rust implementation, SQLite compatibility, native async capabilities and MVCC/concurrent writes. Those features do not by themselves justify replacing SQLite. Multiple canonical writers inside one session would still require Ion-level ordering, authority, cancellation and recovery semantics and would trade deterministic serialization for conflict/retry handling.
 
-| Records | Required constraints/indexes |
+Benchmark Turso only against representative Ion workloads if SQLite storage becomes measurable overhead or a future accepted requirement such as local/remote sync makes Turso materially relevant. Do not add a production Turso/libSQL dependency for optionality alone.
+
+libSQL is not a preferred initial engine because its remote/replica features are not current core requirements and its fundamental single-writer behavior does not solve a present Ion problem.
+
+Client/server databases such as Postgres belong to a future multi-host/multi-user writable-session design, not the local-first core.
+
+Keep storage implementation private enough to change engines, but do not build a generic multi-backend framework before a second engine earns inclusion.
+
+### Artifacts/output
+
+Small semantic payloads required for exact replay may remain inline. Large opaque tool/process output may spill to files with durable reference, byte counts, integrity hash and truncation/quota status.
+
+Publish content safely before committing a required reference. Crash residue may produce an orphan to collect; committed state must not point to missing required content.
+
+Separate three classes:
+
+1. semantic facts/control decisions: durable before acknowledgement/publication;
+2. recovery checkpoints/output: bounded and periodically durable, never proof of terminal completion;
+3. live display deltas: provisional and replaceable.
+
+Do not fsync every token or rewrite an ever-growing full message for each streaming frame. P2 selects checkpoint cadence and spill thresholds from measurement.
+
+## 16. Public contract
+
+Expose session/agent/conversation commands and bounded queries with stable typed IDs, receipts, typed errors and explicit cancellation scopes.
+
+Keep database rows/codecs, invocation tokens, transaction builders and raw registries private unless a demonstrated embedding use requires them.
+
+A frontend attaches without becoming an execution owner. Acceptance and eventual completion are separately observable.
+
+A compatibility adapter such as ACP may wait for completion if required by that protocol, but it must not change the runtime's underlying admission semantics.
+
+Default local access uses OS-local trust and restrictive file/socket permissions. Remote authentication, multi-user authorization and distributed writable sessions require separate designs before exposure.
+
+## 17. Validation gates
+
+No design section becomes "optimal" merely because it is written here.
+
+| Gate | Decision/evidence |
 |---|---|
-| Session, agent, conversation | Stable identity; supervision/ancestry validation; current agent conversation and configuration revision |
-| Entry | Immutable content; conversation/order, head, and kind indexes; bounded fork-aware range queries |
-| Task and effect | Indexed live status, owner, dependencies, exact attempt identity, intent/checkpoint/outcome |
-| Input/message/receipt | Unique scoped request key and message identity; ordered target inbox; explicit disposition |
-| Grant and approval | Current authority revision, narrowing lineage, immutable approved action binding |
-| Reservation and usage | Unique attempt charges, ancestor accounts, retained uncertain reservations |
-| Assignment and artifact metadata | Revision-based mutation; retained results; base/workspace/evidence references |
+| P1 | Promote the typed re-entrant task model into production components; validate input idempotency, concurrent tool tasks, retained worker wait, cancellation races, recovery, ownership and missing-kind behavior. |
+| P2 | Validate physical store topology, SQLite behavior, output/checkpoint policy, indexed history/forks, active-memory bounds, backup/repair and optionally Turso under the same workload. |
+| P3 | Validate extension/tool/behavior contribution boundaries, authority/reload/failure semantics and sandbox assumptions. |
+| P4 | Validate TUI/group interaction, target-safe input, approvals, narrow layouts, output overload, reconnect and terminal restoration. |
 
-These are a logical schema, not an instruction to create every table before the first working slice. Version the actual schema and serialized kind payloads separately. Before an incompatible change, choose and test migration or explicit archive/refusal; never silently reinterpret old bytes or delete old sessions.
+P1-P4 build the core. Higher-level memory/knowledge/task-board systems are intentionally outside these gates. They may be investigated after the core baseline exists, using controlled effectiveness measurements rather than architecture speculation.
 
-Three classes of output/state remain distinct:
-
-1. Semantic facts and control decisions: durable before acknowledgment/publication.
-2. Recovery output/checkpoints: bounded, periodically persisted, never proof of completion.
-3. Live display deltas: provisional and coalescible; loss is repaired from a fresh view or final durable content.
-
-Do not fsync each token or rewrite an ever-growing complete message per token. Prototype P2 selects output batching/spill thresholds from measurements. Each output channel has one runtime owner, invocation identity, monotonic offsets, and explicit retention references. A foreground tool handing work to a background job transfers/references output durably before the tool finishes.
-
-A watch atomically captures the requested view and registers subsequent delivery under the session writer. The snapshot includes its durable CommitSeq, current live output snapshots/cursors, and a process-local observation epoch. Durable events are whole commit envelopes. Provisional output frames carry channel/invocation identity and offsets. No ordering is inferred from wall-clock timestamps or adjacency of filtered commit numbers.
-
-Overflow closes the affected subscription and requires a new atomic snapshot; it never blocks execution or silently drops a correctness-visible event while pretending the view is complete. Old-epoch frames reject. Final durable output replaces the matching provisional output exactly once. Only active context, live state, selected transcript pages, and bounded output need residency. Session/group summaries do not require loading every worker transcript.
-
-## 14. Public contract and interoperability
-
-Expose session/agent/conversation commands and bounded queries with stable IDs, typed errors, receipts, and explicit cancellation scopes. Optional assignment/knowledge services expose separate capability surfaces; enabling them must not change the meaning of the core commands. Keep database rows, codecs, invocation tokens, raw tool registries, and transaction builders crate-private unless a demonstrated embedding use requires otherwise.
-
-A frontend attaches without becoming an execution owner. Prompt acceptance and eventual completion are separately observable. A compatibility adapter may wait for completion when its protocol requires that response shape. Pin the negotiated ACP schema/version and test its actual prompt, cancellation, permission, resume, and close semantics; do not assume all protocol revisions mean the same thing.
-
-Default local access uses OS-local trust and restrictive socket/file permissions. Remote authentication, multi-user authorization, and distributed writable sessions are outside the first implementation. They require explicit designs before exposure, not an unauthenticated port added to the host.
-
-## 15. Decision gates
-
-The recommended direction is a single-owner, task-based durable runtime with typed agent behavior and integrated single/multi-agent clients. The following choices remain deliberately prototype-gated:
-
-| Gate | Decision to resolve | Required evidence |
-|---|---|---|
-| P1 | Production promotion of the selected re-entrant typed task model; exact ID/transaction representation | One turn, two tools, child wait, cancel/settle races, reopen, and clear Rust APIs without duplicated mechanisms |
-| P2 | Per-session storage topology, output checkpoint cadence, channel sharing, spill thresholds, query/index strategy | Independent concurrent sessions, long output and deep forks; RSS, lock contention, write amplification, restart/backup cost, and loss-boundary tests |
-| P3 | Extension hooks and reload authority | Replace/remove during execution; required-hook failure; no stale approval or grant resurrection |
-| P4 | TUI layout, terminal substrate, and keymap | Main plus worker; narrow/wide layouts, target-safe input, approvals, overload, resize, and reconnect |
-| E1 | Optional assignment/task-coordination surface | Multi-agent tasks showing less duplicated/missed work without unacceptable model-context or coordination overhead |
-| E2 | Optional project knowledge/memory surface | Cross-session tasks showing useful retrieval, provenance/freshness behavior, contradiction handling, bounded context cost, and safe disable/reset |
-
-P1–P4 build the core agent. E1/E2 are experiments layered on that core and are not prerequisites for single-agent usability. No existing Ion crate, renderer, ID scheme, storage schema, or optional coordination mechanism wins by default. Reuse is decided after these contracts, based on correctness and measured cost. No claim of optimality follows from a design document; the evaluation plan in ROADMAP.md supplies the evidence.
+The implementation rule is simple: **if evidence shows a core decision is wrong, change the design and implementation. Do not preserve it for compatibility with unfinished internal code.**
