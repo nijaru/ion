@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CommitSeq, ConversationId, EntryId, InputId, TaskId};
+use crate::{CommitSeq, ConversationId, EntryId, InputId, InvocationKind, TaskId};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Change {
@@ -8,7 +8,19 @@ pub enum Change {
     ConversationCreated(ConversationId),
     EntryAppended(EntryId),
     InputAdmitted(InputId),
+    InputDispositionChanged(InputId),
     TaskCreated(TaskId),
+    TaskReserved {
+        task_id: TaskId,
+        generation: u64,
+        kind: InvocationKind,
+    },
+    TaskCheckpointed {
+        task_id: TaskId,
+        generation: u64,
+    },
+    TaskCancellationMarked(TaskId),
+    TaskSettled(TaskId),
     ConversationOwned {
         task_id: TaskId,
         conversation_id: ConversationId,

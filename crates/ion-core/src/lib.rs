@@ -25,7 +25,7 @@ pub use session::{
     Session, SessionError, TaskReceipt, TaskRequest,
 };
 pub use task::{
-    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord,
-    TaskStatus,
+    InvocationKind, TaskInvocation, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
+    TaskOutput, TaskRecord, TaskStatus,
 };
 pub use view::{Change, CommitEvent, ObservationBatch, SessionSnapshot};

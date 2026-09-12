@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use super::TaskOutput;
+use super::{TaskInvocation, TaskOutput};
 use crate::{ConversationId, TaskId};
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -18,6 +18,7 @@ pub struct TaskRecord {
     pub dependencies: Vec<TaskId>,
     pub owned_conversations: Vec<ConversationId>,
     pub generation: u64,
+    pub invocation: Option<TaskInvocation>,
     pub cancel_requested: bool,
     pub status: TaskStatus,
     pub output: Option<TaskOutput>,
@@ -43,6 +44,7 @@ impl TaskRecord {
             dependencies,
             owned_conversations: Vec::new(),
             generation: 0,
+            invocation: None,
             cancel_requested: false,
             status: TaskStatus::Pending,
             output: None,

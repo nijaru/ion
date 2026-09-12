@@ -1,13 +1,18 @@
 use std::collections::VecDeque;
 
+use serde_json::Value;
+
 use crate::session::command::{
-    ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest, InputReceipt, InputRequest,
-    SessionError, TaskReceipt, TaskRequest,
+    CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
+    InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt, TaskRequest,
 };
 use crate::session::transaction::{MutationBatch, Transaction};
 use crate::store::MemoryStore;
 use crate::view::{CommitEvent, ObservationBatch, SessionSnapshot};
-use crate::{CommitSeq, ConversationId, RequestKey, SessionId};
+use crate::{
+    CommitSeq, ConversationId, InputDisposition, InputId, InvocationKind, RequestKey, SessionId,
+    TaskId, TaskOutcome, TaskOutput, TaskStatus,
+};
 
 const OBSERVATION_CAPACITY: usize = 128;
 
@@ -133,6 +138,86 @@ impl Session {
             reset_required: false,
             events,
         }
+    }
+
+    pub(crate) fn set_input_disposition(
+        &mut self,
+        input_id: InputId,
+        disposition: InputDisposition,
+    ) -> Result<CommitSeq, SessionError> {
+        let (_, commit_seq) = self
+            .transact(|transaction| transaction.set_input_disposition(input_id, disposition))?;
+        Ok(commit_seq)
+    }
+
+    pub(crate) fn reserve_task_invocation(
+        &mut self,
+        task_id: TaskId,
+        kind: InvocationKind,
+    ) -> Result<InvocationReceipt, SessionError> {
+        let (generation, commit_seq) =
+            self.transact(|transaction| transaction.reserve_task(task_id, kind))?;
+        Ok(InvocationReceipt {
+            task_id,
+            generation,
+            kind,
+            commit_seq,
+        })
+    }
+
+    pub(crate) fn checkpoint_task(
+        &mut self,
+        task_id: TaskId,
+        generation: u64,
+        checkpoint: Option<Value>,
+        output: Option<TaskOutput>,
+    ) -> Result<CommitSeq, SessionError> {
+        let (_, commit_seq) = self.transact(|transaction| {
+            transaction.checkpoint_task(task_id, generation, checkpoint, output)
+        })?;
+        Ok(commit_seq)
+    }
+
+    pub(crate) fn mark_task_cancellation(
+        &mut self,
+        task_id: TaskId,
+    ) -> Result<CancellationReceipt, SessionError> {
+        let state = self.store.state();
+        let task = state
+            .tasks
+            .get(&task_id)
+            .ok_or(SessionError::UnknownTask(task_id))?;
+        if task.cancel_requested || matches!(task.status, TaskStatus::Terminal(_)) {
+            return Ok(CancellationReceipt {
+                changed: false,
+                commit_seq: state
+                    .last_commit
+                    .expect("initialized session has a commit"),
+            });
+        }
+
+        let (_, commit_seq) =
+            self.transact(|transaction| transaction.mark_task_cancellation(task_id))?;
+        Ok(CancellationReceipt {
+            changed: true,
+            commit_seq,
+        })
+    }
+
+    pub(crate) fn settle_task_with<T>(
+        &mut self,
+        task_id: TaskId,
+        generation: u64,
+        outcome: TaskOutcome,
+        output: Option<TaskOutput>,
+        plan: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
+    ) -> Result<(T, CommitSeq), SessionError> {
+        self.transact(|transaction| {
+            transaction.assert_task_write_authority(task_id, generation)?;
+            let value = plan(transaction)?;
+            transaction.settle_task(task_id, generation, outcome, output)?;
+            Ok(value)
+        })
     }
 
     fn replay_input(

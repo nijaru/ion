@@ -7,3 +7,6 @@ pub use command::{
     SessionError, TaskReceipt, TaskRequest,
 };
 pub use owner::Session;
+
+#[cfg(test)]
+mod tests;

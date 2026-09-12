@@ -4,8 +4,8 @@ use thiserror::Error;
 
 use crate::conversation::context::{ContextControl, ForkError};
 use crate::{
-    CommitSeq, ConversationId, EntryId, EntryKind, HistoryParent, IdError, InputBody, InputMode,
-    InputSender, RequestKey, TaskId, TaskKindName,
+    CommitSeq, ConversationId, EntryId, EntryKind, HistoryParent, IdError, InputBody, InputId,
+    InputMode, InputSender, InvocationKind, RequestKey, TaskId, TaskKindName,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -90,21 +90,62 @@ pub struct TaskReceipt {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct InputReceipt {
-    pub input_id: crate::InputId,
+    pub input_id: InputId,
     pub commit_seq: CommitSeq,
     pub replayed: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InvocationReceipt {
+    pub(crate) task_id: TaskId,
+    pub(crate) generation: u64,
+    pub(crate) kind: InvocationKind,
+    pub(crate) commit_seq: CommitSeq,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct CancellationReceipt {
+    pub(crate) changed: bool,
+    pub(crate) commit_seq: CommitSeq,
 }
 
 #[derive(Debug, Error)]
 pub enum SessionError {
     #[error("unknown conversation {0}")]
     UnknownConversation(ConversationId),
+    #[error("unknown input {0}")]
+    UnknownInput(InputId),
     #[error("unknown task {0}")]
     UnknownTask(TaskId),
     #[error("context control references entry {0}, which is not visible to the conversation")]
     InvisibleContextReference(EntryId),
     #[error("task dependency {0} appears more than once")]
     DuplicateDependency(TaskId),
+    #[error("task {0} has dependencies that are not terminal")]
+    DependenciesNotReady(TaskId),
+    #[error("task {0} is not pending")]
+    TaskNotPending(TaskId),
+    #[error("task {0} is not running")]
+    TaskNotRunning(TaskId),
+    #[error("task {0} is already terminal")]
+    TaskAlreadyTerminal(TaskId),
+    #[error("task {task_id} cannot reserve {kind:?} in its current state")]
+    InvalidInvocationKind {
+        task_id: TaskId,
+        kind: InvocationKind,
+    },
+    #[error("task {task_id} invocation generation {generation} is stale; current generation is {current}")]
+    StaleInvocation {
+        task_id: TaskId,
+        generation: u64,
+        current: u64,
+    },
+    #[error("task {0} normal invocation is fenced by durable cancellation")]
+    CancellationFence(TaskId),
+    #[error("task {0} invocation generation space is exhausted")]
+    GenerationExhausted(TaskId),
+    #[error("input {0} cannot make the requested disposition transition")]
+    InvalidInputDisposition(InputId),
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]
