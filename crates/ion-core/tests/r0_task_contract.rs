@@ -396,9 +396,7 @@ async fn cancel_before_settlement_fences_normal_completion_then_runs_fresh_abort
         let registry = Arc::clone(&registry);
         let store = Arc::clone(&store);
         let cancellation = cancellation.clone();
-        async move {
-            execute_task_with_cancellation(&registry, store, task_id, cancellation).await
-        }
+        async move { execute_task_with_cancellation(&registry, store, task_id, cancellation).await }
     });
     tokio::time::timeout(Duration::from_secs(1), started.notified())
         .await
