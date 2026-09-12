@@ -134,7 +134,9 @@ pub enum SessionError {
         task_id: TaskId,
         kind: InvocationKind,
     },
-    #[error("task {task_id} invocation generation {generation} is stale; current generation is {current}")]
+    #[error(
+        "task {task_id} invocation generation {generation} is stale; current generation is {current}"
+    )]
     StaleInvocation {
         task_id: TaskId,
         generation: u64,
