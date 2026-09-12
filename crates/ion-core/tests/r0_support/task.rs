@@ -52,11 +52,6 @@ impl<C, R, F> TerminalPlan<C, R, F> {
             completion: Completion::Failed(value),
         }
     }
-
-    pub fn with_checkpoint(mut self, checkpoint: C) -> Self {
-        self.checkpoint = Some(checkpoint);
-        self
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -71,11 +66,6 @@ impl<C, A> AbortPlan<C, A> {
             checkpoint: None,
             result,
         }
-    }
-
-    pub fn with_checkpoint(mut self, checkpoint: C) -> Self {
-        self.checkpoint = Some(checkpoint);
-        self
     }
 }
 
@@ -126,10 +116,6 @@ impl<C: JsonPayload> TaskContext<C> {
             invocation,
             marker: PhantomData,
         }
-    }
-
-    pub const fn invocation(&self) -> Invocation {
-        self.invocation
     }
 
     /// Prototype of the only mutation path available to a running task.
