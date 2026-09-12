@@ -1,0 +1,148 @@
+use std::fmt;
+use std::num::NonZeroI64;
+use std::str::FromStr;
+
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct SessionId(Uuid);
+
+impl SessionId {
+    #[must_use]
+    pub fn new() -> Self {
+        Self(Uuid::now_v7())
+    }
+
+    #[must_use]
+    pub const fn as_uuid(self) -> Uuid {
+        self.0
+    }
+}
+
+impl Default for SessionId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Display for SessionId {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        self.0.fmt(formatter)
+    }
+}
+
+impl FromStr for SessionId {
+    type Err = uuid::Error;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        Uuid::parse_str(value).map(Self)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct LocalSeq(NonZeroI64);
+
+impl LocalSeq {
+    pub fn new(value: i64) -> Result<Self, IdError> {
+        NonZeroI64::new(value)
+            .filter(|value| value.get() > 0)
+            .map(Self)
+            .ok_or(IdError::NonPositive(value))
+    }
+
+    #[must_use]
+    pub const fn get(self) -> i64 {
+        self.0.get()
+    }
+
+    pub fn next(self) -> Result<Self, IdError> {
+        let next = self.get().checked_add(1).ok_or(IdError::Exhausted)?;
+        Self::new(next)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum IdError {
+    #[error("session-local sequence values must be positive, got {0}")]
+    NonPositive(i64),
+    #[error("session-local sequence space is exhausted")]
+    Exhausted,
+}
+
+macro_rules! local_id {
+    ($name:ident) => {
+        #[derive(
+            Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize,
+        )]
+        pub struct $name(LocalSeq);
+
+        impl $name {
+            pub fn new(value: i64) -> Result<Self, IdError> {
+                LocalSeq::new(value).map(Self)
+            }
+
+            #[must_use]
+            pub const fn local_seq(self) -> LocalSeq {
+                self.0
+            }
+
+            #[must_use]
+            pub const fn get(self) -> i64 {
+                self.0.get()
+            }
+        }
+
+        impl TryFrom<i64> for $name {
+            type Error = IdError;
+
+            fn try_from(value: i64) -> Result<Self, Self::Error> {
+                Self::new(value)
+            }
+        }
+
+        impl From<$name> for LocalSeq {
+            fn from(value: $name) -> Self {
+                value.0
+            }
+        }
+
+        impl fmt::Display for $name {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                self.get().fmt(formatter)
+            }
+        }
+    };
+}
+
+local_id!(ConversationId);
+local_id!(EntryId);
+local_id!(InputId);
+local_id!(TaskId);
+local_id!(ArtifactId);
+local_id!(CommitSeq);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn local_ids_share_ordered_storage_without_sharing_rust_types() {
+        let sequence = LocalSeq::new(41).expect("valid local sequence");
+        let entry = EntryId::new(sequence.get()).expect("entry id");
+        let task = TaskId::new(sequence.next().expect("next sequence").get()).expect("task id");
+
+        assert_eq!(entry.get(), 41);
+        assert_eq!(task.get(), 42);
+        assert!(EntryId::new(0).is_err());
+        assert!(TaskId::new(-1).is_err());
+    }
+
+    #[test]
+    fn session_id_round_trips_through_text() {
+        let id = SessionId::new();
+        let encoded = id.to_string();
+        assert_eq!(encoded.parse::<SessionId>().expect("parse session id"), id);
+    }
+}
