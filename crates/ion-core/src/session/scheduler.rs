@@ -61,7 +61,9 @@ impl TaskDriver {
             })),
         };
 
-        if running.invocation_kind != InvocationKind::Abort && self.cancel_requested(task_id).await? {
+        if running.invocation_kind != InvocationKind::Abort
+            && self.cancel_requested(task_id).await?
+        {
             return self.run_abort(task_id, handler).await;
         }
 

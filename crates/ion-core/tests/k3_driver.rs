@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use ion_core::{
-    AbortContext, InvocationKind, Session, TaskCompletion, TaskContext, TaskDriver, TaskDriverError,
-    TaskFuture, TaskKind, TaskKindName, TaskOutcomeKind, TaskRegistry, TaskRequest, TaskStatus,
+    AbortContext, InvocationKind, Session, TaskCompletion, TaskContext, TaskDriver,
+    TaskDriverError, TaskFuture, TaskKind, TaskKindName, TaskOutcomeKind, TaskRegistry,
+    TaskRequest, TaskStatus,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -144,7 +145,10 @@ async fn missing_task_kind_settles_unsupported_without_data_loss() {
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Unsupported);
     let snapshot = driver.snapshot().await;
     assert_eq!(snapshot.tasks.len(), 1);
-    assert!(matches!(snapshot.tasks[0].status, TaskStatus::Terminal(_)));
+    assert!(matches!(
+        snapshot.tasks[0].status,
+        TaskStatus::Terminal(_)
+    ));
 }
 
 #[tokio::test]

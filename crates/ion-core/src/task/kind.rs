@@ -7,9 +7,8 @@ use thiserror::Error;
 use super::{AbortContext, TaskContext, TaskKindName, TaskOutput};
 use crate::{CommitSeq, ConversationId, InvocationKind, TaskId, TaskOutcome, TaskOutcomeKind};
 
-pub type TaskFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<TaskCompletion, TaskRunError>> + Send + 'a>,
->;
+pub type TaskFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<TaskCompletion, TaskRunError>> + Send + 'a>>;
 
 pub trait TaskKind: Send + Sync {
     fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a>;

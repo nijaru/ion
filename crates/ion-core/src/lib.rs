@@ -22,8 +22,8 @@ pub use id::{
 };
 pub use session::{
     ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest, InputReceipt,
-    InputRequest, Session, SessionError, TaskCancellation, TaskDriver, TaskDriverError, TaskReceipt,
-    TaskRequest,
+    InputRequest, Session, SessionError, TaskCancellation, TaskDriver, TaskDriverError,
+    TaskReceipt, TaskRequest,
 };
 pub use task::{
     AbortContext, InvocationKind, RunningTask, TaskCompletion, TaskContext, TaskContextError,

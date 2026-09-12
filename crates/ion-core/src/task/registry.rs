@@ -38,9 +38,7 @@ impl TaskRegistry {
         kind: &TaskKindName,
         schema_version: u32,
     ) -> Option<Arc<dyn TaskKind>> {
-        self.kinds
-            .get(&(kind.clone(), schema_version))
-            .cloned()
+        self.kinds.get(&(kind.clone(), schema_version)).cloned()
     }
 }
 
