@@ -2,8 +2,10 @@
 //!
 //! Authoritative session state has one mutation owner; provider, tool, and
 //! agent effects execute concurrently outside that mutation line and become
-//! authoritative only through durable transitions. Durable conversation state
-//! is a tree addressed through independent lane cursors.
+//! authoritative only through durable transitions. The target model separates
+//! retained agents, conversations, admitted inputs, generic tasks, effects, and
+//! commit ordering; legacy lane/operation code remains only while equivalent
+//! target slices are promoted.
 
 mod agent;
 mod agent_host;
@@ -45,7 +47,10 @@ pub use extensions::{
     ExtensionDialog, ExtensionService, ExtensionUiEvent, ExtensionUiHub, ExtensionUiUpdate,
     MAX_EXTENSION_WIDGET_LINES,
 };
-pub use ids::{AgentId, EntryId, OperationId, RuntimeCursor, RuntimeInstanceId, SessionId};
+pub use ids::{
+    AgentId, ConversationId, EntryId, InputId, OperationId, RuntimeCursor, RuntimeInstanceId,
+    SessionId, TaskId,
+};
 pub use mcp::{McpService, ServerDef};
 pub use operation::{OperationOutcome, OperationState, SessionEntry};
 pub use peer::{PeerCleanupError, PeerServiceError};
