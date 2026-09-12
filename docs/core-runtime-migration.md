@@ -2,7 +2,7 @@
 
 Status: active implementation plan, 2026-09-12.
 
-This document translates `DESIGN.md` revision 5 into implementation order. The old runtime is not a compatibility target. Git history is the archive.
+This document translates `DESIGN.md` revision 5 into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation.
 
 ## Decision
 
@@ -151,9 +151,11 @@ The model service must not know session/task IDs or database commands.
 
 Use a scripted/faux implementation for the first core. Production provider catalog/auth/wire adapters are a separate component pass.
 
+The leading organization is a small independent `ion-ai` crate containing only this provider-neutral contract plus the scripted service. R0.5 may reject that crate split if it proves artificial, but do not put HTTP/OAuth/provider-catalog logic in `ion-core` merely to avoid one stable dependency boundary.
+
 ## Rewrite boundary
 
-Once R0.1–R0.5 are accepted, remove the old core implementation and reconstruct `ion-core` around the target.
+Once R0.1–R0.5 are accepted, remove the old core implementation and reconstruct `ion-core` around the target and `docs/source-layout.md`.
 
 ### Delete/rewrite
 
@@ -169,6 +171,21 @@ Treat these as old-runtime code, not refactor anchors:
 - old generic effect orchestration
 - old context machinery that conflicts with immutable context controls
 - old store schema/SQL tied to agents/lanes/operations/effects
+
+Do not create a replacement `runtime.rs` catch-all. The fresh implementation is organized around semantic modules (`conversation`, `task`, `session`, `view`, `store`, built-ins) as defined in `docs/source-layout.md`.
+
+### Application cutover
+
+The current `ion` application crate is tightly coupled to the old core. Do not preserve those dependencies just to keep the old binary running during the rewrite.
+
+At the clean cutover, choose the smallest workspace that remains honest and green:
+
+- delete/replace old application code that only drives removed core APIs;
+- temporarily remove `crates/ion` from the workspace if no useful new shell exists yet, **or** replace it with a genuinely minimal new shell once the new command/view API exists;
+- keep `ion-terminal` only as an independently compiling low-level terminal crate pending its later first-principles review;
+- reintroduce the full application/TUI incrementally from the new core outward.
+
+User-facing temporary unusability is acceptable; a compatibility bridge to the obsolete runtime is not.
 
 ### Review and port algorithms, not APIs
 
@@ -197,6 +214,8 @@ Low-level terminal editor/rendering utilities may later be reused after P4 revie
 ## Fresh `ion-core` implementation order
 
 ### K1 — Storage-independent domain types
+
+Create the fresh module skeleton from `docs/source-layout.md` only as real behavior lands. Do not pre-create empty hierarchy for aesthetics.
 
 Add only target nouns:
 
@@ -247,6 +266,8 @@ No real provider yet. Use deterministic task kinds.
 ### K4 — SQLite session store
 
 Implement the fresh schema as one database for one session. Do not migrate the old tables in place during core development.
+
+Follow the SQLite module boundaries in `docs/source-layout.md`: connection/open policy, schema, atomic commit application and focused per-record reads/writes. Do not create another monolithic `sql.rs`/`queries.rs` file.
 
 For old development data, preserve/archive/refuse according to the pre-1.0 policy. A migration can be written later only if preserving old sessions is actually valuable.
 
@@ -315,7 +336,7 @@ Intentional Ion improvements:
 - no session/task IDs inside provider API;
 - credentials never enter session storage.
 
-Do not implement the full provider catalog before the core can run one scripted model turn.
+Do not implement the full provider catalog before the core can run one scripted model turn. If `ion-ai` was accepted by R0.5, extend that crate rather than moving provider/network logic back into the application binary or `ion-core`.
 
 ## Subsequent subsystem passes
 
