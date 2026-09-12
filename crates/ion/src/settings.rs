@@ -929,3 +929,51 @@ mod protected_paths_settings_tests {
         assert!(disabled.protected_paths().is_empty());
     }
 }
+
+/// Canonical structural peer definitions for durable authority. Inactive MCP
+/// servers retain supervision but receive no grant; selecting them again is a
+/// new admission. Validate every definition before any host mutation.
+pub fn peer_authority_definitions(
+    mcp: &[ion_core::ServerDef],
+    extensions: &[ion_core::ExtensionDef],
+    active_mcp: &[String],
+) -> Result<std::collections::BTreeMap<String, String>, String> {
+    let mut desired = std::collections::BTreeMap::new();
+    let mut seen = std::collections::HashSet::new();
+    for (prefix, name, command, args, active) in mcp
+        .iter()
+        .map(|def| {
+            (
+                "mcp",
+                &def.name,
+                &def.command,
+                &def.args,
+                active_mcp.contains(&def.name),
+            )
+        })
+        .chain(
+            extensions
+                .iter()
+                .map(|def| ("ext", &def.name, &def.command, &def.args, true)),
+        )
+    {
+        let scope = format!("{prefix}:{name}");
+        if name.trim().is_empty()
+            || command.trim().is_empty()
+            || name.contains('\0')
+            || command.contains('\0')
+            || args.iter().any(|arg| arg.contains('\0'))
+        {
+            return Err(format!("invalid peer definition: {scope}"));
+        }
+        if !seen.insert(scope.clone()) {
+            return Err(format!("duplicate peer: {scope}"));
+        }
+        if active {
+            let definition =
+                serde_json::to_string(&(command, args)).map_err(|err| err.to_string())?;
+            desired.insert(scope, definition);
+        }
+    }
+    Ok(desired)
+}

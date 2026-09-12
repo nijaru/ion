@@ -232,10 +232,9 @@ async fn lane_agent_admission_rejects_structural_scope_widening() {
     let mut parent = crate::session::lane::Config::new("model-a");
     parent.tools =
         crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["read".to_owned()]));
-    parent.scopes =
-        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
-            "scope-a".to_owned(),
-        ]));
+    parent.scopes = crate::session::lane::ScopeGrant::from_published(
+        std::collections::BTreeMap::from([("scope-a".to_owned(), 0)]),
+    );
     store
         .set_lane_config(session_id, crate::session::lane::MAIN, parent.clone())
         .await
@@ -244,9 +243,9 @@ async fn lane_agent_admission_rejects_structural_scope_widening() {
     let rejected = crate::AgentId::generate();
     let mut wider = parent.clone();
     wider.scopes =
-        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
-            "scope-a".to_owned(),
-            "scope-b".to_owned(),
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeMap::from([
+            ("scope-a".to_owned(), 0),
+            ("scope-b".to_owned(), 0),
         ]));
     let err = store
         .admit_lane_agent(session_id, rejected, root_agent, "scope-wider", None, wider)
@@ -302,10 +301,9 @@ async fn session_agent_admission_rejects_capability_escalation() {
     let mut parent_config = crate::session::lane::Config::new("parent-model");
     parent_config.tools =
         crate::tool::ToolSelection::Only(std::collections::BTreeSet::from(["read".to_owned()]));
-    parent_config.scopes =
-        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
-            "scope-a".to_owned(),
-        ]));
+    parent_config.scopes = crate::session::lane::ScopeGrant::from_published(
+        std::collections::BTreeMap::from([("scope-a".to_owned(), 0)]),
+    );
     store
         .set_lane_config(
             root_session,
@@ -345,9 +343,9 @@ async fn session_agent_admission_rejects_capability_escalation() {
     let mut wider_scopes = crate::session::lane::Config::new("child-model");
     wider_scopes.tools = parent_config.tools.clone();
     wider_scopes.scopes =
-        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeSet::from([
-            "scope-a".to_owned(),
-            "scope-b".to_owned(),
+        crate::session::lane::ScopeGrant::from_published(std::collections::BTreeMap::from([
+            ("scope-a".to_owned(), 0),
+            ("scope-b".to_owned(), 0),
         ]));
     let err = store
         .admit_session_agent(

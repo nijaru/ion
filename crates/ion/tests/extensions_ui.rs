@@ -33,7 +33,8 @@ async fn extension_pushes_status_and_widget() {
     let mut events = service.ui_hub().subscribe();
     service
         .start_into(&[ui_extension_def("uikit")], &catalog)
-        .await;
+        .await
+        .expect("start service");
 
     // The initialize response carries status + widget pushes; drain
     // until both arrive (handshake happens before start_into returns).
@@ -80,7 +81,8 @@ async fn extension_registers_and_runs_a_command_with_a_dialog() {
     let mut events = service.ui_hub().subscribe();
     service
         .start_into(&[ui_extension_def("uikit")], &catalog)
-        .await;
+        .await
+        .expect("start service");
 
     // Discovery completes with the tools handshake.
     let mut commands = Vec::new();
@@ -179,7 +181,8 @@ async fn command_name_collisions_get_numeric_suffixes_in_discovery_order() {
             ],
             &catalog,
         )
-        .await;
+        .await
+        .expect("start service");
 
     let mut commands = Vec::new();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
@@ -205,7 +208,8 @@ async fn peer_death_clears_ui_state() {
     let mut events = service.ui_hub().subscribe();
     service
         .start_into(&[ui_extension_def("uikit")], &catalog)
-        .await;
+        .await
+        .expect("start service");
 
     // Crash the peer through its tool (crash: true).
     let crash = catalog

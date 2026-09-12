@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::BTreeMap;
 
 use crate::ids::{EntryId, OperationId};
 use crate::tool::ToolSelection;
@@ -12,7 +12,7 @@ pub(crate) const MAIN: &str = "main";
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub(crate) enum ScopeGrant {
     LegacyAll,
-    Only(BTreeSet<String>),
+    Only(BTreeMap<String, u64>),
 }
 
 impl ScopeGrant {
@@ -22,15 +22,15 @@ impl ScopeGrant {
 
     #[must_use]
     pub(crate) fn none() -> Self {
-        Self::Only(BTreeSet::new())
+        Self::Only(BTreeMap::new())
     }
 
     #[must_use]
-    pub(crate) fn from_published(scopes: BTreeSet<String>) -> Self {
+    pub(crate) fn from_published(scopes: BTreeMap<String, u64>) -> Self {
         Self::Only(scopes)
     }
 
-    pub(crate) fn materialize(&mut self, published: &BTreeSet<String>) -> bool {
+    pub(crate) fn materialize(&mut self, published: &BTreeMap<String, u64>) -> bool {
         if matches!(self, Self::LegacyAll) {
             *self = Self::Only(published.clone());
             true
@@ -39,18 +39,18 @@ impl ScopeGrant {
         }
     }
 
-    pub(crate) fn insert(&mut self, scope: String) -> bool {
+    pub(crate) fn insert(&mut self, scope: String, revision: u64) -> bool {
         match self {
             Self::LegacyAll => false,
-            Self::Only(scopes) => scopes.insert(scope),
+            Self::Only(scopes) => scopes.insert(scope, revision) != Some(revision),
         }
     }
 
     #[must_use]
-    pub(crate) fn allows(&self, scope: &str) -> bool {
+    pub(crate) fn allows(&self, scope: &str, revision: u64) -> bool {
         match self {
             Self::LegacyAll => true,
-            Self::Only(scopes) => scopes.contains(scope),
+            Self::Only(scopes) => scopes.get(scope) == Some(&revision),
         }
     }
 
@@ -59,7 +59,9 @@ impl ScopeGrant {
         match (self, parent) {
             (_, Self::LegacyAll) => true,
             (Self::LegacyAll, Self::Only(_)) => false,
-            (Self::Only(child), Self::Only(parent)) => child.is_subset(parent),
+            (Self::Only(child), Self::Only(parent)) => child
+                .iter()
+                .all(|(scope, revision)| parent.get(scope) == Some(revision)),
         }
     }
 }

@@ -96,6 +96,7 @@ where
     let family = Arc::new(runtime.agent_family(options.max_active_agents).await?);
     let hosted = ion_core::hosted_agent_runtimes(
         ion_core::HostedAgentConfig {
+            configuration: tools.configuration().clone(),
             store: store.clone(),
             make_provider,
             make_provider_for_model,

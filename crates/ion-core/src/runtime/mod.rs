@@ -1567,7 +1567,12 @@ impl Runtime {
             for lane in &mut loaded.lanes {
                 let materialized = lane.config.scopes.materialize(&published);
                 let inserted = lane.name == crate::session::lane::MAIN
-                    && lane.config.scopes.insert(scope.to_owned());
+                    && lane.config.scopes.insert(
+                        scope.to_owned(),
+                        self.tools
+                            .scope_revision(scope)
+                            .ok_or_else(|| CommandError::ScopeNotConfigured(scope.to_owned()))?,
+                    );
                 if materialized || inserted {
                     self.store
                         .set_lane_config(self.session_id, &lane.name, lane.config.clone())
@@ -2805,7 +2810,11 @@ impl<P: Provider> SessionRuntime<P> {
             .expect("root structural scope admission requires the main lane")
             .config
             .clone();
-        if !config.scopes.insert(scope) {
+        let revision = self
+            .tools
+            .scope_revision(&scope)
+            .ok_or_else(|| CommandError::ScopeNotConfigured(scope.clone()))?;
+        if !config.scopes.insert(scope, revision) {
             return Ok(());
         }
         self.store

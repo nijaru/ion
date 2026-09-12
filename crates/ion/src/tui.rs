@@ -112,6 +112,8 @@ pub fn workspace_file_list(cwd: &std::path::Path) -> Vec<String> {
 /// never runtime state.
 #[derive(Clone)]
 pub struct HostConfig {
+    /// Host-owned configuration ledger; frontends do not mutate session rows.
+    pub configuration_store: Option<ion_core::SessionStore>,
     /// Model id for the /model display; also marks switching as
     /// possible (a real model is configured; scripted launches have
     /// nothing to switch to).
@@ -6643,10 +6645,15 @@ pub async fn run(
                                 // found live in tmux). The result arrives
                                 // through the command channel.
                                 if let Some(service) = host.extension_service.clone() {
+                                    let lease = match host.tool_catalog.as_ref().map(|catalog| catalog.configuration().try_enter()).transpose() {
+                                        Ok(lease) => lease,
+                                        Err(err) => { notice(&mut state, &format!("/{command}: {err}")); continue; }
+                                    };
                                     let command = command.clone();
                                     let args = args.clone();
                                     let tx = command_tx.clone();
                                     tokio::spawn(async move {
+                                        let _lease = lease;
                                         let result = service.run_command(&command, &args).await;
                                         let _ = tx.send((command, result)).await;
                                     });
@@ -6715,6 +6722,7 @@ pub async fn run(
                                     &mut keymap,
                                     &mut theme,
                                     ReloadHost {
+                                        store: host.configuration_store.as_ref(),
                                         catalog: host.tool_catalog.as_ref(),
                                         mcp_service: host.mcp_service.as_ref(),
                                         extension_service: host.extension_service.as_ref(),

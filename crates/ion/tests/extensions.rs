@@ -42,7 +42,8 @@ async fn extension_publishes_and_serves_tools_through_the_catalog() {
     let catalog = ToolCatalog::default();
     ExtensionService::new()
         .start_into(&[ext_def("fake_extension.py")], &catalog)
-        .await;
+        .await
+        .expect("start service");
 
     // Same logical shape as MCP tools: namespaced, schema-carrying.
     let spec = catalog
@@ -69,7 +70,8 @@ async fn extension_crash_is_a_typed_failure_and_the_runtime_survives() {
     let catalog = ToolCatalog::default();
     ExtensionService::new()
         .start_into(&[ext_def("crashing_extension.py")], &catalog)
-        .await;
+        .await
+        .expect("start service");
     // The ghost tool is present while the peer is live.
     assert!(catalog.specs().iter().any(|s| s.name == "textkit__ghost"));
 
@@ -132,7 +134,8 @@ async fn extension_peer_restarts_after_discovery_crash_with_a_bounded_delay() {
     let catalog = ToolCatalog::default();
     ExtensionService::new()
         .start_into(&[restarting_ext_def(&marker)], &catalog)
-        .await;
+        .await
+        .expect("start service");
 
     let deadline = Instant::now() + Duration::from_secs(3);
     let mut output = None;
@@ -173,7 +176,8 @@ async fn a_second_language_registers_the_same_logical_tool() {
             }],
             &catalog,
         )
-        .await;
+        .await
+        .expect("start service");
     let outcome = catalog
         .execute("pingkit__ping", &json!({}), CancellationToken::new())
         .await;

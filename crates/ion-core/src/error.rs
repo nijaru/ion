@@ -30,6 +30,8 @@ pub enum CommandError {
     LaneExists(String),
     #[error("lane name cannot be empty")]
     InvalidLaneName,
+    #[error("scope {0:?} is not configured for this host")]
+    ScopeNotConfigured(String),
     #[error("no active operation; the session is idle")]
     NoActiveOperation,
     #[error("operation {operation_id} is not the active operation")]

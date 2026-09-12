@@ -322,6 +322,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 async fn build_catalog(
     settings: &Settings,
     cli: &Cli,
+    store: &SessionStore,
 ) -> Result<
     (
         ion_core::ToolCatalog,
@@ -350,14 +351,43 @@ async fn build_catalog(
     let ext_defs =
         ion::settings::load_extension_defs(settings, Some(cwd.as_path()), cli.trust_project)
             .map_err(std::io::Error::other)?;
+    let desired = ion::settings::peer_authority_definitions(
+        &mcp_defs,
+        &ext_defs,
+        &settings.active_mcp_servers,
+    )
+    .map_err(std::io::Error::other)?;
+    let update = tools
+        .configuration()
+        .try_update()
+        .map_err(std::io::Error::other)?;
+    if let Err(err) = tools
+        .reconcile_peer_authority(store, desired, &update)
+        .await
+    {
+        update.unchanged();
+        return Err(std::io::Error::other(err));
+    }
     let mcp_service = Some(std::sync::Arc::new(ion_core::McpService::new()));
-    if let Some(service) = &mcp_service {
-        service.start_into(&mcp_defs, &tools).await;
-    }
     let extension_service = Some(ion_core::ExtensionService::new());
-    if let Some(service) = &extension_service {
-        service.start_into(&ext_defs, &tools).await;
+    let started = async {
+        if let Some(service) = &mcp_service {
+            service.start_into(&mcp_defs, &tools).await?;
+        }
+        if let Some(service) = &extension_service {
+            service.start_into(&ext_defs, &tools).await?;
+        }
+        Ok::<(), ion_core::PeerServiceError>(())
     }
+    .await;
+    if let Err(err) = started {
+        let cleanup = tools.close().await;
+        return Err(std::io::Error::other(match cleanup {
+            Ok(()) => err.to_string(),
+            Err(close) => format!("{err}; catalog cleanup failed: {close}"),
+        }));
+    }
+    update.finish();
     Ok((tools, extension_service, mcp_service))
 }
 
@@ -593,7 +623,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    let (tools, extension_service, mcp_service) = match build_catalog(settings, cli).await {
+    let (tools, extension_service, mcp_service) = match build_catalog(settings, cli, &store).await {
         Ok(built) => built,
         Err(err) => {
             restore_tui_startup_terminal(guard);
@@ -798,6 +828,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         settings.theme(),
         keymap,
         tui::HostConfig {
+            configuration_store: Some((*store).clone()),
             launch_mode: tui_launch_mode(cli.tui_mode, settings),
             model_name,
             model_provider,
@@ -1171,7 +1202,13 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
     let make_provider = provider_factory(cli, settings).map_err(RuntimeError::OperationFailed)?;
     let cwd =
         std::env::current_dir().map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
-    let (tools, _extension_service, _mcp_service) = build_catalog(settings, cli)
+    let store = if cli.no_session {
+        SessionStore::open_in_memory()
+    } else {
+        SessionStore::open(default_db_path())
+    }
+    .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
+    let (tools, _extension_service, _mcp_service) = build_catalog(settings, cli, &store)
         .await
         .map_err(|err| RuntimeError::OperationFailed(err.to_string()))?;
     let trusted_resources = match ion_core::load_trusted_resources(&cwd, cli.trust_project) {
@@ -1185,21 +1222,7 @@ async fn run_print(prompt: String, cli: &Cli, settings: &Settings) -> Result<(),
             return Err(RuntimeError::OperationFailed(err));
         }
     };
-    let store = match if cli.no_session {
-        SessionStore::open_in_memory()
-    } else {
-        SessionStore::open(default_db_path())
-    } {
-        Ok(store) => store,
-        Err(err) => {
-            if let Err(close_err) = tools.close().await {
-                return Err(RuntimeError::OperationFailed(format!(
-                    "{err}; tool catalog close failed: {close_err}"
-                )));
-            }
-            return Err(RuntimeError::OperationFailed(err.to_string()));
-        }
-    };
+
     if let Some(notice) = store.startup_notice() {
         eprintln!("store: {notice}");
     };

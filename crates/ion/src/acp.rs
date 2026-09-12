@@ -569,7 +569,8 @@ where
     if !servers.is_empty() {
         ion_core::McpService::new()
             .start_into(&servers, &catalog)
-            .await;
+            .await
+            .map_err(|err| err.to_string())?;
     }
     let trusted_resources = ion_core::load_trusted_resources(cwd_path, config.trust_project)?;
     Ok((cwd, catalog, trusted_resources))

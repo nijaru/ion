@@ -1,5 +1,5 @@
 use super::*;
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 use tokio::task::JoinSet;
 
@@ -14,6 +14,8 @@ use tokio::task::JoinSet;
 #[derive(Clone)]
 pub struct ToolCatalog {
     core: ToolRegistry,
+    configuration: crate::HostConfiguration,
+    peer_revisions: Arc<std::sync::RwLock<Option<BTreeMap<String, u64>>>>,
     /// Structural scope identities owned by the host, independent of whether
     /// a peer currently has a live tool generation published.
     declared_scopes: Arc<std::sync::RwLock<BTreeSet<String>>>,
@@ -178,6 +180,59 @@ impl CatalogService {
 }
 
 impl ToolCatalog {
+    /// Admission lifetime shared with every runtime composed by this host.
+    pub fn configuration(&self) -> &crate::HostConfiguration {
+        &self.configuration
+    }
+
+    #[must_use]
+    pub fn with_configuration(mut self, configuration: crate::HostConfiguration) -> Self {
+        self.configuration = configuration;
+        self
+    }
+
+    /// Persist explicit peer configuration before changing availability. This
+    /// host-derived view invalidates stale lane grants without mutating them.
+    pub async fn reconcile_peer_authority(
+        &self,
+        store: &crate::SessionStore,
+        desired: BTreeMap<String, String>,
+        update: &crate::ConfigurationUpdate,
+    ) -> Result<(), crate::StoreError> {
+        if !update.belongs_to(&self.configuration) {
+            return Err(crate::StoreError::Sqlite(
+                "configuration guard belongs to another host".into(),
+            ));
+        }
+        let workspace = self
+            .cwd()
+            .canonicalize()
+            .map_err(|err| crate::StoreError::Sqlite(format!("workspace: {err}")))?
+            .to_string_lossy()
+            .into_owned();
+        let revisions = store.reconcile_host_scopes(workspace, desired).await?;
+        *self
+            .peer_revisions
+            .write()
+            .expect("peer authority poisoned") = Some(revisions);
+        Ok(())
+    }
+
+    /// The revision a lane grant must carry for `scope` to stay authoritative.
+    /// Core scopes are unrevisioned. A catalog that has not reconciled host
+    /// authority keeps peer scopes at their first revision, so client-scoped
+    /// catalogs (ACP, tests) stay usable; a reconciled catalog denies any
+    /// scope the host no longer configures.
+    pub(crate) fn scope_revision(&self, scope: &str) -> Option<u64> {
+        if !scope.starts_with("mcp:") && !scope.starts_with("ext:") {
+            return Some(0);
+        }
+        match &*self.peer_revisions.read().expect("peer authority poisoned") {
+            Some(revisions) => revisions.get(scope).copied(),
+            None => Some(0),
+        }
+    }
+
     /// A catalog over `cwd` with only the core tool set.
     #[must_use]
     pub fn with_cwd(cwd: impl AsRef<Path>) -> Self {
@@ -337,7 +392,7 @@ impl ToolCatalog {
     /// temporarily unavailable keeps the same authority across restart, while
     /// model-step snapshots still require a live generation.
     #[must_use]
-    pub(crate) fn admission_scopes(&self) -> BTreeSet<String> {
+    pub(crate) fn admission_scopes(&self) -> BTreeMap<String, u64> {
         let active_mcp_scopes = self
             .active_mcp_scopes
             .read()
@@ -350,7 +405,10 @@ impl ToolCatalog {
             .filter(|scope| {
                 !scope.starts_with("mcp:") || active_mcp_scopes.contains(scope.as_str())
             })
-            .cloned()
+            .filter_map(|scope| {
+                self.scope_revision(scope)
+                    .map(|revision| (scope.clone(), revision))
+            })
             .collect()
     }
 
@@ -361,14 +419,17 @@ impl ToolCatalog {
         &self,
         scopes: &crate::session::lane::ScopeGrant,
     ) -> ToolRegistry {
-        self.snapshot_matching(|scope| scopes.allows(scope))
+        self.snapshot_matching(|scope| {
+            self.scope_revision(scope)
+                .is_some_and(|revision| scopes.allows(scope, revision))
+        })
     }
 
     /// The merged immutable snapshot: core plus every currently published
     /// scope. Name collisions resolve in favor of core tools.
     #[must_use]
     pub fn snapshot(&self) -> ToolRegistry {
-        self.snapshot_matching(|_| true)
+        self.snapshot_matching(|scope| self.scope_revision(scope).is_some())
     }
 
     /// All registered tool specs in the current snapshot, ordered by
@@ -440,6 +501,8 @@ impl From<ToolRegistry> for ToolCatalog {
     fn from(core: ToolRegistry) -> Self {
         Self {
             core,
+            configuration: crate::HostConfiguration::default(),
+            peer_revisions: Arc::new(std::sync::RwLock::new(None)),
             declared_scopes: Arc::new(std::sync::RwLock::new(BTreeSet::new())),
             dynamic: Arc::new(std::sync::RwLock::new(HashMap::new())),
             generations: Arc::new(std::sync::RwLock::new(HashMap::new())),
@@ -520,7 +583,7 @@ mod catalog_tests {
                 .get("mcp_echo")
                 .is_none()
         );
-        assert!(catalog.admission_scopes().contains("server-a"));
+        assert!(catalog.admission_scopes().contains_key("server-a"));
 
         service.register_scope("server-a".to_owned(), vec![Arc::new(EchoTool)]);
         assert!(
@@ -564,8 +627,8 @@ mod catalog_tests {
 
         catalog.set_active_mcp_servers(["docs", "unknown", " "]);
         assert!(catalog.specs().iter().any(|s| s.name == "mcp_echo"));
-        assert!(catalog.admission_scopes().contains("mcp:docs"));
-        assert!(!catalog.admission_scopes().contains("mcp:unknown"));
+        assert!(catalog.admission_scopes().contains_key("mcp:docs"));
+        assert!(!catalog.admission_scopes().contains_key("mcp:unknown"));
     }
 
     #[test]
@@ -601,9 +664,10 @@ mod catalog_tests {
         assert!(absent.get("mcp_echo").is_none());
         assert!(absent.get("read").is_some());
 
-        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeMap::from([(
             "server-a".to_owned(),
-        ]));
+            0,
+        )]));
         assert!(
             catalog
                 .snapshot_for_scopes(&admitted)
@@ -616,9 +680,10 @@ mod catalog_tests {
     fn unrelated_scope_registered_later_is_not_in_admitted_snapshot() {
         let catalog = ToolCatalog::with_cwd("/tmp");
         catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
-        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeMap::from([(
             "server-a".to_owned(),
-        ]));
+            0,
+        )]));
         let before = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
 
         catalog.register_scope("server-b", vec![Arc::new(EchoTool)]);
@@ -631,9 +696,10 @@ mod catalog_tests {
     fn admitted_scope_refreshes_to_a_new_generation() {
         let catalog = ToolCatalog::with_cwd("/tmp");
         catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
-        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeSet::from([
+        let admitted = crate::session::lane::ScopeGrant::from_published(BTreeMap::from([(
             "server-a".to_owned(),
-        ]));
+            0,
+        )]));
         let first = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
         catalog.register_scope("server-a", vec![Arc::new(EchoTool)]);
         let second = catalog.snapshot_for_scopes(&admitted).capability_snapshot();
@@ -709,6 +775,173 @@ mod catalog_tests {
         assert!(
             matches!(error, ToolCatalogError::TaskFailed(message) if message.contains("shutdown deadline"))
         );
+    }
+
+    #[tokio::test]
+    async fn peer_removal_and_readd_do_not_resurrect_dormant_lane_grants() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::SessionStore::open_in_memory().unwrap();
+        let catalog = ToolCatalog::with_cwd(root.path());
+        let desired = BTreeMap::from([("ext:echo".to_owned(), "definition-a".to_owned())]);
+        let update = catalog.configuration().try_update().unwrap();
+        catalog
+            .reconcile_peer_authority(&store, desired.clone(), &update)
+            .await
+            .unwrap();
+        catalog.register_scope("ext:echo", vec![Arc::new(EchoTool)]);
+        update.finish();
+        let runtime = crate::Runtime::start_with_store(
+            crate::ScriptedProvider::echo(),
+            catalog.clone(),
+            store.clone(),
+        );
+        let session = runtime.session();
+        let id = runtime.session_id();
+        session.create_lane("sibling").await.unwrap();
+        session.close().await.unwrap();
+        runtime.join().await.unwrap();
+        let original = store.load(id).await.unwrap();
+        assert!(original.lanes.iter().all(|lane| {
+            catalog
+                .snapshot_for_scopes(&lane.config.scopes)
+                .get("mcp_echo")
+                .is_some()
+        }));
+        let update = catalog.configuration().try_update().unwrap();
+        catalog
+            .reconcile_peer_authority(&store, BTreeMap::new(), &update)
+            .await
+            .unwrap();
+        assert!(catalog.snapshot().get("mcp_echo").is_none());
+        update.finish();
+        // Reopen the host after removal; the tombstone survives reconfiguration.
+        let reopened_catalog = ToolCatalog::with_cwd(root.path());
+        let update = reopened_catalog.configuration().try_update().unwrap();
+        reopened_catalog
+            .reconcile_peer_authority(&store, desired, &update)
+            .await
+            .unwrap();
+        reopened_catalog.register_scope("ext:echo", vec![Arc::new(EchoTool)]);
+        update.finish();
+        let dormant = store.load(id).await.unwrap();
+        assert!(dormant.lanes.iter().all(|lane| {
+            reopened_catalog
+                .snapshot_for_scopes(&lane.config.scopes)
+                .get("mcp_echo")
+                .is_none()
+        }));
+        // Restrict a dormant main lane, then explicitly adopt new authority.
+        let mut main = dormant
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "main")
+            .unwrap()
+            .config
+            .clone();
+        main.tools = ToolSelection::Only(BTreeSet::from(["read".to_owned()]));
+        store
+            .set_lane_config(id, "main", main.clone())
+            .await
+            .unwrap();
+        let runtime = crate::Runtime::open_session(
+            crate::ScriptedProvider::echo(),
+            reopened_catalog.clone(),
+            store.clone(),
+            id,
+        )
+        .await
+        .unwrap();
+        runtime
+            .session()
+            .admit_structural_scope("ext:echo")
+            .await
+            .unwrap();
+        let loaded = store.load(id).await.unwrap();
+        let adopted = &loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "main")
+            .unwrap()
+            .config;
+        assert_eq!(adopted.tools, main.tools);
+        assert!(
+            reopened_catalog
+                .snapshot_for_scopes(&adopted.scopes)
+                .get("mcp_echo")
+                .is_some()
+        );
+        assert!(
+            reopened_catalog
+                .snapshot_for_scopes(&adopted.scopes)
+                .selected(&adopted.tools)
+                .get("mcp_echo")
+                .is_none()
+        );
+        let sibling = &loaded
+            .lanes
+            .iter()
+            .find(|lane| lane.name == "sibling")
+            .unwrap()
+            .config;
+        assert!(
+            reopened_catalog
+                .snapshot_for_scopes(&sibling.scopes)
+                .get("mcp_echo")
+                .is_none()
+        );
+        runtime.session().close().await.unwrap();
+        runtime.join().await.unwrap();
+        catalog.close().await.unwrap();
+        reopened_catalog.close().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_authority_write_keeps_the_previous_revision_and_configuration() {
+        let root = tempfile::tempdir().unwrap();
+        let store = crate::SessionStore::open_in_memory().unwrap();
+        let catalog = ToolCatalog::with_cwd(root.path());
+        let desired = BTreeMap::from([("ext:echo".to_owned(), "a".to_owned())]);
+        let update = catalog.configuration().try_update().unwrap();
+        catalog
+            .reconcile_peer_authority(&store, desired, &update)
+            .await
+            .unwrap();
+        catalog.register_scope("ext:echo", vec![Arc::new(EchoTool)]);
+        update.finish();
+        let grant = crate::session::lane::ScopeGrant::from_published(catalog.admission_scopes());
+        let update = catalog.configuration().try_update().unwrap();
+        store.fail_next_write();
+        assert!(
+            catalog
+                .reconcile_peer_authority(&store, BTreeMap::new(), &update)
+                .await
+                .is_err()
+        );
+        update.unchanged();
+        assert!(catalog.configuration().try_enter().is_ok());
+        assert!(
+            catalog
+                .snapshot_for_scopes(&grant)
+                .get("mcp_echo")
+                .is_some()
+        );
+        let update = catalog.configuration().try_update().unwrap();
+        catalog
+            .reconcile_peer_authority(
+                &store,
+                BTreeMap::from([("ext:echo".to_owned(), "replacement".to_owned())]),
+                &update,
+            )
+            .await
+            .unwrap();
+        update.finish();
+        assert!(
+            catalog
+                .snapshot_for_scopes(&grant)
+                .get("mcp_echo")
+                .is_none()
+        );
+        catalog.close().await.unwrap();
     }
 
     #[tokio::test]

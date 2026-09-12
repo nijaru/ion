@@ -2,15 +2,16 @@
 //!
 //! Preparation is read-only. Application is ordered and can partially apply
 //! if a runtime command fails; only a completely applied candidate is reported
-//! as successful. Peer removal changes availability, not durable authority.
+//! as successful. Durable authority changes precede peer replacement.
 
 use super::{KeyMap, Theme, UiState, notice};
 use crate::settings::Settings;
 use ion_core::{ExtensionDef, ServerDef, SessionHandle, TrustedResource};
-use std::collections::HashSet;
+use std::collections::BTreeMap;
 use std::path::Path;
 
 pub(super) struct ReloadHost<'a> {
+    pub store: Option<&'a ion_core::SessionStore>,
     pub catalog: Option<&'a ion_core::ToolCatalog>,
     pub mcp_service: Option<&'a std::sync::Arc<ion_core::McpService>>,
     pub extension_service: Option<&'a ion_core::ExtensionService>,
@@ -25,6 +26,7 @@ struct Candidate {
     resources: Vec<TrustedResource>,
     extensions: Vec<ExtensionDef>,
     mcp: Vec<ServerDef>,
+    authority: BTreeMap<String, String>,
 }
 
 impl Candidate {
@@ -43,12 +45,11 @@ impl Candidate {
             .cloned()
             .map(Into::into)
             .collect();
-        validate_peers(
-            extensions
-                .iter()
-                .map(|def| (&def.name, &def.command, &def.args)),
+        let authority = crate::settings::peer_authority_definitions(
+            &mcp,
+            &extensions,
+            &settings.active_mcp_servers,
         )?;
-        validate_peers(mcp.iter().map(|def| (&def.name, &def.command, &def.args)))?;
         Ok(Self {
             settings,
             keymap,
@@ -57,6 +58,7 @@ impl Candidate {
             resources,
             extensions,
             mcp,
+            authority,
         })
     }
 
@@ -74,27 +76,6 @@ impl Candidate {
         }
         Ok(())
     }
-}
-
-fn validate_peers<'a>(
-    defs: impl Iterator<Item = (&'a String, &'a String, &'a Vec<String>)>,
-) -> Result<(), String> {
-    let mut names = HashSet::new();
-    for (name, command, args) in defs {
-        if name.trim().is_empty() || command.trim().is_empty() {
-            return Err("peer names and commands must not be empty".to_owned());
-        }
-        if !names.insert(name) {
-            return Err(format!("duplicate peer name {name}"));
-        }
-        if name.contains('\0')
-            || command.contains('\0')
-            || args.iter().any(|arg| arg.contains('\0'))
-        {
-            return Err(format!("peer {name} contains a NUL byte"));
-        }
-    }
-    Ok(())
 }
 
 pub(super) async fn reload_config(
@@ -148,13 +129,13 @@ pub(super) async fn reload_config(
     notice(
         state,
         &format!(
-            "reloaded keybindings, theme, catalog and {count} trusted resources; peer supervisors: {started} started, {stopped} stopped (connection readiness is separate); MCP active selection remains launch-configured"
+            "reloaded keybindings, theme, catalog and {count} trusted resources; peer supervisors: {started} started, {stopped} stopped (connection readiness is separate); peer authority updated"
         ),
     );
     if stopped > 0 {
         notice(
             state,
-            "stopped peer availability; existing lane scope grants are retained",
+            "removed or replaced peer grants were revoked; existing lanes need explicit admission for new authority",
         );
     }
 }
@@ -164,6 +145,29 @@ async fn apply_runtime(
     candidate: &Candidate,
     host: &ReloadHost<'_>,
 ) -> Result<(usize, usize), String> {
+    let mut update = None;
+    if let Some(catalog) = host.catalog {
+        // Resolve the ledger before taking the write guard so a host that
+        // cannot reconcile authority is never fenced by a rejected reload.
+        let store = host
+            .store
+            .ok_or_else(|| "host configuration ledger unavailable".to_owned())?;
+        let guard = catalog
+            .configuration()
+            .try_update()
+            .map_err(|err| err.to_string())?;
+        if let Err(err) = catalog
+            .reconcile_peer_authority(store, candidate.authority.clone(), &guard)
+            .await
+        {
+            // The transaction failed before any host effect or authority
+            // change. Keep a previously healthy configuration usable.
+            guard.unchanged();
+            return Err(format!("authority unchanged: {err}"));
+        }
+        catalog.set_active_mcp_servers(&candidate.settings.active_mcp_servers);
+        update = Some(guard);
+    }
     session
         .set_trusted_resources(candidate.resources.clone())
         .await
@@ -171,27 +175,32 @@ async fn apply_runtime(
     let mut counts = (0, 0);
     if let Some(catalog) = host.catalog {
         if let Some(service) = host.extension_service {
-            let (started, stopped) = service.ensure(&candidate.extensions, catalog).await;
+            let (started, stopped) = service
+                .ensure(&candidate.extensions, catalog)
+                .await
+                .map_err(|err| format!("extensions: {err}"))?;
             counts.0 += started;
             counts.1 += stopped;
-            for def in &candidate.extensions {
-                session
-                    .admit_structural_scope(format!("ext:{}", def.name))
-                    .await
-                    .map_err(|err| format!("admit ext:{}: {err}", def.name))?;
-            }
         }
         if let Some(service) = host.mcp_service {
-            let (started, stopped) = service.ensure(&candidate.mcp, catalog).await;
+            let (started, stopped) = service
+                .ensure(&candidate.mcp, catalog)
+                .await
+                .map_err(|err| format!("MCP: {err}"))?;
             counts.0 += started;
             counts.1 += stopped;
-            for def in &candidate.mcp {
-                session
-                    .admit_structural_scope(format!("mcp:{}", def.name))
-                    .await
-                    .map_err(|err| format!("admit mcp:{}: {err}", def.name))?;
-            }
         }
+        // /reload explicitly adopts the chosen peers for the active main lane.
+        // Other lanes keep their revisioned grants and tool-name restrictions.
+        for scope in candidate.authority.keys() {
+            session
+                .admit_structural_scope(scope.clone())
+                .await
+                .map_err(|err| format!("admit {scope}: {err}"))?;
+        }
+    }
+    if let Some(update) = update {
+        update.finish();
     }
     Ok(counts)
 }
@@ -210,13 +219,14 @@ mod tests {
         let runtime = ion_core::Runtime::start_with_policy(
             ion_core::ScriptedProvider::new(vec![]),
             catalog.clone(),
-            store,
+            store.clone(),
             std::sync::Arc::new(ion_core::AllowlistPolicy::new(Vec::<String>::new())),
         );
         let session = runtime.session();
         session.close().await.expect("close");
         runtime.join().await.expect("join");
         let host = ReloadHost {
+            store: Some(&store),
             catalog: Some(&catalog),
             mcp_service: None,
             extension_service: None,
@@ -228,6 +238,12 @@ mod tests {
                 .expect_err("closed runtime")
                 .starts_with("context:")
         );
+        // A partially applied reload leaves the host fenced closed until a
+        // successful reconciliation reports it (DESIGN.md §19).
+        assert!(matches!(
+            catalog.configuration().try_enter(),
+            Err(ion_core::CommandError::ConfigurationFailed)
+        ));
         catalog.close().await.expect("catalog close");
     }
 
@@ -269,6 +285,7 @@ mod tests {
         });
         let catalog = ion_core::ToolCatalog::with_cwd(root.path());
         let host = ReloadHost {
+            store: None,
             catalog: Some(&catalog),
             mcp_service: None,
             extension_service: None,
