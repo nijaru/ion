@@ -8,11 +8,7 @@ fn conversation() -> ConversationId {
     ConversationId::new(1).expect("conversation id")
 }
 
-fn entry(
-    id: i64,
-    projection: Vec<Message>,
-    context: ContextControl,
-) -> Entry {
+fn entry(id: i64, projection: Vec<Message>, context: ContextControl) -> Entry {
     Entry::new(
         EntryId::new(id).expect("entry id"),
         conversation(),
@@ -33,13 +29,21 @@ fn text(role: Role, value: &str) -> Message {
 
 #[test]
 fn immutable_head_and_edit_projection_preserves_history() {
-    let first = entry(1, vec![text(Role::User, "old question")], ContextControl::none());
+    let first = entry(
+        1,
+        vec![text(Role::User, "old question")],
+        ContextControl::none(),
+    );
     let second = entry(
         2,
         vec![text(Role::Assistant, "old answer")],
         ContextControl::none(),
     );
-    let retained = entry(3, vec![text(Role::User, "new question")], ContextControl::none());
+    let retained = entry(
+        3,
+        vec![text(Role::User, "new question")],
+        ContextControl::none(),
+    );
     let answer = entry(
         4,
         vec![text(Role::Assistant, "new answer")],
@@ -60,7 +64,10 @@ fn immutable_head_and_edit_projection_preserves_history() {
 
     let projected = project(&history).expect("project context");
 
-    assert_eq!(projected.entry_ids, vec![summary.id, retained.id, EntryId::new(4).unwrap()]);
+    assert_eq!(
+        projected.entry_ids,
+        vec![summary.id, retained.id, EntryId::new(4).unwrap()]
+    );
     assert_eq!(
         projected.messages,
         vec![
