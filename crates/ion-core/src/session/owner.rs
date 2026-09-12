@@ -145,8 +145,8 @@ impl Session {
         input_id: InputId,
         disposition: InputDisposition,
     ) -> Result<CommitSeq, SessionError> {
-        let (_, commit_seq) = self
-            .transact(|transaction| transaction.set_input_disposition(input_id, disposition))?;
+        let (_, commit_seq) =
+            self.transact(|transaction| transaction.set_input_disposition(input_id, disposition))?;
         Ok(commit_seq)
     }
 
@@ -190,9 +190,7 @@ impl Session {
         if task.cancel_requested || matches!(task.status, TaskStatus::Terminal(_)) {
             return Ok(CancellationReceipt {
                 changed: false,
-                commit_seq: state
-                    .last_commit
-                    .expect("initialized session has a commit"),
+                commit_seq: state.last_commit.expect("initialized session has a commit"),
             });
         }
 
