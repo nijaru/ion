@@ -40,6 +40,7 @@ impl Entry {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
 pub struct EntryKind(String);
 
 impl EntryKind {
@@ -54,6 +55,20 @@ impl EntryKind {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+}
+
+impl TryFrom<String> for EntryKind {
+    type Error = EntryKindError;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::new(value)
+    }
+}
+
+impl From<EntryKind> for String {
+    fn from(value: EntryKind) -> Self {
+        value.0
     }
 }
 
