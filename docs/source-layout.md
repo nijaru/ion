@@ -52,6 +52,7 @@ crates/ion-core/
       kind.rs
       context.rs
       registry.rs
+      typed.rs
       # phase.rs only if a typed authoring helper proves useful
 
     session/
@@ -139,7 +140,8 @@ Owns the generic durable work contract:
 - `TaskKind` async execute/recover/abort contract;
 - invocation-scoped `TaskContext` and restricted `AbortContext`;
 - output/scratch contract;
-- task-kind registry.
+- task-kind registry;
+- optional typed authoring adapter (`task/typed.rs`): `TypedHandler` erases into the same registry entry shape and the same scheduler/lifecycle. Decode failure is a terminal `Failed` only for never-dispatched work; for an already-dispatched task it interrupts and stays recoverable, and a result that cannot be encoded interrupts rather than terminalizing.
 
 It does **not** own session scheduling or persistence. A task kind describes one recoverable operation; the session driver decides when an eligible task is invoked.
 

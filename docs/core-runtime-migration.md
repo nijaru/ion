@@ -257,10 +257,12 @@ Implemented:
 
 Still open:
 
-- typed task authoring adapter over the erased registry;
 - planned owned-conversation creation and scratch retirement (K6);
+- plan data bindings (originating entry, dependency outcomes, frozen context cutoff) and enforced plan bounds (K5);
 - input admission/queued-follow-up/idle scheduling policy on the foreground slot (K5);
 - writable ownership release after local joins (K4 SQLite).
+
+The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
 

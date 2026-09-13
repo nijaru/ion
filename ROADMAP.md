@@ -110,10 +110,11 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- typed task authoring adapter over the erased registry (task authors still handle `serde_json::Value`);
 - input admission, queued follow-ups and idle scheduling on the foreground-turn slot (K5);
-
+- plan data bindings (originating entry, dependency outcomes, frozen context cutoff) and enforced plan bounds (K5);
 - writable ownership release after local joins (K4).
+
+The typed authoring adapter is implemented in `task/typed.rs`: `TaskRegistry::register_typed` erases a `TypedHandler` into the ordinary registry entry shape, input/checkpoint decode and result encode go through the durable JSON shapes, and terminal/failed/aborted/indeterminate stay distinct. An undecodable checkpoint or un-encodable result interrupts an already-dispatched task instead of terminalizing it; only never-dispatched work settles a structured `Failed`.
 
 The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch, cancellation during saturated capacity admission, and interruption/uncertainty handling are covered by outcome-sensitive tests in `k3_abort.rs` and `k3_driver.rs`: exactly one Abort invocation, no normal execution, separate bounded cleanup admission, interrupted invocations that stay running and recoverable, known-failure versus indeterminate settlements, and blocked recovery for a running task whose implementation is unavailable. Persisted reopen coverage remains open.
 

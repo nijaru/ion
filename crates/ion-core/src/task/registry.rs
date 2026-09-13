@@ -33,6 +33,17 @@ impl TaskRegistry {
         Ok(())
     }
 
+    /// Register a typed handler. It erases into the same registry entry shape
+    /// as [`Self::register`]; there is no parallel scheduling path.
+    pub fn register_typed<H: super::TypedHandler>(
+        &mut self,
+        kind: TaskKindName,
+        schema_version: u32,
+        handler: Arc<H>,
+    ) -> Result<(), TaskRegistryError> {
+        self.register(kind, schema_version, super::erase_typed(handler))
+    }
+
     pub(crate) fn get(
         &self,
         kind: &TaskKindName,

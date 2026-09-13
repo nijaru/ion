@@ -5,6 +5,7 @@ mod output;
 mod plan;
 mod record;
 mod registry;
+mod typed;
 
 pub use context::{AbortContext, TaskContext, TaskContextError};
 pub(crate) use context::{ContextFuture, TaskRuntime};
@@ -16,3 +17,8 @@ pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,
 };
 pub use registry::{TaskRegistry, TaskRegistryError};
+pub(crate) use typed::erase as erase_typed;
+pub use typed::{
+    TypedAbortContext, TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport,
+    TypedTask,
+};

@@ -31,6 +31,8 @@ pub use task::{
     RunningTask, TaskCompletion, TaskContext, TaskContextError, TaskDependency, TaskFuture,
     TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
     TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus,
+    TypedAbortContext, TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport,
+    TypedTask,
 };
 pub use view::{
     Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
