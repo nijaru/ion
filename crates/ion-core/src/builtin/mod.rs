@@ -7,10 +7,12 @@
 mod generation;
 mod post_tools;
 mod tool;
+mod worker;
 
 pub use generation::GenerationKind;
 pub use post_tools::PostToolsKind;
 pub use tool::{Tool, ToolCatalog, ToolCatalogError, ToolError, ToolFuture, ToolKind};
+pub use worker::{WorkerKind, WorkerSeed, WorkerSpec};
 
 use std::sync::Arc;
 
@@ -20,12 +22,15 @@ use crate::{TaskKindName, TaskRegistry, TaskRegistryError};
 pub const GENERATION: &str = "generation";
 pub const TOOL: &str = "tool";
 pub const POST_TOOLS: &str = "post_tools";
+pub const WORKER: &str = "worker";
 
 /// Entry kinds these built-ins append. The transcript is append-only; these
 /// kinds describe the origin of each entry, not its provider wire shape.
 pub const USER_ENTRY: &str = "user";
 pub const ASSISTANT_ENTRY: &str = "assistant";
 pub const TOOL_RESULT_ENTRY: &str = "tool_result";
+/// The seeded instruction of a spawned worker conversation.
+pub const BRIEF_ENTRY: &str = "brief";
 
 /// Schema revision of every built-in kind.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -58,6 +63,11 @@ impl Builtins {
             task_kind(POST_TOOLS),
             SCHEMA_VERSION,
             Arc::new(PostToolsKind),
+        )?;
+        registry.register(
+            task_kind(WORKER),
+            SCHEMA_VERSION,
+            Arc::new(WorkerKind::new(task_kind(GENERATION), SCHEMA_VERSION)),
         )
     }
 }

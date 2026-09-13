@@ -319,6 +319,30 @@ impl Session {
             .collect()
     }
 
+    /// One conversation record, without materializing the rest of the session.
+    #[must_use]
+    pub fn conversation_record(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Option<crate::Conversation> {
+        self.state
+            .conversations
+            .get(&conversation_id)
+            .map(|conversation| **conversation)
+    }
+
+    /// The conversations `task_id` owns, in creation order.
+    ///
+    /// This is how a client finds the worker a spawn created: planned
+    /// conversation IDs only exist after the commit that created them.
+    #[must_use]
+    pub fn owned_conversations(&self, task_id: TaskId) -> Option<Vec<ConversationId>> {
+        self.state
+            .tasks
+            .get(&task_id)
+            .map(|task| task.owned_conversations.clone())
+    }
+
     /// Bounded overview: counts only, no transcript or task payloads.
     #[must_use]
     pub fn summary(&self) -> SessionSummary {

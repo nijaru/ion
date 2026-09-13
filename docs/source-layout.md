@@ -233,6 +233,8 @@ Initial K5 built-ins:
 - tool execution wrapper;
 - post-tools/join continuation.
 
+K6 adds `worker.rs`: the trusted adapter that spawns a retained worker conversation. Like the others it is an ordinary registered kind, and it reaches no session state the ordinary plan path does not.
+
 The generic scheduler must not branch on these names. If a built-in needs specialized behavior, it uses the same task capabilities available to an appropriate registered kind.
 
 Implemented as `builtin::{generation, tool, post_tools}`. `Builtins` registers all three under canonical names over one `ion_ai::ModelService` and one `ToolCatalog`; a client composes them like any other kind. `tool.rs` also owns the `Tool`/`ToolCatalog` seam that tool execution receives through.

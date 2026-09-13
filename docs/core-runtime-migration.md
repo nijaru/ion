@@ -370,7 +370,15 @@ Still open for this slice:
 
 `TaskPlan` can create owned conversations: `create_conversation` returns a plan-local handle, planned entries and successors may target it, and the conversation is created first, owned by the settling task with the reciprocal edge, in the same commit as the outcome. Context seed is explicit (`PlannedConversation::fresh` or `inherited` at a stable cutoff validated like any fork), and the plan bounds cover conversations as well as entries, inputs and tasks. `tests/k6_workers.rs` covers fresh and inherited workers, ownership reciprocity, seeding a worker with a brief and a retained task, reopen, a foreign plan handle, an invisible cutoff and the conversation bound.
 
-Still open for this slice: the worker control surface (run/spawn/send/inspect/wait/interrupt/retire as commands rather than test kinds), reuse of a retained worker, nested ownership limits, and retiring worker history.
+The production entry point is `builtin::worker`: a `worker` task's immutable input is a `WorkerSpec` (a brief and an optional inherited seed), and its settlement plans the owned conversation, the brief as a transcript entry with a user projection, and the worker's initial generation as a background task. The brief is an entry rather than an admitted input, so there is no admission receipt to replay and no input to consume; `DESIGN.md` §11 already allows a task with no assigned input to read its transcript. Reads are bounded: `TaskDriver::{conversation, owned_conversations}` look up one conversation record and a task's owned list without materializing the session.
+
+Still open for this slice, in the order they block each other:
+
+- **joined runs.** A joined worker needs a dependency carrying its *final* result back to the creator. Settling the worker's initial generation is not that barrier: a generation settles as soon as it has planned its tool children and the continuation.
+- **worker-local turn scope.** A worker conversation currently holds no foreground turn, so its work is background: it survives creator cancellation (correct for retained) but a follow-up admitted to a running worker could start a second generation beside the first.
+- the command surface for send/follow-up, inspect and wait as first-class operations rather than composed primitives;
+- interruption scoped to one worker run, which today is either one task or the creator's whole turn;
+- reuse of a retained worker, nested ownership limits, and retirement.
 
 Create owned conversations through the same writer:
 

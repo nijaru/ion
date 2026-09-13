@@ -185,6 +185,26 @@ impl TaskDriver {
         self.session.lock().await.task_record(task_id)
     }
 
+    /// Look up one conversation record without materializing the transcript or
+    /// the session.
+    pub async fn conversation(
+        &self,
+        conversation_id: crate::ConversationId,
+    ) -> Option<crate::Conversation> {
+        self.session
+            .lock()
+            .await
+            .conversation_record(conversation_id)
+    }
+
+    /// The conversations a task owns, in creation order.
+    ///
+    /// A spawn task's worker conversation gets a real ID only when its plan
+    /// commits, so this is how a client reads back what it created.
+    pub async fn owned_conversations(&self, task_id: TaskId) -> Option<Vec<crate::ConversationId>> {
+        self.session.lock().await.owned_conversations(task_id)
+    }
+
     /// Read one bounded page of a conversation's fork-visible transcript.
     pub async fn conversation_entries(
         &self,

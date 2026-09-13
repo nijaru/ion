@@ -448,3 +448,410 @@ async fn a_worker_conversation_and_its_task_survive_reopen() {
         1
     );
 }
+
+mod spawn {
+    //! Production retained spawn over the real built-in kinds.
+
+    use std::sync::Arc;
+
+    use ion_ai::{
+        Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ResponseTermination, Role,
+        Script, ScriptedModelService, Usage,
+    };
+    use ion_core::builtin::{BRIEF_ENTRY, Builtins, ToolCatalog, WORKER};
+    use ion_core::conversation::context::ContextControl;
+    use ion_core::{
+        ConversationId, DriveOutcome, EntryKind, TaskCompletion, TaskDriver, TaskFuture, TaskId,
+        TaskKind, TaskKindName, TaskRegistry, TaskRequest, TaskRunError, TaskStatus,
+    };
+    use serde_json::json;
+
+    use crate::support::TempDb;
+
+    fn kind(name: &str) -> TaskKindName {
+        TaskKindName::new(name).expect("task kind")
+    }
+
+    fn assistant_text(text: &str) -> Message {
+        Message {
+            role: Role::Assistant,
+            content: vec![Content::Text(text.to_owned())],
+            provider_replay: None,
+        }
+    }
+
+    fn completed(message: Message) -> ModelStreamEvent {
+        ModelStreamEvent::Completed(ModelResponse {
+            message,
+            usage: Usage::known(1, 1),
+            termination: ResponseTermination::Completed,
+        })
+    }
+
+    fn builtins(
+        scripts: impl IntoIterator<Item = Script>,
+    ) -> (TaskRegistry, Arc<ScriptedModelService>) {
+        let service = Arc::new(ScriptedModelService::new(scripts));
+        let mut registry = TaskRegistry::new();
+        Builtins {
+            model: ModelRef {
+                provider: "test".to_owned(),
+                model: "scripted".to_owned(),
+            },
+            service: service.clone(),
+            tools: Arc::new(ToolCatalog::new()),
+        }
+        .register(&mut registry)
+        .expect("register built-ins");
+        (registry, service)
+    }
+
+    /// A plain user entry carrying a model-visible projection.
+    fn user_entry(conversation: ConversationId, text: &str) -> ion_core::EntryRequest {
+        ion_core::EntryRequest {
+            conversation_id: conversation,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: json!({"text": text}),
+            projection: vec![Message {
+                role: Role::User,
+                content: vec![Content::Text(text.to_owned())],
+                provider_replay: None,
+            }],
+            context: ContextControl::none(),
+        }
+    }
+
+    fn spawn_request(conversation: ConversationId, input: serde_json::Value) -> TaskRequest {
+        TaskRequest {
+            conversation_id: conversation,
+            kind: kind(WORKER),
+            schema_version: 1,
+            input,
+            dependencies: Vec::new(),
+        }
+    }
+
+    /// The worker's initial generation, found by its conversation.
+    async fn worker_task(driver: &TaskDriver, worker: ConversationId) -> TaskId {
+        driver
+            .snapshot()
+            .await
+            .tasks
+            .iter()
+            .find(|task| task.conversation_id == worker)
+            .map(|task| task.id)
+            .expect("the worker's initial task")
+    }
+
+    #[tokio::test]
+    async fn a_spawned_worker_runs_its_brief_as_a_generation() {
+        let (registry, service) = builtins([Script::Stream(vec![completed(assistant_text(
+            "worker answer",
+        ))])]);
+        let mut session = ion_core::Session::new().expect("session");
+        let root = session.root_conversation();
+        let spawn = session
+            .create_task(spawn_request(root, json!({"brief": "do the thing"})))
+            .expect("spawn task");
+        let driver = TaskDriver::new(session, registry);
+
+        let DriveOutcome::Settled(settlement) =
+            driver.drive_task(spawn.task_id).await.expect("spawn")
+        else {
+            panic!("the spawn must settle");
+        };
+        assert_eq!(settlement.outcome.value["retained"], json!(true));
+
+        // The worker is discoverable only from the durable ownership edge.
+        let worker = driver
+            .owned_conversations(spawn.task_id)
+            .await
+            .expect("spawn task")
+            .pop()
+            .expect("one owned worker");
+        let conversation = driver.conversation(worker).await.expect("worker record");
+        assert_eq!(conversation.owner_task, Some(spawn.task_id));
+        assert_eq!(conversation.parent, None);
+        assert_eq!(
+            conversation.foreground_turn, None,
+            "retained work holds no slot"
+        );
+
+        // Its generation runs on the seeded brief, as ordinary work.
+        let generation = worker_task(&driver, worker).await;
+        let record = tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            driver.wait_task(generation),
+        )
+        .await
+        .expect("the worker's generation must not stall")
+        .expect("wait");
+        assert!(matches!(record.status, TaskStatus::Terminal(_)));
+
+        // The model saw exactly the brief, and the worker's transcript holds it.
+        let requests = service.requests();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].messages, vec![user_message("do the thing")]);
+        let page = driver
+            .conversation_entries(worker, None, 8)
+            .await
+            .expect("worker transcript");
+        let kinds: Vec<&str> = page
+            .entries
+            .iter()
+            .map(|entry| entry.kind.as_str())
+            .collect();
+        assert_eq!(kinds, vec![BRIEF_ENTRY, "assistant"]);
+        assert_eq!(
+            page.entries[0].data["spawned_by"],
+            json!(spawn.task_id.get())
+        );
+        // The creator's conversation is untouched and idle again.
+        assert!(
+            driver
+                .conversation_entries(root, None, 8)
+                .await
+                .expect("root transcript")
+                .entries
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn an_inherited_worker_starts_from_its_cutoff_not_the_latest_history() {
+        let (registry, service) = builtins([Script::Stream(vec![completed(assistant_text(
+            "worker answer",
+        ))])]);
+        let mut session = ion_core::Session::new().expect("session");
+        let root = session.root_conversation();
+        let cutoff = session
+            .append_entry(user_entry(root, "inherited"))
+            .expect("entry")
+            .entry_id;
+        session
+            .append_entry(user_entry(root, "later history"))
+            .expect("entry");
+        let spawn = session
+            .create_task(spawn_request(
+                root,
+                json!({
+                    "brief": "do the thing",
+                    "seed": {
+                        "kind": "inherited",
+                        "conversation": root.get(),
+                        "at": cutoff.get(),
+                    },
+                }),
+            ))
+            .expect("spawn task");
+        let driver = TaskDriver::new(session, registry);
+        assert!(matches!(
+            driver.drive_task(spawn.task_id).await.expect("spawn"),
+            DriveOutcome::Settled(_)
+        ));
+
+        let worker = driver
+            .owned_conversations(spawn.task_id)
+            .await
+            .expect("spawn task")
+            .pop()
+            .expect("one owned worker");
+        let generation = worker_task(&driver, worker).await;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(10),
+            driver.wait_task(generation),
+        )
+        .await
+        .expect("the worker's generation must not stall")
+        .expect("wait");
+
+        // The worker sees the cutoff prefix plus its own brief; the parent's
+        // later entry is not part of its context.
+        let requests = service.requests();
+        assert_eq!(
+            requests[0].messages,
+            vec![user_message("inherited"), user_message("do the thing")],
+            "the worker must start from the stable cutoff"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_spawn_creates_no_worker() {
+        let (registry, _service) = builtins([] as [Script; 0]);
+        let mut session = ion_core::Session::new().expect("session");
+        let root = session.root_conversation();
+        let spawn = session
+            .create_task(spawn_request(root, json!({"brief": "do the thing"})))
+            .expect("spawn task");
+        let driver = TaskDriver::new(session, registry);
+        let before = driver.snapshot().await;
+
+        driver.cancel_task(spawn.task_id).await.expect("cancel");
+        let DriveOutcome::Settled(settlement) = driver
+            .drive_task(spawn.task_id)
+            .await
+            .expect("abort cleanup")
+        else {
+            panic!("cleanup must settle");
+        };
+        assert_eq!(settlement.outcome.kind, ion_core::TaskOutcomeKind::Aborted);
+
+        // Cleanup plans nothing, so no conversation, brief or task appeared.
+        let after = driver.snapshot().await;
+        assert_eq!(after.conversations, before.conversations);
+        assert!(after.entries.is_empty());
+        assert_eq!(after.tasks.len(), 1);
+    }
+
+    /// Interrupts its first invocation and spawns the worker only on recovery,
+    /// standing in for a crash between dispatch and settlement.
+    struct CrashOnce;
+
+    impl TaskKind for CrashOnce {
+        fn execute<'a>(
+            &'a self,
+            _task: ion_core::RunningTask,
+            _context: ion_core::TaskContext,
+        ) -> TaskFuture<'a> {
+            Box::pin(async { Err(TaskRunError::new("process died before settling")) })
+        }
+
+        fn recover<'a>(
+            &'a self,
+            _task: ion_core::RunningTask,
+            _context: ion_core::TaskContext,
+        ) -> TaskFuture<'a> {
+            Box::pin(async move {
+                let mut plan = ion_core::TaskPlan::new();
+                let worker = plan.create_conversation(ion_core::PlannedConversation::fresh());
+                plan.append_entry(ion_core::PlannedEntry {
+                    conversation_id: ion_core::PlannedTarget::planned(worker),
+                    kind: EntryKind::new("brief").expect("entry kind"),
+                    data: json!({"brief": "recovered"}),
+                    projection: Vec::new(),
+                    context: ContextControl::none(),
+                });
+                plan.create_task(ion_core::PlannedTask {
+                    conversation_id: ion_core::PlannedTarget::planned(worker),
+                    kind: kind("worker"),
+                    schema_version: 1,
+                    input: json!({}),
+                    dependencies: Vec::new(),
+                    background: true,
+                });
+                Ok(TaskCompletion::completed(json!("recovered")).with_plan(plan))
+            })
+        }
+
+        fn abort<'a>(
+            &'a self,
+            _task: ion_core::RunningTask,
+            _context: ion_core::AbortContext,
+        ) -> TaskFuture<'a> {
+            Box::pin(async { Ok(TaskCompletion::aborted(json!("aborted"))) })
+        }
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_spawn_leaves_no_worker_and_recovery_creates_exactly_one() {
+        let db = TempDb::new("k6-recover");
+        let mut session = ion_core::Session::create(db.path()).expect("create");
+        let root = session.root_conversation();
+        fn crash_registry() -> TaskRegistry {
+            let mut registry = TaskRegistry::new();
+            registry
+                .register(kind("crash"), 1, Arc::new(CrashOnce))
+                .expect("register crash");
+            registry
+        }
+
+        let spawn = session
+            .create_task(TaskRequest {
+                conversation_id: root,
+                kind: kind("crash"),
+                schema_version: 1,
+                input: json!({}),
+                dependencies: Vec::new(),
+            })
+            .expect("spawn task");
+        let driver = TaskDriver::new(session, crash_registry());
+        let before = driver.snapshot().await;
+
+        assert!(matches!(
+            driver.drive_task(spawn.task_id).await.expect("drive"),
+            DriveOutcome::Interrupted(_)
+        ));
+        let after = driver.snapshot().await;
+        assert_eq!(
+            after.conversations, before.conversations,
+            "no worker existed"
+        );
+        assert!(after.entries.is_empty());
+        assert_eq!(
+            driver
+                .owned_conversations(spawn.task_id)
+                .await
+                .expect("task"),
+            Vec::<ConversationId>::new()
+        );
+
+        // Reopen, recover once, and the worker exists exactly once.
+        driver.close(ion_core::CloseMode::Fault).await;
+        drop(driver);
+        let reopened = TaskDriver::open(db.path(), crash_registry()).expect("open");
+        assert!(matches!(
+            reopened.drive_task(spawn.task_id).await.expect("recover"),
+            DriveOutcome::Settled(_)
+        ));
+        let owned = reopened
+            .owned_conversations(spawn.task_id)
+            .await
+            .expect("task");
+        assert_eq!(owned.len(), 1, "recovery creates exactly one worker");
+        assert_eq!(
+            reopened
+                .snapshot()
+                .await
+                .tasks
+                .iter()
+                .filter(|task| task.conversation_id == owned[0])
+                .count(),
+            1
+        );
+        assert_eq!(
+            reopened
+                .conversation(owned[0])
+                .await
+                .expect("worker record")
+                .owner_task,
+            Some(spawn.task_id)
+        );
+    }
+
+    #[tokio::test]
+    async fn worker_reads_are_bounded_and_absent_for_unknown_ids() {
+        let (registry, _service) = builtins([] as [Script; 0]);
+        let driver = TaskDriver::new(ion_core::Session::new().expect("session"), registry);
+        let unknown = ConversationId::new(9_999).expect("conversation id");
+        assert!(driver.conversation(unknown).await.is_none());
+        assert!(
+            driver
+                .owned_conversations(TaskId::new(9_999).expect("task id"))
+                .await
+                .is_none()
+        );
+        let root = driver.snapshot().await.root_conversation;
+        assert_eq!(
+            driver.conversation(root).await.expect("root record").id,
+            root
+        );
+    }
+
+    fn user_message(text: &str) -> Message {
+        Message {
+            role: Role::User,
+            content: vec![Content::Text(text.to_owned())],
+            provider_replay: None,
+        }
+    }
+}

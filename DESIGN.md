@@ -332,6 +332,10 @@ retire
 
 The primary conversation is the default synchronizer. Parallelism is bounded and purpose-driven; more agents are not assumed better.
 
+The implemented part of this contract is the **retained spawn**: a trusted built-in adapter creates the worker conversation, its brief and its initial task in one commit with the outcome that created it, seeds the brief as a transcript entry with a user projection (so a worker with no admitted input still reads it as context), and runs the worker's work as background. A crash before that settlement leaves no worker at all, and a recovery drive creates exactly one.
+
+Still open: **joined runs**, which need a dependency that carries the worker's *final* result back to the creator (settling the worker's initial generation is not a barrier, because a generation settles before its tools and continuation finish); **worker-local turn scope**, without which a follow-up admitted to a running worker could start a second generation beside the first; the command surface for send/follow-up, inspect and wait; interruption scoped to one worker run rather than a task or a creator turn; reuse of a retained worker; and retirement.
+
 ## 13. `ion-ai` model/provider boundary
 
 The provider-neutral model contract is a separate small crate, `ion-ai`. `ion-core` may depend on it; `ion-ai` must not depend on session/task/store types.
