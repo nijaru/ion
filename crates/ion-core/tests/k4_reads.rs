@@ -8,9 +8,9 @@ use std::sync::Arc;
 
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    Change, CommitSeq, EntryKind, PlannedEntry, PlannedTask, RunningTask, Session, SessionError,
-    TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan,
-    TaskRegistry, TaskRequest, TaskStatus,
+    Change, CommitSeq, EntryKind, PlannedEntry, PlannedTask, PlannedTurn, RunningTask, Session,
+    SessionError, TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind,
+    TaskKindName, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::json;
 
@@ -41,7 +41,7 @@ impl TaskKind for Author {
                     schema_version: 1,
                     input: json!({}),
                     dependencies: Vec::new(),
-                    background: false,
+                    turn: PlannedTurn::Inherit,
                 });
             }
             Ok(TaskCompletion::completed(json!("authored")).with_plan(plan))

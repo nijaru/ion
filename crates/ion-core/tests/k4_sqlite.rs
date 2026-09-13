@@ -9,9 +9,9 @@ use std::sync::Arc;
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
     CloseMode, ConversationSpec, EntryKind, EntryRequest, InputBody, InputMode, InputRequest,
-    InputSender, PlannedEntry, PlannedTask, RequestKey, RunningTask, Session, SessionError,
-    TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan,
-    TaskRegistry, TaskRequest, TaskStatus,
+    InputSender, PlannedEntry, PlannedTask, PlannedTurn, RequestKey, RunningTask, Session,
+    SessionError, TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind,
+    TaskKindName, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::json;
 
@@ -46,7 +46,7 @@ impl TaskKind for ScopedSuccessor {
                 schema_version: 1,
                 input: json!({"call": "scoped"}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!("dispatched")).with_plan(plan))
         })
@@ -74,7 +74,7 @@ impl TaskKind for BackgroundSuccessor {
                 schema_version: 1,
                 input: json!({"task": "background"}),
                 dependencies: Vec::new(),
-                background: true,
+                turn: PlannedTurn::Background,
             });
             Ok(TaskCompletion::completed(json!("spawned")).with_plan(plan))
         })

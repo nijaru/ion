@@ -11,8 +11,9 @@ use ion_core::conversation::context::ContextControl;
 use ion_core::{
     CloseMode, ConversationId, ConversationSpec, DriveOutcome, EntryKind, HistoryParent,
     PlannedConversation, PlannedConversationRef, PlannedEntry, PlannedTarget, PlannedTask,
-    RunningTask, Session, SessionError, TaskCompletion, TaskContext, TaskDriver, TaskDriverError,
-    TaskFuture, TaskKind, TaskKindName, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
+    PlannedTurn, RunningTask, Session, SessionError, TaskCompletion, TaskContext, TaskDriver,
+    TaskDriverError, TaskFuture, TaskKind, TaskKindName, TaskPlan, TaskRegistry, TaskRequest,
+    TaskStatus,
 };
 use serde_json::json;
 
@@ -55,7 +56,7 @@ impl TaskKind for SpawnWorker {
                         schema_version: 1,
                         input: json!({}),
                         dependencies: Vec::new(),
-                        background: true,
+                        turn: PlannedTurn::Background,
                     });
                     return Ok(TaskCompletion::completed(json!("foreign")).with_plan(plan));
                 }
@@ -73,7 +74,7 @@ impl TaskKind for SpawnWorker {
                 schema_version: 1,
                 input: json!({}),
                 dependencies: Vec::new(),
-                background: true,
+                turn: PlannedTurn::Background,
             });
             Ok(TaskCompletion::completed(json!("spawned")).with_plan(plan))
         })
@@ -737,7 +738,7 @@ mod spawn {
                     schema_version: 1,
                     input: json!({}),
                     dependencies: Vec::new(),
-                    background: true,
+                    turn: ion_core::PlannedTurn::Background,
                 });
                 Ok(TaskCompletion::completed(json!("recovered")).with_plan(plan))
             })

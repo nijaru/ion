@@ -16,9 +16,9 @@ use ion_core::builtin::{Builtins, ToolCatalog};
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
     CloseMode, ConversationId, EntryKind, InputBody, InputDisposition, InputMode, InputRequest,
-    InputSender, PlannedEntry, PlannedTask, RequestKey, RunningTask, Session, SessionError,
-    TaskCompletion, TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskId, TaskKind,
-    TaskKindName, TaskPlan, TaskRecord, TaskRegistry, TurnTemplate,
+    InputSender, PlannedEntry, PlannedTask, PlannedTurn, RequestKey, RunningTask, Session,
+    SessionError, TaskCompletion, TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskId,
+    TaskKind, TaskKindName, TaskPlan, TaskRecord, TaskRegistry, TurnTemplate,
 };
 use serde_json::json;
 
@@ -530,7 +530,7 @@ impl TaskKind for FanTo {
                 schema_version: 1,
                 input: json!({}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             let _ = task;
             Ok(TaskCompletion::completed(json!("fanned out")).with_plan(plan))

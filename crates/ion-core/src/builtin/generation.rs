@@ -23,7 +23,9 @@ use serde_json::{Value, json};
 use super::tool::ToolCatalog;
 use super::{ASSISTANT_ENTRY, POST_TOOLS, SCHEMA_VERSION, TOOL, USER_ENTRY, entry_kind, task_kind};
 use crate::conversation::context::{ContextControl, project};
-use crate::task::{PlannedEntry, PlannedTask, PlannedTaskRef, TaskDependency, TaskPlan};
+use crate::task::{
+    PlannedEntry, PlannedTask, PlannedTaskRef, PlannedTurn, TaskDependency, TaskPlan,
+};
 use crate::{
     AbortContext, Entry, EntryId, InputBody, InputId, ResourceDomain, RunningTask, TaskCompletion,
     TaskContext, TaskFuture, TaskKind, TaskRunError,
@@ -182,7 +184,7 @@ impl TaskKind for GenerationKind {
                             schema_version: SCHEMA_VERSION,
                             input: json!({"call": call}),
                             dependencies: Vec::new(),
-                            background: false,
+                            turn: PlannedTurn::Inherit,
                         })
                     })
                     .collect();
@@ -192,7 +194,7 @@ impl TaskKind for GenerationKind {
                     schema_version: SCHEMA_VERSION,
                     input: json!({}),
                     dependencies: tools.into_iter().map(TaskDependency::Planned).collect(),
-                    background: false,
+                    turn: PlannedTurn::Inherit,
                 });
             }
 

@@ -6,7 +6,10 @@
 //! crash before the settlement therefore leaves no worker, and a recovery drive
 //! creates exactly one.
 //!
-//! This is intentionally only the retained spawn. The brief is seeded as a
+//! The worker's run is an independent turn in its own conversation, so it is
+//! never idle while it works: follow-ups queue behind it and cancelling the
+//! worker's turn stops exactly that run. This is intentionally only the
+//! retained spawn. The brief is seeded as a
 //! transcript entry with a user projection rather than an admitted input, so
 //! there is no admission receipt to replay and no input to consume; DESIGN §11
 //! already allows a task with no assigned input to read its transcript, and
@@ -19,7 +22,9 @@ use serde_json::json;
 
 use super::{BRIEF_ENTRY, entry_kind};
 use crate::conversation::context::ContextControl;
-use crate::task::{PlannedConversation, PlannedEntry, PlannedTarget, PlannedTask, TaskPlan};
+use crate::task::{
+    PlannedConversation, PlannedEntry, PlannedTarget, PlannedTask, PlannedTurn, TaskPlan,
+};
 use crate::{
     AbortContext, ConversationId, EntryId, HistoryParent, ResourceDomain, RunningTask,
     TaskCompletion, TaskContext, TaskFuture, TaskKind, TaskKindName,
@@ -110,16 +115,16 @@ impl TaskKind for WorkerKind {
                 }],
                 context: ContextControl::none(),
             });
-            // Retained: the worker's work is background, so it survives
-            // cancellation of the turn that spawned it and never occupies that
-            // turn's foreground slot.
+            // The worker's run occupies its *own* conversation's turn slot, so it
+            // survives cancellation of the creator's turn while a follow-up
+            // queues behind it instead of starting a second chain beside it.
             plan.create_task(PlannedTask {
                 conversation_id: PlannedTarget::planned(worker),
                 kind: self.initial_kind.clone(),
                 schema_version: self.initial_schema_version,
                 input: json!({}),
                 dependencies: Vec::new(),
-                background: true,
+                turn: PlannedTurn::Own,
             });
 
             Ok(TaskCompletion::completed(json!({

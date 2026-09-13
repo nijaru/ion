@@ -189,9 +189,25 @@ pub struct PlannedTask {
     pub schema_version: u32,
     pub input: Value,
     pub dependencies: Vec<TaskDependency>,
-    /// Background successors inherit no foreground turn and survive turn
-    /// cancellation. Use this for retained workers.
-    pub background: bool,
+    pub turn: PlannedTurn,
+}
+
+/// What turn a successor belongs to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PlannedTurn {
+    /// Join the settling task's turn, so the creator's turn covers this work.
+    #[default]
+    Inherit,
+    /// Open the target conversation's own foreground slot for this successor,
+    /// making it the root of an independent turn.
+    ///
+    /// A worker uses this so its run is not idle in its own conversation:
+    /// a follow-up queues behind it instead of starting a second chain beside
+    /// the first, and cancelling the worker's turn stops exactly that run.
+    Own,
+    /// Stay outside any turn. The work survives cancellation of the creator's
+    /// turn; this is the trusted kind's explicit lifetime choice.
+    Background,
 }
 
 /// A dependency on an existing durable task or on a task planned earlier in the

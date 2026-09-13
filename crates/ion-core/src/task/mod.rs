@@ -15,7 +15,7 @@ pub use output::TaskOutput;
 pub use plan::{
     MAX_PLAN_CONVERSATIONS, MAX_PLAN_ENTRIES, MAX_PLAN_INPUTS, MAX_PLAN_TASKS, PlannedConversation,
     PlannedConversationRef, PlannedEntry, PlannedEntryRef, PlannedTarget, PlannedTask,
-    PlannedTaskRef, TaskDependency, TaskPlan,
+    PlannedTaskRef, PlannedTurn, TaskDependency, TaskPlan,
 };
 pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,

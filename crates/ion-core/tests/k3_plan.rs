@@ -3,9 +3,9 @@ use std::sync::Arc;
 use ion_ai::{Content, Message, Role, ToolCall};
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    AbortContext, ConversationId, DriveOutcome, EntryKind, PlannedEntry, PlannedTask, RunningTask,
-    Session, TaskCompletion, TaskContext, TaskDependency, TaskDriver, TaskFuture, TaskKind,
-    TaskKindName, TaskOutcomeKind, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
+    AbortContext, ConversationId, DriveOutcome, EntryKind, PlannedEntry, PlannedTask, PlannedTurn,
+    RunningTask, Session, TaskCompletion, TaskContext, TaskDependency, TaskDriver, TaskFuture,
+    TaskKind, TaskKindName, TaskOutcomeKind, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::json;
 
@@ -54,7 +54,7 @@ impl TaskKind for Generator {
                     schema_version: 1,
                     input: json!({"call": id}),
                     dependencies: Vec::new(),
-                    background: false,
+                    turn: PlannedTurn::Inherit,
                 })
             };
             let first = tool(&mut plan, "a");
@@ -68,7 +68,7 @@ impl TaskKind for Generator {
                     TaskDependency::Planned(first),
                     TaskDependency::Planned(second),
                 ],
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!("dispatched")).with_plan(plan))
         })
@@ -120,7 +120,7 @@ impl TaskKind for Broken {
                 schema_version: 1,
                 input: json!({}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!("claimed")).with_plan(plan))
         })
@@ -256,7 +256,7 @@ impl TaskKind for ForeignRef {
                 schema_version: 1,
                 input: json!({"owner": "other plan"}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
@@ -265,7 +265,7 @@ impl TaskKind for ForeignRef {
                 schema_version: 1,
                 input: json!({"owner": "this plan"}),
                 dependencies: vec![TaskDependency::Planned(foreign)],
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!("claimed")).with_plan(plan))
         })
@@ -294,7 +294,7 @@ impl TaskKind for Oversized {
                     schema_version: 1,
                     input: json!({}),
                     dependencies: Vec::new(),
-                    background: false,
+                    turn: PlannedTurn::Inherit,
                 });
             }
             Ok(TaskCompletion::completed(json!("oversized")).with_plan(plan))

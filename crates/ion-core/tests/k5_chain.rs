@@ -10,9 +10,9 @@ use std::time::Duration;
 
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    AbortContext, DriveOutcome, EntryKind, PlannedEntry, PlannedTask, RunningTask, Session,
-    TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan,
-    TaskRegistry, TaskRequest, TaskStatus,
+    AbortContext, DriveOutcome, EntryKind, PlannedEntry, PlannedTask, PlannedTurn, RunningTask,
+    Session, TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind, TaskKindName,
+    TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -98,7 +98,7 @@ impl TaskKind for Generation {
                     schema_version: 1,
                     input: json!({"call": name}),
                     dependencies: Vec::new(),
-                    background: false,
+                    turn: PlannedTurn::Inherit,
                 })
             };
             let a = call(&mut plan, "a");
@@ -112,7 +112,7 @@ impl TaskKind for Generation {
                     ion_core::TaskDependency::Planned(a),
                     ion_core::TaskDependency::Planned(b),
                 ],
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!({"step": step})).with_plan(plan))
         })
@@ -203,7 +203,7 @@ impl TaskKind for Join {
                 schema_version: 1,
                 input: json!({"step": "second"}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             Ok(TaskCompletion::completed(json!({"joined": joined})).with_plan(plan))
         })

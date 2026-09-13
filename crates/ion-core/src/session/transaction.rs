@@ -9,7 +9,7 @@ use crate::session::command::{
 use crate::session::idle::Admission;
 use crate::session::idle::admission;
 use crate::session::state::{SessionState, apply_mutation};
-use crate::task::{PlannedTask, TaskDependency, TaskPlan};
+use crate::task::{PlannedTask, PlannedTurn, TaskDependency, TaskPlan};
 use crate::view::Change;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
@@ -265,32 +265,41 @@ impl Transaction {
             self.set_input_disposition(binding.input, InputDisposition::Consumed(entry_id))?;
         }
 
-        // Successors inherit the settling task's turn, unless the plan marks
-        // them background (a retained worker must survive turn cancellation).
-        let inherited_turn = self
+        // A successor joins the settling task's turn unless the plan says
+        // otherwise: `Own` opens the successor's own conversation slot, and
+        // `Background` stays outside cancellation scope.
+        let settling_turn = self
             .draft
             .tasks
             .get(&settling_task)
             .ok_or(SessionError::UnknownTask(settling_task))?
             .turn;
+        let turn_cancelled = settling_turn.is_some_and(|root| {
+            self.draft
+                .tasks
+                .get(&root)
+                .is_some_and(|task| task.cancel_requested)
+        });
 
         let mut planned_ids = Vec::with_capacity(plan.tasks().len());
         for _ in plan.tasks() {
             planned_ids.push(TaskId::new(self.allocate()?.get())?);
         }
         for (index, task) in plan.tasks().iter().enumerate() {
-            let turn = if task.background {
-                None
-            } else {
-                inherited_turn
-            };
             let conversation_id =
                 self.resolve_target(task.conversation_id, plan, &conversation_ids)?;
+            let id = planned_ids[index];
+            let turn = match task.turn {
+                PlannedTurn::Inherit => settling_turn,
+                PlannedTurn::Own => Some(id),
+                PlannedTurn::Background => None,
+            };
             self.create_planned_task(
                 task,
                 conversation_id,
-                planned_ids[index],
+                id,
                 turn,
+                turn_cancelled,
                 plan.id(),
                 &planned_ids,
             )?;
@@ -325,12 +334,14 @@ impl Transaction {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn create_planned_task(
         &mut self,
         task: &PlannedTask,
         conversation_id: ConversationId,
         id: TaskId,
         turn: Option<TaskId>,
+        turn_cancelled: bool,
         plan_id: u64,
         planned_ids: &[TaskId],
     ) -> Result<(), SessionError> {
@@ -373,24 +384,31 @@ impl Transaction {
             task.input.clone(),
             dependencies,
         );
+        let opens_turn = task.turn == PlannedTurn::Own;
         let mut record = match turn {
             Some(turn) => record.in_turn(turn),
             None => record,
         };
-        // A cancelled turn admits no new runnable work. Successors that inherit
-        // the turn are born cancelled so an abort's cleanup cannot smuggle
-        // ordinary work into a turn the caller already stopped. `background`
-        // successors are outside the turn by construction and are the trusted
-        // kind's explicit lifetime choice.
-        if record.turn.is_some_and(|root| {
-            self.draft
-                .tasks
-                .get(&root)
-                .is_some_and(|task| task.cancel_requested)
-        }) {
+        // A cancelled turn admits no new runnable work. Successors that join the
+        // settling turn, or that open their own, are born cancelled so an abort's
+        // cleanup cannot smuggle ordinary work into a turn the caller already
+        // stopped. `Background` successors are outside turn cancellation by
+        // construction, which is the trusted kind's explicit lifetime choice.
+        if turn_cancelled && !matches!(task.turn, PlannedTurn::Background) {
             record.cancel_requested = true;
         }
         self.stage(Mutation::CreateTask(record), Change::TaskCreated(id))?;
+        if opens_turn {
+            // Validated against the same slot invariant as any other turn: one
+            // authoritative foreground turn per conversation.
+            self.stage(
+                Mutation::OpenForegroundTurn {
+                    conversation_id,
+                    task_id: id,
+                },
+                Change::ForegroundTurnChanged(conversation_id),
+            )?;
+        }
         Ok(())
     }
 

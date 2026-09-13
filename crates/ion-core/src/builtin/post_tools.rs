@@ -11,7 +11,7 @@
 use serde_json::json;
 
 use super::{GENERATION, SCHEMA_VERSION, task_kind};
-use crate::task::{PlannedTask, TaskPlan};
+use crate::task::{PlannedTask, PlannedTurn, TaskPlan};
 use crate::{
     AbortContext, RunningTask, TaskCompletion, TaskContext, TaskFuture, TaskKind, TaskOutcomeKind,
     TaskRunError,
@@ -48,7 +48,7 @@ impl TaskKind for PostToolsKind {
                 schema_version: SCHEMA_VERSION,
                 input: json!({}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
 
             Ok(TaskCompletion::completed(json!({"tool_results": outcomes.len()})).with_plan(plan))

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use tokio::sync::Notify;
 
 use ion_core::{
-    AbortContext, ConversationSpec, PlannedTask, RunningTask, Session, SessionError,
+    AbortContext, ConversationSpec, PlannedTask, PlannedTurn, RunningTask, Session, SessionError,
     TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskKind, TaskKindName, TaskOutcomeKind,
     TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
 };
@@ -37,7 +37,7 @@ impl TaskKind for FanOut {
                 schema_version: 1,
                 input: json!({"scope": "turn"}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             plan.create_task(PlannedTask {
                 conversation_id: (task.conversation_id).into(),
@@ -45,7 +45,7 @@ impl TaskKind for FanOut {
                 schema_version: 1,
                 input: json!({"scope": "retained"}),
                 dependencies: Vec::new(),
-                background: true,
+                turn: PlannedTurn::Background,
             });
             Ok(TaskCompletion::completed(json!("fanned out")).with_plan(plan))
         })
@@ -338,7 +338,7 @@ impl TaskKind for AbortFanOut {
                 schema_version: 1,
                 input: json!({"scope": "cleanup"}),
                 dependencies: Vec::new(),
-                background: false,
+                turn: PlannedTurn::Inherit,
             });
             plan.create_task(PlannedTask {
                 conversation_id: (task.conversation_id).into(),
@@ -346,7 +346,7 @@ impl TaskKind for AbortFanOut {
                 schema_version: 1,
                 input: json!({"scope": "retained"}),
                 dependencies: Vec::new(),
-                background: true,
+                turn: PlannedTurn::Background,
             });
             Ok(TaskCompletion::aborted(json!("cleaned up")).with_plan(plan))
         })

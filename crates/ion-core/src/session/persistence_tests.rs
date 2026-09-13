@@ -213,7 +213,7 @@ fn committed_write_set_reconstructs_resident_state() {
     use crate::conversation::context::ContextControl;
     use crate::{
         ConversationSpec, EntryKind, EntryRequest, InputBody, InputMode, InputRequest, InputSender,
-        InvocationKind, PlannedEntry, PlannedTask, TaskPlan,
+        InvocationKind, PlannedEntry, PlannedTask, PlannedTurn, TaskPlan,
     };
 
     let recording = RecordingStore::default();
@@ -279,7 +279,7 @@ fn committed_write_set_reconstructs_resident_state() {
         schema_version: 1,
         input: serde_json::json!({"call": "a"}),
         dependencies: Vec::new(),
-        background: false,
+        turn: PlannedTurn::Inherit,
     });
     plan.create_task(PlannedTask {
         conversation_id: (root).into(),
@@ -287,7 +287,7 @@ fn committed_write_set_reconstructs_resident_state() {
         schema_version: 1,
         input: serde_json::json!({"call": "b"}),
         dependencies: vec![crate::TaskDependency::Planned(scoped)],
-        background: true,
+        turn: PlannedTurn::Background,
     });
     session
         .settle_task_with(
