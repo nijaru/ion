@@ -199,10 +199,11 @@ impl Transaction {
         Ok(id)
     }
 
-    /// Apply a trusted task's finalization plan. Entries are staged first, then
-    /// successor tasks in plan order with all IDs allocated up front so planned
-    /// dependencies resolve without exposing IDs before commit. Any error rolls
-    /// back the whole transaction, including the settling task.
+    /// Apply a trusted task's finalization plan. Conversations this plan creates
+    /// come first, then entries, input bindings and successor tasks in plan
+    /// order, with all task IDs allocated up front so planned dependencies
+    /// resolve without exposing IDs before commit. Any error rolls back the whole
+    /// transaction, including the settling task.
     pub(crate) fn apply_task_plan(
         &mut self,
         plan: &TaskPlan,
@@ -211,17 +212,32 @@ impl Transaction {
         if plan.entries().len() > crate::task::MAX_PLAN_ENTRIES
             || plan.tasks().len() > crate::task::MAX_PLAN_TASKS
             || plan.inputs().len() > crate::task::MAX_PLAN_INPUTS
+            || plan.conversations().len() > crate::task::MAX_PLAN_CONVERSATIONS
         {
             return Err(SessionError::PlanTooLarge {
                 entries: plan.entries().len(),
                 inputs: plan.inputs().len(),
+                conversations: plan.conversations().len(),
                 tasks: plan.tasks().len(),
             });
         }
+
+        // A conversation this plan creates is owned by the settling task, which
+        // records the reciprocal ownership edge in the same commit.
+        let mut conversation_ids = Vec::with_capacity(plan.conversations().len());
+        for conversation in plan.conversations() {
+            conversation_ids.push(self.create_conversation(ConversationSpec {
+                parent: conversation.parent,
+                owner_task: Some(settling_task),
+            })?);
+        }
+
         let mut entry_ids = Vec::with_capacity(plan.entries().len());
         for entry in plan.entries() {
+            let conversation_id =
+                self.resolve_target(entry.conversation_id, plan, &conversation_ids)?;
             entry_ids.push(self.append_entry(EntryRequest {
-                conversation_id: entry.conversation_id,
+                conversation_id,
                 kind: entry.kind.clone(),
                 data: entry.data.clone(),
                 projection: entry.projection.clone(),
@@ -262,21 +278,58 @@ impl Transaction {
             } else {
                 inherited_turn
             };
-            self.create_planned_task(task, planned_ids[index], turn, plan.id(), &planned_ids)?;
+            let conversation_id =
+                self.resolve_target(task.conversation_id, plan, &conversation_ids)?;
+            self.create_planned_task(
+                task,
+                conversation_id,
+                planned_ids[index],
+                turn,
+                plan.id(),
+                &planned_ids,
+            )?;
         }
         Ok(planned_ids)
+    }
+
+    /// Resolve a plan target to a conversation that exists in this draft.
+    fn resolve_target(
+        &self,
+        target: crate::task::PlannedTarget,
+        plan: &TaskPlan,
+        conversation_ids: &[ConversationId],
+    ) -> Result<ConversationId, SessionError> {
+        match target {
+            crate::task::PlannedTarget::Existing(conversation_id) => Ok(conversation_id),
+            crate::task::PlannedTarget::Planned(reference) => {
+                // A plan may only target a conversation planned by the same plan,
+                // which rejects a handle minted elsewhere.
+                if reference.plan_id() != plan.id() {
+                    return Err(SessionError::Invariant(
+                        "plan target belongs to a different plan".to_owned(),
+                    ));
+                }
+                conversation_ids
+                    .get(reference.index())
+                    .copied()
+                    .ok_or_else(|| {
+                        SessionError::Invariant("plan target was not planned".to_owned())
+                    })
+            }
+        }
     }
 
     fn create_planned_task(
         &mut self,
         task: &PlannedTask,
+        conversation_id: ConversationId,
         id: TaskId,
         turn: Option<TaskId>,
         plan_id: u64,
         planned_ids: &[TaskId],
     ) -> Result<(), SessionError> {
-        if !self.draft.conversations.contains_key(&task.conversation_id) {
-            return Err(SessionError::UnknownConversation(task.conversation_id));
+        if !self.draft.conversations.contains_key(&conversation_id) {
+            return Err(SessionError::UnknownConversation(conversation_id));
         }
         let mut seen = HashSet::with_capacity(task.dependencies.len());
         let mut dependencies = Vec::with_capacity(task.dependencies.len());
@@ -308,7 +361,7 @@ impl Transaction {
 
         let record = TaskRecord::pending(
             id,
-            task.conversation_id,
+            conversation_id,
             task.kind.clone(),
             task.schema_version,
             task.input.clone(),

@@ -43,7 +43,7 @@ impl TaskKind for PostToolsKind {
 
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: task_kind(GENERATION),
                 schema_version: SCHEMA_VERSION,
                 input: json!({}),

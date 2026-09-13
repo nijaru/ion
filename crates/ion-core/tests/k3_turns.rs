@@ -32,7 +32,7 @@ impl TaskKind for FanOut {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("held"),
                 schema_version: 1,
                 input: json!({"scope": "turn"}),
@@ -40,7 +40,7 @@ impl TaskKind for FanOut {
                 background: false,
             });
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"scope": "retained"}),
@@ -333,7 +333,7 @@ impl TaskKind for AbortFanOut {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"scope": "cleanup"}),
@@ -341,7 +341,7 @@ impl TaskKind for AbortFanOut {
                 background: false,
             });
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"scope": "retained"}),

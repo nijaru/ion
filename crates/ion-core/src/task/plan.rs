@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::TaskKindName;
 use crate::conversation::context::ContextControl;
-use crate::{ConversationId, EntryKind, InputId, TaskId};
+use crate::{ConversationId, EntryKind, HistoryParent, InputId, TaskId};
 
 /// Provisional per-plan bounds. The writer rejects an over-large plan so a bad
 /// or hostile trusted kind cannot commit an unbounded transaction. These are
@@ -12,6 +12,7 @@ use crate::{ConversationId, EntryKind, InputId, TaskId};
 pub const MAX_PLAN_ENTRIES: usize = 256;
 pub const MAX_PLAN_TASKS: usize = 256;
 pub const MAX_PLAN_INPUTS: usize = 256;
+pub const MAX_PLAN_CONVERSATIONS: usize = 64;
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 
@@ -27,6 +28,7 @@ static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 #[derive(Debug, Clone, PartialEq)]
 pub struct TaskPlan {
     id: u64,
+    conversations: Vec<PlannedConversation>,
     entries: Vec<PlannedEntry>,
     inputs: Vec<PlannedInput>,
     tasks: Vec<PlannedTask>,
@@ -43,6 +45,7 @@ impl TaskPlan {
     pub fn new() -> Self {
         Self {
             id: NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed),
+            conversations: Vec::new(),
             entries: Vec::new(),
             inputs: Vec::new(),
             tasks: Vec::new(),
@@ -51,7 +54,25 @@ impl TaskPlan {
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.entries.is_empty() && self.inputs.is_empty() && self.tasks.is_empty()
+        self.conversations.is_empty()
+            && self.entries.is_empty()
+            && self.inputs.is_empty()
+            && self.tasks.is_empty()
+    }
+
+    /// Queue a conversation this plan creates and the settling task owns. It is
+    /// created before any planned entry or task, so those may target it, and it
+    /// becomes durable in the same commit as the outcome that created it.
+    pub fn create_conversation(
+        &mut self,
+        conversation: PlannedConversation,
+    ) -> PlannedConversationRef {
+        let reference = PlannedConversationRef {
+            plan: self.id,
+            index: self.conversations.len(),
+        };
+        self.conversations.push(conversation);
+        reference
     }
 
     /// Queue an immutable transcript entry and return a plan-local handle to it.
@@ -88,6 +109,10 @@ impl TaskPlan {
         self.id
     }
 
+    pub(crate) fn conversations(&self) -> &[PlannedConversation] {
+        &self.conversations
+    }
+
     pub(crate) fn entries(&self) -> &[PlannedEntry] {
         &self.entries
     }
@@ -103,16 +128,63 @@ impl TaskPlan {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedEntry {
-    pub conversation_id: ConversationId,
+    pub conversation_id: PlannedTarget,
     pub kind: EntryKind,
     pub data: Value,
     pub projection: Vec<ion_ai::Message>,
     pub context: ContextControl,
 }
 
+/// A conversation a plan writes to: one that already exists, or one this plan
+/// creates. Mirrors [`TaskDependency`], so no durable ID escapes before commit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PlannedTarget {
+    Existing(ConversationId),
+    Planned(PlannedConversationRef),
+}
+
+impl PlannedTarget {
+    #[must_use]
+    pub const fn existing(conversation_id: ConversationId) -> Self {
+        Self::Existing(conversation_id)
+    }
+
+    #[must_use]
+    pub const fn planned(reference: PlannedConversationRef) -> Self {
+        Self::Planned(reference)
+    }
+}
+
+impl From<ConversationId> for PlannedTarget {
+    fn from(conversation_id: ConversationId) -> Self {
+        Self::Existing(conversation_id)
+    }
+}
+
+/// A conversation this plan creates. Context seed is explicit: `parent` inherits
+/// history at a stable cutoff, and `None` starts fresh.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PlannedConversation {
+    pub parent: Option<HistoryParent>,
+}
+
+impl PlannedConversation {
+    #[must_use]
+    pub const fn fresh() -> Self {
+        Self { parent: None }
+    }
+
+    #[must_use]
+    pub const fn inherited(parent: HistoryParent) -> Self {
+        Self {
+            parent: Some(parent),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct PlannedTask {
-    pub conversation_id: ConversationId,
+    pub conversation_id: PlannedTarget,
     pub kind: TaskKindName,
     pub schema_version: u32,
     pub input: Value,
@@ -138,8 +210,27 @@ pub struct PlannedEntryRef {
     plan: u64,
     index: usize,
 }
-
 impl PlannedEntryRef {
+    #[must_use]
+    pub fn index(self) -> usize {
+        self.index
+    }
+
+    #[must_use]
+    pub fn plan_id(self) -> u64 {
+        self.plan
+    }
+}
+
+/// Plan-local handle for a conversation this plan creates. Not a durable
+/// identifier.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct PlannedConversationRef {
+    plan: u64,
+    index: usize,
+}
+
+impl PlannedConversationRef {
     #[must_use]
     pub fn index(self) -> usize {
         self.index

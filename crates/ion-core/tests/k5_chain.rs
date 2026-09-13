@@ -85,7 +85,7 @@ impl TaskKind for Generation {
 
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("assistant").expect("entry kind"),
                 data: json!({"text": "calling tools", "calls": ["a", "b"]}),
                 projection: Vec::new(),
@@ -93,7 +93,7 @@ impl TaskKind for Generation {
             });
             let call = |plan: &mut TaskPlan, name: &str| {
                 plan.create_task(PlannedTask {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: kind("tool"),
                     schema_version: 1,
                     input: json!({"call": name}),
@@ -104,7 +104,7 @@ impl TaskKind for Generation {
             let a = call(&mut plan, "a");
             let b = call(&mut plan, "b");
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("join"),
                 schema_version: 1,
                 input: json!({"of": ["a", "b"]}),
@@ -191,14 +191,14 @@ impl TaskKind for Join {
 
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("tool_result").expect("entry kind"),
                 data: json!({"results": joined}),
                 projection: Vec::new(),
                 context: ContextControl::none(),
             });
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("generation"),
                 schema_version: 1,
                 input: json!({"step": "second"}),

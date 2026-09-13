@@ -276,7 +276,7 @@ fn recorded(
     };
     let mut plan = TaskPlan::new();
     plan.append_entry(PlannedEntry {
-        conversation_id,
+        conversation_id: conversation_id.into(),
         kind: entry_kind(TOOL_RESULT_ENTRY),
         data: json!({
             "call_id": result.call_id,

@@ -27,7 +27,7 @@ impl TaskKind for Author {
             let mut plan = TaskPlan::new();
             for index in 0..3 {
                 plan.append_entry(PlannedEntry {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: EntryKind::new("note").expect("entry kind"),
                     data: json!({"index": index}),
                     projection: Vec::new(),
@@ -36,7 +36,7 @@ impl TaskKind for Author {
             }
             for name in ["left", "right"] {
                 plan.create_task(PlannedTask {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: kind(name),
                     schema_version: 1,
                     input: json!({}),

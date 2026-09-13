@@ -34,14 +34,14 @@ impl TaskKind for ScopedSuccessor {
                 .await?;
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("assistant").expect("entry kind"),
                 data: json!({"text": "dispatching"}),
                 projection: Vec::new(),
                 context: ContextControl::none(),
             });
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"call": "scoped"}),
@@ -69,7 +69,7 @@ impl TaskKind for BackgroundSuccessor {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("worker"),
                 schema_version: 1,
                 input: json!({"task": "background"}),

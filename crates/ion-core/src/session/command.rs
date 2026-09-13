@@ -150,11 +150,12 @@ pub enum SessionError {
     #[error("session is closed or faulted")]
     Closed,
     #[error(
-        "task finalization plan exceeds the bounded plan size: {entries} entries, {inputs} input bindings, {tasks} tasks"
+        "task finalization plan exceeds the bounded plan size: {entries} entries, {inputs} input bindings, {conversations} conversations, {tasks} tasks"
     )]
     PlanTooLarge {
         entries: usize,
         inputs: usize,
+        conversations: usize,
         tasks: usize,
     },
     #[error("conversation {0} already has a live foreground turn")]

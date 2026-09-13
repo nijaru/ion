@@ -41,7 +41,7 @@ impl TaskKind for Generator {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("assistant").expect("entry kind"),
                 data: json!({"text": "calling tools"}),
                 projection: vec![assistant_calls()],
@@ -49,7 +49,7 @@ impl TaskKind for Generator {
             });
             let tool = |plan: &mut TaskPlan, id: &str| {
                 plan.create_task(PlannedTask {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: kind("tool"),
                     schema_version: 1,
                     input: json!({"call": id}),
@@ -60,7 +60,7 @@ impl TaskKind for Generator {
             let first = tool(&mut plan, "a");
             let second = tool(&mut plan, "b");
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("join"),
                 schema_version: 1,
                 input: json!({"calls": ["a", "b"]}),
@@ -108,14 +108,14 @@ impl TaskKind for Broken {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("assistant").expect("entry kind"),
                 data: json!("would be dropped"),
                 projection: Vec::new(),
                 context: ContextControl::none(),
             });
             plan.create_task(PlannedTask {
-                conversation_id: ConversationId::new(9_999).expect("conversation id"),
+                conversation_id: (ConversationId::new(9_999).expect("conversation id")).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({}),
@@ -251,7 +251,7 @@ impl TaskKind for ForeignRef {
         Box::pin(async move {
             let mut other = TaskPlan::new();
             let foreign = other.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"owner": "other plan"}),
@@ -260,7 +260,7 @@ impl TaskKind for ForeignRef {
             });
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: kind("tool"),
                 schema_version: 1,
                 input: json!({"owner": "this plan"}),
@@ -289,7 +289,7 @@ impl TaskKind for Oversized {
             let mut plan = TaskPlan::new();
             for _ in 0..=ion_core::MAX_PLAN_TASKS {
                 plan.create_task(PlannedTask {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: kind("tool"),
                     schema_version: 1,
                     input: json!({}),

@@ -42,7 +42,7 @@ impl TaskKind for Answer {
             for input in &inputs {
                 let InputBody::Text(text) = &input.body;
                 let reference = plan.append_entry(PlannedEntry {
-                    conversation_id: task.conversation_id,
+                    conversation_id: (task.conversation_id).into(),
                     kind: EntryKind::new("user").expect("entry kind"),
                     data: json!({"text": text}),
                     projection: Vec::new(),
@@ -525,7 +525,7 @@ impl TaskKind for FanTo {
         Box::pin(async move {
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
-                conversation_id: self.other,
+                conversation_id: (self.other).into(),
                 kind: kind("answer"),
                 schema_version: 1,
                 input: json!({}),

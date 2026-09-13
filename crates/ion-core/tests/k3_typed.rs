@@ -60,7 +60,7 @@ impl TypedHandler for Typed {
             }
             let mut plan = TaskPlan::new();
             plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
+                conversation_id: (task.conversation_id).into(),
                 kind: EntryKind::new("assistant").expect("entry kind"),
                 data: json!(task.input.label),
                 projection: Vec::new(),

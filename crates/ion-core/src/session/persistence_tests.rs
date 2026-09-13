@@ -267,14 +267,14 @@ fn committed_write_set_reconstructs_resident_state() {
         .expect("checkpoint");
     let mut plan = TaskPlan::new();
     plan.append_entry(PlannedEntry {
-        conversation_id: root,
+        conversation_id: (root).into(),
         kind: EntryKind::new("assistant").expect("entry kind"),
         data: serde_json::json!({"text": "calling tools"}),
         projection: Vec::new(),
         context: ContextControl::none(),
     });
     let scoped = plan.create_task(PlannedTask {
-        conversation_id: root,
+        conversation_id: (root).into(),
         kind: TaskKindName::new("tool").expect("kind"),
         schema_version: 1,
         input: serde_json::json!({"call": "a"}),
@@ -282,7 +282,7 @@ fn committed_write_set_reconstructs_resident_state() {
         background: false,
     });
     plan.create_task(PlannedTask {
-        conversation_id: root,
+        conversation_id: (root).into(),
         kind: TaskKindName::new("tool").expect("kind"),
         schema_version: 1,
         input: serde_json::json!({"call": "b"}),

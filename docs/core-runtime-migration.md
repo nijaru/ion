@@ -366,6 +366,12 @@ Still open for this slice:
 
 ### K6 — workers
 
+**Ownership mechanism implemented; worker control surface still open.**
+
+`TaskPlan` can create owned conversations: `create_conversation` returns a plan-local handle, planned entries and successors may target it, and the conversation is created first, owned by the settling task with the reciprocal edge, in the same commit as the outcome. Context seed is explicit (`PlannedConversation::fresh` or `inherited` at a stable cutoff validated like any fork), and the plan bounds cover conversations as well as entries, inputs and tasks. `tests/k6_workers.rs` covers fresh and inherited workers, ownership reciprocity, seeding a worker with a brief and a retained task, reopen, a foreign plan handle, an invisible cutoff and the conversation bound.
+
+Still open for this slice: the worker control surface (run/spawn/send/inspect/wait/interrupt/retire as commands rather than test kinds), reuse of a retained worker, nested ownership limits, and retiring worker history.
+
 Create owned conversations through the same writer:
 
 - fresh context;

@@ -145,7 +145,7 @@ impl TaskKind for GenerationKind {
             let mut plan = TaskPlan::new();
             for input in &frozen.inputs {
                 let reference = plan.append_entry(PlannedEntry {
-                    conversation_id,
+                    conversation_id: conversation_id.into(),
                     kind: entry_kind(USER_ENTRY),
                     data: json!({"text": input.text}),
                     projection: vec![Message {
@@ -158,7 +158,7 @@ impl TaskKind for GenerationKind {
                 plan.consume_input(input.id, reference);
             }
             plan.append_entry(PlannedEntry {
-                conversation_id,
+                conversation_id: conversation_id.into(),
                 kind: entry_kind(ASSISTANT_ENTRY),
                 data: json!({
                     "text": text,
@@ -177,7 +177,7 @@ impl TaskKind for GenerationKind {
                     .iter()
                     .map(|call| {
                         plan.create_task(PlannedTask {
-                            conversation_id,
+                            conversation_id: conversation_id.into(),
                             kind: task_kind(TOOL),
                             schema_version: SCHEMA_VERSION,
                             input: json!({"call": call}),
@@ -187,7 +187,7 @@ impl TaskKind for GenerationKind {
                     })
                     .collect();
                 plan.create_task(PlannedTask {
-                    conversation_id,
+                    conversation_id: conversation_id.into(),
                     kind: task_kind(POST_TOOLS),
                     schema_version: SCHEMA_VERSION,
                     input: json!({}),
