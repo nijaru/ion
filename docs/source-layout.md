@@ -63,13 +63,13 @@ crates/ion-core/
       transaction.rs
       scheduler.rs
       idle.rs       # admission policy + queued-input scheduling
+      lifecycle.rs  # graceful/fault close and abort cleanup admission
       wait.rs
       capacity.rs
       # add focused modules below when behavior is large enough:
       # handle.rs
       # cancellation.rs
       # recovery.rs
-      # lifecycle.rs
 
     view/
       mod.rs
@@ -159,7 +159,8 @@ Current split:
 - `state.rs`: resident records/indexes and semantic mutation application; persistence owns no copy of this state;
 - `command.rs`: typed command/receipt/error vocabulary;
 - `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
-- `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership, cancellation signaling and close/join policy;
+- `scheduler.rs`: task driver, registry dispatch, local invocation ownership, settlement dispatch and cancellation signaling;
+- `lifecycle.rs`: graceful/fault close that fences writes before joining, and the separate bounded admission abort cleanup uses;
 - `idle.rs`: the mode/state admission policy and the turn a conversation starts for queued input, including the `TurnTemplate` configuration. It owns when queued input becomes work, not how a turn is created (`owner.rs`/`transaction.rs`) or how it is driven (`scheduler.rs`);
 - `wait.rs`: client task/dependency waits over committed-state wake signals;
 - `capacity.rs`: independent process-local scarce-resource limits.

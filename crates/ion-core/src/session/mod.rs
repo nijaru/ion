@@ -2,6 +2,7 @@ mod capacity;
 mod command;
 pub use capacity::TaskCapacity;
 mod idle;
+mod lifecycle;
 mod owner;
 mod scheduler;
 pub(crate) mod state;
@@ -13,10 +14,11 @@ pub use command::{
     InputReceipt, InputRequest, SessionError, TaskReceipt, TaskRequest, TurnCancellation,
 };
 pub use idle::TurnTemplate;
+pub use lifecycle::CloseMode;
 pub use owner::Session;
 pub use scheduler::{
-    CloseMode, DriveOutcome, Interruption, InterruptionReason, Settlement, TaskCancellation,
-    TaskDriver, TaskDriverError,
+    DriveOutcome, Interruption, InterruptionReason, Settlement, TaskCancellation, TaskDriver,
+    TaskDriverError,
 };
 
 #[cfg(test)]

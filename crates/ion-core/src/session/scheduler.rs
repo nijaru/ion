@@ -20,17 +20,17 @@ use crate::{
 pub struct TaskDriver {
     pub(super) session: Arc<Mutex<Session>>,
     pub(super) registry: Arc<std::sync::RwLock<TaskRegistry>>,
-    capacity: super::TaskCapacity,
+    pub(super) capacity: super::TaskCapacity,
     /// Turn shape for a conversation that answers queued input on its own.
     ///
     /// Shared by every handle, so a clone cannot disagree about how a
     /// conversation answers queued input.
     pub(super) turn_template: Arc<std::sync::RwLock<Option<super::TurnTemplate>>>,
-    active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
-    drained: tokio::sync::watch::Sender<()>,
-    changes: tokio::sync::watch::Sender<()>,
-    stopping: CancellationToken,
-    fault: CancellationToken,
+    pub(super) active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
+    pub(super) drained: tokio::sync::watch::Sender<()>,
+    pub(super) changes: tokio::sync::watch::Sender<()>,
+    pub(super) stopping: CancellationToken,
+    pub(super) fault: CancellationToken,
 }
 
 impl TaskDriver {
@@ -300,30 +300,6 @@ impl TaskDriver {
         self.finish_normal(running, completion, Some(handler)).await
     }
 
-    /// Stop admission and canonical writes, then join all local drives.
-    /// Graceful close asks normal handlers to return cooperatively; fault close
-    /// drops their futures after fencing. Neither marks durable cancellation.
-    pub async fn close(&self, mode: CloseMode) {
-        let mut drained = self.drained.subscribe();
-        {
-            let mut session = self.session.lock().await;
-            session.close();
-            self.stopping.cancel();
-            if mode == CloseMode::Fault {
-                self.fault.cancel();
-            }
-            for token in self.active.lock().expect("active task mutex").values() {
-                token.cancel();
-            }
-        }
-        loop {
-            if self.active.lock().expect("active task mutex").is_empty() {
-                return;
-            }
-            drained.changed().await.expect("driver owns drain sender");
-        }
-    }
-
     pub async fn cancel_task(&self, task_id: TaskId) -> Result<TaskCancellation, TaskDriverError> {
         let receipt = {
             let mut session = self.session.lock().await;
@@ -529,43 +505,7 @@ impl TaskDriver {
         true
     }
 
-    async fn cleanup_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, TaskDriverError> {
-        tokio::select! {
-            biased;
-            () = self.stopping.cancelled() => Err(SessionError::Closed.into()),
-            () = self.fault.cancelled() => Err(SessionError::Closed.into()),
-            permit = self.capacity.acquire_cleanup() => Ok(permit),
-        }
-    }
-
-    async fn run_abort(
-        &self,
-        task_id: TaskId,
-        handler: Option<Arc<dyn TaskKind>>,
-    ) -> Result<DriveOutcome, TaskDriverError> {
-        let _permit = self.cleanup_permit().await?;
-        let running = {
-            let mut session = self.session.lock().await;
-            session.ensure_open()?;
-            let receipt = session.reserve_task_invocation(task_id, InvocationKind::Abort)?;
-            let task = session
-                .task_record(task_id)
-                .ok_or(SessionError::UnknownTask(task_id))?;
-            running_task(task, receipt)
-        };
-        // Cleanup requires the registered kind. Without it the task stays
-        // durably running and cancelled for a later explicit abort drive.
-        let completion = match handler {
-            Some(handler) => {
-                self.run_handler(handler, running.clone(), CancellationToken::new())
-                    .await
-            }
-            None => Err(InterruptionReason::HandlerUnavailable),
-        };
-        self.settle(running, completion).await
-    }
-
-    async fn run_handler(
+    pub(super) async fn run_handler(
         &self,
         handler: Arc<dyn TaskKind>,
         running: RunningTask,
@@ -646,7 +586,7 @@ impl TaskDriver {
         }
     }
 
-    async fn settle(
+    pub(super) async fn settle(
         &self,
         running: RunningTask,
         completion: Result<TaskCompletion, InterruptionReason>,
@@ -747,7 +687,7 @@ fn context_error(error: SessionError) -> TaskContextError {
     }
 }
 
-fn running_task(task: TaskRecord, receipt: InvocationReceipt) -> RunningTask {
+pub(super) fn running_task(task: TaskRecord, receipt: InvocationReceipt) -> RunningTask {
     RunningTask {
         id: task.id,
         conversation_id: task.conversation_id,
@@ -823,12 +763,6 @@ impl Drop for ActiveInvocation {
             .remove(&self.task_id);
         self.drained.send_replace(());
     }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CloseMode {
-    Graceful,
-    Fault,
 }
 
 #[derive(Debug, Clone, PartialEq)]
