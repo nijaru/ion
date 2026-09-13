@@ -108,17 +108,24 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
+- distinguish handler interruption and unresolved external work from known terminal application failure;
+- preserve recovery eligibility when a previously running task implementation is unavailable;
+
 - writable ownership release after local joins (K4).
 
-The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Persistence-backed evidence remains open:
+The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch and cancellation during saturated capacity admission are now covered by outcome-sensitive tests in `k3_abort.rs`: exactly one Abort invocation, no normal execution, and separate bounded cleanup admission. Persisted reopen coverage remains open.
+
+Persistence-backed evidence remains open:
 
 - persisted reopen/crash recovery and explicit resume/drive, which require K4 storage to test honestly.
 
 ### K4 — fresh SQLite session store
 
-**Status: resident-state/persistence prerequisite implemented; SQLite remains open.**
+**Status: resident-state/persistence separation implemented; SQLite paused for contract work.**
 
 The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
+
+Before SQL, replace full-history draft/snapshot cloning with bounded typed reads and a transaction overlay (or a justified bounded working set). Semantic ownership does not require full residency. Complete restricted task finalization and typed task adaptation, and specify foreground-turn membership/input disposition before freezing the persistence interface. The current split establishes ordering, not these structural requirements.
 
 Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
 

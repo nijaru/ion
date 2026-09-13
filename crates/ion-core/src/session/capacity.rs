@@ -35,12 +35,37 @@ mod tests {
 }
 
 /// Unconfigured domains are unlimited. Limits apply independently, not globally.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TaskCapacity {
     limits: HashMap<ResourceDomain, Arc<Semaphore>>,
+    cleanup: Arc<Semaphore>,
+}
+
+impl Default for TaskCapacity {
+    fn default() -> Self {
+        Self {
+            limits: HashMap::new(),
+            cleanup: Arc::new(Semaphore::new(1)),
+        }
+    }
 }
 
 impl TaskCapacity {
+    /// Abort work has its own bounded admission, independent of normal domains.
+    #[must_use]
+    pub fn with_cleanup_limit(mut self, limit: NonZeroUsize) -> Self {
+        self.cleanup = Arc::new(Semaphore::new(limit.get()));
+        self
+    }
+
+    pub(super) async fn acquire_cleanup(&self) -> OwnedSemaphorePermit {
+        self.cleanup
+            .clone()
+            .acquire_owned()
+            .await
+            .expect("cleanup capacity is never closed")
+    }
+
     #[must_use]
     pub fn with_limit(mut self, domain: ResourceDomain, limit: NonZeroUsize) -> Self {
         self.limits

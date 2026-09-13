@@ -252,6 +252,7 @@ Implemented:
 
 Still open:
 
+- interruption/uncertainty policy and recoverable missing-implementation behavior;
 - writable ownership release after local joins (K4 SQLite).
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
@@ -262,7 +263,9 @@ Do not add a second scheduler to solve these. Extend the same session/task drive
 
 ### K4 — SQLite session store
 
-**Next major stage.**
+**Paused before SQL for bounded-state and task-contract work.**
+
+The resident/persistence split below establishes commit ordering only. Full-history clones remain in transaction drafts and snapshots. Before SQL, define bounded typed reads plus transaction overlays (or a justified bounded working set), restricted task finalization with same-batch references, typed authoring adaptation, and foreground-turn membership. Also strengthen safe context validation before K5. These are structural contracts, not P2 index tuning.
 
 Implement a fresh schema as one database for one session. Do not migrate old tables in place during core development.
 

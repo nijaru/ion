@@ -73,20 +73,34 @@ impl TaskDriver {
     ) -> Result<DriveOutcome, TaskDriverError> {
         let eligible = self.wait_dependencies(task_id).await?;
         let handler = self.registry.get(&eligible.kind, eligible.schema_version);
-        let _permit = tokio::select! {
-            biased;
-            () = self.stopping.cancelled() => return Err(SessionError::Closed.into()),
-            () = self.fault.cancelled() => return Err(SessionError::Closed.into()),
-            permit = self.capacity.acquire(handler.as_ref().and_then(|kind| kind.resource_domain())) => permit,
-        };
-        let (task, receipt) = {
+        let mut cleanup = eligible.cancel_requested;
+        let cancellation = active.token();
+        let (task, receipt, permit) = loop {
+            let permit = if cleanup {
+                Some(self.cleanup_permit().await?)
+            } else {
+                tokio::select! {
+                    biased;
+                    () = self.stopping.cancelled() => return Err(SessionError::Closed.into()),
+                    () = self.fault.cancelled() => return Err(SessionError::Closed.into()),
+                    () = cancellation.cancelled() => { cleanup = true; continue; }
+                    permit = self.capacity.acquire(handler.as_ref().and_then(|kind| kind.resource_domain())) => permit,
+                }
+            };
             let mut session = self.session.lock().await;
+            session.ensure_open()?;
             let task = session
                 .task_record(task_id)
                 .ok_or(SessionError::UnknownTask(task_id))?;
             let kind = next_invocation(&task).ok_or(TaskDriverError::AlreadyTerminal(task_id))?;
+            // Cancellation may commit after normal admission but before reservation.
+            // Release the normal permit and reclassify before reserving Abort.
+            if kind == InvocationKind::Abort && !cleanup {
+                cleanup = true;
+                continue;
+            }
             let receipt = session.reserve_task_invocation(task_id, kind)?;
-            (task, receipt)
+            break (task, receipt, permit);
         };
 
         let running = running_task(task, receipt);
@@ -106,6 +120,7 @@ impl TaskDriver {
             return self.settle(running, completion).await;
         }
 
+        drop(permit);
         self.finish_normal(running, completion, handler).await
     }
 
@@ -208,11 +223,21 @@ impl TaskDriver {
         self.run_abort(task_id, handler).await
     }
 
+    async fn cleanup_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, TaskDriverError> {
+        tokio::select! {
+            biased;
+            () = self.stopping.cancelled() => Err(SessionError::Closed.into()),
+            () = self.fault.cancelled() => Err(SessionError::Closed.into()),
+            permit = self.capacity.acquire_cleanup() => Ok(permit),
+        }
+    }
+
     async fn run_abort(
         &self,
         task_id: TaskId,
         handler: Option<Arc<dyn TaskKind>>,
     ) -> Result<DriveOutcome, TaskDriverError> {
+        let _permit = self.cleanup_permit().await?;
         let running = {
             let mut session = self.session.lock().await;
             let receipt = session.reserve_task_invocation(task_id, InvocationKind::Abort)?;
@@ -222,7 +247,10 @@ impl TaskDriver {
             running_task(task, receipt)
         };
         let completion = match handler {
-            Some(handler) => self.run_abort_handler(handler, running.clone()).await,
+            Some(handler) => {
+                self.run_handler(handler, running.clone(), CancellationToken::new())
+                    .await
+            }
             None => TaskCompletion::unsupported(json!({
                 "kind": running.kind.as_str(),
                 "schema_version": running.schema_version,
@@ -241,32 +269,23 @@ impl TaskDriver {
         let runtime: Arc<dyn TaskRuntime> = Arc::new(SessionTaskRuntime {
             session: self.session.clone(),
         });
-        let context = TaskContext::new(runtime, running.id, running.generation, cancellation);
-        let invocation_kind = running.invocation_kind;
         let mut join = tokio::spawn(async move {
-            match invocation_kind {
-                InvocationKind::Execute => handler.execute(running, context).await,
-                InvocationKind::Recover => handler.recover(running, context).await,
-                InvocationKind::Abort => unreachable!("abort uses restricted context"),
+            match running.invocation_kind {
+                InvocationKind::Execute | InvocationKind::Recover => {
+                    let context =
+                        TaskContext::new(runtime, running.id, running.generation, cancellation);
+                    if running.invocation_kind == InvocationKind::Execute {
+                        handler.execute(running, context).await
+                    } else {
+                        handler.recover(running, context).await
+                    }
+                }
+                InvocationKind::Abort => {
+                    let context = AbortContext::new(runtime, running.id, running.generation);
+                    handler.abort(running, context).await
+                }
             }
         });
-        let result = tokio::select! {
-            result = &mut join => result,
-            () = self.fault.cancelled() => { join.abort(); join.await }
-        };
-        completion_from_join(result)
-    }
-
-    async fn run_abort_handler(
-        &self,
-        handler: Arc<dyn TaskKind>,
-        running: RunningTask,
-    ) -> TaskCompletion {
-        let runtime: Arc<dyn TaskRuntime> = Arc::new(SessionTaskRuntime {
-            session: self.session.clone(),
-        });
-        let context = AbortContext::new(runtime, running.id, running.generation);
-        let mut join = tokio::spawn(async move { handler.abort(running, context).await });
         let result = tokio::select! {
             result = &mut join => result,
             () = self.fault.cancelled() => { join.abort(); join.await }
