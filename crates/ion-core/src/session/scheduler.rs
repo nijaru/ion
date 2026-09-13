@@ -21,6 +21,8 @@ pub struct TaskDriver {
     pub(super) session: Arc<Mutex<Session>>,
     registry: Arc<std::sync::RwLock<TaskRegistry>>,
     capacity: super::TaskCapacity,
+    /// Turn shape for a conversation that answers queued input on its own.
+    pub(super) turn_template: Option<super::TurnTemplate>,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     drained: tokio::sync::watch::Sender<()>,
     changes: tokio::sync::watch::Sender<()>,
@@ -95,12 +97,23 @@ impl TaskDriver {
             capacity,
             session: Arc::new(Mutex::new(session)),
             registry: Arc::new(std::sync::RwLock::new(registry)),
+            turn_template: None,
             active: Arc::new(StdMutex::new(HashMap::new())),
             drained: tokio::sync::watch::channel(()).0,
             changes,
             stopping: CancellationToken::new(),
             fault,
         }
+    }
+
+    /// Configure the turn a conversation starts when it answers queued input on
+    /// its own. Without a template, admission still queues, but nothing is
+    /// scheduled automatically and a turn-starting mode on an idle conversation
+    /// is refused rather than silently dropped.
+    #[must_use]
+    pub fn with_turn_template(mut self, template: super::TurnTemplate) -> Self {
+        self.turn_template = Some(template);
+        self
     }
 
     /// Restore a missing implementation without touching durable task data.
@@ -356,19 +369,31 @@ impl TaskDriver {
         Ok(session.create_turn(request)?)
     }
 
-    /// Admit `input` and open the turn that answers it, binding the input to the
-    /// new turn root in one commit.
-    ///
-    /// This is the one entry point that turns a user submission into work. It
-    /// starts nothing: the returned turn still needs an explicit drive, and a
-    /// duplicate request key replays without opening a second turn.
+    /// Admit an input under the mode/state policy, using the configured turn
+    /// template for the turn it may start. Starts nothing: the returned turn
+    /// still needs an explicit drive.
+    pub async fn admit_input(
+        &self,
+        input: crate::InputRequest,
+    ) -> Result<crate::AdmissionReceipt, TaskDriverError> {
+        let turn = self
+            .turn_template
+            .as_ref()
+            .map(|template| template.request(input.target));
+        let mut session = self.session.lock().await;
+        Ok(session.admit_input(input, turn)?)
+    }
+
+    /// Admit an input under the mode/state policy with an explicit turn request.
+    /// This is how a client chooses a different turn shape (a command turn, for
+    /// example) than the conversation's automatic one.
     pub async fn submit_input(
         &self,
         input: crate::InputRequest,
         task: crate::TaskRequest,
-    ) -> Result<crate::SubmissionReceipt, TaskDriverError> {
+    ) -> Result<crate::AdmissionReceipt, TaskDriverError> {
         let mut session = self.session.lock().await;
-        Ok(session.submit_input(input, task)?)
+        Ok(session.admit_input(input, Some(task))?)
     }
 
     pub async fn assign_input(
@@ -427,6 +452,10 @@ impl TaskDriver {
                 // Work this settlement unblocked becomes runnable here, and only
                 // here: admission never starts work on its own.
                 self.dispatch_runnable(task_id, &created).await;
+                // If the settlement also released the conversation's turn slot, a
+                // queued input may now own it. A scheduling failure is not a
+                // settlement failure.
+                let _ = self.schedule_next_turn(running.conversation_id).await;
                 Ok(outcome)
             }
             Some(Err(error)) => Err(error),
@@ -473,7 +502,7 @@ impl TaskDriver {
 
     /// Admit a local drive for `task_id` unless one already exists. Returns
     /// whether a new drive was spawned.
-    fn spawn_drive(&self, task_id: TaskId) -> bool {
+    pub(super) fn spawn_drive(&self, task_id: TaskId) -> bool {
         let Ok(active) =
             ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())
         else {
@@ -609,6 +638,7 @@ impl TaskDriver {
                 };
                 let (outcome, created) = settled?;
                 self.dispatch_runnable(running.id, &created).await;
+                let _ = self.schedule_next_turn(running.conversation_id).await;
                 Ok(outcome)
             }
             // No durable settlement: the task remains running and is retried

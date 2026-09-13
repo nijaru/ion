@@ -24,9 +24,10 @@ use ion_core::builtin::{
     ToolKind,
 };
 use ion_core::{
-    ConversationId, DriveOutcome, InputBody, InputDisposition, InputMode, InputRequest,
-    InputSender, InvocationKind, RequestKey, Session, SessionError, TaskDriver, TaskDriverError,
-    TaskId, TaskKindName, TaskOutcomeKind, TaskRecord, TaskRegistry, TaskRequest, TaskStatus,
+    AdmissionReceipt, ConversationId, DriveOutcome, InputBody, InputDisposition, InputMode,
+    InputRequest, InputSender, InvocationKind, RequestKey, Session, SessionError, TaskDriver,
+    TaskDriverError, TaskId, TaskKindName, TaskOutcomeKind, TaskRecord, TaskRegistry, TaskRequest,
+    TaskStatus,
 };
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -269,7 +270,7 @@ async fn submit_and_drive(
     root: ConversationId,
     key: &str,
     text: &str,
-) -> (ion_core::SubmissionReceipt, TaskId) {
+) -> (AdmissionReceipt, TaskId) {
     let submitted = driver
         .submit_input(submission(root, key, text), turn_request(root))
         .await
@@ -477,27 +478,27 @@ async fn a_completed_submission_replays_instead_of_opening_a_second_turn() {
 }
 
 #[tokio::test]
-async fn a_submission_cannot_replay_onto_an_input_admitted_without_a_turn() {
+async fn replaying_an_admission_reports_a_queued_input_without_a_turn() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();
     let admitted = session
-        .admit_input(submission(root, "turn-1", "hello"))
+        .queue_input(submission(root, "turn-1", "hello"))
         .expect("admit without a turn")
         .input_id;
     let driver = TaskDriver::new(session, builtin_registry([] as [Script; 0]));
 
-    // The input exists and the key matches, but it was never accepted as a
-    // submission. Reporting success would silently accept work with no turn.
-    let error = driver
+    // The same key replays the original admission. Because it only queued, the
+    // receipt must say so rather than report a turn that does not exist.
+    let replayed = driver
         .submit_input(submission(root, "turn-1", "hello"), turn_request(root))
         .await
-        .expect_err("a submission cannot replay onto an unbound input");
-    assert!(matches!(
-        error,
-        TaskDriverError::Session(SessionError::SubmissionUnbound(id)) if id == admitted
-    ));
+        .expect("replay");
+    assert!(replayed.replayed);
+    assert_eq!(replayed.input_id, admitted);
+    assert_eq!(replayed.task_id, None, "a queued input has no turn");
+    assert!(!replayed.started_turn());
     let snapshot = driver.snapshot().await;
-    assert_eq!(snapshot.tasks.len(), 0);
+    assert_eq!(snapshot.tasks.len(), 0, "a replay opens no turn");
     assert_eq!(snapshot.inputs[0].disposition, InputDisposition::Queued);
 }
 

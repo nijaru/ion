@@ -62,6 +62,7 @@ crates/ion-core/
       command.rs
       transaction.rs
       scheduler.rs
+      idle.rs       # admission policy + queued-input scheduling
       wait.rs
       capacity.rs
       # add focused modules below when behavior is large enough:
@@ -159,6 +160,7 @@ Current split:
 - `command.rs`: typed command/receipt/error vocabulary;
 - `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
 - `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership, cancellation signaling and close/join policy;
+- `idle.rs`: the mode/state admission policy and the turn a conversation starts for queued input, including the `TurnTemplate` configuration. It owns when queued input becomes work, not how a turn is created (`owner.rs`/`transaction.rs`) or how it is driven (`scheduler.rs`);
 - `wait.rs`: client task/dependency waits over committed-state wake signals;
 - `capacity.rs`: independent process-local scarce-resource limits.
 

@@ -22,10 +22,10 @@ pub use id::{
     ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
 };
 pub use session::{
-    CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest,
-    InputReceipt, InputRequest, Interruption, InterruptionReason, Session, SessionError,
-    Settlement, SubmissionReceipt, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError,
-    TaskReceipt, TaskRequest, TurnCancellation,
+    AdmissionReceipt, CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt,
+    EntryRequest, InputReceipt, InputRequest, Interruption, InterruptionReason, Session,
+    SessionError, Settlement, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError,
+    TaskReceipt, TaskRequest, TurnCancellation, TurnTemplate,
 };
 pub use task::{
     AbortContext, DependencyOutcome, InvocationKind, MAX_PLAN_ENTRIES, MAX_PLAN_INPUTS,

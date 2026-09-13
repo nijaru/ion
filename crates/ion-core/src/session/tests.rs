@@ -23,6 +23,79 @@ fn completed(value: &str) -> TaskOutcome {
     }
 }
 
+fn input_request(target: ConversationId, mode: InputMode) -> InputRequest {
+    InputRequest {
+        target,
+        sender: InputSender::User,
+        mode,
+        request_key: None,
+        body: InputBody::Text("hello".to_owned()),
+    }
+}
+
+#[test]
+fn admission_policy_follows_mode_and_conversation_state() {
+    // Idle: a turn-starting mode opens the turn; queue-only and notice do not.
+    for (mode, starts) in [
+        (InputMode::Submit, true),
+        (InputMode::Steer, true),
+        (InputMode::FollowUp, true),
+        (InputMode::QueueOnly, false),
+        (InputMode::Notice, false),
+    ] {
+        let mut session = Session::new().expect("session");
+        let root = session.root_conversation();
+        let receipt = session
+            .admit_input(
+                input_request(root, mode),
+                Some(task_request(root, Vec::new())),
+            )
+            .expect("idle admission");
+        assert_eq!(receipt.started_turn(), starts, "idle {mode:?}");
+        let disposition = &session.snapshot().inputs[0].disposition;
+        if starts {
+            assert_eq!(
+                disposition,
+                &InputDisposition::Assigned(receipt.task_id.expect("turn root"))
+            );
+        } else {
+            assert_eq!(disposition, &InputDisposition::Queued);
+        }
+    }
+
+    // Busy: only submit is refused; every other mode queues.
+    for (mode, refused) in [
+        (InputMode::Submit, true),
+        (InputMode::Steer, false),
+        (InputMode::FollowUp, false),
+        (InputMode::QueueOnly, false),
+        (InputMode::Notice, false),
+    ] {
+        let mut session = Session::new().expect("session");
+        let root = session.root_conversation();
+        session
+            .create_turn(task_request(root, Vec::new()))
+            .expect("live turn");
+        let before = session.snapshot();
+        let receipt = session.admit_input(
+            input_request(root, mode),
+            Some(task_request(root, Vec::new())),
+        );
+        if refused {
+            let error = receipt.expect_err("a busy submit is refused");
+            assert!(matches!(error, SessionError::ForegroundTurnBusy(id) if id == root));
+            assert_eq!(session.snapshot(), before, "a refusal admits nothing");
+        } else {
+            let receipt = receipt.expect("busy admission queues");
+            assert!(!receipt.started_turn(), "busy {mode:?}");
+            assert_eq!(
+                session.snapshot().inputs[0].disposition,
+                InputDisposition::Queued
+            );
+        }
+    }
+}
+
 #[test]
 fn reservation_checkpoint_and_recovery_are_generation_fenced() {
     let mut session = Session::new().expect("session");
@@ -159,7 +232,7 @@ fn input_disposition_tracks_assignment_then_consumption() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();
     let input = session
-        .admit_input(InputRequest {
+        .queue_input(InputRequest {
             target: root,
             sender: InputSender::User,
             mode: InputMode::Submit,
@@ -205,7 +278,7 @@ fn submission_rejects_an_input_aimed_at_another_conversation() {
     let before = session.snapshot();
 
     let error = session
-        .submit_input(
+        .admit_input(
             InputRequest {
                 target: other,
                 sender: InputSender::User,
@@ -213,7 +286,7 @@ fn submission_rejects_an_input_aimed_at_another_conversation() {
                 request_key: None,
                 body: InputBody::Text("elsewhere".to_owned()),
             },
-            task_request(root, Vec::new()),
+            Some(task_request(root, Vec::new())),
         )
         .expect_err("a mismatched target must be rejected");
     assert!(matches!(error, SessionError::InputTargetMismatch { .. }));

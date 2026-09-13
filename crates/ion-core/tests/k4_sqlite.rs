@@ -173,7 +173,7 @@ async fn build_session(path: &Path) -> (TaskDriver, TaskId) {
         .expect("fork")
         .conversation_id;
     let admitted = session
-        .admit_input(InputRequest {
+        .queue_input(InputRequest {
             target: root,
             sender: InputSender::User,
             mode: InputMode::Submit,
@@ -290,7 +290,7 @@ async fn reopening_reconstructs_entries_inputs_tasks_and_turns() {
     assert_eq!(input.disposition, before.inputs[0].disposition);
     let key = input.request_key.clone().expect("request key survived");
     let replay = reopened
-        .admit_input(InputRequest {
+        .queue_input(InputRequest {
             target: input.target,
             sender: input.sender,
             mode: input.mode,

@@ -272,7 +272,7 @@ Cancelling a turn durably marks every non-terminal task scoped to that turn root
 
 The slot is released only when the turn has no remaining non-terminal member, not when the root settles. A terminal root with live tools or a continuation still owns the slot, so a second foreground chain cannot interleave with the first. Background work never holds the slot and never delays its release. Starting a new turn while one is live is rejected until the slot is free.
 
-This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Submission admits an input and opens the turn that answers it in one commit, binding the input to the turn root; the generation that answers it consumes the input when it appends the entry carrying its content. Queued follow-ups and idle-conversation scheduling remain K5 policy built on this slot, and a consumed entry reference is only one of several distinct facts about an input.
+This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Admission decides whether an input opens the conversation's turn or queues behind it, and a settlement that releases the slot starts the next queued turn. Queued follow-ups and idle-conversation scheduling are this slot plus the admission policy, and a consumed entry reference is only one of several distinct facts about an input.
 
 ## 11. Inputs and communication
 
@@ -292,7 +292,11 @@ Initial modes:
 
 Exact duplicate request-key replay returns the original receipt. Rebinding the same key to different target/content/mode rejects `IdempotencyConflict`.
 
-Submission is atomic where it matters: admitting an input and opening the turn that answers it commit together with the binding, so an accepted input always has a task and a rejected submission admits nothing. Nothing is driven by submission. Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript. A submission replay is accepted only onto a bound or consumed input: replaying onto an input that was merely admitted would silently accept work no turn ever took.
+Admission and turn start are one durable decision, and it follows the mode/state table above. A turn-starting mode on an idle conversation admits the input and opens the turn that answers it in the same commit, binding the input to the new turn root; a rejected admission, such as submit on a busy conversation, admits nothing. Steering or following up on a busy conversation queues the input instead of failing, and a notice or queue-only input is retained without waking the conversation.
+
+Queued input is drained when a settlement releases the conversation's turn slot, one input per successor turn and in admission order, so a queued follow-up continues the conversation without a client polling. Nothing schedules queued input on its own before that: opening or inspecting a session still starts no work, and a client may ask for the next turn explicitly, which is what a conversation reopened with durable queued input needs. The scheduler never invents a task kind: a conversation's automatic turn shape is configuration (`TurnTemplate`), and without one nothing is scheduled automatically and a turn-starting mode on an idle conversation is refused rather than silently dropped.
+
+Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript. A duplicate request key replays the original admission without a new commit: the receipt reports the bound turn when one exists and otherwise reports the input as queued, including when the original admission queued it. A queued input is not a lost input, so replaying it is not an error. Steering a busy conversation is deferred to the next turn boundary; injecting input into a running generation mid-turn is not built yet.
 
 Inter-worker communication uses this same input substrate rather than another mailbox truth model.
 

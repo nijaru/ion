@@ -6,6 +6,8 @@ use crate::conversation::context::{project, validate_fork_cutoff};
 use crate::session::command::{
     ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
 };
+use crate::session::idle::Admission;
+use crate::session::idle::admission;
 use crate::session::state::{SessionState, apply_mutation};
 use crate::task::{PlannedTask, TaskDependency, TaskPlan};
 use crate::view::Change;
@@ -331,27 +333,73 @@ impl Transaction {
         Ok(())
     }
 
-    /// Admit an input and open the foreground turn that will answer it, binding
-    /// the input to the new turn root in one commit. Either the input is admitted
-    /// and bound, or nothing changes.
-    pub(crate) fn create_input_turn(
+    /// Admit an input and apply the mode/state policy for its conversation.
+    ///
+    /// `turn` supplies the turn to start when the policy starts one; a mode that
+    /// only queues does not need it. Refusal happens before anything is staged,
+    /// and any later error rolls the whole transaction back, so a rejected
+    /// submission admits nothing.
+    pub(crate) fn admit_input(
         &mut self,
-        input: InputRequest,
-        task: TaskRequest,
-    ) -> Result<(InputId, TaskId), SessionError> {
-        if input.target != task.conversation_id {
-            return Err(SessionError::InputTargetMismatch {
-                input: input.target,
-                task: task.conversation_id,
-            });
+        request: InputRequest,
+        turn: Option<TaskRequest>,
+    ) -> Result<(InputId, Option<TaskId>), SessionError> {
+        let target = request.target;
+        let mode = request.mode;
+        let conversation = self
+            .draft
+            .conversations
+            .get(&target)
+            .ok_or(SessionError::UnknownConversation(target))?;
+        let busy = conversation.foreground_turn.is_some();
+
+        match admission(mode, busy) {
+            Admission::Reject => Err(SessionError::ForegroundTurnBusy(target)),
+            Admission::Queue => Ok((self.queue_input(request)?, None)),
+            Admission::StartTurn => {
+                let turn = turn.ok_or(SessionError::MissingTurnRequest { mode })?;
+                if turn.conversation_id != target {
+                    return Err(SessionError::InputTargetMismatch {
+                        input: target,
+                        task: turn.conversation_id,
+                    });
+                }
+                let input_id = self.queue_input(request)?;
+                let task_id = self.create_turn(turn)?;
+                self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
+                Ok((input_id, Some(task_id)))
+            }
         }
-        let input_id = self.admit_input(input)?;
-        let task_id = self.create_turn(task)?;
-        self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
-        Ok((input_id, task_id))
     }
 
-    pub(crate) fn admit_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {
+    /// Bind an already-queued input to a new turn in one commit. This is how an
+    /// idle conversation answers input that arrived while it was busy.
+    pub(crate) fn bind_turn_for_input(
+        &mut self,
+        input_id: InputId,
+        turn: TaskRequest,
+    ) -> Result<TaskId, SessionError> {
+        let (target, disposition) = self
+            .draft
+            .inputs
+            .get(&input_id)
+            .map(|input| (input.target, input.disposition))
+            .ok_or(SessionError::UnknownInput(input_id))?;
+        if disposition != InputDisposition::Queued {
+            return Err(SessionError::InvalidInputDisposition(input_id));
+        }
+        if target != turn.conversation_id {
+            return Err(SessionError::InputTargetMismatch {
+                input: target,
+                task: turn.conversation_id,
+            });
+        }
+        let task_id = self.create_turn(turn)?;
+        self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
+        Ok(task_id)
+    }
+
+    pub(crate) fn queue_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {
         if !self.draft.conversations.contains_key(&request.target) {
             return Err(SessionError::UnknownConversation(request.target));
         }

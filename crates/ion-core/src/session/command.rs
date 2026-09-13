@@ -95,17 +95,26 @@ pub struct InputReceipt {
     pub replayed: bool,
 }
 
-/// Receipt for a submitted input that opened the foreground turn answering it.
+/// Receipt for an admitted input under the mode/state admission policy.
 ///
-/// `task_id` is the turn root the input was bound to. A replay returns the same
-/// input without a new commit; `task_id` is present while the input is still
-/// `Assigned`, and `None` once it has been consumed (or was cancelled).
+/// `task_id` is the turn root that answers the input when the policy started
+/// one. `None` means the input is queued (or that a replay found it already
+/// consumed), so the caller must not assume a turn exists. A replay returns the
+/// same input without a new commit and without opening a second turn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SubmissionReceipt {
+pub struct AdmissionReceipt {
     pub input_id: InputId,
     pub task_id: Option<TaskId>,
     pub commit_seq: CommitSeq,
     pub replayed: bool,
+}
+
+impl AdmissionReceipt {
+    /// Whether this admission opened the turn that answers the input.
+    #[must_use]
+    pub const fn started_turn(&self) -> bool {
+        self.task_id.is_some()
+    }
 }
 
 /// Result of cancelling one foreground turn. `cancelled` lists the tasks whose
@@ -194,8 +203,10 @@ pub enum SessionError {
         input: ConversationId,
         task: ConversationId,
     },
-    #[error("input {0} was admitted without a turn, so a submission cannot replay onto it")]
-    SubmissionUnbound(InputId),
+    #[error(
+        "mode {mode:?} starts a turn on an idle conversation, but no turn request was supplied"
+    )]
+    MissingTurnRequest { mode: InputMode },
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]

@@ -234,7 +234,7 @@ fn committed_write_set_reconstructs_resident_state() {
         })
         .expect("entry");
     session
-        .admit_input(InputRequest {
+        .queue_input(InputRequest {
             target: root,
             sender: InputSender::User,
             mode: InputMode::Submit,

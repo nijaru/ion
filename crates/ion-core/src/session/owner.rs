@@ -3,8 +3,8 @@ use std::collections::VecDeque;
 use serde_json::Value;
 
 use crate::session::command::{
-    CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
-    InputReceipt, InputRequest, InvocationReceipt, SessionError, SubmissionReceipt, TaskReceipt,
+    AdmissionReceipt, CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt,
+    EntryRequest, InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt,
     TaskRequest, TurnCancellation,
 };
 use crate::session::state::{RunnableTask, SessionState};
@@ -157,7 +157,7 @@ impl Session {
         })
     }
 
-    pub fn admit_input(&mut self, request: InputRequest) -> Result<InputReceipt, SessionError> {
+    pub fn queue_input(&mut self, request: InputRequest) -> Result<InputReceipt, SessionError> {
         self.ensure_open()?;
         if let Some(key) = request.request_key.as_ref()
             && let Some(receipt) = self.replay_input(key, &request)?
@@ -166,7 +166,7 @@ impl Session {
         }
 
         let (input_id, commit_seq) =
-            self.transact(|transaction| transaction.admit_input(request))?;
+            self.transact(|transaction| transaction.queue_input(request))?;
         Ok(InputReceipt {
             input_id,
             commit_seq,
@@ -174,36 +174,70 @@ impl Session {
         })
     }
 
-    /// Admit `input` and open the foreground turn that answers it, in one
-    /// commit. The input is bound to the created turn root.
+    /// The earliest queued input of `conversation_id` whose mode starts a turn,
+    /// if the conversation currently holds no foreground turn.
+    pub(crate) fn next_schedulable_input(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Option<InputId> {
+        let conversation = self.state.conversations.get(&conversation_id)?;
+        if conversation.foreground_turn.is_some() {
+            return None;
+        }
+        self.state
+            .inputs
+            .values()
+            .find(|input| {
+                input.target == conversation_id
+                    && input.disposition == InputDisposition::Queued
+                    && crate::session::idle::starts_turn(input.mode)
+            })
+            .map(|input| input.id)
+    }
+
+    /// Bind an already-queued input to a new turn in one commit.
+    pub(crate) fn bind_turn_for_input(
+        &mut self,
+        input_id: InputId,
+        turn: TaskRequest,
+    ) -> Result<TaskId, SessionError> {
+        self.transact(|transaction| transaction.bind_turn_for_input(input_id, turn))
+            .map(|(task_id, _)| task_id)
+    }
+
+    /// Admit an input and apply the mode/state admission policy for its
+    /// conversation, in one commit.
     ///
-    /// A duplicate request key replays the original submission without a new
-    /// commit and without opening a second turn; the same key with different
-    /// content or routing is a conflict. Nothing is driven here: admitting work
-    /// never starts it.
-    pub fn submit_input(
+    /// `turn` supplies the turn to start when the policy starts one; a mode that
+    /// only queues does not need it, and an idle conversation that must answer a
+    /// turn-starting mode without one is refused. A duplicate request key replays
+    /// the original admission without a new commit. Nothing is driven here:
+    /// admitting work never starts it.
+    pub fn admit_input(
         &mut self,
         input: InputRequest,
-        task: TaskRequest,
-    ) -> Result<SubmissionReceipt, SessionError> {
+        turn: Option<TaskRequest>,
+    ) -> Result<AdmissionReceipt, SessionError> {
         self.ensure_open()?;
-        if input.target != task.conversation_id {
+        if let Some(turn) = turn.as_ref()
+            && turn.conversation_id != input.target
+        {
             return Err(SessionError::InputTargetMismatch {
                 input: input.target,
-                task: task.conversation_id,
+                task: turn.conversation_id,
             });
         }
         if let Some(key) = input.request_key.as_ref()
-            && let Some(receipt) = self.replay_submission(key, &input)?
+            && let Some(receipt) = self.replay_admission(key, &input)?
         {
             return Ok(receipt);
         }
 
         let ((input_id, task_id), commit_seq) =
-            self.transact(|transaction| transaction.create_input_turn(input, task))?;
-        Ok(SubmissionReceipt {
+            self.transact(|transaction| transaction.admit_input(input, turn))?;
+        Ok(AdmissionReceipt {
             input_id,
-            task_id: Some(task_id),
+            task_id,
             commit_seq,
             replayed: false,
         })
@@ -542,35 +576,29 @@ impl Session {
     }
 
     /// Replay an already-admitted submission: the same input without a new
-    /// commit. The turn root is recovered from the binding, so a retried submit
-    /// cannot open a second turn for the same input.
-    ///
-    /// An input admitted without a submission has no turn to replay. Returning
-    /// it as a successful submission would silently accept work that was never
-    /// accepted as a turn, so that case is refused instead.
-    fn replay_submission(
+    /// commit. The turn root is recovered from the binding when one exists, so a
+    /// retried admission cannot open a second turn for the same input. A queued
+    /// input replays as queued rather than as an error, because queueing is a
+    /// legitimate outcome of admission.
+    fn replay_admission(
         &self,
         key: &RequestKey,
         request: &InputRequest,
-    ) -> Result<Option<SubmissionReceipt>, SessionError> {
+    ) -> Result<Option<AdmissionReceipt>, SessionError> {
         let Some(receipt) = self.replay_input(key, request)? else {
             return Ok(None);
         };
-        let disposition = self
-            .state
-            .inputs
-            .get(&receipt.input_id)
-            .map(|input| input.disposition);
-        let task_id = match disposition {
-            Some(InputDisposition::Assigned(task_id)) => Some(task_id),
-            // The original submission completed, so there is no live binding but
-            // the replay is still truthful.
-            Some(InputDisposition::Consumed(_)) => None,
-            Some(InputDisposition::Queued | InputDisposition::Cancelled) | None => {
-                return Err(SessionError::SubmissionUnbound(receipt.input_id));
-            }
-        };
-        Ok(Some(SubmissionReceipt {
+        let task_id =
+            self.state
+                .inputs
+                .get(&receipt.input_id)
+                .and_then(|input| match input.disposition {
+                    InputDisposition::Assigned(task_id) => Some(task_id),
+                    InputDisposition::Queued
+                    | InputDisposition::Consumed(_)
+                    | InputDisposition::Cancelled => None,
+                });
+        Ok(Some(AdmissionReceipt {
             input_id: receipt.input_id,
             task_id,
             commit_seq: receipt.commit_seq,

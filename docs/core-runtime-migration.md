@@ -258,7 +258,6 @@ Implemented:
 Still open:
 
 - planned owned-conversation creation and scratch retirement (K6);
-- queued follow-ups and idle-conversation scheduling on the foreground slot (K5);
 - writable ownership release after local joins (K4 SQLite).
 
 The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
@@ -334,7 +333,7 @@ For old development data, preserve/archive/refuse according to the pre-1.0 polic
 
 ### K5 — generation + tool chain
 
-**Implemented over `ion-ai`; provider catalogue and idle scheduling remain.**
+**Implemented over `ion-ai`; provider catalogue and mid-turn steering remain.**
 
 The production built-ins live in `crates/ion-core/src/builtin/`. `Builtins` registers `generation`, `tool` and `post_tools` under their canonical names over one `ModelService` and one `ToolCatalog`; the scheduler branches on no built-in name. `tests/k5_chain.rs` keeps the shape proof with scripted in-test kinds, and `tests/k5_generation.rs` runs the same chain through the real kinds:
 
@@ -352,12 +351,15 @@ The tool kind runs exactly one call against the catalogue and owns its own resul
 
 `TaskDriver::cancel_turn` marks the turn's non-terminal members, signals the live invocations, and drives abort cleanup for members that never dispatched, since those cannot observe a local signal. Together with per-tool result ownership this closes a cancelled exchange and releases the foreground slot without a manual drive.
 
-Submission binds an input to a generation task: `Session::submit_input` admits the input, opens the foreground turn and records `Queued -> Assigned(task)` in one commit, and the generation settlement moves `Assigned -> Consumed(entry)` in the same commit that appends the entry carrying the input's content. `TaskPlan` gained plan-local entry handles and input consumptions, so this binding uses the ordinary restricted-finalization path; `TaskContext::assigned_inputs` reads only the inputs bound to the invocation's own task. Exact request-key replay is unchanged and never opens a second turn, and a submission whose request key names an input that was admitted without a turn is refused instead of silently succeeding.
+Submission binds an input to a generation task: `Session::admit_input` applies the mode/state policy from `DESIGN.md` §11 in one commit, starting the turn that answers the input when the mode and conversation state call for one and otherwise queueing it; a refused admission admits nothing. `TaskDriver::admit_input` uses the driver's configured `TurnTemplate` for the turn it may start, `TaskDriver::submit_input` takes an explicit turn request, and `Session::queue_input` is the queue-only primitive. The generation consumes a bound input into the entry carrying its content. `TaskPlan` gained plan-local entry handles and input consumptions, so this binding uses the ordinary restricted-finalization path; `TaskContext::assigned_inputs` reads only the inputs bound to the invocation's own task. Exact request-key replay is unchanged and never opens a second turn; a replay of an admission that queued reports the input as queued rather than inventing a turn.
+
+Queued input is drained by the settlement that releases a conversation's turn slot: one input per successor turn, in admission order, driven by the driver rather than a coordinator task. `TaskDriver::schedule_next_turn` exposes the same step explicitly, which is how a conversation reopened with durable queued input resumes; without a configured `TurnTemplate` nothing is scheduled automatically.
 
 Still open for this slice:
 
 - a production provider catalogue (auth, wire adapters, model listing);
-- queued follow-ups and idle scheduling while a turn waits for the next input;
+- mid-turn steering: a steer on a busy conversation is queued and delivered at the next turn boundary, but injecting it into a running generation's context is unbuilt;
+- a paused/idle-policy control per conversation, which the mode table references but does not define;
 - context/output bounds, and the readiness scan's per-settlement dependency-list comparison, which is index work under P2;
 - per-tool reconciliation/adoption. A tool can today only declare retry safety; a tool that needs to query an external identity to adopt a prior attempt has no seam for it yet, so the execution-environment pass owns that;
 - cleanup created by cleanup. A successor born cancelled during abort cleanup still needs an explicit drive to settle; auto-driving it would let a pathological kind generate cleanup recursively, so it stays bounded until a depth or budget rule exists.

@@ -97,9 +97,9 @@ fn request_key_replay_returns_original_receipt_without_new_commit() {
     };
 
     let first = session
-        .admit_input(request.clone())
+        .queue_input(request.clone())
         .expect("first admission");
-    let second = session.admit_input(request).expect("replay");
+    let second = session.queue_input(request).expect("replay");
     assert!(!first.replayed);
     assert!(second.replayed);
     assert_eq!(first.input_id, second.input_id);
@@ -108,7 +108,7 @@ fn request_key_replay_returns_original_receipt_without_new_commit() {
     assert_eq!(session.snapshot().last_commit, first.commit_seq);
 
     let conflict = session
-        .admit_input(InputRequest {
+        .queue_input(InputRequest {
             target: session.root_conversation(),
             sender: InputSender::User,
             mode: InputMode::Submit,
