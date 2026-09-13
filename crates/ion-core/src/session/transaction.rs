@@ -203,7 +203,7 @@ impl Transaction {
         &mut self,
         plan: &TaskPlan,
         settling_task: TaskId,
-    ) -> Result<(), SessionError> {
+    ) -> Result<Vec<TaskId>, SessionError> {
         if plan.entries().len() > crate::task::MAX_PLAN_ENTRIES
             || plan.tasks().len() > crate::task::MAX_PLAN_TASKS
         {
@@ -243,7 +243,7 @@ impl Transaction {
             };
             self.create_planned_task(task, planned_ids[index], turn, plan.id(), &planned_ids)?;
         }
-        Ok(())
+        Ok(planned_ids)
     }
 
     fn create_planned_task(

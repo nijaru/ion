@@ -27,12 +27,12 @@ pub use session::{
     TaskRequest, TurnCancellation,
 };
 pub use task::{
-    AbortContext, InvocationKind, MAX_PLAN_ENTRIES, MAX_PLAN_TASKS, PlannedEntry, PlannedTask,
-    PlannedTaskRef, ResourceDomain, RunningTask, TaskCompletion, TaskContext, TaskContextError,
-    TaskDependency, TaskFuture, TaskInvocation, TaskKind, TaskKindName, TaskKindNameError,
-    TaskOutcome, TaskOutcomeKind, TaskOutput, TaskPlan, TaskRecord, TaskRegistry,
-    TaskRegistryError, TaskRunError, TaskStatus, TypedAbortContext, TypedContext, TypedFuture,
-    TypedHandler, TypedOutcome, TypedReport, TypedTask,
+    AbortContext, DependencyOutcome, InvocationKind, MAX_PLAN_ENTRIES, MAX_PLAN_TASKS,
+    PlannedEntry, PlannedTask, PlannedTaskRef, ResourceDomain, RunningTask, TaskCompletion,
+    TaskContext, TaskContextError, TaskDependency, TaskFuture, TaskInvocation, TaskKind,
+    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskPlan,
+    TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus, TypedAbortContext,
+    TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport, TypedTask,
 };
 pub use view::{
     Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,

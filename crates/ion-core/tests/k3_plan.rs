@@ -13,16 +13,6 @@ fn kind(name: &str) -> TaskKindName {
     TaskKindName::new(name).expect("task kind")
 }
 
-fn futures_pending<F: std::future::Future>(future: &mut std::pin::Pin<Box<F>>) -> bool {
-    use std::task::{Context, Poll, Waker};
-    !matches!(
-        future
-            .as_mut()
-            .poll(&mut Context::from_waker(Waker::noop())),
-        Poll::Ready(_)
-    )
-}
-
 fn assistant_calls() -> Message {
     Message {
         role: Role::Assistant,
@@ -216,33 +206,18 @@ async fn finalization_plan_commits_settlement_entries_and_successors_together() 
         .find(|record| record.kind == kind("join"))
         .expect("join task");
     assert_eq!(join.dependencies, tool_ids);
-    assert!(
-        successors
-            .iter()
-            .all(|record| matches!(record.status, TaskStatus::Pending))
-    );
 
-    // The join only becomes driveable once both tools are terminal; a
-    // dependency wait observes that without reserving an invocation.
+    // The plan committed three successors atomically, and the driver then
+    // dispatches work a settlement made runnable: both tools run because they
+    // are ready and their kind is registered, and the join runs once both are
+    // terminal. No further explicit drive is needed.
     let join_id = join.id;
-    let mut waiting = Box::pin(driver.wait_dependencies(join_id));
-    assert!(futures_pending(&mut waiting));
-    drop(waiting);
-    assert!(matches!(
-        driver
-            .snapshot()
-            .await
-            .tasks
-            .iter()
-            .find(|r| r.id == join_id)
-            .unwrap()
-            .status,
-        TaskStatus::Pending
-    ));
+    let join_record = driver.wait_task(join_id).await.expect("join settles");
+    assert!(matches!(join_record.status, TaskStatus::Terminal(_)));
     for tool_id in &tool_ids {
-        driver.drive_task(*tool_id).await.expect("drive tool");
+        let tool = driver.task(*tool_id).await.expect("tool record");
+        assert!(matches!(tool.status, TaskStatus::Terminal(_)));
     }
-    driver.drive_task(join_id).await.expect("drive join");
 }
 
 #[tokio::test]

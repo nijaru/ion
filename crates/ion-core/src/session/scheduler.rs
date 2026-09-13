@@ -139,14 +139,24 @@ impl TaskDriver {
         let session = self.session.lock().await;
         session.ensure_open()?;
         let active = ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())?;
-        let driver = self.clone();
-        let join = tokio::spawn(async move { driver.drive_owned(task_id, active).await });
+        let drive = self.drive_owned(task_id, active);
         drop(session);
-        join.await
+        tokio::spawn(drive)
+            .await
             .map_err(|error| TaskDriverError::DriverJoin(error.to_string()))?
     }
 
-    async fn drive_owned(
+    /// An owned drive, as an opaque boxed future.
+    ///
+    /// Readiness dispatch runs inside a drive and spawns further drives. Boxing
+    /// the future keeps that recursion out of the type of the enclosing future,
+    /// which the compiler otherwise cannot prove `Send`.
+    fn drive_owned(&self, task_id: TaskId, active: ActiveInvocation) -> BoxDrive {
+        let driver = self.clone();
+        Box::pin(async move { driver.drive_owned_inner(task_id, active).await })
+    }
+
+    async fn drive_owned_inner(
         &self,
         task_id: TaskId,
         active: ActiveInvocation,
@@ -307,29 +317,89 @@ impl TaskDriver {
         handler: Option<Arc<dyn TaskKind>>,
     ) -> Result<DriveOutcome, TaskDriverError> {
         let task_id = running.id;
-        {
+        let settled = {
             let mut session = self.session.lock().await;
             session.ensure_open()?;
             let task = session
                 .task_record(task_id)
                 .ok_or(SessionError::UnknownTask(task_id))?;
-            if !task.cancel_requested {
-                return match completion {
-                    Ok(completion) => self.settle_in_session(&mut session, &running, completion),
-                    Err(reason) => Ok(DriveOutcome::Interrupted(Interruption {
-                        task_id: running.id,
-                        invocation_kind: running.invocation_kind,
-                        generation: running.generation,
-                        reservation_commit: running.reservation_commit,
-                        reason,
-                    })),
-                };
+            if task.cancel_requested {
+                None
+            } else {
+                match completion {
+                    Ok(completion) => {
+                        Some(self.settle_in_session(&mut session, &running, completion))
+                    }
+                    Err(reason) => {
+                        return Ok(DriveOutcome::Interrupted(Interruption {
+                            task_id: running.id,
+                            invocation_kind: running.invocation_kind,
+                            generation: running.generation,
+                            reservation_commit: running.reservation_commit,
+                            reason,
+                        }));
+                    }
+                }
             }
-        }
+        };
 
-        // Cancellation committed during the normal invocation; the old
-        // invocation already joined, so cleanup runs as a fresh abort generation.
-        self.run_abort(task_id, handler).await
+        match settled {
+            Some(Ok((outcome, created))) => {
+                // Work this settlement unblocked becomes runnable here, and only
+                // here: admission never starts work on its own.
+                self.dispatch_runnable(task_id, &created).await;
+                Ok(outcome)
+            }
+            Some(Err(error)) => Err(error),
+            // Cancellation committed during the normal invocation; the old
+            // invocation already joined, so cleanup runs as a fresh abort generation.
+            None => self.run_abort(task_id, handler).await,
+        }
+    }
+
+    /// Drive the successors a settlement left runnable and that have a
+    /// registered kind.
+    ///
+    /// Readiness alone never fabricates an outcome: a candidate with no
+    /// registered implementation stays pending for an explicit drive, so
+    /// registering a kind later is still possible. Each candidate runs as an
+    /// ordinary owned invocation, which means close still joins it, a second
+    /// local drive for one task is still rejected, and cancellation still
+    /// fences reservation.
+    async fn dispatch_runnable(&self, settled: TaskId, created: &[TaskId]) {
+        let candidates = {
+            let session = self.session.lock().await;
+            if session.ensure_open().is_err() {
+                return;
+            }
+            session.runnable_successors(settled, created)
+        };
+        let registry = self.registry.read().expect("task registry lock");
+        let dispatchable: Vec<TaskId> = candidates
+            .into_iter()
+            .filter(|candidate| {
+                registry
+                    .get(&candidate.kind, candidate.schema_version)
+                    .is_some()
+            })
+            .map(|candidate| candidate.id)
+            .collect();
+        drop(registry);
+
+        for task_id in dispatchable {
+            let Ok(active) =
+                ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())
+            else {
+                // Already driven locally; the existing drive owns it.
+                continue;
+            };
+            let driver = self.clone();
+            let spawned: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+                Box::pin(async move {
+                    let _ = driver.drive_owned(task_id, active).await;
+                });
+            tokio::spawn(spawned);
+        }
     }
 
     async fn cleanup_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, TaskDriverError> {
@@ -414,27 +484,30 @@ impl TaskDriver {
         session: &mut Session,
         running: &RunningTask,
         completion: TaskCompletion,
-    ) -> Result<DriveOutcome, TaskDriverError> {
+    ) -> Result<(DriveOutcome, Vec<TaskId>), TaskDriverError> {
         let TaskCompletion {
             outcome,
             output,
             plan,
         } = completion;
-        let (_, commit_seq) = session.settle_task_with(
+        let (created, commit_seq) = session.settle_task_with(
             running.id,
             running.generation,
             outcome.clone(),
             output,
             |transaction| transaction.apply_task_plan(&plan, running.id),
         )?;
-        Ok(DriveOutcome::Settled(Settlement {
-            task_id: running.id,
-            invocation_kind: running.invocation_kind,
-            generation: running.generation,
-            reservation_commit: running.reservation_commit,
-            settlement_commit: commit_seq,
-            outcome,
-        }))
+        Ok((
+            DriveOutcome::Settled(Settlement {
+                task_id: running.id,
+                invocation_kind: running.invocation_kind,
+                generation: running.generation,
+                reservation_commit: running.reservation_commit,
+                settlement_commit: commit_seq,
+                outcome,
+            }),
+            created,
+        ))
     }
 
     async fn settle(
@@ -444,8 +517,13 @@ impl TaskDriver {
     ) -> Result<DriveOutcome, TaskDriverError> {
         match completion {
             Ok(completion) => {
-                let mut session = self.session.lock().await;
-                self.settle_in_session(&mut session, &running, completion)
+                let settled = {
+                    let mut session = self.session.lock().await;
+                    self.settle_in_session(&mut session, &running, completion)
+                };
+                let (outcome, created) = settled?;
+                self.dispatch_runnable(running.id, &created).await;
+                Ok(outcome)
             }
             // No durable settlement: the task remains running and is retried
             // through an explicit Recover or Abort drive.
@@ -477,6 +555,36 @@ impl TaskRuntime for SessionTaskRuntime {
             session
                 .checkpoint_task(task_id, generation, checkpoint, output)
                 .map_err(context_error)
+        })
+    }
+
+    fn conversation_entries<'a>(
+        &'a self,
+        task_id: TaskId,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> ContextFuture<'a, Result<crate::EntryPage, TaskContextError>> {
+        Box::pin(async move {
+            let session = self.session.lock().await;
+            session.ensure_open().map_err(context_error)?;
+            let conversation_id = session
+                .task_record(task_id)
+                .ok_or_else(|| TaskContextError::Runtime(format!("unknown task {task_id}")))?
+                .conversation_id;
+            session
+                .conversation_entries(conversation_id, after, limit)
+                .map_err(context_error)
+        })
+    }
+
+    fn dependency_outcomes<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> ContextFuture<'a, Result<Vec<crate::DependencyOutcome>, TaskContextError>> {
+        Box::pin(async move {
+            let session = self.session.lock().await;
+            session.ensure_open().map_err(context_error)?;
+            session.dependency_outcomes(task_id).map_err(context_error)
         })
     }
 }
@@ -519,6 +627,11 @@ fn next_invocation(task: &TaskRecord) -> Option<InvocationKind> {
         }
     }
 }
+
+/// An owned drive future. See `TaskDriver::drive_owned`.
+type BoxDrive = std::pin::Pin<
+    Box<dyn std::future::Future<Output = Result<DriveOutcome, TaskDriverError>> + Send>,
+>;
 
 struct ActiveInvocation {
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,

@@ -208,6 +208,15 @@ Async Rust stack state is process-local and **not durable continuation**. Proces
 
 Trusted task code receives an invocation-scoped `TaskContext`. Its durable commit path can replace the complete checkpoint and perform narrowly authorized canonical writes. Every commit revalidates task identity, invocation generation and cancellation authority on the session writer.
 
+An invocation also reads through `TaskContext`, and only through it:
+
+- its own conversation's transcript, one bounded page at a time, at an optional cutoff;
+- the resolved outcomes of its own fixed dependencies, in dependency order.
+
+Both are fallible reads of committed state. A dependency is terminal before an invocation is reserved, so reading outcomes is not a wait. Reads are scoped to the invocation's conversation and its own dependency list rather than exposing the session: an invocation cannot observe unrelated conversations and cannot widen its own input.
+
+A settlement makes its successors runnable, and the driver dispatches work a settlement made runnable: the successors that plan created, plus dependents of the settled task whose dependencies are now all terminal. Dispatch is scoped to what the settlement touched, so admitting a task still never starts it. A candidate whose kind is not registered stays pending for an explicit drive rather than being settled `unsupported`, so an implementation can still be registered later. Each dispatched candidate is an ordinary owned invocation: close joins it, a second local drive for the same task is rejected, and cancellation still fences reservation.
+
 The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically. The implemented part of that contract is a bounded `TaskPlan` attached to a task completion: it queues immutable transcript entries and successor tasks, and a successor may depend on an existing task or on a task planned earlier in the same plan. Plan-local handles become real session-local IDs only when the writer applies the plan, so no ID escapes before commit. The writer revalidates invocation generation, cancellation and authority, applies entries then successors, and commits outcome and plan in one batch; any failure rolls back the outcome and every planned write. Planned owned conversations and scratch retirement are deferred to K6.
 
 ### Optional phase helper

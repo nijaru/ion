@@ -6,8 +6,8 @@ use thiserror::Error;
 use crate::session::transaction::Mutation;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation, TaskRecord,
-    TaskStatus,
+    InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation, TaskKindName,
+    TaskRecord, TaskStatus,
 };
 
 /// Resident semantic state. Records are held behind `Arc` so a transaction
@@ -44,6 +44,53 @@ impl SessionState {
         }
     }
 
+    /// Whether every fixed dependency of `task` is durably terminal.
+    fn dependencies_terminal(&self, task: &TaskRecord) -> bool {
+        task.dependencies.iter().all(|dependency| {
+            self.tasks
+                .get(dependency)
+                .is_some_and(|task| matches!(task.status, TaskStatus::Terminal(_)))
+        })
+    }
+
+    /// Pending work that a settlement just made runnable: successors the plan
+    /// created, plus dependents of the settled task whose dependencies are now
+    /// all terminal.
+    ///
+    /// Deliberately scoped to what this settlement touched. An unrelated
+    /// pending task that was admitted but never driven stays pending, so
+    /// admitting work still never starts it. Whether a candidate is actually
+    /// driven also depends on the driver's registered kinds; this is the
+    /// readiness predicate, not the dispatch decision. Payloads are not cloned.
+    pub(crate) fn runnable_successors(
+        &self,
+        settled: TaskId,
+        created: &[TaskId],
+    ) -> Vec<RunnableTask> {
+        self.tasks
+            .values()
+            .filter(|task| {
+                matches!(task.status, TaskStatus::Pending)
+                    && !task.cancel_requested
+                    && (created.contains(&task.id) || task.dependencies.contains(&settled))
+                    && self.dependencies_terminal(task)
+            })
+            .map(|task| RunnableTask {
+                id: task.id,
+                kind: task.kind.clone(),
+                schema_version: task.schema_version,
+            })
+            .collect()
+    }
+
+    /// Terminal, or cancelled, or ready to run: the condition a task wait
+    /// resolves on, and the reason a settlement can unblock dependents.
+    pub(crate) fn ready(&self, task: &TaskRecord) -> bool {
+        matches!(task.status, TaskStatus::Terminal(_))
+            || task.cancel_requested
+            || self.dependencies_terminal(task)
+    }
+
     pub(crate) fn visible_entries(
         &self,
         conversation_id: ConversationId,
@@ -73,6 +120,15 @@ impl SessionState {
         );
         Ok(visible)
     }
+}
+
+/// A pending task whose fixed dependencies are all terminal. Deliberately
+/// carries no payload: dispatch decisions do not need to clone task state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RunnableTask {
+    pub(crate) id: TaskId,
+    pub(crate) kind: TaskKindName,
+    pub(crate) schema_version: u32,
 }
 
 fn conversation_mut(state: &mut SessionState, id: ConversationId) -> Option<&mut Conversation> {

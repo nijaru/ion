@@ -7,15 +7,15 @@ use crate::session::command::{
     InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt, TaskRequest,
     TurnCancellation,
 };
-use crate::session::state::SessionState;
+use crate::session::state::{RunnableTask, SessionState};
 use crate::session::transaction::Transaction;
 use crate::store::{MemoryStore, Persistence};
 use crate::view::{
     CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
 };
 use crate::{
-    CommitSeq, ConversationId, InputDisposition, InputId, InvocationKind, RequestKey, SessionId,
-    TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
+    CommitSeq, ConversationId, DependencyOutcome, InputDisposition, InputId, InvocationKind,
+    RequestKey, SessionId, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
 };
 
 #[cfg(test)]
@@ -172,6 +172,57 @@ impl Session {
             commit_seq,
             replayed: false,
         })
+    }
+
+    /// Whether a task wait should resolve: terminal, cancelled, or fully
+    /// unblocked. Kept on the state owner so the wait and dispatch paths cannot
+    /// drift apart.
+    pub(crate) fn ready_to_run(&self, task: &TaskRecord) -> bool {
+        self.state.ready(task)
+    }
+
+    /// Pending work that `settled` just made runnable. Readiness only; the
+    /// driver decides whether a candidate has an implementation to run.
+    pub(crate) fn runnable_successors(
+        &self,
+        settled: TaskId,
+        created: &[TaskId],
+    ) -> Vec<RunnableTask> {
+        self.state.runnable_successors(settled, created)
+    }
+
+    /// The committed outcomes of a task's fixed dependencies, in dependency
+    /// order. A dependency that is not terminal is a broken invariant rather
+    /// than an absence: reservation already required terminal dependencies.
+    pub(crate) fn dependency_outcomes(
+        &self,
+        task_id: TaskId,
+    ) -> Result<Vec<DependencyOutcome>, SessionError> {
+        let task = self
+            .state
+            .tasks
+            .get(&task_id)
+            .ok_or(SessionError::UnknownTask(task_id))?;
+        let mut outcomes = Vec::with_capacity(task.dependencies.len());
+        for dependency in &task.dependencies {
+            let record = self
+                .state
+                .tasks
+                .get(dependency)
+                .ok_or(SessionError::UnknownTask(*dependency))?;
+            let TaskStatus::Terminal(outcome) = &record.status else {
+                return Err(SessionError::Invariant(format!(
+                    "dependency {dependency} of task {task_id} is not terminal"
+                )));
+            };
+            outcomes.push(DependencyOutcome {
+                task_id: record.id,
+                kind: record.kind.clone(),
+                outcome: outcome.clone(),
+                output: record.output.clone(),
+            });
+        }
+        Ok(outcomes)
     }
 
     /// Bounded overview: counts only, no transcript or task payloads.

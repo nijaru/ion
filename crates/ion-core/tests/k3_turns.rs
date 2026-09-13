@@ -1,5 +1,7 @@
 use std::sync::Arc;
 
+use tokio::sync::Notify;
+
 use ion_core::{
     AbortContext, ConversationSpec, PlannedTask, RunningTask, Session, SessionError,
     TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskKind, TaskKindName, TaskOutcomeKind,
@@ -31,7 +33,7 @@ impl TaskKind for FanOut {
             let mut plan = TaskPlan::new();
             plan.create_task(PlannedTask {
                 conversation_id: task.conversation_id,
-                kind: kind("tool"),
+                kind: kind("held"),
                 schema_version: 1,
                 input: json!({"scope": "turn"}),
                 dependencies: Vec::new(),
@@ -74,11 +76,41 @@ impl TaskKind for Plain {
     }
 }
 
-fn registry() -> TaskRegistry {
+/// Stays in flight until its turn is cancelled, so a test can observe the
+/// conversation while a scoped successor still occupies the slot.
+struct Held {
+    entered: Arc<Notify>,
+}
+
+impl TaskKind for Held {
+    fn execute<'a>(&'a self, _task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            // Cancellation is level-triggered, so this cannot miss a signal that
+            // already arrived. Returning here lets the driver notice the durable
+            // mark and run a fresh abort generation.
+            context.cancelled().await;
+            Ok(TaskCompletion::completed(json!("held until cancelled")))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async { Ok(TaskCompletion::aborted(json!("aborted"))) })
+    }
+}
+
+fn registry(entered: Arc<Notify>) -> TaskRegistry {
     let mut registry = TaskRegistry::new();
     registry
         .register(kind("fan"), 1, Arc::new(FanOut))
         .expect("fan");
+    registry
+        .register(kind("held"), 1, Arc::new(Held { entered }))
+        .expect("held");
     registry
         .register(kind("tool"), 1, Arc::new(Plain))
         .expect("tool");
@@ -138,20 +170,22 @@ async fn foreground_slot_spans_the_whole_chain_not_just_the_root() {
     let mut session = Session::new().expect("session");
     let root_conversation = session.root_conversation();
     let turn = session.create_turn(request(&session, "fan")).expect("turn");
-    let driver = TaskDriver::new(session, registry());
+    let entered = Arc::new(Notify::new());
+    let driver = TaskDriver::new(session, registry(entered.clone()));
 
     driver
         .drive_task(turn.task_id)
         .await
         .expect("drive turn root");
 
-    // The root settled, but its scoped successor is still foreground work, so
-    // the conversation must not advertise a free slot yet: admitting another
-    // chain here would interleave two model-visible exchanges.
+    // The plan committed a scoped successor and a ready background successor.
+    // Readiness dispatch starts the scoped one, which stays in flight.
+    entered.notified().await;
     let snapshot = driver.snapshot().await;
     assert_eq!(
         foreground_turn_from(&snapshot, root_conversation),
-        Some(turn.task_id)
+        Some(turn.task_id),
+        "the root settled, but its scoped successor still owns the slot"
     );
     let scoped: Vec<_> = snapshot
         .tasks
@@ -165,35 +199,32 @@ async fn foreground_slot_spans_the_whole_chain_not_just_the_root() {
         .copied()
         .find(|id| *id != turn.task_id)
         .expect("scoped successor");
+    assert!(matches!(
+        snapshot
+            .tasks
+            .iter()
+            .find(|record| record.id == successor)
+            .expect("scoped record")
+            .status,
+        TaskStatus::Running
+    ));
+    // Background work never holds the slot, and reaching terminal does not
+    // delay its release either.
     let retained = snapshot
         .tasks
         .iter()
         .find(|record| record.turn.is_none())
         .expect("background successor");
-    assert!(matches!(retained.status, TaskStatus::Pending));
+    assert!(matches!(retained.status, TaskStatus::Terminal(_)));
+    assert!(!retained.cancel_requested);
 
     let cancellation = driver.cancel_turn(turn.task_id).await.expect("cancel turn");
     assert!(cancellation.changed());
     assert_eq!(cancellation.cancelled, vec![successor]);
-    // A cancelled but unsettled member still holds the slot.
-    assert_eq!(
-        foreground_turn_from(&driver.snapshot().await, root_conversation),
-        Some(turn.task_id)
-    );
+    driver.wait_task(successor).await.expect("abort settles");
 
-    // Cleanup settles the scoped member, which completes the foreground chain.
-    driver.drive_task(successor).await.expect("drive abort");
     let snapshot = driver.snapshot().await;
     assert_eq!(foreground_turn_from(&snapshot, root_conversation), None);
-
-    // Background work never held the slot and must not delay release.
-    let retained = snapshot
-        .tasks
-        .iter()
-        .find(|record| record.id == retained.id)
-        .expect("retained task");
-    assert!(!retained.cancel_requested);
-    assert!(matches!(retained.status, TaskStatus::Pending));
 
     // With the chain finished, the conversation can admit a new turn.
     driver
@@ -215,7 +246,7 @@ async fn cancelling_a_live_turn_releases_the_slot_after_abort_settlement() {
     let turn = session
         .create_turn(request(&session, "tool"))
         .expect("turn");
-    let driver = TaskDriver::new(session, registry());
+    let driver = TaskDriver::new(session, registry(Arc::new(Notify::new())));
 
     let cancellation = driver.cancel_turn(turn.task_id).await.expect("cancel turn");
     assert_eq!(cancellation.cancelled, vec![turn.task_id]);

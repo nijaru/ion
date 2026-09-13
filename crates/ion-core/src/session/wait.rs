@@ -31,13 +31,7 @@ impl TaskDriver {
                     .task_record(task_id)
                     .ok_or(SessionError::UnknownTask(task_id))?;
                 let ready = matches!(task.status, TaskStatus::Terminal(_))
-                    || (!terminal
-                        && (task.cancel_requested
-                            || task.dependencies.iter().all(|id| {
-                                session.task_record(*id).is_some_and(|dependency| {
-                                    matches!(dependency.status, TaskStatus::Terminal(_))
-                                })
-                            })));
+                    || (!terminal && session.ready_to_run(&task));
                 if ready {
                     return Ok(task);
                 }

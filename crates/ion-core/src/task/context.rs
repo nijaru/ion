@@ -6,9 +6,21 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::{CommitSeq, TaskId, TaskOutput};
+use crate::{CommitSeq, EntryId, EntryPage, TaskId, TaskKindName, TaskOutcome, TaskOutput};
 
 pub(crate) type ContextFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
+
+/// The resolved durable result of one dependency, as read by an invocation.
+///
+/// Dependencies are terminal before an invocation is reserved, so this is a
+/// read of committed state rather than a wait.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DependencyOutcome {
+    pub task_id: TaskId,
+    pub kind: TaskKindName,
+    pub outcome: TaskOutcome,
+    pub output: Option<TaskOutput>,
+}
 
 pub(crate) trait TaskRuntime: Send + Sync {
     fn checkpoint<'a>(
@@ -18,6 +30,20 @@ pub(crate) trait TaskRuntime: Send + Sync {
         checkpoint: Option<Value>,
         output: Option<TaskOutput>,
     ) -> ContextFuture<'a, Result<CommitSeq, TaskContextError>>;
+
+    /// One bounded page of the invocation conversation's fork-visible entries.
+    fn conversation_entries<'a>(
+        &'a self,
+        task_id: TaskId,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> ContextFuture<'a, Result<EntryPage, TaskContextError>>;
+
+    /// The committed outcomes of this invocation's fixed dependencies.
+    fn dependency_outcomes<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> ContextFuture<'a, Result<Vec<DependencyOutcome>, TaskContextError>>;
 }
 
 #[derive(Clone)]
@@ -51,6 +77,29 @@ impl TaskContext {
         self.runtime
             .checkpoint(self.task_id, self.generation, checkpoint, output)
             .await
+    }
+
+    /// Read one bounded page of this invocation's conversation transcript.
+    ///
+    /// `after` is exclusive; `None` starts at the beginning of the fork-visible
+    /// range. The read holds the mutation line only for the read itself, and the
+    /// caller decides what to do with a long history instead of receiving an
+    /// unbounded clone.
+    pub async fn conversation_entries(
+        &self,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> Result<EntryPage, TaskContextError> {
+        self.runtime
+            .conversation_entries(self.task_id, after, limit)
+            .await
+    }
+
+    /// The committed outcomes of this invocation's fixed dependencies, in
+    /// dependency order. This is what lets a continuation observe the work it
+    /// was created to join.
+    pub async fn dependency_outcomes(&self) -> Result<Vec<DependencyOutcome>, TaskContextError> {
+        self.runtime.dependency_outcomes(self.task_id).await
     }
 
     #[must_use]

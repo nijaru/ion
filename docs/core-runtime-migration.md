@@ -333,9 +333,9 @@ For old development data, preserve/archive/refuse according to the pre-1.0 polic
 
 ### K5 — generation + tool chain
 
-Use `ion-ai`'s scripted model service and a narrow tool executor.
+**Chain backbone implemented; scripted model service and real tool executor still open.**
 
-Prove:
+Implemented: an invocation can read its own conversation transcript as bounded pages and its own dependencies' resolved outcomes, and a settlement dispatches the successors it made runnable. `tests/k5_chain.rs` proves the shape end to end:
 
 ```text
 input
@@ -345,7 +345,14 @@ input
  -> final generation
 ```
 
-with B settling before A while projected order remains A,B.
+with B settling before A while the join still observes A,B, the continuation generation reading the transcript entry the join appended, the whole chain occupying one foreground-turn slot until its final settlement, and rows running on readiness dispatch alone after the turn root is driven.
+
+Still open for this slice:
+
+- the model calls are a scripted in-test kind, not `ion-ai`'s model service plus a narrow tool executor;
+- input admission and queued follow-ups do not yet bind a pending user input to a generation task;
+- dispatch is unscoped to the foreground slot: it drives any successor the settlement unblocked, including background work, which is intended, but there is no idle scheduling while a turn waits for the next input;
+- the readiness scan compares dependency lists per settlement, which is fine at this scale and is index work under P2.
 
 ### K6 — workers
 
