@@ -1,24 +1,35 @@
 //! K5: the real generation/tool chain on top of `ion-ai`.
 //!
 //! A submitted input is admitted, bound to a turn root, and answered by the
-//! registered built-in kinds: generation calls the model service, a tool task
-//! runs one call, the post-tools join appends the exchange, and the continuation
-//! generation finishes the turn. The `ScriptedModelService` stands in for a
-//! provider; everything else is production code.
+//! registered built-in kinds: generation freezes and dispatches a model request,
+//! a tool task records its own result, the post-tools join makes the
+//! continuation runnable, and the continuation generation finishes the turn.
+//! The `ScriptedModelService` stands in for a provider; everything else is
+//! production code.
+//!
+//! The recovery tests interrupt a real invocation and observe what the
+//! replacement invocation does: it must not repeat an unrecorded external
+//! action and must not rebuild a different model request.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::time::Duration;
 
 use ion_ai::{
-    Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
-    ScriptedModelService, ToolCall, ToolSpec, Usage,
+    Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ProviderError, ProviderErrorKind,
+    ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
-use ion_core::builtin::{Builtins, Tool, ToolCatalog, ToolFuture};
+use ion_core::builtin::{
+    Builtins, GenerationKind, PostToolsKind, Tool, ToolCatalog, ToolCatalogError, ToolFuture,
+    ToolKind,
+};
 use ion_core::{
-    DriveOutcome, InputBody, InputDisposition, InputMode, InputRequest, InputSender, RequestKey,
-    Session, SessionError, TaskDriver, TaskDriverError, TaskKindName, TaskOutcomeKind,
-    TaskRegistry, TaskRequest, TaskStatus,
+    ConversationId, DriveOutcome, InputBody, InputDisposition, InputMode, InputRequest,
+    InputSender, InvocationKind, RequestKey, Session, SessionError, TaskDriver, TaskDriverError,
+    TaskId, TaskKindName, TaskOutcomeKind, TaskRecord, TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::{Value, json};
+use tokio::sync::Notify;
 
 struct Echo;
 
@@ -36,9 +47,29 @@ impl Tool for Echo {
     }
 }
 
-/// A tool that never returns on its own, so a test can observe that an
-/// in-flight call is stopped by the durable cancellation mark plus local signal.
-struct Blocking;
+/// A second tool claiming the same name, used to prove a rejected registration
+/// does not replace the registered one.
+struct EchoReplacement;
+
+impl Tool for EchoReplacement {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "echo".to_owned(),
+            description: "replacement".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    fn call<'a>(&'a self, _arguments: Value) -> ToolFuture<'a> {
+        Box::pin(async move { Ok(json!({"replaced": true})) })
+    }
+}
+
+/// Never returns, and reports entry so a test can cancel after the call was
+/// durably dispatched.
+struct Blocking {
+    entered: Arc<Notify>,
+}
 
 impl Tool for Blocking {
     fn spec(&self) -> ToolSpec {
@@ -50,7 +81,46 @@ impl Tool for Blocking {
     }
 
     fn call<'a>(&'a self, _arguments: Value) -> ToolFuture<'a> {
-        Box::pin(std::future::pending())
+        let entered = self.entered.clone();
+        Box::pin(async move {
+            entered.notify_one();
+            std::future::pending().await
+        })
+    }
+}
+
+/// Counts real calls and panics on the first one, standing in for an external
+/// action whose invocation disappeared after the effect landed. The counter
+/// only ever increases inside `call`, so a test can prove the action was not
+/// repeated.
+struct Flaky {
+    calls: Arc<AtomicUsize>,
+    panic_once: Arc<AtomicBool>,
+    retry_safe: bool,
+}
+
+impl Tool for Flaky {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: "flaky".to_owned(),
+            description: "counts calls and loses its first invocation".to_owned(),
+            input_schema: json!({"type": "object"}),
+        }
+    }
+
+    fn retry_safe(&self) -> bool {
+        self.retry_safe
+    }
+
+    fn call<'a>(&'a self, _arguments: Value) -> ToolFuture<'a> {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst) + 1;
+        let panic = self.panic_once.swap(false, Ordering::SeqCst);
+        Box::pin(async move {
+            if panic {
+                panic!("external call landed before the invocation disappeared");
+            }
+            Ok(json!({"call": call}))
+        })
     }
 }
 
@@ -86,6 +156,14 @@ fn assistant_tool_call(id: &str, name: &str, arguments: Value) -> Message {
     }
 }
 
+fn user_message(text: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![Content::Text(text.to_owned())],
+        provider_replay: None,
+    }
+}
+
 /// A driver with the built-in kinds registered over a scripted model service.
 /// The service is returned so a test can inspect the requests the chain made.
 fn builtin_driver(
@@ -103,10 +181,7 @@ fn driver_over(
     let service = Arc::new(ScriptedModelService::new(scripts));
     let mut registry = TaskRegistry::new();
     Builtins {
-        model: ModelRef {
-            provider: "test".to_owned(),
-            model: "scripted".to_owned(),
-        },
+        model: model_ref(),
         service: service.clone(),
         tools: catalog,
     }
@@ -118,7 +193,43 @@ fn driver_over(
     )
 }
 
-fn submission(target: ion_core::ConversationId, key: &str, text: &str) -> InputRequest {
+fn model_ref() -> ModelRef {
+    ModelRef {
+        provider: "test".to_owned(),
+        model: "scripted".to_owned(),
+    }
+}
+
+/// A driver whose tool kind is deliberately not registered yet. Dispatch then
+/// leaves the tool task pending, so a test can drive one invocation at a time
+/// and observe its interruption directly.
+fn driver_without_tool(
+    catalog: Arc<ToolCatalog>,
+    scripts: impl IntoIterator<Item = Script>,
+) -> (TaskDriver, Arc<ScriptedModelService>) {
+    let service = Arc::new(ScriptedModelService::new(scripts));
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(
+            kind(ion_core::builtin::GENERATION),
+            1,
+            Arc::new(GenerationKind::new(model_ref(), service.clone(), catalog)),
+        )
+        .expect("generation");
+    registry
+        .register(
+            kind(ion_core::builtin::POST_TOOLS),
+            1,
+            Arc::new(PostToolsKind),
+        )
+        .expect("post-tools");
+    (
+        TaskDriver::new(Session::new().expect("session"), registry),
+        service,
+    )
+}
+
+fn submission(target: ConversationId, key: &str, text: &str) -> InputRequest {
     InputRequest {
         target,
         sender: InputSender::User,
@@ -128,7 +239,7 @@ fn submission(target: ion_core::ConversationId, key: &str, text: &str) -> InputR
     }
 }
 
-fn turn_request(target: ion_core::ConversationId) -> TaskRequest {
+fn turn_request(target: ConversationId) -> TaskRequest {
     TaskRequest {
         conversation_id: target,
         kind: kind(ion_core::builtin::GENERATION),
@@ -136,6 +247,36 @@ fn turn_request(target: ion_core::ConversationId) -> TaskRequest {
         input: json!({}),
         dependencies: Vec::new(),
     }
+}
+
+async fn wait(driver: &TaskDriver, task_id: TaskId) -> TaskRecord {
+    tokio::time::timeout(Duration::from_secs(10), driver.wait_task(task_id))
+        .await
+        .expect("the chain must not stall")
+        .expect("wait for a task")
+}
+
+fn find(driver_tasks: &[TaskRecord], task_kind: &str) -> Vec<TaskId> {
+    driver_tasks
+        .iter()
+        .filter(|task| task.kind == kind(task_kind))
+        .map(|task| task.id)
+        .collect()
+}
+
+async fn submit_and_drive(
+    driver: &TaskDriver,
+    root: ConversationId,
+    key: &str,
+    text: &str,
+) -> (ion_core::SubmissionReceipt, TaskId) {
+    let submitted = driver
+        .submit_input(submission(root, key, text), turn_request(root))
+        .await
+        .expect("submit");
+    let turn = submitted.task_id.expect("a submission binds its turn root");
+    driver.drive_task(turn).await.expect("drive the turn");
+    (submitted, turn)
 }
 
 #[tokio::test]
@@ -153,46 +294,63 @@ async fn submitted_input_drives_a_real_generation_tool_chain() {
     ]);
     let root = driver.snapshot().await.root_conversation;
 
-    let submitted = driver
-        .submit_input(
-            submission(root, "turn-1", "please echo"),
-            turn_request(root),
-        )
+    let (submitted, turn) = {
+        let submitted = driver
+            .submit_input(
+                submission(root, "turn-1", "please echo"),
+                turn_request(root),
+            )
+            .await
+            .expect("submit");
+        let turn = submitted.task_id.expect("a submission binds its turn root");
+
+        // Admission bound the input and opened the slot, but started no work:
+        // the turn root is still pending until it is explicitly driven.
+        let snapshot = driver.snapshot().await;
+        let input = snapshot
+            .inputs
+            .iter()
+            .find(|input| input.id == submitted.input_id)
+            .expect("admitted input");
+        assert_eq!(input.disposition, InputDisposition::Assigned(turn));
+        assert_eq!(foreground(&snapshot, root), Some(turn));
+        assert_eq!(
+            snapshot
+                .tasks
+                .iter()
+                .find(|task| task.id == turn)
+                .expect("turn root")
+                .status,
+            TaskStatus::Pending
+        );
+        driver.drive_task(turn).await.expect("drive the turn");
+        (submitted, turn)
+    };
+
+    // Readiness dispatch runs asynchronously, so wait for each step of the chain
+    // rather than assuming the whole chain finished when the root settled.
+    let tasks = driver.snapshot().await.tasks;
+    let tool = *find(&tasks, ion_core::builtin::TOOL)
+        .first()
+        .expect("tool task");
+    let join = *find(&tasks, ion_core::builtin::POST_TOOLS)
+        .first()
+        .expect("join task");
+    wait(&driver, tool).await;
+    let join_record = wait(&driver, join).await;
+    let TaskStatus::Terminal(join_outcome) = &join_record.status else {
+        panic!("the join must be terminal");
+    };
+    assert_eq!(join_outcome.kind, TaskOutcomeKind::Completed);
+    let continuation = driver
+        .snapshot()
         .await
-        .expect("submit");
-    assert!(!submitted.replayed);
-    let turn = submitted.task_id.expect("a submission binds its turn root");
-
-    // Admission bound the input and opened the slot, but started no work: the
-    // turn root is still pending until it is explicitly driven.
-    let snapshot = driver.snapshot().await;
-    let input = snapshot
-        .inputs
+        .tasks
         .iter()
-        .find(|input| input.id == submitted.input_id)
-        .expect("admitted input");
-    assert_eq!(input.disposition, InputDisposition::Assigned(turn));
-    assert_eq!(
-        snapshot
-            .conversations
-            .iter()
-            .find(|conversation| conversation.id == root)
-            .expect("conversation")
-            .foreground_turn,
-        Some(turn)
-    );
-    assert_eq!(
-        snapshot
-            .tasks
-            .iter()
-            .find(|task| task.id == turn)
-            .expect("turn root")
-            .status,
-        TaskStatus::Pending
-    );
-
-    let outcome = driver.drive_task(turn).await.expect("drive the turn");
-    assert!(matches!(outcome, DriveOutcome::Settled(_)));
+        .find(|task| task.kind == kind(ion_core::builtin::GENERATION) && task.id != turn)
+        .map(|task| task.id)
+        .expect("continuation generation");
+    wait(&driver, continuation).await;
 
     // The chain appended exactly one entry per step, in transcript order.
     let page = driver
@@ -227,23 +385,18 @@ async fn submitted_input_drives_a_real_generation_tool_chain() {
         "generation, tool, join, generation"
     );
     assert_eq!(
-        snapshot
-            .conversations
-            .iter()
-            .find(|conversation| conversation.id == root)
-            .expect("conversation")
-            .foreground_turn,
+        foreground(&snapshot, root),
         None,
-        "the finished chain releases the slot"
+        "the chain releases the slot"
     );
 
     // The tool task settled with the tool's own result, not a placeholder.
-    let tool = snapshot
+    let tool_record = snapshot
         .tasks
         .iter()
-        .find(|task| task.kind == kind(ion_core::builtin::TOOL))
+        .find(|task| task.id == tool)
         .expect("tool task");
-    let TaskStatus::Terminal(outcome) = &tool.status else {
+    let TaskStatus::Terminal(outcome) = &tool_record.status else {
         panic!("tool task must be terminal");
     };
     assert_eq!(outcome.kind, TaskOutcomeKind::Completed);
@@ -273,7 +426,7 @@ async fn submitted_input_drives_a_real_generation_tool_chain() {
         .collect();
     assert_eq!(second, vec![Role::User, Role::Assistant, Role::Tool]);
     let Content::ToolResult(result) = &requests[1].messages[2].content[0] else {
-        panic!("the join must produce a tool result");
+        panic!("the tool task must produce a tool result");
     };
     assert_eq!(result.call_id, "call-1");
     assert_eq!(result.result, json!({"echoed": {"value": "hi"}}));
@@ -308,15 +461,7 @@ async fn a_completed_submission_replays_instead_of_opening_a_second_turn() {
     let snapshot = driver.snapshot().await;
     assert_eq!(snapshot.inputs.len(), 1);
     assert_eq!(snapshot.tasks.len(), 1, "no second generation was admitted");
-    assert_eq!(
-        snapshot
-            .conversations
-            .iter()
-            .find(|conversation| conversation.id == root)
-            .expect("conversation")
-            .foreground_turn,
-        None
-    );
+    assert_eq!(foreground(&snapshot, root), None);
     assert_eq!(service.requests().len(), 1, "the replay called no model");
 
     // The same key with different content is a conflict, not a new turn.
@@ -329,6 +474,31 @@ async fn a_completed_submission_replays_instead_of_opening_a_second_turn() {
         TaskDriverError::Session(SessionError::IdempotencyConflict(_))
     ));
     assert_eq!(driver.snapshot().await.inputs.len(), 1);
+}
+
+#[tokio::test]
+async fn a_submission_cannot_replay_onto_an_input_admitted_without_a_turn() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let admitted = session
+        .admit_input(submission(root, "turn-1", "hello"))
+        .expect("admit without a turn")
+        .input_id;
+    let driver = TaskDriver::new(session, builtin_registry([] as [Script; 0]));
+
+    // The input exists and the key matches, but it was never accepted as a
+    // submission. Reporting success would silently accept work with no turn.
+    let error = driver
+        .submit_input(submission(root, "turn-1", "hello"), turn_request(root))
+        .await
+        .expect_err("a submission cannot replay onto an unbound input");
+    assert!(matches!(
+        error,
+        TaskDriverError::Session(SessionError::SubmissionUnbound(id)) if id == admitted
+    ));
+    let snapshot = driver.snapshot().await;
+    assert_eq!(snapshot.tasks.len(), 0);
+    assert_eq!(snapshot.inputs[0].disposition, InputDisposition::Queued);
 }
 
 #[tokio::test]
@@ -373,56 +543,58 @@ async fn an_incomplete_answer_is_not_appended_as_history() {
 }
 
 #[tokio::test]
-async fn cancelling_a_turn_stops_an_in_flight_tool_call() {
+async fn cancelling_a_turn_closes_the_exchange_and_releases_the_slot() {
+    let entered = Arc::new(Notify::new());
     let mut catalog = ToolCatalog::new();
-    catalog.register(Blocking).expect("register blocking tool");
-    let (driver, _service) = driver_over(
+    catalog
+        .register(Blocking {
+            entered: entered.clone(),
+        })
+        .expect("register blocking tool");
+    let (driver, service) = driver_over(
         Arc::new(catalog),
-        [Script::Stream(vec![completed(assistant_tool_call(
-            "call-1",
-            "block",
-            json!({}),
-        ))])],
+        [
+            Script::Stream(vec![completed(assistant_tool_call(
+                "call-1",
+                "block",
+                json!({}),
+            ))]),
+            Script::Stream(vec![completed(assistant_text("second turn"))]),
+        ],
     );
     let root = driver.snapshot().await.root_conversation;
 
-    let submitted = driver
-        .submit_input(
-            submission(root, "turn-1", "block please"),
-            turn_request(root),
-        )
-        .await
-        .expect("submit");
-    let turn = submitted.task_id.expect("turn root");
-    driver.drive_task(turn).await.expect("drive the turn");
+    let (_, turn) = submit_and_drive(&driver, root, "turn-1", "block please").await;
+    let tasks = driver.snapshot().await.tasks;
+    let tool = *find(&tasks, ion_core::builtin::TOOL)
+        .first()
+        .expect("tool task");
+    let join = *find(&tasks, ion_core::builtin::POST_TOOLS)
+        .first()
+        .expect("join task");
 
-    // The generation settled and dispatched the tool, which is now blocked in
-    // its call. Cancelling the turn must stop it rather than let it settle with
-    // a fabricated result.
-    let tool_id = driver
-        .snapshot()
+    // Cancel only after the call was durably dispatched and entered.
+    tokio::time::timeout(Duration::from_secs(10), entered.notified())
         .await
-        .tasks
-        .iter()
-        .find(|task| task.kind == kind(ion_core::builtin::TOOL))
-        .map(|task| task.id)
-        .expect("dispatched tool task");
+        .expect("the tool call must start");
     driver.cancel_turn(turn).await.expect("cancel the turn");
 
-    let record = tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        driver.wait_task(tool_id),
-    )
-    .await
-    .expect("a cancelled tool call must not hang")
-    .expect("wait for the tool task");
-    let TaskStatus::Terminal(outcome) = &record.status else {
-        panic!("the cancelled tool task must settle through abort");
+    // The dispatched call's outcome is unknown and is not reported as stopped,
+    // but the call still records a result so the exchange closes.
+    let tool_record = wait(&driver, tool).await;
+    let TaskStatus::Terminal(outcome) = &tool_record.status else {
+        panic!("the cancelled tool must settle");
     };
-    assert_eq!(outcome.kind, TaskOutcomeKind::Aborted);
+    assert_eq!(outcome.kind, TaskOutcomeKind::Indeterminate);
+    // The never-dispatched join is driven to abort rather than left pending.
+    assert_eq!(
+        wait(&driver, join).await.status,
+        TaskStatus::Terminal(ion_core::TaskOutcome {
+            kind: TaskOutcomeKind::Aborted,
+            value: json!({"reason": "post-tools join aborted"}),
+        })
+    );
 
-    // The user entry and assistant call are already durable; the pending join is
-    // cancelled rather than runnable.
     let page = driver
         .conversation_entries(root, None, 8)
         .await
@@ -432,16 +604,252 @@ async fn cancelling_a_turn_stops_an_in_flight_tool_call() {
         .iter()
         .map(|entry| entry.kind.as_str())
         .collect();
-    assert_eq!(kinds, ["user", "assistant"]);
-    let join = driver
+    assert_eq!(kinds, ["user", "assistant", "tool_result"]);
+    assert_eq!(
+        foreground(&driver.snapshot().await, root),
+        None,
+        "cleanup completed, so the slot is free"
+    );
+
+    // A later turn builds a provider-safe context from the closed exchange.
+    submit_and_drive(&driver, root, "turn-2", "again").await;
+    let second: Vec<Role> = service.requests()[1]
+        .messages
+        .iter()
+        .map(|message| message.role)
+        .collect();
+    assert_eq!(
+        second,
+        vec![Role::User, Role::Assistant, Role::Tool, Role::User],
+        "the aborted call is still represented as a tool result"
+    );
+    match &service.requests()[1].messages[2].content[0] {
+        Content::ToolResult(result) => {
+            assert!(
+                result.result["error"]
+                    .as_str()
+                    .is_some_and(|error| { error.contains("outcome is unknown") }),
+                "the result must not claim the call was stopped"
+            );
+        }
+        other => panic!("expected a tool result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tool_recovery_does_not_repeat_a_dispatched_call() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut catalog = ToolCatalog::new();
+    catalog
+        .register(Flaky {
+            calls: calls.clone(),
+            panic_once: Arc::new(AtomicBool::new(true)),
+            retry_safe: false,
+        })
+        .expect("register flaky tool");
+    let catalog = Arc::new(catalog);
+    let (driver, service) = driver_without_tool(
+        catalog.clone(),
+        [
+            Script::Stream(vec![completed(assistant_tool_call(
+                "call-1",
+                "flaky",
+                json!({}),
+            ))]),
+            Script::Stream(vec![completed(assistant_text("done"))]),
+        ],
+    );
+    let root = driver.snapshot().await.root_conversation;
+
+    submit_and_drive(&driver, root, "turn-1", "flaky please").await;
+    let tool = *find(&driver.snapshot().await.tasks, ion_core::builtin::TOOL)
+        .first()
+        .expect("tool task");
+    assert_eq!(
+        driver.task(tool).await.expect("tool record").status,
+        TaskStatus::Pending,
+        "an unregistered kind is not dispatched"
+    );
+
+    driver
+        .register_task_kind(
+            kind(ion_core::builtin::TOOL),
+            1,
+            Arc::new(ToolKind::new(catalog)),
+        )
+        .expect("register the tool kind");
+
+    // The first invocation lands the external effect and is then lost; the
+    // task stays running and recoverable.
+    assert!(
+        matches!(
+            driver.drive_task(tool).await.expect("drive"),
+            DriveOutcome::Interrupted(_)
+        ),
+        "a lost invocation is not a terminal outcome"
+    );
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        driver.task(tool).await.expect("tool record").status,
+        TaskStatus::Running
+    );
+
+    // Recovery sees the recorded dispatch and refuses to repeat a call whose
+    // external outcome is unknown.
+    let DriveOutcome::Settled(settlement) = driver.drive_task(tool).await.expect("recover") else {
+        panic!("recovery must settle");
+    };
+    assert_eq!(settlement.invocation_kind, InvocationKind::Recover);
+    assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Indeterminate);
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "the call must not repeat");
+
+    // The chain still completes, and the continuation sees the uncertainty.
+    let join = *find(
+        &driver.snapshot().await.tasks,
+        ion_core::builtin::POST_TOOLS,
+    )
+    .first()
+    .expect("join task");
+    wait(&driver, join).await;
+    let continuation = driver
         .snapshot()
         .await
         .tasks
-        .into_iter()
-        .find(|task| task.kind == kind(ion_core::builtin::POST_TOOLS))
-        .expect("join task");
-    assert!(join.cancel_requested);
-    assert_eq!(join.status, TaskStatus::Pending);
+        .iter()
+        .find(|task| task.kind == kind(ion_core::builtin::GENERATION) && task.id != tool)
+        .map(|task| task.id)
+        .expect("continuation generation");
+    wait(&driver, continuation).await;
+    match &service.requests()[1].messages[2].content[0] {
+        Content::ToolResult(result) => assert_eq!(
+            result.result,
+            json!({"error": "the previous attempt was dispatched; its outcome is unknown"})
+        ),
+        other => panic!("expected a tool result, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn tool_recovery_redispatches_a_retry_safe_call() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let mut catalog = ToolCatalog::new();
+    catalog
+        .register(Flaky {
+            calls: calls.clone(),
+            panic_once: Arc::new(AtomicBool::new(true)),
+            retry_safe: true,
+        })
+        .expect("register flaky tool");
+    let catalog = Arc::new(catalog);
+    let (driver, _service) = driver_without_tool(
+        catalog.clone(),
+        [
+            Script::Stream(vec![completed(assistant_tool_call(
+                "call-1",
+                "flaky",
+                json!({}),
+            ))]),
+            Script::Stream(vec![completed(assistant_text("done"))]),
+        ],
+    );
+    let root = driver.snapshot().await.root_conversation;
+
+    submit_and_drive(&driver, root, "turn-1", "flaky please").await;
+    let tool = *find(&driver.snapshot().await.tasks, ion_core::builtin::TOOL)
+        .first()
+        .expect("tool task");
+    driver
+        .register_task_kind(
+            kind(ion_core::builtin::TOOL),
+            1,
+            Arc::new(ToolKind::new(catalog)),
+        )
+        .expect("register the tool kind");
+    assert!(matches!(
+        driver.drive_task(tool).await.expect("drive"),
+        DriveOutcome::Interrupted(_)
+    ));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let DriveOutcome::Settled(settlement) = driver.drive_task(tool).await.expect("recover") else {
+        panic!("recovery must settle");
+    };
+    assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Completed);
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        2,
+        "a retry-safe call may be attempted again"
+    );
+}
+
+#[tokio::test]
+async fn generation_recovery_reuses_the_frozen_request() {
+    let (driver, service) = builtin_driver([
+        Script::OpenError(ProviderError {
+            kind: ProviderErrorKind::Transport,
+            message: "provider unreachable".to_owned(),
+        }),
+        Script::Stream(vec![completed(assistant_text("recovered"))]),
+    ]);
+    let root = driver.snapshot().await.root_conversation;
+
+    let submitted = driver
+        .submit_input(submission(root, "turn-1", "hello"), turn_request(root))
+        .await
+        .expect("submit");
+    let turn = submitted.task_id.expect("turn root");
+    assert!(
+        matches!(
+            driver.drive_task(turn).await.expect("drive"),
+            DriveOutcome::Interrupted(_)
+        ),
+        "a provider failure interrupts rather than settling"
+    );
+
+    // The complete request was frozen before dispatch, with attempt accounting.
+    let record = driver.task(turn).await.expect("turn record");
+    let checkpoint = record.checkpoint.expect("a frozen request checkpoint");
+    assert_eq!(checkpoint["attempts"], json!(1));
+    assert_eq!(
+        checkpoint["request"]["messages"],
+        json!([user_message("hello")])
+    );
+
+    let DriveOutcome::Settled(settlement) = driver.drive_task(turn).await.expect("recover") else {
+        panic!("recovery must settle");
+    };
+    assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Completed);
+    assert_eq!(settlement.outcome.value["attempts"], json!(2));
+
+    // The replacement invocation replayed the recorded request verbatim.
+    let requests = service.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        requests[0], requests[1],
+        "recovery must not rebuild a different request"
+    );
+
+    let page = driver
+        .conversation_entries(root, None, 8)
+        .await
+        .expect("transcript");
+    assert_eq!(page.entries[1].data["attempts"], json!(2));
+}
+
+#[tokio::test]
+async fn a_duplicate_tool_registration_is_rejected_without_replacing() {
+    let mut catalog = ToolCatalog::new();
+    catalog.register(Echo).expect("first registration");
+    let error = catalog
+        .register(EchoReplacement)
+        .expect_err("a duplicate name must be rejected");
+    assert!(matches!(error, ToolCatalogError::Duplicate(name) if name == "echo"));
+    let specs = catalog.specs();
+    assert_eq!(specs.len(), 1);
+    assert_eq!(
+        specs[0].description, "return the arguments it was called with",
+        "the rejected registration must not replace the tool"
+    );
 }
 
 #[tokio::test]
@@ -466,4 +874,32 @@ async fn a_submission_that_cannot_open_a_turn_admits_nothing() {
         TaskDriverError::Session(SessionError::ForegroundTurnBusy(_))
     ));
     assert_eq!(driver.snapshot().await, before);
+}
+
+/// The built-in registry without a driver, for tests that need their own
+/// session handle.
+fn builtin_registry(scripts: impl IntoIterator<Item = Script>) -> TaskRegistry {
+    let mut catalog = ToolCatalog::new();
+    catalog.register(Echo).expect("register echo");
+    let mut registry = TaskRegistry::new();
+    Builtins {
+        model: model_ref(),
+        service: Arc::new(ScriptedModelService::new(scripts)),
+        tools: Arc::new(catalog),
+    }
+    .register(&mut registry)
+    .expect("register built-ins");
+    registry
+}
+
+fn foreground(
+    snapshot: &ion_core::SessionSnapshot,
+    conversation: ConversationId,
+) -> Option<TaskId> {
+    snapshot
+        .conversations
+        .iter()
+        .find(|record| record.id == conversation)
+        .expect("conversation")
+        .foreground_turn
 }

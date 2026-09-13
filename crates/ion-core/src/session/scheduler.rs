@@ -23,7 +23,7 @@ pub struct TaskDriver {
     capacity: super::TaskCapacity,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     drained: tokio::sync::watch::Sender<()>,
-    changes: tokio::sync::watch::Receiver<()>,
+    changes: tokio::sync::watch::Sender<()>,
     stopping: CancellationToken,
     fault: CancellationToken,
 }
@@ -41,7 +41,7 @@ impl TaskDriver {
         capacity: super::TaskCapacity,
     ) -> Self {
         let fault = session.fault_signal();
-        let changes = session.subscribe();
+        let changes = session.changes();
         Self {
             capacity,
             session: Arc::new(Mutex::new(session)),
@@ -126,11 +126,15 @@ impl TaskDriver {
         self.session.lock().await.observations_after(cursor)
     }
 
-    /// Resolve when a change has been committed since this call started. This
-    /// is the polling-free companion to [`Self::observations_after`]; it
-    /// carries no payload, so a waiter still reads the tail itself.
+    /// Resolve when a change commits after this call starts. This is the
+    /// polling-free companion to [`Self::observations_after`]; it carries no
+    /// payload, so a waiter still reads the tail itself.
+    ///
+    /// Each caller subscribes when it waits, so a commit wakes every waiter
+    /// instead of only the first one to observe it.
     pub async fn changed(&self) {
-        let _ = self.changes.clone().changed().await;
+        let mut receiver = self.changes.subscribe();
+        let _ = receiver.changed().await;
     }
 
     pub async fn drive_task(&self, task_id: TaskId) -> Result<DriveOutcome, TaskDriverError> {
@@ -259,6 +263,10 @@ impl TaskDriver {
     /// Cancel one foreground turn: the durable marks commit first, then every
     /// affected local invocation is signalled. Retained workers and background
     /// tasks whose `turn` is unset are outside this scope.
+    ///
+    /// A member that never dispatched cannot observe a local signal, so its
+    /// abort cleanup is driven here. Leaving it pending would hold the turn's
+    /// foreground slot forever and leave its tool exchange unfinished.
     pub async fn cancel_turn(&self, root: TaskId) -> Result<TurnCancellation, TaskDriverError> {
         let cancellation = {
             let mut session = self.session.lock().await;
@@ -266,6 +274,13 @@ impl TaskDriver {
         };
         for task_id in &cancellation.cancelled {
             self.signal(*task_id);
+        }
+        let pending = {
+            let session = self.session.lock().await;
+            session.pending_cancelled_members(root)
+        };
+        for task_id in pending {
+            self.spawn_drive(task_id);
         }
         Ok(cancellation)
     }
@@ -402,19 +417,26 @@ impl TaskDriver {
         drop(registry);
 
         for task_id in dispatchable {
-            let Ok(active) =
-                ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())
-            else {
-                // Already driven locally; the existing drive owns it.
-                continue;
-            };
-            let driver = self.clone();
-            let spawned: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
-                Box::pin(async move {
-                    let _ = driver.drive_owned(task_id, active).await;
-                });
-            tokio::spawn(spawned);
+            // Already driven locally means the existing drive owns it.
+            self.spawn_drive(task_id);
         }
+    }
+
+    /// Admit a local drive for `task_id` unless one already exists. Returns
+    /// whether a new drive was spawned.
+    fn spawn_drive(&self, task_id: TaskId) -> bool {
+        let Ok(active) =
+            ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())
+        else {
+            return false;
+        };
+        let driver = self.clone();
+        let spawned: std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>> =
+            Box::pin(async move {
+                let _ = driver.drive_owned(task_id, active).await;
+            });
+        tokio::spawn(spawned);
+        true
     }
 
     async fn cleanup_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, TaskDriverError> {

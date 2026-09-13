@@ -242,3 +242,28 @@ async fn changed_wakes_a_waiter_when_a_commit_lands() {
         .expect("waiter woke")
         .expect("waiter joined");
 }
+
+#[tokio::test]
+async fn changed_does_not_resolve_on_a_commit_that_predates_the_wait() {
+    let (driver, task_id) = authoring_driver();
+    // Driver construction and task admission already committed, so a waiter
+    // must wait for the next commit rather than reporting stale progress.
+    let (ready, started) = tokio::sync::oneshot::channel();
+    let waiter = driver.clone();
+    let waiting = tokio::spawn(async move {
+        ready.send(()).expect("the test is waiting");
+        waiter.changed().await;
+    });
+    started.await.expect("the waiter started");
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    assert!(
+        !waiting.is_finished(),
+        "changed must not resolve on an earlier commit"
+    );
+
+    driver.drive_task(task_id).await.expect("drive");
+    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .expect("waiter woke")
+        .expect("waiter joined");
+}

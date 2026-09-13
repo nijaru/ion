@@ -240,7 +240,7 @@ async fn foreground_slot_spans_the_whole_chain_not_just_the_root() {
 }
 
 #[tokio::test]
-async fn cancelling_a_live_turn_releases_the_slot_after_abort_settlement() {
+async fn cancelling_a_turn_that_never_dispatched_settles_its_cleanup() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();
     let turn = session
@@ -250,9 +250,45 @@ async fn cancelling_a_live_turn_releases_the_slot_after_abort_settlement() {
 
     let cancellation = driver.cancel_turn(turn.task_id).await.expect("cancel turn");
     assert_eq!(cancellation.cancelled, vec![turn.task_id]);
-    assert!(foreground_turn_from(&driver.snapshot().await, root).is_some());
 
-    match driver.drive_task(turn.task_id).await.expect("drive abort") {
+    // The member never dispatched, so it cannot observe a local signal. The
+    // driver settles its cleanup instead of leaving it pending forever and
+    // holding the conversation's foreground slot.
+    let record = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        driver.wait_task(turn.task_id),
+    )
+    .await
+    .expect("cleanup must not stall")
+    .expect("wait for the cleaned-up turn");
+    let TaskStatus::Terminal(outcome) = &record.status else {
+        panic!("a cancelled pending turn must settle");
+    };
+    assert_eq!(outcome.kind, TaskOutcomeKind::Aborted);
+    assert_eq!(foreground_turn_from(&driver.snapshot().await, root), None);
+}
+
+#[tokio::test]
+async fn cancelling_a_live_turn_releases_the_slot_after_abort_settlement() {
+    let entered = Arc::new(Notify::new());
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let turn = session
+        .create_turn(request(&session, "held"))
+        .expect("turn");
+    let driver = TaskDriver::new(session, registry(entered.clone()));
+
+    let drive = tokio::spawn({
+        let driver = driver.clone();
+        async move { driver.drive_task(turn.task_id).await }
+    });
+    entered.notified().await;
+    let cancellation = driver.cancel_turn(turn.task_id).await.expect("cancel turn");
+    assert_eq!(cancellation.cancelled, vec![turn.task_id]);
+
+    // The live invocation observes the signal, joins, and cleanup settles
+    // through a fresh abort generation.
+    match drive.await.unwrap().expect("drive abort") {
         ion_core::DriveOutcome::Settled(settlement) => {
             assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Aborted);
         }

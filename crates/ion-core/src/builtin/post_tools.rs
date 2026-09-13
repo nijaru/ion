@@ -1,21 +1,17 @@
-//! The post-tools join: turn finished tool tasks into one transcript entry and
-//! start the next generation.
+//! The post-tools join: the barrier between finished tool tasks and the next
+//! generation.
 //!
-//! Tool tasks settle in completion order, but a provider request requires tool
-//! results in the order of the assistant call that produced them. The join reads
-//! its dependencies in dependency order, which is call order, and appends them
-//! as consecutive tool messages.
-//!
-//! Known gap: a turn cancelled between the assistant entry and this join leaves
-//! the exchange without results. Resolving that (a head/edit or a recorded
-//! aborted result) is not yet policy, so this entry is not always appended.
+//! Each tool task records its own result entry when it settles, so transcript
+//! chronology records completion order while model projection restores the
+//! originating call order. The join therefore appends nothing; it waits until
+//! every call has a recorded result and only then makes the continuation
+//! generation runnable, which is what keeps an incomplete exchange from
+//! becoming model context.
 
-use ion_ai::{Content, Message, Role, ToolResult};
 use serde_json::json;
 
-use super::{GENERATION, SCHEMA_VERSION, TOOL_RESULT_ENTRY, entry_kind, task_kind};
-use crate::conversation::context::ContextControl;
-use crate::task::{PlannedEntry, PlannedTask, TaskPlan};
+use super::{GENERATION, SCHEMA_VERSION, task_kind};
+use crate::task::{PlannedTask, TaskPlan};
 use crate::{
     AbortContext, RunningTask, TaskCompletion, TaskContext, TaskFuture, TaskKind, TaskOutcomeKind,
     TaskRunError,
@@ -27,45 +23,25 @@ impl TaskKind for PostToolsKind {
     fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
         Box::pin(async move {
             let outcomes = context.dependency_outcomes().await?;
-            let mut results = Vec::with_capacity(outcomes.len());
+            // Every tool task settles a recorded result entry on success, tool
+            // error, cancellation and unknown outcome. A dependency that settled
+            // `Failed` or `Unsupported` could not record one, so starting another
+            // generation would build context from a split exchange.
             for outcome in &outcomes {
-                // A tool that did not complete leaves the exchange incomplete.
-                // Staying recoverable is safer than presenting a partial or
-                // fabricated result to the model as the call's outcome.
-                if outcome.outcome.kind != TaskOutcomeKind::Completed {
+                if !matches!(
+                    outcome.outcome.kind,
+                    TaskOutcomeKind::Completed
+                        | TaskOutcomeKind::Aborted
+                        | TaskOutcomeKind::Indeterminate
+                ) {
                     return Err(TaskRunError::new(format!(
-                        "tool task {} settled {:?}",
+                        "tool task {} settled {:?} without recording a result",
                         outcome.task_id, outcome.outcome.kind
                     )));
                 }
-                let result: ToolResult = serde_json::from_value(outcome.outcome.value.clone())
-                    .map_err(|error| {
-                        TaskRunError::new(format!(
-                            "tool task {} produced an invalid result: {error}",
-                            outcome.task_id
-                        ))
-                    })?;
-                results.push(result);
             }
 
-            let projection: Vec<Message> = results
-                .iter()
-                .cloned()
-                .map(|result| Message {
-                    role: Role::Tool,
-                    content: vec![Content::ToolResult(result)],
-                    provider_replay: None,
-                })
-                .collect();
-
             let mut plan = TaskPlan::new();
-            plan.append_entry(PlannedEntry {
-                conversation_id: task.conversation_id,
-                kind: entry_kind(TOOL_RESULT_ENTRY),
-                data: json!({"count": results.len()}),
-                projection,
-                context: ContextControl::none(),
-            });
             plan.create_task(PlannedTask {
                 conversation_id: task.conversation_id,
                 kind: task_kind(GENERATION),
@@ -75,7 +51,7 @@ impl TaskKind for PostToolsKind {
                 background: false,
             });
 
-            Ok(TaskCompletion::completed(json!({"results": results.len()})).with_plan(plan))
+            Ok(TaskCompletion::completed(json!({"tool_results": outcomes.len()})).with_plan(plan))
         })
     }
 

@@ -1,9 +1,14 @@
 //! Generation as an ordinary task kind.
 //!
 //! One invocation reads its conversation transcript at a frozen cutoff, projects
-//! it into provider-neutral context, adds the input durably bound to this task,
-//! calls the model service, and settles with a plan that appends the transcript
-//! entries it produced plus the tool children and join the answer requires.
+//! it into provider-neutral context, adds the inputs durably bound to this task,
+//! and freezes the complete model request in its durable checkpoint *before*
+//! dispatch. Recovery therefore replays the recorded request instead of
+//! silently rebuilding a different one from changed history, inputs or
+//! configuration, and every attempt is accounted for.
+//!
+//! The settlement appends the transcript entries the answer produced, consumes
+//! the inputs it answered, and creates the tool children plus the join.
 
 use std::sync::Arc;
 
@@ -12,15 +17,16 @@ use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse, ModelService,
     ModelStream, ModelStreamEvent, ProviderError, ResponseTermination, Role, ToolCall, Usage,
 };
-use serde_json::json;
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 
 use super::tool::ToolCatalog;
 use super::{ASSISTANT_ENTRY, POST_TOOLS, SCHEMA_VERSION, TOOL, USER_ENTRY, entry_kind, task_kind};
 use crate::conversation::context::{ContextControl, project};
 use crate::task::{PlannedEntry, PlannedTask, PlannedTaskRef, TaskDependency, TaskPlan};
 use crate::{
-    AbortContext, Entry, ResourceDomain, RunningTask, TaskCompletion, TaskContext, TaskFuture,
-    TaskKind, TaskRunError,
+    AbortContext, Entry, EntryId, InputBody, InputId, ResourceDomain, RunningTask, TaskCompletion,
+    TaskContext, TaskFuture, TaskKind, TaskRunError,
 };
 
 /// Transcript page size. History is read in bounded pages rather than as one
@@ -42,6 +48,44 @@ impl GenerationKind {
             tools,
         }
     }
+
+    /// Build the request this invocation will send, freezing the transcript
+    /// cutoff, the bound inputs and the tool specifications with it.
+    async fn freeze(&self, context: &TaskContext) -> Result<FrozenRequest, TaskRunError> {
+        let entries = read_transcript(context).await?;
+        let context_cutoff = entries.last().map(|entry| entry.id);
+        let projection = project(&entries).map_err(|error| {
+            TaskRunError::new(format!(
+                "conversation context is not provider-safe: {error}"
+            ))
+        })?;
+
+        let mut messages = projection.messages;
+        let mut inputs = Vec::new();
+        for input in context.assigned_inputs().await? {
+            let InputBody::Text(text) = &input.body;
+            messages.push(Message {
+                role: Role::User,
+                content: vec![Content::Text(text.clone())],
+                provider_replay: None,
+            });
+            inputs.push(FrozenInput {
+                id: input.id,
+                text: text.clone(),
+            });
+        }
+
+        Ok(FrozenRequest {
+            request: ModelRequest {
+                model: self.model.clone(),
+                messages,
+                tools: self.tools.specs(),
+            },
+            context_cutoff,
+            inputs,
+            attempts: 0,
+        })
+    }
 }
 
 impl TaskKind for GenerationKind {
@@ -52,37 +96,18 @@ impl TaskKind for GenerationKind {
     fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
         Box::pin(async move {
             let conversation_id = task.conversation_id;
-
-            // Read the transcript once and keep the last entry as the cutoff the
-            // request was built against. The projection is the frozen context.
-            let entries = read_transcript(&context).await?;
-            let cutoff = entries.last().map(|entry| entry.id);
-            let projection = project(&entries).map_err(|error| {
-                TaskRunError::new(format!(
-                    "conversation context is not provider-safe: {error}"
-                ))
-            })?;
-
-            let mut messages = projection.messages;
-            let mut bound_inputs = Vec::new();
-            for input in context.assigned_inputs().await? {
-                let crate::InputBody::Text(text) = &input.body;
-                messages.push(Message {
-                    role: Role::User,
-                    content: vec![Content::Text(text.clone())],
-                    provider_replay: None,
-                });
-                bound_inputs.push((input.id, text.clone()));
-            }
-
-            let request = ModelRequest {
-                model: self.model.clone(),
-                messages,
-                tools: self.tools.specs(),
+            // Recovery reuses the recorded request verbatim; only a first attempt
+            // derives one from current history and configuration.
+            let mut frozen = match frozen_of(task.checkpoint.as_ref()) {
+                Some(frozen) => frozen,
+                None => self.freeze(&context).await?,
             };
+            frozen.attempts += 1;
+            context.checkpoint(Some(encode(&frozen)?), None).await?;
+
             let stream = self
                 .service
-                .stream(request)
+                .stream(frozen.request.clone())
                 .await
                 .map_err(|error| TaskRunError::new(format!("model request failed: {error}")))?;
             let response = tokio::select! {
@@ -94,7 +119,7 @@ impl TaskKind for GenerationKind {
             };
 
             // A stream that ended without a complete answer is not a final turn.
-            // Nothing is appended and the bound input is not consumed, so the
+            // Nothing is appended and the bound inputs are not consumed, so the
             // partial answer cannot masquerade as history.
             if !response.is_complete() {
                 return Ok(TaskCompletion::failed(json!({
@@ -102,6 +127,7 @@ impl TaskKind for GenerationKind {
                     "termination": response.termination,
                     "message": response.message,
                     "usage": response.usage,
+                    "attempts": frozen.attempts,
                 })));
             }
 
@@ -117,19 +143,19 @@ impl TaskKind for GenerationKind {
             let text = message_text(&response.message);
 
             let mut plan = TaskPlan::new();
-            for (input_id, input_text) in bound_inputs {
+            for input in &frozen.inputs {
                 let reference = plan.append_entry(PlannedEntry {
                     conversation_id,
                     kind: entry_kind(USER_ENTRY),
-                    data: json!({"text": input_text}),
+                    data: json!({"text": input.text}),
                     projection: vec![Message {
                         role: Role::User,
-                        content: vec![Content::Text(input_text)],
+                        content: vec![Content::Text(input.text.clone())],
                         provider_replay: None,
                     }],
                     context: ContextControl::none(),
                 });
-                plan.consume_input(input_id, reference);
+                plan.consume_input(input.id, reference);
             }
             plan.append_entry(PlannedEntry {
                 conversation_id,
@@ -137,7 +163,8 @@ impl TaskKind for GenerationKind {
                 data: json!({
                     "text": text,
                     "tool_calls": calls.len(),
-                    "context_cutoff": cutoff.map(|entry| entry.get()),
+                    "context_cutoff": frozen.context_cutoff.map(|entry| entry.get()),
+                    "attempts": frozen.attempts,
                     "usage": response.usage,
                     "termination": response.termination,
                 }),
@@ -172,6 +199,7 @@ impl TaskKind for GenerationKind {
             Ok(TaskCompletion::completed(json!({
                 "text": message_text(&response.message),
                 "tool_calls": calls.len(),
+                "attempts": frozen.attempts,
             }))
             .with_plan(plan))
         })
@@ -188,6 +216,33 @@ impl TaskKind for GenerationKind {
             ))
         })
     }
+}
+
+/// The complete, durable request this invocation dispatches.
+///
+/// It is the task checkpoint, so a replacement invocation cannot silently
+/// continue against a different transcript, input set, model or tool catalogue.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FrozenRequest {
+    request: ModelRequest,
+    context_cutoff: Option<EntryId>,
+    inputs: Vec<FrozenInput>,
+    attempts: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FrozenInput {
+    id: InputId,
+    text: String,
+}
+
+fn frozen_of(checkpoint: Option<&Value>) -> Option<FrozenRequest> {
+    serde_json::from_value(checkpoint?.clone()).ok()
+}
+
+fn encode(frozen: &FrozenRequest) -> Result<Value, TaskRunError> {
+    serde_json::to_value(frozen)
+        .map_err(|error| TaskRunError::new(format!("frozen request is not encodable: {error}")))
 }
 
 async fn read_transcript(context: &TaskContext) -> Result<Vec<Entry>, TaskRunError> {

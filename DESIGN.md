@@ -228,7 +228,7 @@ Complex task kinds may use a typed checkpoint/phase helper for exhaustive dispat
 
 Task state is the recovery boundary. Before a repeat-sensitive external action, the task durably records enough checkpoint/attempt information to classify recovery.
 
-Representative states include prepared/not-dispatched, dispatched retry-safe attempt, dispatched reconcile/adopt handle, and dispatched no-safe-retry operation.
+Representative states include prepared/not-dispatched, dispatched retry-safe attempt, dispatched reconcile/adopt handle, and dispatched no-safe-retry operation. The built-in tool kind is the first concrete instance: it records a durable dispatch before handing a call over, so a replacement invocation can tell "never dispatched" from "outcome unknown". A tool that does not declare itself retry-safe settles `Indeterminate` instead of repeating the call or claiming it was stopped, and its recorded result entry carries that uncertainty into the transcript rather than inventing a success.
 
 | Recovery class | Behavior |
 |---|---|
@@ -256,7 +256,7 @@ input
 
 A generation settlement atomically appends the transcript entries the answer produced and creates every required tool child plus the join/continuation before becoming terminal. When the generation answers an admitted input, that settlement also appends the user entry carrying the input's content and consumes the input in the same commit; an answer that never completes leaves the input bound and appends nothing.
 
-Tool tasks may finish in any order. Transcript chronology records completion order; model projection restores tool-result order to the originating assistant call order.
+Tool tasks may finish in any order. Each tool task commits its own result entry with its outcome, so transcript chronology records completion order while model projection restores the results to the originating assistant call order. The post-tools join appends nothing: it is the barrier that makes the continuation generation runnable only once every call has a recorded result, which keeps a split exchange from becoming model context.
 
 Independent read-only tools may run concurrently under resource limits. Mutating calls against one workspace serialize by default unless the execution-environment pass proves a stronger safe policy.
 
@@ -268,7 +268,7 @@ Dependency edges order work; they are not cancellation or ownership scope. A con
 
 A generation settlement's successors inherit the settling task's turn. A plan marks a successor `background` when it must outlive the turn, which is how retained workers survive cancellation; that is an authorized lifetime choice for a trusted kind, not a general way for any plan to escape cancellation scope.
 
-Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, and then signals the affected local invocations. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. A successor created by cleanup after the turn was cancelled is born cancelled, so an abort cannot smuggle new runnable work into a stopped turn.
+Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, then signals the affected local invocations and drives abort cleanup for members that never dispatched, because those cannot observe a local signal. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. A successor created by cleanup after the turn was cancelled is born cancelled, so an abort cannot smuggle new runnable work into a stopped turn; such a member still needs an explicit drive to settle, which bounds cleanup from recursively generating more cleanup.
 
 The slot is released only when the turn has no remaining non-terminal member, not when the root settles. A terminal root with live tools or a continuation still owns the slot, so a second foreground chain cannot interleave with the first. Background work never holds the slot and never delays its release. Starting a new turn while one is live is rejected until the slot is free.
 
@@ -292,7 +292,7 @@ Initial modes:
 
 Exact duplicate request-key replay returns the original receipt. Rebinding the same key to different target/content/mode rejects `IdempotencyConflict`.
 
-Submission is atomic where it matters: admitting an input and opening the turn that answers it commit together with the binding, so an accepted input always has a task and a rejected submission admits nothing. Nothing is driven by submission. Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript.
+Submission is atomic where it matters: admitting an input and opening the turn that answers it commit together with the binding, so an accepted input always has a task and a rejected submission admits nothing. Nothing is driven by submission. Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript. A submission replay is accepted only onto a bound or consumed input: replaying onto an input that was merely admitted would silently accept work no turn ever took.
 
 Inter-worker communication uses this same input substrate rather than another mailbox truth model.
 
@@ -353,7 +353,7 @@ Provider-specific opaque replay metadata may be attached to otherwise provider-n
 
 A finished transport stream is not necessarily a complete answer. Responses carry termination state (`Completed` or `Incomplete` with a reason such as output-token or context exhaustion), and a generation task must not settle an incomplete response as a successful final answer. Reported usage distinguishes unknown from a reported zero, so an interrupted request is never silently accounted as free.
 
-Typed provider failures cross the boundary as facts. Generation tasks own durable retry/backoff/compaction/usage policy, and they freeze request-relevant identity (model/settings, context cutoff, tool specifications, implementation revision) at the durable boundary so recovery cannot silently continue against changed inputs. Provisional stream output carries stable task/invocation identity so late frames cannot attach to a successor generation. Hidden provider/SDK retries that bypass durable attempt accounting are disabled or controlled.
+Typed provider failures cross the boundary as facts. Generation tasks own durable retry/backoff/compaction/usage policy, and they freeze request-relevant identity (model/settings, context cutoff, tool specifications, implementation revision) at the durable boundary so recovery cannot silently continue against changed inputs. The built-in generation kind implements that by recording the complete request, its transcript cutoff and its bound inputs in its checkpoint before dispatch, and by accounting for each attempt; recovery replays the recorded request. Provisional stream output carries stable task/invocation identity so late frames cannot attach to a successor generation. Hidden provider/SDK retries that bypass durable attempt accounting are disabled or controlled.
 
 The later provider pass extends `ion-ai` roughly as:
 

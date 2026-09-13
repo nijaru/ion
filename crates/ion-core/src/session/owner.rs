@@ -422,8 +422,31 @@ impl Session {
         self.changes.send_replace(());
     }
 
+    /// Turn members that are already durably cancelled but were never
+    /// dispatched. Only an explicit abort drive can settle them, so the driver
+    /// drives them as cleanup; without that they hold the foreground slot and
+    /// leave their exchange unfinished.
+    pub(crate) fn pending_cancelled_members(&self, root: TaskId) -> Vec<TaskId> {
+        self.state
+            .tasks
+            .values()
+            .filter(|task| {
+                task.turn == Some(root)
+                    && task.cancel_requested
+                    && matches!(task.status, TaskStatus::Pending)
+            })
+            .map(|task| task.id)
+            .collect()
+    }
+
     pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
         self.changes.subscribe()
+    }
+
+    /// A notification sender for the driver. Each waiter subscribes when it
+    /// waits, so a commit wakes every waiter rather than only the first.
+    pub(crate) fn changes(&self) -> tokio::sync::watch::Sender<()> {
+        self.changes.clone()
     }
 
     pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
@@ -521,6 +544,10 @@ impl Session {
     /// Replay an already-admitted submission: the same input without a new
     /// commit. The turn root is recovered from the binding, so a retried submit
     /// cannot open a second turn for the same input.
+    ///
+    /// An input admitted without a submission has no turn to replay. Returning
+    /// it as a successful submission would silently accept work that was never
+    /// accepted as a turn, so that case is refused instead.
     fn replay_submission(
         &self,
         key: &RequestKey,
@@ -529,16 +556,20 @@ impl Session {
         let Some(receipt) = self.replay_input(key, request)? else {
             return Ok(None);
         };
-        let task_id =
-            self.state
-                .inputs
-                .get(&receipt.input_id)
-                .and_then(|input| match input.disposition {
-                    InputDisposition::Assigned(task_id) => Some(task_id),
-                    InputDisposition::Queued
-                    | InputDisposition::Consumed(_)
-                    | InputDisposition::Cancelled => None,
-                });
+        let disposition = self
+            .state
+            .inputs
+            .get(&receipt.input_id)
+            .map(|input| input.disposition);
+        let task_id = match disposition {
+            Some(InputDisposition::Assigned(task_id)) => Some(task_id),
+            // The original submission completed, so there is no live binding but
+            // the replay is still truthful.
+            Some(InputDisposition::Consumed(_)) => None,
+            Some(InputDisposition::Queued | InputDisposition::Cancelled) | None => {
+                return Err(SessionError::SubmissionUnbound(receipt.input_id));
+            }
+        };
         Ok(Some(SubmissionReceipt {
             input_id: receipt.input_id,
             task_id,

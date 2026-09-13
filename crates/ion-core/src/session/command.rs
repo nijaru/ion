@@ -194,6 +194,8 @@ pub enum SessionError {
         input: ConversationId,
         task: ConversationId,
     },
+    #[error("input {0} was admitted without a turn, so a submission cannot replay onto it")]
+    SubmissionUnbound(InputId),
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]
