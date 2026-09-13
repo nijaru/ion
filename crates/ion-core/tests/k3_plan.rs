@@ -267,3 +267,101 @@ async fn failed_finalization_rolls_back_successors_and_leaves_task_recoverable()
     assert_eq!(record.generation, 1);
     assert!(!record.cancel_requested);
 }
+
+/// Returns a plan whose dependency handle was minted by a different plan.
+struct ForeignRef;
+
+impl TaskKind for ForeignRef {
+    fn execute<'a>(&'a self, task: RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            let mut other = TaskPlan::new();
+            let foreign = other.create_task(PlannedTask {
+                conversation_id: task.conversation_id,
+                kind: kind("tool"),
+                schema_version: 1,
+                input: json!({"owner": "other plan"}),
+                dependencies: Vec::new(),
+                background: false,
+            });
+            let mut plan = TaskPlan::new();
+            plan.create_task(PlannedTask {
+                conversation_id: task.conversation_id,
+                kind: kind("tool"),
+                schema_version: 1,
+                input: json!({"owner": "this plan"}),
+                dependencies: vec![TaskDependency::Planned(foreign)],
+                background: false,
+            });
+            Ok(TaskCompletion::completed(json!("claimed")).with_plan(plan))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async { Ok(TaskCompletion::aborted(json!("aborted"))) })
+    }
+}
+
+/// Returns a plan larger than the enforced bound.
+struct Oversized;
+
+impl TaskKind for Oversized {
+    fn execute<'a>(&'a self, task: RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            let mut plan = TaskPlan::new();
+            for _ in 0..=ion_core::MAX_PLAN_TASKS {
+                plan.create_task(PlannedTask {
+                    conversation_id: task.conversation_id,
+                    kind: kind("tool"),
+                    schema_version: 1,
+                    input: json!({}),
+                    dependencies: Vec::new(),
+                    background: false,
+                });
+            }
+            Ok(TaskCompletion::completed(json!("oversized")).with_plan(plan))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async { Ok(TaskCompletion::aborted(json!("aborted"))) })
+    }
+}
+
+#[tokio::test]
+async fn foreign_plan_handle_is_rejected_without_partial_settlement() {
+    let (driver, task_id) = setup(Arc::new(ForeignRef), "foreign");
+    let before = driver.snapshot().await;
+
+    let error = driver.drive_task(task_id).await.expect_err("must reject");
+    assert!(matches!(
+        error,
+        ion_core::TaskDriverError::Session(ion_core::SessionError::Invariant(_))
+    ));
+    let after = driver.snapshot().await;
+    assert_eq!(after.tasks.len(), before.tasks.len());
+    assert!(matches!(after.tasks[0].status, TaskStatus::Running));
+}
+
+#[tokio::test]
+async fn oversized_plan_is_rejected_without_partial_settlement() {
+    let (driver, task_id) = setup(Arc::new(Oversized), "oversized");
+    let before = driver.snapshot().await;
+
+    let error = driver.drive_task(task_id).await.expect_err("must reject");
+    assert!(matches!(
+        error,
+        ion_core::TaskDriverError::Session(ion_core::SessionError::PlanTooLarge { .. })
+    ));
+    let after = driver.snapshot().await;
+    assert_eq!(after.tasks.len(), before.tasks.len());
+    assert_eq!(after.entries.len(), before.entries.len());
+    assert!(matches!(after.tasks[0].status, TaskStatus::Running));
+}

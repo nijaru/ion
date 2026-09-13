@@ -33,7 +33,7 @@ Session
 
 with workers as owned conversations, immutable context controls, task-level recovery and one per-session canonical store.
 
-The five pre-rewrite gates passed at `81c344d713f13b73e19232b4ad36dfe40ba663b9` under CI run `34718467220`. Current clean-core code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` passes format, strict Clippy and full workspace tests under CI run `34725190754`.
+The five pre-rewrite gates passed at `81c344d713f13b73e19232b4ad36dfe40ba663b9` under CI run `34718467220`. The K3 core-driver checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` (CI run `34725190754`) is historical validation evidence, not a statement about the current head.
 
 ## Accepted R0 contracts
 
@@ -313,6 +313,15 @@ Required K4 invariants:
 5. the remaining per-commit map-structure clone in `Transaction::new` is removed when reads move to indexed storage; it no longer copies payloads.
 
 Index tuning, measured thresholds and cold-history paging remain P2 work; these are structural requirements.
+
+Also required before the SQLite interface is frozen (flagged by the 2026-09-13 design review):
+
+6. reads must be fallible — a missing record and a storage failure are different results, so `Option<Record>` alone is insufficient once a real backend exists;
+7. the driver must expose bounded reads (summary, record lookup, transcript page) and observation polling; today only `Session::snapshot` is reachable through `TaskDriver`, which forces full-state materialization for a live client;
+8. observation recovery needs a coverage floor: an event tail or an explicit "resnapshot required" for cursors older than retained coverage, with defined `cursor = None` and future-cursor behavior;
+9. every projection whose state changes must be invalidated — for example releasing the foreground slot emits `ForegroundTurnChanged`, not only `TaskSettled`.
+
+Expensive frozen-cutoff context construction must move outside mutation authority; indexed storage alone does not fix the current call structure.
 
 On open, SQLite reconstructs or lazily supplies the resident state needed by the kernel. Opening/inspection must not drive tasks. Running tasks remain durable records and are entered through explicit recovery drive.
 

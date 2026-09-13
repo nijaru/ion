@@ -199,6 +199,14 @@ impl Transaction {
         plan: &TaskPlan,
         settling_task: TaskId,
     ) -> Result<(), SessionError> {
+        if plan.entries().len() > crate::task::MAX_PLAN_ENTRIES
+            || plan.tasks().len() > crate::task::MAX_PLAN_TASKS
+        {
+            return Err(SessionError::PlanTooLarge {
+                entries: plan.entries().len(),
+                tasks: plan.tasks().len(),
+            });
+        }
         for entry in plan.entries() {
             self.append_entry(EntryRequest {
                 conversation_id: entry.conversation_id,
@@ -228,7 +236,7 @@ impl Transaction {
             } else {
                 inherited_turn
             };
-            self.create_planned_task(task, planned_ids[index], turn, &planned_ids)?;
+            self.create_planned_task(task, planned_ids[index], turn, plan.id(), &planned_ids)?;
         }
         Ok(())
     }
@@ -238,6 +246,7 @@ impl Transaction {
         task: &PlannedTask,
         id: TaskId,
         turn: Option<TaskId>,
+        plan_id: u64,
         planned_ids: &[TaskId],
     ) -> Result<(), SessionError> {
         if !self.draft.conversations.contains_key(&task.conversation_id) {
@@ -249,8 +258,14 @@ impl Transaction {
             let dependency_id = match dependency {
                 TaskDependency::Existing(id) => *id,
                 TaskDependency::Planned(reference) => {
-                    // A plan may only depend on tasks planned earlier, which keeps
-                    // the successor graph acyclic by construction.
+                    // A plan may only depend on tasks planned earlier in the same
+                    // plan, which keeps the successor graph acyclic and rejects a
+                    // handle minted by a different plan.
+                    if reference.plan_id() != plan_id {
+                        return Err(SessionError::Invariant(
+                            "plan dependency belongs to a different plan".to_owned(),
+                        ));
+                    }
                     *planned_ids.get(reference.index()).ok_or_else(|| {
                         SessionError::Invariant("plan dependency is not yet planned".to_owned())
                     })?

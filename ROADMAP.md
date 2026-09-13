@@ -8,16 +8,16 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| Core architecture | Clean rewrite active; K0-K2 implemented, K3 core driver validated | DESIGN.md; docs/core-runtime-migration.md; code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` |
+| Core architecture | Clean rewrite active; K0-K2 complete, K3 storage-independent work complete, K4 preparation done | DESIGN.md; docs/core-runtime-migration.md; evidence log below |
 | Worker/fork/session topology | Accepted target; fork/ownership domain + writer primitives implemented, worker runtime open | docs/research/agent-topology-context-2026-09-12.md; K1/K2 |
-| Task execution/recovery | K2 lifecycle boundary implemented; K3 async execute/recover/abort driver in progress | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs` |
+| Task execution/recovery | K2 lifecycle boundary plus K3 driver implemented, including waits, capacity, close, interruption/uncertainty, finalization and turns | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs` |
 | IDs/order | Session-local unified sequence implemented in fresh core; SQLite representation open | R0.4; K1/K2 |
 | AI boundary | Independent provider-neutral `ion-ai` contract crate implemented | R0.5; `crates/ion-ai/` |
-| Storage topology/engine | Deterministic in-memory writer implemented; fresh per-session SQLite store is K4 | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
-| Fresh production core | Old lane/agent/operation/effect runtime physically removed; K0-K2 complete, K3 in progress | cleanup commit `2d273f78`; code checkpoint `a33e0fb2` |
+| Storage topology/engine | Resident/persistence split and durable write set implemented; fresh per-session SQLite store is the next K4 slice | docs/research/storage-engines-2026-09-12.md; docs/p2-storage-topology-prototype.md |
+| Fresh production core | Old lane/agent/operation/effect runtime physically removed; K0-K3 complete, K4 next | cleanup commit `2d273f78`; evidence log below |
 | TUI/group target | Interaction requirements drafted; fresh application/TUI not yet rebuilt | TERMINAL.md |
 
-R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`. The old core was then physically removed instead of retained as a compatibility runtime. The current clean-core code checkpoint is `a33e0fb22073857cc724244b23f99e0c12249147`, validated by CI run `34725190754`: format, strict Clippy and the full workspace tests all pass.
+R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`. The old core was then physically removed instead of retained as a compatibility runtime. The K3 core-driver checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` (CI run `34725190754`) remains historical validation evidence; later commits are listed in the evidence log.
 
 The design remains reopenable if production evidence disproves a contract. Do not preserve an implementation merely because it has now been rewritten once.
 
@@ -104,8 +104,8 @@ Implemented now:
 - durable cancellation mark + process-local cancellation signal + fresh abort generation after the old invocation joins;
 - local duplicate-drive rejection for one task;
 - dependency readiness enforcement at reservation;
-- missing task kind settles `Unsupported` without deleting the record;
-- task errors and panics settle durable `Failed` outcomes;
+- a never-dispatched task with a missing kind settles `Unsupported` without deleting the record; a running task whose implementation is unavailable blocks recovery instead of terminalizing;
+- a known application failure settles durable `Failed`; handler errors and panics interrupt and leave the task running and recoverable;
 - cancellation/settlement ordering is serialized under the writer: settlement wins if it commits first, otherwise abort owns cleanup.
 
 Still open before K3 is considered complete:
@@ -128,7 +128,7 @@ Persistence-backed evidence remains open:
 
 The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
 
-Before SQL, bounded residency and the persistence interface are decided. Resident records are copy-on-write behind `Arc`, so a commit no longer deep-copies historical payloads and a checkpoint touches only its own record. The remaining per-commit map-structure clone is removed when reads move to indexed storage. The decision and its invariants are recorded in `docs/core-runtime-migration.md`. Restricted task finalization and foreground-turn membership are implemented. The remaining interface work is the typed task authoring adapter and planned owned-conversation/scratch finalization.
+Before SQL, bounded residency and the persistence interface are decided. Resident records are copy-on-write behind `Arc`, so a commit does not deep-copy unrelated durable records and a checkpoint touches only its own record; transcript projection still materializes visible history. The remaining per-commit map-structure clone is removed when reads move to indexed storage. The decision and its invariants are recorded in `docs/core-runtime-migration.md`. The durable write set in `MutationBatch` is what a backend persists and can reconstruct from, covered by `committed_write_set_reconstructs_resident_state`. Restricted task finalization, foreground-turn membership and the typed task authoring adapter are implemented. Planned owned-conversation/scratch finalization is K6 work and does not block basic SQLite.
 
 Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
 
@@ -207,7 +207,7 @@ Ion data root/
   catalog.sqlite   # optional rebuildable discovery cache only if useful
 ```
 
-Compare the current root-wide SQLite layout against per-session stores under many active sessions, large/cold histories, WAL/checkpoint pressure, backup/archive/delete, corruption isolation and restart/repair.
+Compare the removed root-wide SQLite layout (historical, Git-history-only) against per-session stores under many active sessions, large/cold histories, WAL/checkpoint pressure, backup/archive/delete, corruption isolation and restart/repair.
 
 SQLite remains the baseline. Benchmark Turso only if representative measurements show engine-level overhead or a concrete sync requirement makes it relevant. Do not add concurrent canonical writers merely because an engine supports them.
 
@@ -318,4 +318,6 @@ Agent-effectiveness optimization starts from a stable M1/M2 baseline. More conte
 
 2026-09-12: legacy production `ion-core` runtime/store/operation/tool code and historical prototype harnesses were physically removed at cleanup commit `2d273f78`; Git history remains the archive. The clean core no longer carries lane/agent/operation/effect compatibility paths.
 
-2026-09-12: clean K0-K2 plus the first K3 task driver are validated at code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` by CI run `34725190754`. Fresh-core evidence includes exact request-key replay/conflict, immutable fork/context checks, atomic owned-conversation/task links, bounded observations, invocation generation fencing, checkpoints, cancellation + fresh abort generation, terminal successor rollback/commit, dependency readiness, missing-kind preservation, panic/error settlement, no-work-on-inspection, duplicate local-drive rejection and serialized cancellation/settlement ordering.
+2026-09-12: clean K0-K2 plus the first K3 task driver are validated at code checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` by CI run `34725190754`. Superseded in part on 2026-09-13: handler errors and panics now interrupt and stay recoverable rather than settling `Failed`, and a running task with an unavailable implementation blocks recovery rather than settling `Unsupported`. Fresh-core evidence includes exact request-key replay/conflict, immutable fork/context checks, atomic owned-conversation/task links, bounded observations, invocation generation fencing, checkpoints, cancellation + fresh abort generation, terminal successor rollback/commit, dependency readiness, missing-kind preservation, panic/error settlement, no-work-on-inspection, duplicate local-drive rejection and serialized cancellation/settlement ordering.
+
+2026-09-13: K3 storage-independent work completed and K4 prepared, with all gates green per commit. Added: notification-driven task/dependency waits; independent model/tool/process capacity with separate bounded cleanup admission; graceful/fault close that fences canonical writes before joining; resident-state/persistence split with fail-stop on persistence error; copy-on-write resident records so a commit does not deep-copy unrelated payloads; interruption distinguished from terminal settlement (`Indeterminate` for unreconcilable external actions, blocked recovery for an unavailable running implementation); atomic `TaskPlan` finalization; one authoritative foreground-turn slot that spans the whole chain with turn-scoped cancellation and a cancelled-turn admission barrier; commit-time context-control validation; loss-aware `ion-ai`; bounded session summary and paginated transcript reads; and a typed task authoring adapter. `MutationBatch` now carries the durable write set and `committed_write_set_reconstructs_resident_state` proves a store can rebuild resident semantics from it. See `knowledge/projects/ion/clean-rewrite-review-2026-09-12.md` for the review provenance and remaining limitations; no persistence or crash guarantee is claimed.

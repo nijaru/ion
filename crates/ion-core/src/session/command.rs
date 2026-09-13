@@ -127,6 +127,10 @@ pub(crate) struct CancellationReceipt {
 pub enum SessionError {
     #[error("session is closed or faulted")]
     Closed,
+    #[error(
+        "task finalization plan exceeds the bounded plan size: {entries} entries, {tasks} tasks"
+    )]
+    PlanTooLarge { entries: usize, tasks: usize },
     #[error("conversation {0} already has a live foreground turn")]
     ForegroundTurnBusy(ConversationId),
     #[error("{0}")]
