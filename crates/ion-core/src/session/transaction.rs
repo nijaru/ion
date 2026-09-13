@@ -67,10 +67,14 @@ pub(crate) enum Mutation {
 pub(crate) struct MutationBatch {
     pub(crate) commit_seq: CommitSeq,
     pub(crate) last_seq: LocalSeq,
+    /// The commit this batch was built against. A real store uses it as a
+    /// compare-and-set fence so a stale writer authority cannot interleave.
+    pub(crate) base_commit: Option<CommitSeq>,
     pub(crate) writes: Vec<Mutation>,
 }
 
 pub(crate) struct Transaction {
+    base_commit: Option<CommitSeq>,
     draft: SessionState,
     admitted_inputs: Vec<InputId>,
     writes: Vec<Mutation>,
@@ -80,6 +84,7 @@ pub(crate) struct Transaction {
 impl Transaction {
     pub(crate) fn new(state: &SessionState) -> Self {
         Self {
+            base_commit: state.last_commit,
             draft: state.clone(),
             admitted_inputs: Vec::new(),
             writes: Vec::new(),
@@ -568,6 +573,7 @@ impl Transaction {
             MutationBatch {
                 commit_seq,
                 last_seq,
+                base_commit: self.base_commit,
                 writes: self.writes,
             },
             self.changes,

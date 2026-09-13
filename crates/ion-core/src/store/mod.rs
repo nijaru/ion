@@ -1,4 +1,5 @@
 mod memory;
+pub(crate) mod sqlite;
 
 pub(crate) use memory::MemoryStore;
 

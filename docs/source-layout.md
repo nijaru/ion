@@ -79,7 +79,7 @@ crates/ion-core/
     store/
       mod.rs
       memory.rs
-      # K4:
+      # per-session SQLite store (implemented); artifact.rs is still future
       sqlite/
         mod.rs
         connection.rs
@@ -207,13 +207,15 @@ commit
 
 Keep the store interface crate-private and narrow. It is not a promise of interchangeable public database backends.
 
-`store/sqlite/` owns all SQLite details. No other module imports `rusqlite`, raw SQL, or holds a SQLite connection.
+`store/sqlite/` owns all SQLite details. No other module imports `rusqlite`, raw SQL, or holds a SQLite connection. The per-session store is implemented; `Session::create`/`Session::open` are the public entry points and `SqliteStore` stays crate-private.
 
-- `schema.rs`: schema/version/DDL only;
-- `connection.rs`: open policy, pragmas, transactions, ownership/lock setup;
-- `commit.rs`: application of one atomic semantic mutation batch;
-- per-record modules: focused point/range reads and persistence helpers;
+- `schema.rs`: schema/version/DDL only, currently version 1;
+- `connection.rs`: open policy (WAL with `synchronous = FULL`, `busy_timeout`), create-versus-open, session identity and metadata reads;
+- `commit.rs`: application of one atomic semantic mutation batch, including the commit-cursor compare-and-set that fences a stale writer authority;
+- `conversation.rs`, `entry.rs`, `input.rs`, `task.rs`: focused per-record writes plus the reads open-time reconstruction composes;
 - `artifact.rs`: publication/reference metadata integration, not arbitrary filesystem tools.
+
+Reconstruction composes those per-record reads and never needs another record's payload. Entries keep `data`/`projection`/`context` as JSON columns. Tasks keep `input`/`checkpoint`/`invocation`/`outcome`/`output` as JSON columns and normalize identity, lifecycle state, dependencies and ownership into columns and child tables. Nothing stores a second copy of a value its columns already carry.
 
 Do not create one giant `sql.rs` or `queries.rs` file.
 

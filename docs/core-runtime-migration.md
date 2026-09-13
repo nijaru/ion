@@ -272,13 +272,15 @@ Do not add a second scheduler to solve these. Extend the same session/task drive
 
 ### K4 — SQLite session store
 
-**Paused before SQL for bounded-state and task-contract work.**
+**Per-session SQLite store implemented; process-death evidence still outstanding.**
 
-The resident/persistence split below establishes commit ordering only. Full-history clones remain in transaction drafts and snapshots. Before SQL, define bounded typed reads plus transaction overlays (or a justified bounded working set), restricted task finalization with same-batch references, typed authoring adaptation, and foreground-turn membership. Also strengthen safe context validation before K5. These are structural contracts, not P2 index tuning.
+`Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 1: session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
 
-Implement a fresh schema as one database for one session. Do not migrate old tables in place during core development.
+Evidence so far is in-process (`tests/k4_sqlite.rs`): a representative write set — history-parented conversation, entries, input admission and disposition, a pending task, a dependent task, a task-owned conversation, two turns with different foreground-slot outcomes, a checkpoint, a finalization plan and a durable cancellation mark — reconstructs an identical snapshot after close and reopen; duplicate-input replay survives reopen; a stale second authority is fenced and left closed; and an interrupted task reopens as running with nothing implicitly started. This is **not** process-death evidence: an interrupted handler is not a killed process, and no subprocess test exists yet.
 
-Follow the SQLite module boundaries in `docs/source-layout.md`: connection/open policy, schema, atomic commit application and focused per-record reads/writes. Do not create another monolithic `sql.rs`/`queries.rs` file.
+Still open for this slice: a real killed-process durability test; letting the driver open on-disk sessions (only `Session` does today); cold-history reads, since the resident store still holds every record after open and the per-commit map-structure clone remains; and index tuning.
+
+The pre-SQL work this section used to gate on is complete: the resident/persistence split, restricted task finalization with same-batch references, typed authoring adaptation, foreground-turn membership, safe context validation, and the bounded/fallible read and observation contract (invariants 7-9 below; invariant 6 lands with the SQLite read path).
 
 The pre-SQL resident/persistence split is implemented. `Session` owns `SessionState`, and the crate-private `Persistence` interface accepts validated batches. The transaction's prepared state is installed only after a successful commit; failed persistence leaves resident records and observations unchanged, fences canonical writes, and signals local fault shutdown. `MemoryStore` retains only volatile commit ordering, not another semantic state copy. The resulting boundary is:
 

@@ -40,6 +40,28 @@ impl Session {
         Self::with_id(SessionId::new())
     }
 
+    /// Create a new on-disk session at `path`.
+    ///
+    /// The file gets a fresh schema; an existing database is refused rather
+    /// than overwritten. Commits from this point survive process death.
+    pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
+        let session_id = SessionId::new();
+        let store = crate::store::sqlite::SqliteStore::create(path.as_ref(), session_id)
+            .map_err(|error| SessionError::Persistence(error.to_string()))?;
+        Self::with_store(session_id, Box::new(store))
+    }
+
+    /// Open an existing on-disk session.
+    ///
+    /// This reads durable records only. A task that was running when the
+    /// process died stays `Running` and requires an explicit recovery drive, so
+    /// opening a session never starts work.
+    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
+        let (store, state) = crate::store::sqlite::SqliteStore::open(path.as_ref())
+            .map_err(|error| SessionError::Persistence(error.to_string()))?;
+        Ok(Self::from_state(state, Box::new(store)))
+    }
+
     pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
         Self::with_store(session_id, Box::new(MemoryStore::new()))
     }
@@ -51,17 +73,22 @@ impl Session {
         session_id: SessionId,
         store: Box<dyn Persistence>,
     ) -> Result<Self, SessionError> {
-        let mut session = Self {
-            state: SessionState::empty(session_id),
+        let mut session = Self::from_state(SessionState::empty(session_id), store);
+        session.transact(|transaction| transaction.create_root())?;
+        Ok(session)
+    }
+
+    /// Build a session over already-reconstructed resident state.
+    fn from_state(state: SessionState, store: Box<dyn Persistence>) -> Self {
+        Self {
+            state,
             store,
             closed: false,
             fault: tokio_util::sync::CancellationToken::new(),
             observations: VecDeque::new(),
             dropped_through: None,
             changes: tokio::sync::watch::channel(()).0,
-        };
-        session.transact(|transaction| transaction.create_root())?;
-        Ok(session)
+        }
     }
 
     #[must_use]
