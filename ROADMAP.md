@@ -85,6 +85,7 @@ The current kernel has one serialized semantic mutation line, typed atomic mutat
 - apply terminal/abort closure atomically with successor writes;
 - explicit input disposition transitions;
 - produce bounded committed observations with resnapshot-on-overflow semantics;
+- expose a bounded `SessionSummary` (counts and cursors, no payloads) and a paginated fork-visible transcript read with an exclusive cursor;
 - reject failed transactions without publishing IDs, commits or partial successor state.
 
 K2's lifecycle paths are exercised through the K3 production driver so they are not test-only dead code.

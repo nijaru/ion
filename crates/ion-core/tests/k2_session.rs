@@ -238,6 +238,65 @@ fn context_controls_must_form_a_complete_provider_context() {
 }
 
 #[test]
+fn bounded_summary_and_paginated_transcript_reads() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let mut ids = Vec::new();
+    for index in 0..5 {
+        ids.push(
+            session
+                .append_entry(EntryRequest {
+                    conversation_id: root,
+                    kind: EntryKind::new("user").expect("entry kind"),
+                    data: serde_json::Value::Null,
+                    projection: vec![user_message(&format!("message {index}"))],
+                    context: ContextControl::none(),
+                })
+                .expect("entry")
+                .entry_id,
+        );
+    }
+
+    let summary = session.summary();
+    assert_eq!(summary.entries, 5);
+    assert_eq!(summary.conversations, 1);
+    assert_eq!(summary.inputs, 0);
+    assert_eq!(summary.tasks, ion_core::TaskCounts::default());
+    assert_eq!(summary.last_commit, session.snapshot().last_commit);
+
+    let first = session
+        .conversation_entries(root, None, 2)
+        .expect("first page");
+    assert_eq!(first.entries.len(), 2);
+    assert_eq!(first.entries[0].id, ids[0]);
+    let cursor = first.next.expect("more pages");
+    assert_eq!(cursor, ids[1]);
+
+    let second = session
+        .conversation_entries(root, Some(cursor), 2)
+        .expect("second page");
+    assert_eq!(second.entries[0].id, ids[2]);
+    let last = session
+        .conversation_entries(root, second.next, 2)
+        .expect("last page");
+    assert_eq!(last.entries.len(), 1);
+    assert_eq!(last.entries[0].id, ids[4]);
+    assert_eq!(last.next, None);
+
+    assert!(matches!(
+        session.conversation_entries(root, Some(EntryId::new(9_999).expect("id")), 2),
+        Err(SessionError::InvisibleContextReference(_))
+    ));
+    assert!(
+        session
+            .conversation_entries(root, None, 0)
+            .expect("empty")
+            .entries
+            .is_empty()
+    );
+}
+
+#[test]
 fn bounded_observations_require_resnapshot_after_overflow() {
     let mut session = Session::new().expect("session");
     let initial = session.snapshot().last_commit;

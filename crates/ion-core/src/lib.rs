@@ -32,4 +32,6 @@ pub use task::{
     TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
     TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus,
 };
-pub use view::{Change, CommitEvent, ObservationBatch, SessionSnapshot};
+pub use view::{
+    Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
+};

@@ -361,6 +361,10 @@ Approvals bind the exact prepared invocation and relevant arguments/revision.
 
 Workspace identity is independent from history and ownership. Multiple read-only workers may share a workspace. Parallel mutating workers normally use isolated worktrees/snapshots unless a stronger conflict policy is proven.
 
+Initial workspace-mutation policy, until the execution-environment pass replaces it with enforcement: one session's writer serializes that session's mutations, but it cannot serialize two sessions that bind the same workspace. Concurrent writable bindings of the same workspace are therefore rejected rather than silently interleaved; a mutating worker takes an isolated workspace instead. This is a policy gate, not a cross-session database transaction.
+
+Read-only sharing is not snapshot-consistent: one reader can observe a file before a mutation and another after. Verification and review results bind to a revision, snapshot or recorded content state rather than to a live shared view. A declared capability is not enforced isolation: a shell or extension that claims read-only status does not authorize parallel mutation. Approvals and overwrites recheck the expected base revision, so a file changed since approval is not silently replaced.
+
 Filesystem/process/job/sandbox behavior belongs to an execution-environment boundary, not the session scheduler. The environment may expose durable job identities/reconciliation, but canonical session truth remains owned by the task/session runtime.
 
 ## 15. Cancellation and close
@@ -389,7 +393,7 @@ Live model/tool output is provisional and coalescible. Final durable output repl
 
 Per-conversation drafts and delayed replies bind captured target IDs. Changing TUI focus cannot reroute an already-submitted command.
 
-Conversation/session summaries must not require loading every historical transcript/task.
+Conversation/session summaries must not require loading every historical transcript/task. The kernel exposes a bounded `SessionSummary` carrying counts and cursors, and a paginated fork-visible transcript read (`Session::conversation_entries`) with an exclusive cursor. These are interfaces: their K2 implementation still derives visible entries in memory, and K4 must back them with indexed range reads rather than full-history materialization.
 
 ## 17. Persistence
 

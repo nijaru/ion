@@ -71,7 +71,9 @@ crates/ion-core/
 
     view/
       mod.rs
-      # current snapshot/event/watch types may split as they grow
+      snapshot.rs   # SessionSnapshot + bounded SessionSummary/EntryPage
+      event.rs
+      # split further only as behavior grows
 
     store/
       mod.rs
@@ -171,8 +173,11 @@ As behavior grows, split by real ownership:
 Owns bounded client projections, not canonical execution state:
 
 - snapshots;
+- a bounded `SessionSummary` and paginated fork-visible `EntryPage` reads, so summaries and scrolling do not materialize all history;
 - committed events;
 - observation/watch cursors and overflow/reset semantics.
+
+K2 derives these reads in memory; K4 backs them with indexed storage queries.
 
 TUI-specific focus, drafts, layout and rendering stay outside `ion-core`.
 

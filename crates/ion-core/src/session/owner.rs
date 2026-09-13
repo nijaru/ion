@@ -10,7 +10,9 @@ use crate::session::command::{
 use crate::session::state::SessionState;
 use crate::session::transaction::Transaction;
 use crate::store::{MemoryStore, Persistence};
-use crate::view::{CommitEvent, ObservationBatch, SessionSnapshot};
+use crate::view::{
+    CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
+};
 use crate::{
     CommitSeq, ConversationId, InputDisposition, InputId, InvocationKind, RequestKey, SessionId,
     TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
@@ -133,6 +135,66 @@ impl Session {
             commit_seq,
             replayed: false,
         })
+    }
+
+    /// Bounded overview: counts only, no transcript or task payloads.
+    #[must_use]
+    pub fn summary(&self) -> SessionSummary {
+        let state = &self.state;
+        let mut tasks = TaskCounts::default();
+        for task in state.tasks.values() {
+            match task.status {
+                TaskStatus::Pending => tasks.pending += 1,
+                TaskStatus::Running => tasks.running += 1,
+                TaskStatus::Terminal(_) => tasks.terminal += 1,
+            }
+        }
+        SessionSummary {
+            session_id: state.session_id,
+            root_conversation: state
+                .root_conversation
+                .expect("initialized session has root conversation"),
+            last_commit: state
+                .last_commit
+                .expect("initialized session has first commit"),
+            conversations: state.conversations.len(),
+            entries: state.entries.len(),
+            inputs: state.inputs.len(),
+            tasks,
+        }
+    }
+
+    /// Read one bounded page of a conversation's fork-visible transcript.
+    /// `after` is exclusive and must be visible; a returned cursor stays valid
+    /// while the transcript remains append-only at that range.
+    pub fn conversation_entries(
+        &self,
+        conversation_id: ConversationId,
+        after: Option<crate::EntryId>,
+        limit: usize,
+    ) -> Result<EntryPage, SessionError> {
+        let visible = self
+            .state
+            .visible_entries(conversation_id)
+            .map_err(|error| SessionError::Invariant(error.to_string()))?;
+        let start = match after {
+            Some(cursor) => visible
+                .iter()
+                .position(|entry| entry.id == cursor)
+                .map(|position| position + 1)
+                .ok_or(SessionError::InvisibleContextReference(cursor))?,
+            None => 0,
+        };
+        if limit == 0 || start >= visible.len() {
+            return Ok(EntryPage {
+                entries: Vec::new(),
+                next: None,
+            });
+        }
+        let end = start.saturating_add(limit).min(visible.len());
+        let entries: Vec<_> = visible[start..end].to_vec();
+        let next = (end < visible.len()).then(|| entries.last().expect("non-empty page").id);
+        Ok(EntryPage { entries, next })
     }
 
     #[must_use]
