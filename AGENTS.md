@@ -39,7 +39,7 @@ Accepted kernel contracts:
 4. one private session-local monotonic sequence backing distinct typed local IDs and commit cursors;
 5. a small independent provider-neutral `ion-ai` contract crate with scripted model service.
 
-Proceed through K0/K1 onward in `docs/core-runtime-migration.md`. Replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port leaf algorithms only after their new boundary exists.
+Follow `ROADMAP.md` §1 for current work order: the 2026-09-13 review prioritizes correctness repairs, bounded storage and a measurable single-agent coding loop before further joined-worker/control expansion. K/P numbers are subsystem labels, not permission to bypass that gate. Preserve the core architecture; do not reopen R0 or build another runtime to address local defects. Replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port leaf algorithms only after their new boundary exists.
 
 Follow `docs/source-layout.md`. Do not recreate broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, or giant SQL/TUI buckets. A module should have one semantic owner and few reasons to change; file size is a review signal, not something to game by moving code into generic helper files.
 
@@ -51,7 +51,7 @@ Do not prematurely redesign every peripheral subsystem during the kernel rewrite
 
 ## Changes
 
-For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Prefer the smallest coherent primitive that preserves the target invariant.
+For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Review findings are source-derived until reproduced; add the boundary-specific regression before marking a repair closed, and record its commit/evidence in `ROADMAP.md`. Keep current status sections consistent with the evidence log; historical green tests do not prove newly identified gaps closed. Prefer the smallest coherent primitive that preserves the target invariant.
 
 A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths. R0 prototype code is deleted once equivalent fresh-core invariants are covered.
 

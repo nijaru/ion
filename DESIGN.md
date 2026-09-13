@@ -1,6 +1,8 @@
 # Ion design
 
-Status: accepted target architecture, revision 6, 2026-09-12 (America/Los_Angeles).
+Status: accepted target architecture, revision 7, 2026-09-13 (America/Los_Angeles).
+
+Revision 7 accepts the targeted repair direction from the source review at `888d103c`; it does not claim the repairs implemented. `ROADMAP.md` §1 owns their order and acceptance evidence. The core nouns and recovery architecture remain unchanged.
 
 This document defines the core agent/runtime Ion should become. It is not a description of the legacy implementation and not a compatibility contract with it. The project is pre-1.0; if production evidence disproves an internal design, change the design rather than preserving unfinished abstractions.
 
@@ -100,7 +102,7 @@ Resident `SessionState` belongs to the session owner, not the persistence backen
 
 Any persistence error conservatively fences the writable session handle and fault-stops local invocations. Failed persistence does not install the prepared state or publish committed observations. Reopen and recover durable state; never guess whether a batch committed.
 
-The host owns an exclusive cross-process writable-session lock and releases it last during close. PID/heartbeat/stale-timestamp heuristics are not ownership.
+The host acquires an OS-held exclusive cross-process writable-session lock before reconstruction or recovery and releases it last, after local invocations join and storage closes. Reconstruction reads one consistent snapshot. PID/heartbeat/stale-timestamp heuristics are not ownership. Commit-cursor CAS remains defense-in-depth: it fences stale canonical writes, but cannot by itself prevent two processes executing an external action. The OS ownership requirement is not yet implemented (R1).
 
 ## 6. Identity and ordering
 
@@ -238,6 +240,8 @@ Representative states include prepared/not-dispatched, dispatched retry-safe att
 
 Attempt/usage evidence may be a task-scoped ledger. It is not another generic effect lifecycle.
 
+Absent checkpoints and unreadable/unsupported checkpoints are distinct. Recovery must block on unreadable evidence, never decode it as “not dispatched” or rebuild a frozen request. Prepared tool implementation identity and recovery policy must remain identifiable across catalog changes; removal or changed retry safety cannot erase earlier dispatch uncertainty. The built-in adapters still need this fail-closed repair (R3).
+
 If one logical task would perform several independent repeat-sensitive operations, prefer child tasks. Otherwise its checkpoint must encode every uncertain boundary. Add a first-class effect entity only if a future concrete operation demonstrates an independent identity/lifetime the task model cannot represent cleanly.
 
 Opening or inspecting a session starts no work. Drive/resume is explicit.
@@ -254,7 +258,7 @@ input
               -> next generation or final answer
 ```
 
-A generation settlement atomically appends the transcript entries the answer produced and creates every required tool child plus the join/continuation before becoming terminal. When the generation answers an admitted input, that settlement also appends the user entry carrying the input's content and consumes the input in the same commit; an answer that never completes leaves the input bound and appends nothing.
+A generation settlement atomically appends the transcript entries the answer produced and creates every required tool child plus the join/continuation before becoming terminal. User-message placement is independent of answer success: the writer appends the user entry and records its input placement atomically before provider dispatch. An explicit retry creates a new answer attempt against that same placed input/entry, not a second admission or duplicate user message. Assistant settlement remains separate and never turns incomplete output into a successful answer. This supersedes answer-dependent user-entry persistence; R4 must implement the disposition/attempt API and its tests.
 
 Tool tasks may finish in any order. Each tool task commits its own result entry with its outcome, so transcript chronology records completion order while model projection restores the results to the originating assistant call order. The post-tools join appends nothing: it is the barrier that makes the continuation generation runnable only once every call has a recorded result, which keeps a split exchange from becoming model context.
 
@@ -264,13 +268,15 @@ Ordinary tool definitions do not receive arbitrary session transaction authority
 
 ### Foreground turns
 
-Dependency edges order work; they are not cancellation or ownership scope. A conversation instead holds one authoritative foreground-turn slot, and each task records the turn root it belongs to (`None` is background or retained-worker work). A turn root records its own id and occupies the slot until it becomes terminal.
+Dependency edges order work; they are not cancellation or ownership scope. A conversation instead holds one authoritative foreground-turn slot, and each task records the turn root it belongs to (`None` is work outside any turn). A turn root records its own id; the slot lasts until the whole turn closes, not until that root operation becomes terminal.
 
 A generation settlement's successors inherit the settling task's turn by default. A plan may instead give a successor its own turn (`Own`), which opens that conversation's foreground slot in the same commit so the successor roots an independent turn there, or leave it outside every turn (`Background`), which is how retained work survives cancellation; that is an authorized lifetime choice for a trusted kind, not a general way for any plan to escape cancellation scope. Opening a turn a conversation already holds is rejected and rolls the whole plan back, so the one-turn-per-conversation rule holds for plan writes too.
 
 Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, then signals the affected local invocations and drives abort cleanup for members that never dispatched, because those cannot observe a local signal. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. A successor created by cleanup after the turn was cancelled is born cancelled, so an abort cannot smuggle new runnable work into a stopped turn; such a member still needs an explicit drive to settle, which bounds cleanup from recursively generating more cleanup.
 
-A completed turn records **which member closed it**: the turn root carries a durable receipt (`turn_closed_by`) written in the same commit as the settlement and the slot release. That receipt is what makes "the worker has finished" expressible, because the member that ends a chain is only decided while the chain runs - a generation settles as soon as it has planned its children.
+Turn control has its own durable cancellation barrier, independent of whether the root operation is already terminal. Cancelling after root settlement must still fence future member admission and cleanup successors without rewriting the root's outcome. R2 must implement this separation; consulting the root operation's cancellation flag is insufficient.
+
+A completed turn records **which member closed it**: the turn root carries a durable receipt (`turn_closed_by`) written in the same commit as the settlement and the slot release. The receipt proves closure, not success or answer selection: cleanup or a failed member may close the turn. Joined runs require an explicit result-selection contract distinct from the receipt. The member that ends a chain is only decided while the chain runs; a generation settles as soon as it has planned its children.
 
 The slot is released only when the turn has no remaining non-terminal member, not when the root settles. A terminal root with live tools or a continuation still owns the slot, so a second foreground chain cannot interleave with the first. Background work never holds the slot and never delays its release. Starting a new turn while one is live is rejected until the slot is free.
 
@@ -298,7 +304,7 @@ Admission and turn start are one durable decision, and it follows the mode/state
 
 Queued input is drained when a settlement releases the conversation's turn slot — and only the conversations whose slot that settlement actually released, so unrelated work cannot start a turn — one input per successor turn and in admission order, so a queued follow-up continues the conversation without a client polling. Nothing schedules queued input on its own before that: opening or inspecting a session still starts no work, and a client may ask for the next turn explicitly, which is what a conversation reopened with durable queued input needs. The scheduler never invents a task kind: a conversation's automatic turn shape is configuration (`TurnTemplate`), and without one nothing is scheduled automatically and a turn-starting mode on an idle conversation is refused rather than silently dropped. Scheduling also refuses a turn whose kind the driver cannot run, leaving the input queued for when the implementation is registered instead of binding it to work that would settle `Unsupported`.
 
-Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript. A duplicate request key replays the original admission without a new commit: the receipt reports the bound turn when one exists and otherwise reports the input as queued, including when the original admission queued it. A queued input is not a lost input, so replaying it is not an error. Steering a busy conversation is deferred to the next turn boundary; injecting input into a running generation mid-turn is not built yet.
+Admission, placement into an entry and answer-attempt settlement are separate durable facts. Current `Assigned`/`Consumed` bindings must evolve in R4 so a failed answer does not strand an accepted request: placed content remains inspectable and explicit retry/abandon remains possible. A task with no assigned input simply reads its transcript. A duplicate request key replays the original admission without a new commit: the receipt reports the bound turn when one exists and otherwise reports the input as queued, including when the original admission queued it. A queued input is not a lost input, so replaying it is not an error. Steering a busy conversation is deferred to the next turn boundary; injecting input into a running generation mid-turn is not built yet.
 
 Inter-worker communication uses this same input substrate rather than another mailbox truth model.
 
@@ -334,15 +340,19 @@ retire
 
 The primary conversation is the default synchronizer. Parallelism is bounded and purpose-driven; more agents are not assumed better.
 
-The implemented part of this contract is the **retained spawn**: a trusted built-in adapter creates the worker conversation, its brief and its initial task in one commit with the outcome that created it, seeds the brief as a transcript entry with a user projection (so a worker with no admitted input still reads it as context), and runs the worker's work as background. A crash before that settlement leaves no worker at all, and a recovery drive creates exactly one.
+The implemented part of this contract is the **retained spawn**: a trusted built-in adapter creates the worker conversation, its brief and its initial task in one commit with the outcome that created it, seeds the brief as a transcript entry with a user projection (so a worker with no admitted input still reads it as context), and opens the worker's own foreground turn. A crash before that settlement leaves no worker at all, and a recovery drive creates exactly one.
 
 **Retire** archives an owned, quiescent worker: one durable `Conversation.retired` flag, set only when the conversation is an owned worker with no foreground turn and no non-terminal task. A retired conversation keeps its history, ownership, terminal outcomes and checkpoints and stays readable, but every writer path rejects it — transcript entries, task creation, input admission, opening a turn and settlement plans — and input that was queued but never started is cancelled in the same commit, because retirement stops future work rather than forgetting it. Reactivation clears the flag and starts nothing. Retiring a conversation never invalidates a cutoff another conversation inherited from it. This is the archive half of the control surface; it is not deletion, and it is node-local rather than propagated from a creator's termination.
 
 A spawned worker's run opens **its own conversation's turn**, so the worker is never idle while it works: a follow-up admitted to a busy worker queues and drains into its own successor turn once the first chain finishes, `cancel_turn` on the worker's root stops exactly that run, and the creator's turn and slot are unaffected. Retained lifetime now follows from that scope rather than from being background, so cancellation of the creator's turn simply does not reach the worker's members.
 
-**Joined runs** build on that receipt: the creator learns a worker finished from it, and `wait_turn` is the client-side form. Still open is the durable dependency edge on a turn, so a creator *task* can depend on it, plus the collector that carries the result back; that edge must also reject the aggregate cycle where a task depends on turn R while a member of R depends on that task, since backward-only ID references no longer prove acyclicity. Then: the command surface for send/follow-up, inspect and wait; interruption scoped to one worker run as a first-class operation rather than the `cancel_turn` primitive; and reuse of a retained worker.
+**Joined runs** build on that closure receipt, not on an assumption that the closing member produced the answer. `wait_turn` is the client-side completion wait; a collector must select the result explicitly. Still open is the durable dependency edge on a turn, so a creator *task* can depend on it, plus the collector that carries the result back; that edge must also reject the aggregate cycle where a task depends on turn R while a member of R depends on that task, since backward-only ID references no longer prove acyclicity. Then: the command surface for send/follow-up, inspect and wait; interruption scoped to one worker run as a first-class operation rather than the `cancel_turn` primitive; and reuse of a retained worker.
 
 ## 13. `ion-ai` model/provider boundary
+
+Conversation configuration and request assembly resolve instructions/project context, selected model and generation controls, visible tools, context policy and run limits at a request boundary. History inheritance does not implicitly choose those settings or grant authority. The resolved request and relevant implementation revisions are frozen before dispatch; credentials remain host-owned and are never frozen into session truth. Current built-ins use one registered model/catalog and have no such configuration contract yet. R7 defines the narrow interface against two materially different provider APIs rather than designing a speculative configuration framework.
+
+Compaction is an ordinary built-in task/policy over the immutable head/edit primitives, not another runtime. Its trigger and safe placement, output bounds and configurable step/cost/deadline limits are required by the real coding baseline (R8). Provider capabilities, ordered content/replay, usage and typed retry facts must be validated with real wire fixtures; the scripted contract alone does not establish provider neutrality.
 
 The provider-neutral model contract is a separate small crate, `ion-ai`. `ion-core` may depend on it; `ion-ai` must not depend on session/task/store types.
 
@@ -417,7 +427,7 @@ Client task/dependency waits subscribe before checking committed state and reche
 
 Frontends attach without becoming execution owners.
 
-A watch captures an atomic bounded view plus durable `CommitSeq`, then receives committed changes and provisional output frames. Overflow requires resnapshot rather than silently presenting incomplete state.
+A watch captures an atomic bounded view plus durable `CommitSeq`, then receives committed changes and provisional output frames. Overflow or a restart coverage gap requires resnapshot rather than silently presenting incomplete state. An in-memory observation buffer lost on reopen cannot report an old cursor caught up merely because the new buffer is empty (R5). Provisional frames require task/invocation identity and a current attachment epoch; the current committed-invalidations surface is not yet the streaming contract (R8).
 
 Live model/tool output is provisional and coalescible. Final durable output replaces matching provisional presentation.
 
@@ -481,7 +491,7 @@ The legacy runtime's core abstractions no longer match this design: lanes, durab
 
 Do not perform a prolonged compatibility refactor and do not maintain old/new production runtimes side by side.
 
-Implementation order is:
+The original kernel build order was (current repair/delivery order is `ROADMAP.md` §1):
 
 ```text
 K0  promote ion-ai contract
@@ -509,4 +519,4 @@ Temporary R0 and historical P1 prototypes remain evidence only until equivalent 
 
 Higher-level knowledge/task-board/memory systems remain outside these gates and require separate effectiveness evidence later.
 
-No part of this document is a claim that the fresh production core already exists. Revision 6 fixes the accepted target after R0; implementation and production validation now have to catch up.
+K0–K5 foundations and part of K6 exist, but this document remains the target contract, not a claim that every requirement is implemented or validated. Revision 7 preserves the architecture and accepts the repair direction; `ROADMAP.md` distinguishes open work, implemented behavior and observed evidence.

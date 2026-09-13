@@ -2,6 +2,8 @@
 
 Evidence reviewed for the proposed target through 2026-09-12, America/Los_Angeles. [DESIGN.md](../DESIGN.md) contains recommendations; [ROADMAP.md](../ROADMAP.md) identifies the work needed to validate them. This is a decision-oriented source review, not a runtime benchmark or a ranking of agent products.
 
+Historical recommendation notice (2026-09-13): the P1 re-entrant authoring recommendation below was superseded by R0's single typed async `execute/recover/abort` contract with complete durable checkpoints. Earlier explicit mutable-context recommendations were superseded by immutable transcript-derived heads/edits. Preserve the source findings as dated evidence, not current implementation instructions. `DESIGN.md` owns accepted contracts; `ROADMAP.md` §1 owns the post-review repair order.
+
 ## 1. Evidence rules
 
 Source code establishes what a specific revision implements. Tests establish the cases asserted, not that those tests passed in this review. Specifications establish intended contracts. Product documentation establishes the public behavior claimed by its publisher. Performance and effectiveness claims require reproducible workloads and measurements.

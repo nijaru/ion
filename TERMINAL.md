@@ -12,7 +12,7 @@ The main views are conversation, agent group, focused worker, activity/approvals
 
 ## 2. Conversation view
 
-The proposed default is Pi-like inline conversation with useful native scrollback, a stable live band, a multiline composer, and compact session status. Fullscreen conversation is an equivalent navigation surface, not a separate feature set.
+The proposed default is Pi-like inline conversation with useful native scrollback, a stable live band, a multiline composer, and compact session status. Fullscreen conversation may later provide equivalent navigation, but the first validated surface comes before a second rendering mode.
 
 The composer displays its target agent, effective model, and delivery mode. It supports editing, undo, multiline paste, history, file references, completion, image attachment where supported, and an external editor. Unsupported terminal chords have documented alternatives. A paste never becomes a sequence of submissions.
 
@@ -49,7 +49,7 @@ Bindings are user-configurable and documented from resolved command metadata. Ke
 | Resume | Explicitly resumes eligible work; reports blocked recovery or missing capabilities. |
 | Cancel turn | Names the exact agent and turn; does not silently cancel its retained peers or unrelated jobs. |
 | Cancel subtree/group | Previews the affected agents/jobs and uses the runtime's durable scope barrier. |
-| Retire agent | Requires descendant and artifact disposition; keeps history inspectable. |
+| Retire agent | Archives the selected quiescent worker without deleting history or implicitly retiring descendants. Descendant/artifact cleanup is a separate, explicit action. |
 | Restart | Creates fresh execution/identity as defined by the host command and records lineage; never disguises a retry as recovery. |
 | Inspect/history/fork | Reads or creates history with explicit context/configuration/authority choices. Does not restore files implicitly. |
 

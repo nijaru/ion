@@ -8,20 +8,41 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 
 | Deliverable | State | Evidence |
 |---|---|---|
-| Core architecture | Clean rewrite active; K0-K2 complete, K3 storage-independent work complete, K4 preparation done | DESIGN.md; docs/core-runtime-migration.md; evidence log below |
-| Worker/fork/session topology | Accepted target; fork/ownership domain + writer primitives implemented, worker runtime open | docs/research/agent-topology-context-2026-09-12.md; K1/K2 |
+| Core architecture | K0–K5 foundations and part of K6 implemented; correctness repair gate active | DESIGN.md; repair order below; docs/core-runtime-migration.md |
+| Worker/fork/session topology | Retained spawn, archive, worker-local turns and closure receipts implemented; joined-run expansion paused behind repairs and the coding baseline | K6 below; repair order below |
 | Task execution/recovery | K2 lifecycle boundary plus K3 driver implemented, including waits, capacity, close, interruption/uncertainty, finalization, turns and readiness dispatch | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs`; `crates/ion-core/tests/k5_chain.rs` |
-| IDs/order | Session-local unified sequence implemented in fresh core; SQLite representation open | R0.4; K1/K2 |
+| IDs/order | Session-local typed sequence implemented, including SQLite representation | R0.4; K1/K2/K4 |
 | AI boundary | Independent provider-neutral `ion-ai` contract crate implemented | R0.5; `crates/ion-ai/` |
-| Storage topology/engine | Fresh per-session SQLite store implemented (schema v1, WAL + `synchronous = FULL`, commit-cursor fencing, open-time reconstruction, process-death durability test); physical-topology/index/cold-read evidence open | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
-| Fresh production core | Old lane/agent/operation/effect runtime physically removed; K0-K3 complete, K4 next | cleanup commit `2d273f78`; evidence log below |
+| Storage topology/engine | Per-session SQLite schema v3 implemented; OS ownership exclusion and bounded residency remain open; process-death evidence is limited to acknowledged entry commits | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
+| Fresh production core | Legacy runtime removed; scripted generation/tool chain works; no real-provider coding loop yet | cleanup commit `2d273f78`; evidence log below |
 | TUI/group target | Interaction requirements drafted; fresh application/TUI not yet rebuilt | TERMINAL.md |
 
 R0 was validated at `81c344d713f13b73e19232b4ad36dfe40ba663b9` by CI run `34718467220`. The old core was then physically removed instead of retained as a compatibility runtime. The K3 core-driver checkpoint `a33e0fb22073857cc724244b23f99e0c12249147` (CI run `34725190754`) remains historical validation evidence; later commits are listed in the evidence log.
 
 The design remains reopenable if production evidence disproves a contract. Do not preserve an implementation merely because it has now been rewritten once.
 
-## 1. Immediate work: clean rewrite
+## 1. Immediate work: repair, then a real coding baseline
+
+The 2026-09-13 source review at `888d103c` preserves the core architecture but supersedes the previous “joined workers next” order. Findings below are source-derived failure scenarios, not executed reproductions. The existing green suite does not close them. Start each repair with a regression test at the affected boundary; record the fixing commit and actual evidence here when it closes. Do not infer closure from a nearby test or from updating the design.
+
+### Repair and delivery order
+
+All items below are **open**. This is the work-order authority; the K/P sections retain subsystem scope, not a competing execution sequence.
+
+| Order | Observable behavior / semantic owner | Failure boundary and acceptance evidence |
+|---|---|---|
+| R1 — exclusive writable ownership | Session host/store owns an OS-held exclusive lock before reconstruction or recovery; cursor CAS remains defense-in-depth; load uses a consistent snapshot | Two subprocesses: A parks after dispatch; B must be refused before recovery/external action. Kill A and prove B can acquire ownership. Close releases ownership only after joins and storage close. CAS alone cannot fence overlapping external execution. |
+| R2 — durable turn control | Turn cancellation barrier is independent of the root task's terminal outcome; `turn_closed_by` denotes closure provenance, not the answer | Settle the generation root, keep a child live, cancel, then let child abort cleanup plan successors. None escapes cancellation, including across reopen. Test settlement/mark ordering. Preserve terminal operation outcomes. |
+| R3 — fail-closed recovery | Built-in generation/tool adapters distinguish absent checkpoints from corrupt/unsupported checkpoints; prepared tool identity and recovery policy survive catalog changes | Malformed generation/tool checkpoint, removed tool and changed retry policy across reopen must neither repeat an uncertain action nor fabricate a known result. Use an external witness for dispatch-window crash tests. |
+| R4 — input placement and answer attempts | Input/transcript writer commits the user entry once before provider dispatch; generation answer attempts and their outcomes are separate | Cancel before first token, end incomplete, close/reopen and explicitly retry: one accepted input, one user entry, a new answer attempt, no permanently stranded request. Preserve truthful assistant failure/uncertainty. |
+| R5 — restart-safe observations | Session observation owner tracks coverage across restart; an old cursor cannot silently receive an empty successful delta | Commit, retain a client cursor, commit again, reopen and request changes from the old cursor: require resnapshot. Test future/unknown cursors and atomic watch attachment. |
+| R6 — bounded storage/output | Store indexed reads and transaction overlays replace full-history hydration and map cloning; exact frozen requests remain reproducible without unnecessary payload duplication | Measure 100k terminal tasks, deep forks, large output and a tiny active set: RSS, query work, commit latency, bytes/WAL growth, restart and cancellation latency. Test byte caps, disk exhaustion and artifact publication. Bounded return sizes alone do not establish bounded work. |
+| R7 — thin real coding loop | Conversation configuration/request assembly, provider adapter and execution environment support instructions, selected model/tools, read/edit/exec and minimum permissions | Run an externally verified edit/test task through a headless client. Exercise fixtures from two materially different provider APIs for instructions, controls, replay, ordered content, usage and typed errors; at least one live provider path. Cancel during connection establishment as well as streaming. Freeze resolved configuration, never credentials. |
+| R8 — usable baseline and evaluation | Built-ins own compaction/context policy and configurable step/cost/deadline limits; clients receive invocation-addressed provisional output | Small coding regression set with externally checked outcomes, repeatable model/configuration, cost/latency and failure records. Test streaming/resume/fork, stale frames, output floods, compaction safety and budget exhaustion. Unknown usage must not be treated as zero. A terminal surface additionally needs reducer/PTY and smoke checks. |
+
+R1–R5 precede further runtime feature expansion. R6's bounded-work gate precedes expanding worker fan-out; R7 may use small provider fixtures to inform contracts without waiting for broad storage benchmarking. R7/R8 deliver the single-agent baseline before resuming joined-worker/control-surface expansion. Start small evaluations with M2; M7 is broader optimization, not the first effectiveness check.
+
+After that baseline, resume K6 with explicit joined-result selection and aggregate-cycle rejection, then reuse, nested limits and group control. A closure receipt must never be treated as a successful answer merely because the last member settled. Keep broader provider catalogs, equivalent inline/fullscreen UIs, MCP/extensions and advanced delegation in their later passes. Minimum sandbox/permission boundaries and run/output limits are not deferred to those broader passes.
 
 Follow [docs/core-runtime-migration.md](docs/core-runtime-migration.md) and [docs/source-layout.md](docs/source-layout.md). The five pre-rewrite gates are closed; their evidence and decisions are recorded in [docs/r0-kernel-gates-2026-09-12.md](docs/r0-kernel-gates-2026-09-12.md).
 
@@ -92,7 +113,7 @@ K2's lifecycle paths are exercised through the K3 production driver so they are 
 
 ### K3 — task driver
 
-**Status: in progress; core driver slice validated.**
+**Status: core driver implemented; exclusive ownership and reviewed turn-control gaps remain open (R1/R2).**
 
 Implemented now:
 
@@ -110,25 +131,24 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- writable ownership release after local joins (K4).
+- OS-held writable ownership before reconstruction/recovery and release after local joins/storage close (R1);
+- durable turn cancellation independent of a terminal root operation (R2).
 
 The typed authoring adapter is implemented in `task/typed.rs`: `TaskRegistry::register_typed` erases a `TypedHandler` into the ordinary registry entry shape, input/checkpoint decode and result encode go through the durable JSON shapes, and terminal/failed/aborted/indeterminate stay distinct. An undecodable checkpoint or un-encodable result interrupts an already-dispatched task instead of terminalizing it; only never-dispatched work settles a structured `Failed`.
 
 The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch, cancellation during saturated capacity admission, and interruption/uncertainty handling are covered by outcome-sensitive tests in `k3_abort.rs` and `k3_driver.rs`: exactly one Abort invocation, no normal execution, separate bounded cleanup admission, interrupted invocations that stay running and recoverable, known-failure versus indeterminate settlements, and blocked recovery for a running task whose implementation is unavailable. Persisted reopen coverage remains open.
 
-Persistence-backed evidence remains open:
-
-- persisted reopen/crash recovery and explicit resume/drive, which require K4 storage to test honestly.
+K4 now supplies persisted reopen and explicit-drive evidence. Cross-process ownership exclusion and dispatch-window crash recovery remain open (R1/R3); the acknowledged-entry process-death test is not evidence for those boundaries.
 
 ### K4 — fresh SQLite session store
 
-**Status: resident-state/persistence separation implemented; SQLite paused for contract work.**
+**Status: SQLite schema v3 implemented; exclusive ownership, restart coverage and bounded storage repairs remain open (R1/R5/R6).**
 
 The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
 
-Before SQL, bounded residency and the persistence interface are decided. Resident records are copy-on-write behind `Arc`, so a commit does not deep-copy unrelated durable records and a checkpoint touches only its own record; transcript projection still materializes visible history. The remaining per-commit map-structure clone is removed when reads move to indexed storage. The decision and its invariants are recorded in `docs/core-runtime-migration.md`. The durable write set in `MutationBatch` is what a backend persists and can reconstruct from, covered by `committed_write_set_reconstructs_resident_state`. Restricted task finalization, foreground-turn membership and the typed task authoring adapter are implemented. Planned owned-conversation/scratch finalization is K6 work and does not block basic SQLite.
+Bounded residency and the persistence interface are accepted targets, but bounded residency remains unimplemented (R6). Resident records are copy-on-write behind `Arc`, so a commit does not deep-copy unrelated durable records and a checkpoint touches only its own record; transcript projection still materializes visible history. The remaining per-commit map-structure clone is removed when reads move to indexed storage. The decision and its invariants are recorded in `docs/core-runtime-migration.md`. The durable write set in `MutationBatch` is what a backend persists and can reconstruct from, covered by `committed_write_set_reconstructs_resident_state`. Restricted task finalization, foreground-turn membership and the typed task authoring adapter are implemented. Planned owned-conversation/scratch finalization is K6 work and does not block basic SQLite.
 
-Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
+The fresh per-session schema is implemented at version 3. Do not migrate old lane/operation tables into the new core.
 
 Development-era old databases may be archived/refused under the pre-1.0 policy. A later migration is written only if preserving old sessions is actually worth the complexity.
 
@@ -160,19 +180,19 @@ Still open for this slice: a production provider catalogue; mid-turn steering (a
 
 ### K6 — workers as owned conversations
 
-**Status: ownership mechanism implemented; worker control surface open.**
+**Status: retained workers and turn receipts implemented; further expansion paused behind the repair gate and single-agent baseline.**
 
 A `TaskPlan` can now create conversations it owns: `TaskPlan::create_conversation` returns a plan-local handle that planned entries and successors may target (`PlannedTarget::{Existing, Planned}`), the conversation is created before them, and it is owned by the settling task with the reciprocal edge in the same commit as the outcome. Context seed is explicit — `PlannedConversation::fresh`, or `inherited` at a stable cutoff validated exactly like any fork — and the plan bounds now cover conversations. `tests/k6_workers.rs` covers fresh and inherited workers, ownership reciprocity, seeding a worker with a brief and a retained task, reopen, a foreign plan handle, an invisible cutoff and the enforced bound.
 
-`builtin::worker` is the production retained spawn: a `worker` task takes a `WorkerSpec` (brief plus optional inherited seed) and its settlement plans the owned conversation, the brief as a projected transcript entry, and the worker's initial generation as a background task. `TaskDriver::{conversation, owned_conversations}` give bounded discovery without materializing the session.
+`builtin::worker` is the production retained spawn: a `worker` task takes a `WorkerSpec` (brief plus optional inherited seed) and its settlement plans the owned conversation, the brief as a projected transcript entry, and the worker's initial generation in its own turn. `TaskDriver::{conversation, owned_conversations}` give bounded discovery without materializing the session.
 
 Retirement is implemented as a read-only archive: a durable `Conversation.retired` flag (schema version 2) set only for an owned conversation with no foreground turn and no non-terminal task, rejected through every writer path (including settlement plans) while history, ownership, terminal outcomes and checkpoints stay readable, with reactivation clearing the flag and starting nothing. Queued-but-unstarted input is cancelled in the same commit.
 
 Worker-local turn scope is implemented: `PlannedTurn::{Inherit, Own, Background}` replaced the `background` flag, and `Own` opens the target conversation's foreground slot in the same commit that creates the successor rooting it (rejected with a full rollback when the slot is already held). The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: follow-ups queue behind it and drain into their own successor turns, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle as soon as the spawn settles.
 
-Turn completion is durable: the turn root records the member whose settlement closed the turn, written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose it as the client's "the worker's whole chain answered" wait.
+Turn completion is durable: the turn root records the member whose settlement closed the turn, written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose whole-chain closure, not answer selection or success.
 
-Still open, in the order they block each other: **the dependency edge on a turn plus the collector** (a task cannot yet depend on a turn, and the edge must reject the aggregate cycle a backward-only reference check cannot see), the command surface for send/follow-up, inspect and wait, interruption scoped to one worker run as a first-class operation, reuse, and nested ownership limits.
+Deferred until the repair gate and single-agent baseline above: **the dependency edge on a turn plus an explicit result-selecting collector** (a task cannot yet depend on a turn, and the edge must reject the aggregate cycle a backward-only reference check cannot see), the command surface for send/follow-up, inspect and wait, interruption scoped to one worker run as a first-class operation, reuse, and nested ownership limits.
 
 Implement the control surface through the same session/task kernel:
 
@@ -310,13 +330,13 @@ These adapters may wait/reshape responses for protocol compatibility but must no
 
 | Milestone | End-to-end result |
 |---|---|
-| M1 — fresh core | new Session/Conversation/Task runtime, scripted generation/tool chain, SQLite session store, one worker, crash/cancel tests; old core removed |
-| M2 — real coding loop | execution environment plus first real provider path, read/edit/shell, compaction/history/forks, usable headless client |
+| M1 — repaired core | existing fresh kernel plus R1–R5 correctness repairs and targeted crash/cancel evidence; broader K6 controls do not block M2 |
+| M2 — real coding loop | R6 bounded-work gate and R7/R8: provider, instructions/configuration, read/edit/exec, minimum permissions, streaming headless client, compaction, limits and a small coding regression suite |
 | M3 — controlled workers | retained/nested workers, messages/results, workspace policies, background jobs, group limits and TUI group control |
 | M4 — daily coding | provider/auth/model catalog breadth, images, skills/resources, search/completion, editor/settings/export and hardened TUI |
 | M5 — parallel implementation | worktree-backed mutating workers, retained patches/evidence, apply/reverify/conflict/cleanup |
 | M6 — extensibility/interoperability | scoped extensions/MCP plus stable useful Rust/JSON/ACP client surfaces |
-| M7 — effectiveness | controlled evaluation of context, editing/tool interfaces, compaction and delegation; later higher-level systems only if they beat the core baseline |
+| M7 — effectiveness optimization | broaden the evaluations begun at M2; compare context, editing, compaction and delegation against the baseline; higher-level systems only if they improve measured outcomes |
 
 No milestone is “Pi parity.” Pico supplies minimal-harness design evidence; Codex supplies production-engineering evidence; Ion chooses its own tested contracts.
 
@@ -329,6 +349,10 @@ Keep runtime performance separate from model effectiveness. Record source revisi
 Agent-effectiveness optimization starts from a stable M1/M2 baseline. More context, more agents, memory systems and richer coordination surfaces must demonstrate benefit rather than receive architectural preference.
 
 ## Evidence log
+
+Entries below are chronological evidence at their named revisions, not a second current-status list. The 2026-09-13 review at `888d103c` supersedes earlier general claims of a complete cancelled-turn admission barrier and observation-gap handling: R2 covers cancellation after root settlement, and R5 covers restart coverage. Existing tests remain useful but do not cover those scenarios.
+
+2026-09-13: source design review at `888d103c`, including an independent Astra pass, preserved the architecture and identified R1–R8 above. User accepted the repair-first roadmap and long-term continuity update. No reproductions, Rust gates, live-provider runs or performance/effectiveness measurements were run in this documentation pass. Revision 7 of DESIGN records accepted repair contracts; implementation is open. Future joined-worker expansion is deferred behind the repairs and measured single-agent baseline.
 
 2026-09-12: isolated historical P1 prototype at `78148e84d6120d5670a784ec3ecb07684577db1d` validated idempotent reopen, out-of-order effect settlement/call-order projection, retained worker lifetime, capacity-safe wait, cancellation fencing and abrupt-process recovery. Its failure/race evidence is retained; its mandatory `step -> plan` authoring API is superseded.
 

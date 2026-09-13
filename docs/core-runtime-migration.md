@@ -1,6 +1,8 @@
 # Core rewrite plan
 
-Status: K0-K5 implemented; K6 next, 2026-09-13.
+Status: K0–K5 foundations and part of K6 implemented; review repair gate active, 2026-09-13.
+
+`ROADMAP.md` §1 is the current execution order: R1–R5 correctness repairs, bounded storage and a real single-agent coding baseline precede further joined-worker expansion. The K/P sections below describe subsystem scope and historical implementation order, not a competing next-task list. Revision-7 contract changes in `DESIGN.md` are accepted targets, not completed repairs.
 
 This document translates `DESIGN.md` into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation. `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
 
@@ -233,7 +235,7 @@ K2 lifecycle primitives are exercised by K3 production code instead of being tes
 
 ### K3 — task driver
 
-**In progress; core driver slice validated.**
+**Core driver implemented; R1 exclusive ownership and R2 turn-control repairs remain open.**
 
 Implemented:
 
@@ -253,18 +255,19 @@ Implemented:
 - serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup;
 - initial abort dispatch through the shared invocation path with separate bounded cleanup admission;
 - restricted finalization: `TaskCompletion::with_plan` commits transcript entries and successor tasks atomically with the outcome; plan-local handles resolve to session IDs only at commit, and any error rolls back the settlement and every planned write;
-- foreground-turn membership: `Session::create_turn` opens one authoritative slot per conversation, plan successors inherit the turn unless marked background, `TaskDriver::cancel_turn` durably cancels every non-terminal task in the turn and then signals local invocations, and a terminal turn root releases the slot.
+- foreground-turn membership: `Session::create_turn` opens one authoritative slot per conversation, plan successors inherit the turn unless marked background, `TaskDriver::cancel_turn` durably cancels every non-terminal task in the turn and then signals local invocations, and the last terminal member releases the slot; the root's settlement alone does not.
 
 Still open:
 
-- planned owned-conversation creation and scratch retirement (K6);
-- writable ownership release after local joins (K4 SQLite).
+- independent durable turn cancellation control (R2), including cancellation after root settlement;
+- writable OS ownership acquisition before reconstruction/recovery and release after joins/storage close (R1);
+- reclamation beyond archival retirement (later K6); planned owned-conversation creation is implemented.
 
 The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
 
-- persistence-backed reopen/recovery tests once K4 exists.
+- targeted cross-process dispatch-window and exclusive-ownership evidence (R1/R3); existing K4 reopen and acknowledged-entry process-death tests do not establish these.
 
 Do not add a second scheduler to solve these. Extend the same session/task driver boundary.
 
@@ -366,23 +369,23 @@ Still open for this slice:
 
 ### K6 — workers
 
-**Ownership mechanism implemented; worker control surface still open.**
+**Retained spawn, archive, own-turn runs and closure receipts implemented; further expansion deferred behind the repair gate and coding baseline.**
 
 `TaskPlan` can create owned conversations: `create_conversation` returns a plan-local handle, planned entries and successors may target it, and the conversation is created first, owned by the settling task with the reciprocal edge, in the same commit as the outcome. Context seed is explicit (`PlannedConversation::fresh` or `inherited` at a stable cutoff validated like any fork), and the plan bounds cover conversations as well as entries, inputs and tasks. `tests/k6_workers.rs` covers fresh and inherited workers, ownership reciprocity, seeding a worker with a brief and a retained task, reopen, a foreign plan handle, an invisible cutoff and the conversation bound.
 
-The production entry point is `builtin::worker`: a `worker` task's immutable input is a `WorkerSpec` (a brief and an optional inherited seed), and its settlement plans the owned conversation, the brief as a transcript entry with a user projection, and the worker's initial generation as a background task. The brief is an entry rather than an admitted input, so there is no admission receipt to replay and no input to consume; `DESIGN.md` §11 already allows a task with no assigned input to read its transcript. Reads are bounded: `TaskDriver::{conversation, owned_conversations}` look up one conversation record and a task's owned list without materializing the session.
+The production entry point is `builtin::worker`: a `worker` task's immutable input is a `WorkerSpec` (a brief and an optional inherited seed), and its settlement plans the owned conversation, the brief as a transcript entry with a user projection, and the worker's initial generation in its own turn. The brief is an entry rather than an admitted input, so there is no admission receipt to replay and no input to consume; `DESIGN.md` §11 already allows a task with no assigned input to read its transcript. Reads are bounded: `TaskDriver::{conversation, owned_conversations}` look up one conversation record and a task's owned list without materializing the session.
 
 Retirement is implemented as a read-only archive: `Conversation.retired` (schema version 2), `Session::retire_conversation` / `reactivate_conversation` and the same pair on the driver. Retirement requires an owned conversation with no foreground turn and no non-terminal task; input that was queued but never started is cancelled in the same commit. Every writer path rejects a retired conversation — transcript entries, task creation, input admission, opening a turn, and settlement plans — while reads, history, ownership, terminal outcomes and checkpoints are preserved, and inheriting a cutoff from a retired ancestor stays allowed. `tests/k6_retirement.rs` covers quiescence, the rejection paths including a rolled-back plan, cancellation of unstarted input, ownership, reactivation, reopen and the schema refusal.
 
-A planned successor now names its turn: `PlannedTurn::{Inherit, Own, Background}` replaced the old `background` flag. `Own` opens the target conversation's foreground slot in the same commit as the successor that roots it, so the one-turn-per-conversation rule is validated on the plan path too; a plan that opens a slot already held is rejected and rolls back. The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: a follow-up admitted to a busy worker queues and drains into its own successor turn once the first chain finishes, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle again as soon as the spawn settles. Successors that inherit *or* open a turn are born cancelled when the settling task's turn was cancelled; `Background` stays outside cancellation scope.
+A planned successor now names its turn: `PlannedTurn::{Inherit, Own, Background}` replaced the old `background` flag. `Own` opens the target conversation's foreground slot in the same commit as the successor that roots it, so the one-turn-per-conversation rule is validated on the plan path too; a plan that opens a slot already held is rejected and rolls back. The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: a follow-up admitted to a busy worker queues and drains into its own successor turn once the first chain finishes, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle again as soon as the spawn settles. Successor cancellation inheritance exists, but the post-root-settlement case is defective and remains R2 work; do not claim the aggregate admission barrier complete. `Background` stays outside cancellation scope.
 
-A turn's completion is durable: the turn root records the member whose settlement closed the turn (`turn_closed_by`), written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose it. `wait_turn` is the client-side "the worker's whole chain answered" wait, deliberately not the same as waiting for a worker's initial generation, because a generation settles as soon as it has planned its children. `tests/k6_turn_completion.rs` covers the receipt naming the closing member, a later turn not reopening an earlier receipt, one wait not blocking another worker's chain, cancellation still recording a closure, the non-root refusal, and reopen.
+A turn's completion is durable: the turn root records the member whose settlement closed the turn (`turn_closed_by`), written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose it. `wait_turn` observes whole-chain closure, not necessarily an answer or success. It is deliberately distinct from waiting for a worker's initial generation, because a generation settles as soon as it has planned its children. `tests/k6_turn_completion.rs` covers the receipt naming the closing member, a later turn not reopening an earlier receipt, one wait not blocking another worker's chain, cancellation still recording a closure, the non-root refusal, and reopen.
 
-Still open for this slice, in the order they block each other:
+Deferred until the repair gate and single-agent baseline in `ROADMAP.md` §1:
 
-- **a dependency edge on a turn, plus the collector.** The receipt makes "the worker finished" observable, but a *task* cannot yet depend on a turn. The edge must reject the aggregate cycle a backward-only reference check cannot see: a task depending on turn R while a member of R depends on that task.
+- **a dependency edge on a turn, plus the collector.** The receipt makes closure observable, not answer selection or success; a collector needs an explicit result contract and a *task* cannot yet depend on a turn. The edge must reject the aggregate cycle a backward-only reference check cannot see: a task depending on turn R while a member of R depends on that task.
 - the command surface for send/follow-up, inspect and wait as first-class operations rather than composed primitives;
-- interruption scoped to one worker run, which today is either one task or the creator's whole turn;
+- interruption scoped to one worker run as a first-class command; the worker's own `cancel_turn` primitive already exists, subject to R2;
 - reuse of a retained worker and nested ownership limits.
 
 Create owned conversations through the same writer:
