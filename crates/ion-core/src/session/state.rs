@@ -174,6 +174,20 @@ pub(crate) fn apply_mutation(
             conversation_id,
             retired,
         } => retire_conversation(state, *conversation_id, *retired)?,
+        Mutation::CloseTurn { root, closed_by } => {
+            let closed = state
+                .tasks
+                .get(closed_by)
+                .ok_or(StateError::UnknownTask(*closed_by))?;
+            if !matches!(closed.status, TaskStatus::Terminal(_)) || closed.turn != Some(*root) {
+                return Err(StateError::InvalidTurnClosure(*root));
+            }
+            let root_task = task_mut(state, *root).ok_or(StateError::UnknownTask(*root))?;
+            if root_task.turn != Some(*root) || root_task.turn_closed_by.is_some() {
+                return Err(StateError::InvalidTurnClosure(*root));
+            }
+            root_task.turn_closed_by = Some(*closed_by);
+        }
         Mutation::AppendEntry(entry) => {
             ensure_accepts_work(state, entry.conversation_id)?;
             if state
@@ -571,4 +585,6 @@ pub(crate) enum StateError {
     ConversationHasLiveWork(ConversationId),
     #[error("conversation {0} is not an owned worker and cannot be retired")]
     ConversationNotOwned(ConversationId),
+    #[error("turn {0} cannot be closed by that settlement")]
+    InvalidTurnClosure(TaskId),
 }

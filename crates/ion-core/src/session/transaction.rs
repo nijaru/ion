@@ -64,6 +64,11 @@ pub(crate) enum Mutation {
         conversation_id: ConversationId,
         retired: bool,
     },
+    /// Seal a completed turn with the member whose settlement closed it.
+    CloseTurn {
+        root: TaskId,
+        closed_by: TaskId,
+    },
 }
 
 /// The complete durable write set of one commit. Observation invalidations are
@@ -743,6 +748,16 @@ impl Transaction {
                 task.turn == Some(root) && !matches!(task.status, TaskStatus::Terminal(_))
             });
         if !remaining {
+            // The turn's completion receipt commits with the settlement that
+            // closed it, so a joiner can never observe a released slot without
+            // knowing which member ended the turn.
+            self.stage(
+                Mutation::CloseTurn {
+                    root,
+                    closed_by: task_id,
+                },
+                Change::TurnClosed(root),
+            )?;
             self.stage(
                 Mutation::ReleaseForegroundTurn {
                     conversation_id,

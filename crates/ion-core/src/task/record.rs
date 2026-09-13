@@ -20,6 +20,13 @@ pub struct TaskRecord {
     /// Foreground turn root this task belongs to, or `None` for background and
     /// retained worker work. A turn root records its own id.
     pub turn: Option<TaskId>,
+    /// On a turn root: the member whose settlement closed the turn, written
+    /// atomically with that settlement and the slot release.
+    ///
+    /// This is the durable receipt that a turn finished. It is what a joiner
+    /// waits for, because which member ends a chain is only decided while the
+    /// chain runs.
+    pub turn_closed_by: Option<TaskId>,
     pub generation: u64,
     pub invocation: Option<TaskInvocation>,
     pub cancel_requested: bool,
@@ -47,6 +54,7 @@ impl TaskRecord {
             dependencies,
             owned_conversations: Vec::new(),
             turn: None,
+            turn_closed_by: None,
             generation: 0,
             invocation: None,
             cancel_requested: false,

@@ -39,7 +39,8 @@ impl MemoryStore {
                 | Mutation::SettleTask { .. }
                 | Mutation::AttachOwnedConversation { .. }
                 | Mutation::ReleaseForegroundTurn { .. }
-                | Mutation::SetConversationRetired { .. } => true,
+                | Mutation::SetConversationRetired { .. }
+                | Mutation::CloseTurn { .. } => true,
             };
             if !unique {
                 return Err(StoreError(

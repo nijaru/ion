@@ -214,6 +214,8 @@ pub enum SessionError {
     ConversationNotOwned(ConversationId),
     #[error("conversation {0} has live work and cannot be retired")]
     ConversationHasLiveWork(ConversationId),
+    #[error("task {0} is not a foreground turn root")]
+    NotATurnRoot(TaskId),
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]

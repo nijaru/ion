@@ -15,6 +15,40 @@ impl TaskDriver {
         self.wait_state(task_id, false).await
     }
 
+    /// Wait until a foreground turn has completed, and return the member that
+    /// closed it.
+    ///
+    /// This is the client-side wait for "the worker's whole chain answered",
+    /// which is not the same as waiting for its initial generation: a generation
+    /// settles as soon as it has planned its children. Dropping this future only
+    /// drops this wait, and it holds no writer or capacity permit while waiting.
+    pub async fn wait_turn(&self, root: TaskId) -> Result<TaskId, TaskDriverError> {
+        let mut changes = {
+            let session = self.session.lock().await;
+            session.ensure_open()?;
+            let task = session
+                .task_record(root)
+                .ok_or(SessionError::UnknownTask(root))?;
+            if task.turn != Some(root) {
+                return Err(SessionError::NotATurnRoot(root).into());
+            }
+            session.subscribe()
+        };
+        loop {
+            {
+                let session = self.session.lock().await;
+                session.ensure_open()?;
+                if let Some(closed_by) = session.turn_closed_by(root) {
+                    return Ok(closed_by);
+                }
+            }
+            changes
+                .changed()
+                .await
+                .expect("driver owns session notification sender");
+        }
+    }
+
     async fn wait_state(
         &self,
         task_id: TaskId,

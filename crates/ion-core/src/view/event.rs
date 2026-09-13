@@ -29,6 +29,8 @@ pub enum Change {
     ForegroundTurnChanged(ConversationId),
     /// The conversation was retired or reactivated.
     ConversationRetirementChanged(ConversationId),
+    /// A foreground turn completed and recorded its closing member.
+    TurnClosed(TaskId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

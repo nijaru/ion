@@ -105,6 +105,9 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
                 conversation_id,
                 retired,
             } => conversation::set_retired(&transaction, *conversation_id, *retired)?,
+            Mutation::CloseTurn { root, closed_by } => {
+                task::close_turn(&transaction, *root, *closed_by)?;
+            }
         }
     }
 

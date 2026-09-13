@@ -344,6 +344,12 @@ impl Session {
             .collect()
     }
 
+    /// The member that closed `root`'s turn, if that turn has completed.
+    #[must_use]
+    pub fn turn_closed_by(&self, root: TaskId) -> Option<TaskId> {
+        self.state.tasks.get(&root)?.turn_closed_by
+    }
+
     /// One conversation record, without materializing the rest of the session.
     #[must_use]
     pub fn conversation_record(

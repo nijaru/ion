@@ -82,6 +82,22 @@ pub(crate) fn attach_owned_conversation(
     Ok(())
 }
 
+/// Record the member whose settlement closed a turn on the turn's root row.
+pub(crate) fn close_turn(
+    connection: &Connection,
+    root: TaskId,
+    closed_by: TaskId,
+) -> Result<(), StoreError> {
+    let updated = connection.execute(
+        "UPDATE tasks SET turn_closed_by = ?2 WHERE id = ?1 AND turn = id AND turn_closed_by IS NULL",
+        params![root.get(), closed_by.get()],
+    )?;
+    if updated != 1 {
+        return Err(StoreError(format!("task {root} was not an open turn root")));
+    }
+    Ok(())
+}
+
 /// Record a reserved invocation generation.
 pub(crate) fn reserve(
     connection: &Connection,
@@ -178,6 +194,7 @@ type LoadedTask = (
     String,
     Option<String>,
     Option<i64>,
+    Option<i64>,
     i64,
     Option<String>,
     bool,
@@ -197,8 +214,8 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
     )?;
 
     let mut statement = connection.prepare(
-        "SELECT id, conversation_id, kind, schema_version, input, checkpoint, turn, generation,
-                invocation, cancel_requested, state, outcome, output
+        "SELECT id, conversation_id, kind, schema_version, input, checkpoint, turn,
+                turn_closed_by, generation, invocation, cancel_requested, state, outcome, output
          FROM tasks ORDER BY id",
     )?;
     let rows = statement.query_map([], |row| -> rusqlite::Result<LoadedTask> {
@@ -216,6 +233,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
             row.get(10)?,
             row.get(11)?,
             row.get(12)?,
+            row.get(13)?,
         ))
     })?;
 
@@ -229,6 +247,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
             input,
             checkpoint,
             turn,
+            turn_closed_by,
             generation,
             invocation,
             cancel_requested,
@@ -270,6 +289,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
                 .transpose()?
                 .unwrap_or_default(),
             turn: turn.map(id_from).transpose()?,
+            turn_closed_by: turn_closed_by.map(id_from).transpose()?,
             generation: u64::try_from(generation)
                 .map_err(|_| StoreError(format!("task {id} has a negative generation")))?,
             invocation: invocation.as_deref().map(json_from).transpose()?,

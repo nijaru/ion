@@ -185,6 +185,15 @@ impl TaskDriver {
         self.session.lock().await.task_record(task_id)
     }
 
+    /// The member that closed `root`'s turn, if that turn has completed.
+    ///
+    /// This is the durable receipt a joiner waits for: the member that ends a
+    /// chain is only decided while the chain runs, so it cannot be named in
+    /// advance.
+    pub async fn turn_closed_by(&self, root: TaskId) -> Option<TaskId> {
+        self.session.lock().await.turn_closed_by(root)
+    }
+
     /// Look up one conversation record without materializing the transcript or
     /// the session.
     pub async fn conversation(
