@@ -16,6 +16,9 @@ pub struct Conversation {
     pub id: ConversationId,
     pub parent: Option<HistoryParent>,
     pub owner_task: Option<TaskId>,
+    /// The non-terminal foreground turn root, if any. One authoritative slot per
+    /// conversation; background work and retained workers never occupy it.
+    pub foreground_turn: Option<TaskId>,
 }
 
 impl Conversation {
@@ -25,6 +28,7 @@ impl Conversation {
             id,
             parent: None,
             owner_task: None,
+            foreground_turn: None,
         }
     }
 
@@ -38,6 +42,7 @@ impl Conversation {
             id,
             parent,
             owner_task: Some(owner_task),
+            foreground_turn: None,
         }
     }
 }

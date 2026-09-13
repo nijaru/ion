@@ -78,6 +78,7 @@ The current kernel has one serialized semantic mutation line, typed atomic mutat
 - append immutable entries/context controls, rejecting a head or edit whose resulting projection is not a complete provider-safe context (orphaned tool result or dangling call) without consuming sequence values;
 - accept/dedupe/place inputs with exact request-key replay/conflict;
 - create tasks and dependency edges;
+- one authoritative foreground-turn slot per conversation with turn-scoped group cancellation that leaves terminal, background and owned work untouched;
 - reserve execute/recover/abort invocations with generation fencing;
 - replace durable task checkpoints/output;
 - durably mark cancellation and fence stale/normal writes;
@@ -109,6 +110,7 @@ Implemented now:
 Still open before K3 is considered complete:
 
 - typed task authoring adapter over the erased registry (task authors still handle `serde_json::Value`);
+- input admission, queued follow-ups and idle scheduling on the foreground-turn slot (K5);
 
 - writable ownership release after local joins (K4).
 

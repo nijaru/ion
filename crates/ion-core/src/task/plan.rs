@@ -67,6 +67,9 @@ pub struct PlannedTask {
     pub schema_version: u32,
     pub input: Value,
     pub dependencies: Vec<TaskDependency>,
+    /// Background successors inherit no foreground turn and survive turn
+    /// cancellation. Use this for retained workers.
+    pub background: bool,
 }
 
 /// A dependency on an existing durable task or on a task planned earlier in the

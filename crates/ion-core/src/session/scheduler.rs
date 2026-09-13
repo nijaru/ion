@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 use crate::ResourceDomain;
-use crate::session::command::InvocationReceipt;
+use crate::session::command::{InvocationReceipt, TurnCancellation};
 use crate::task::{ContextFuture, TaskRuntime};
 use crate::{
     AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, RunningTask,
@@ -197,20 +197,38 @@ impl TaskDriver {
             session.mark_task_cancellation(task_id)?
         };
         if receipt.changed {
-            let token = self
-                .active
-                .lock()
-                .expect("active task mutex")
-                .get(&task_id)
-                .cloned();
-            if let Some(token) = token {
-                token.cancel();
-            }
+            self.signal(task_id);
         }
         Ok(TaskCancellation {
             changed: receipt.changed,
             commit_seq: receipt.commit_seq,
         })
+    }
+
+    /// Cancel one foreground turn: the durable marks commit first, then every
+    /// affected local invocation is signalled. Retained workers and background
+    /// tasks whose `turn` is unset are outside this scope.
+    pub async fn cancel_turn(&self, root: TaskId) -> Result<TurnCancellation, TaskDriverError> {
+        let cancellation = {
+            let mut session = self.session.lock().await;
+            session.cancel_turn(root)?
+        };
+        for task_id in &cancellation.cancelled {
+            self.signal(*task_id);
+        }
+        Ok(cancellation)
+    }
+
+    fn signal(&self, task_id: TaskId) {
+        let token = self
+            .active
+            .lock()
+            .expect("active task mutex")
+            .get(&task_id)
+            .cloned();
+        if let Some(token) = token {
+            token.cancel();
+        }
     }
 
     pub async fn assign_input(
@@ -356,7 +374,7 @@ impl TaskDriver {
             running.generation,
             outcome.clone(),
             output,
-            |transaction| transaction.apply_task_plan(&plan),
+            |transaction| transaction.apply_task_plan(&plan, running.id),
         )?;
         Ok(DriveOutcome::Settled(Settlement {
             task_id: running.id,

@@ -25,6 +25,10 @@ pub(crate) enum Mutation {
         disposition: InputDisposition,
     },
     CreateTask(TaskRecord),
+    OpenForegroundTurn {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
     ReserveTask {
         task_id: TaskId,
         generation: u64,
@@ -53,7 +57,6 @@ pub(crate) enum Mutation {
 pub(crate) struct MutationBatch {
     pub(crate) commit_seq: CommitSeq,
     pub(crate) last_seq: LocalSeq,
-    pub(crate) mutations: Vec<Mutation>,
     changes: Vec<Change>,
 }
 
@@ -68,7 +71,7 @@ impl MutationBatch {
 
 pub(crate) struct Transaction {
     draft: SessionState,
-    mutations: Vec<Mutation>,
+    admitted_inputs: Vec<InputId>,
     changes: Vec<Change>,
 }
 
@@ -76,7 +79,7 @@ impl Transaction {
     pub(crate) fn new(state: &SessionState) -> Self {
         Self {
             draft: state.clone(),
-            mutations: Vec::new(),
+            admitted_inputs: Vec::new(),
             changes: Vec::new(),
         }
     }
@@ -115,6 +118,7 @@ impl Transaction {
             id,
             parent: spec.parent,
             owner_task: spec.owner_task,
+            foreground_turn: None,
         };
         self.stage(
             Mutation::CreateConversation(conversation),
@@ -187,7 +191,11 @@ impl Transaction {
     /// successor tasks in plan order with all IDs allocated up front so planned
     /// dependencies resolve without exposing IDs before commit. Any error rolls
     /// back the whole transaction, including the settling task.
-    pub(crate) fn apply_task_plan(&mut self, plan: &TaskPlan) -> Result<(), SessionError> {
+    pub(crate) fn apply_task_plan(
+        &mut self,
+        plan: &TaskPlan,
+        settling_task: TaskId,
+    ) -> Result<(), SessionError> {
         for entry in plan.entries() {
             self.append_entry(EntryRequest {
                 conversation_id: entry.conversation_id,
@@ -198,12 +206,26 @@ impl Transaction {
             })?;
         }
 
+        // Successors inherit the settling task's turn, unless the plan marks
+        // them background (a retained worker must survive turn cancellation).
+        let inherited_turn = self
+            .draft
+            .tasks
+            .get(&settling_task)
+            .ok_or(SessionError::UnknownTask(settling_task))?
+            .turn;
+
         let mut planned_ids = Vec::with_capacity(plan.tasks().len());
         for _ in plan.tasks() {
             planned_ids.push(TaskId::new(self.allocate()?.get())?);
         }
         for (index, task) in plan.tasks().iter().enumerate() {
-            self.create_planned_task(task, planned_ids[index], &planned_ids)?;
+            let turn = if task.background {
+                None
+            } else {
+                inherited_turn
+            };
+            self.create_planned_task(task, planned_ids[index], turn, &planned_ids)?;
         }
         Ok(())
     }
@@ -212,6 +234,7 @@ impl Transaction {
         &mut self,
         task: &PlannedTask,
         id: TaskId,
+        turn: Option<TaskId>,
         planned_ids: &[TaskId],
     ) -> Result<(), SessionError> {
         if !self.draft.conversations.contains_key(&task.conversation_id) {
@@ -247,6 +270,10 @@ impl Transaction {
             task.input.clone(),
             dependencies,
         );
+        let record = match turn {
+            Some(turn) => record.in_turn(turn),
+            None => record,
+        };
         self.stage(Mutation::CreateTask(record), Change::TaskCreated(id))?;
         Ok(())
     }
@@ -266,6 +293,7 @@ impl Transaction {
             disposition: InputDisposition::Queued,
         };
         self.stage(Mutation::AdmitInput(input), Change::InputAdmitted(id))?;
+        self.admitted_inputs.push(id);
         Ok(id)
     }
 
@@ -284,6 +312,38 @@ impl Transaction {
     }
 
     pub(crate) fn create_task(&mut self, request: TaskRequest) -> Result<TaskId, SessionError> {
+        self.create_task_record(request, false)
+    }
+
+    /// Create a task that becomes the root of a new foreground turn. The
+    /// conversation holds one authoritative foreground slot at a time.
+    pub(crate) fn create_turn(&mut self, request: TaskRequest) -> Result<TaskId, SessionError> {
+        let conversation_id = request.conversation_id;
+        if self
+            .draft
+            .conversations
+            .get(&conversation_id)
+            .and_then(|conversation| conversation.foreground_turn)
+            .is_some()
+        {
+            return Err(SessionError::ForegroundTurnBusy(conversation_id));
+        }
+        let id = self.create_task_record(request, true)?;
+        self.stage(
+            Mutation::OpenForegroundTurn {
+                conversation_id,
+                task_id: id,
+            },
+            Change::ForegroundTurnChanged(conversation_id),
+        )?;
+        Ok(id)
+    }
+
+    fn create_task_record(
+        &mut self,
+        request: TaskRequest,
+        foreground: bool,
+    ) -> Result<TaskId, SessionError> {
         if !self
             .draft
             .conversations
@@ -302,7 +362,7 @@ impl Transaction {
         }
 
         let id = TaskId::new(self.allocate()?.get())?;
-        let task = TaskRecord::pending(
+        let mut task = TaskRecord::pending(
             id,
             request.conversation_id,
             request.kind,
@@ -310,8 +370,38 @@ impl Transaction {
             request.input,
             request.dependencies,
         );
+        if foreground {
+            task = task.in_turn(id);
+        }
         self.stage(Mutation::CreateTask(task), Change::TaskCreated(id))?;
         Ok(id)
+    }
+
+    /// Cancel a foreground turn: every non-terminal task scoped to the turn
+    /// root, including the root itself. Terminal tasks are left untouched so
+    /// settled work is never rewritten. Owned conversations and background
+    /// tasks are deliberately outside this scope.
+    pub(crate) fn cancel_turn(&mut self, root: TaskId) -> Result<Vec<TaskId>, SessionError> {
+        if !self.draft.tasks.contains_key(&root) {
+            return Err(SessionError::UnknownTask(root));
+        }
+        let mut cancelled = Vec::new();
+        for task in self.draft.tasks.values() {
+            if task.turn != Some(root)
+                || matches!(task.status, TaskStatus::Terminal(_))
+                || task.cancel_requested
+            {
+                continue;
+            }
+            cancelled.push(task.id);
+        }
+        for task_id in &cancelled {
+            self.stage(
+                Mutation::MarkTaskCancellation(*task_id),
+                Change::TaskCancellationMarked(*task_id),
+            )?;
+        }
+        Ok(cancelled)
     }
 
     pub(crate) fn reserve_task(
@@ -407,17 +497,14 @@ impl Transaction {
     pub(crate) fn finish(mut self) -> Result<(MutationBatch, SessionState), SessionError> {
         let last_seq = self.allocate()?;
         let commit_seq = CommitSeq::new(last_seq.get())?;
-        for mutation in &self.mutations {
-            if let Mutation::AdmitInput(input) = mutation {
-                self.draft.input_commits.insert(input.id, commit_seq);
-            }
+        for input_id in &self.admitted_inputs {
+            self.draft.input_commits.insert(*input_id, commit_seq);
         }
         self.draft.last_commit = Some(commit_seq);
         Ok((
             MutationBatch {
                 commit_seq,
                 last_seq,
-                mutations: self.mutations,
                 changes: self.changes,
             },
             self.draft,
@@ -435,7 +522,6 @@ impl Transaction {
 
     fn stage(&mut self, mutation: Mutation, change: Change) -> Result<(), SessionError> {
         apply_mutation(&mut self.draft, &mutation).map_err(map_state)?;
-        self.mutations.push(mutation);
         self.changes.push(change);
         Ok(())
     }
@@ -493,6 +579,9 @@ fn map_state(error: crate::session::state::StateError) -> SessionError {
         }
         crate::session::state::StateError::InvalidInputDisposition(id) => {
             SessionError::InvalidInputDisposition(id)
+        }
+        crate::session::state::StateError::ForegroundTurnBusy(id) => {
+            SessionError::ForegroundTurnBusy(id)
         }
         other => SessionError::Invariant(other.to_string()),
     }

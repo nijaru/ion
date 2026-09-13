@@ -64,6 +64,7 @@ impl TaskKind for Generator {
                     schema_version: 1,
                     input: json!({"call": id}),
                     dependencies: Vec::new(),
+                    background: false,
                 })
             };
             let first = tool(&mut plan, "a");
@@ -77,6 +78,7 @@ impl TaskKind for Generator {
                     TaskDependency::Planned(first),
                     TaskDependency::Planned(second),
                 ],
+                background: false,
             });
             Ok(TaskCompletion::completed(json!("dispatched")).with_plan(plan))
         })
@@ -128,6 +130,7 @@ impl TaskKind for Broken {
                 schema_version: 1,
                 input: json!({}),
                 dependencies: Vec::new(),
+                background: false,
             });
             Ok(TaskCompletion::completed(json!("claimed")).with_plan(plan))
         })

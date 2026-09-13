@@ -14,7 +14,6 @@ impl Persistence for MemoryStore {
             || self
                 .last_seq
                 .is_some_and(|current| batch.last_seq <= current)
-            || batch.mutations.is_empty()
         {
             return Err(StoreError("invalid commit sequence or empty batch".into()));
         }

@@ -121,6 +121,26 @@ pub(crate) fn apply_mutation(
                 return Err(StateError::DuplicateTask(task.id));
             }
         }
+        Mutation::OpenForegroundTurn {
+            conversation_id,
+            task_id,
+        } => {
+            let conversation = state
+                .conversations
+                .get_mut(conversation_id)
+                .ok_or(StateError::UnknownConversation(*conversation_id))?;
+            if conversation.foreground_turn.is_some() {
+                return Err(StateError::ForegroundTurnBusy(*conversation_id));
+            }
+            let task = state
+                .tasks
+                .get(task_id)
+                .ok_or(StateError::UnknownTask(*task_id))?;
+            if task.conversation_id != *conversation_id || task.turn != Some(*task_id) {
+                return Err(StateError::InvalidForegroundTurn(*task_id));
+            }
+            conversation.foreground_turn = Some(*task_id);
+        }
         Mutation::ReserveTask {
             task_id,
             generation,
@@ -152,10 +172,22 @@ pub(crate) fn apply_mutation(
             outcome,
             output,
         } => {
+            let conversation_id = state
+                .tasks
+                .get(task_id)
+                .ok_or(StateError::UnknownTask(*task_id))?
+                .conversation_id;
             let task = authorized_task_mut(state, *task_id, *generation)?;
             task.status = TaskStatus::Terminal(outcome.clone());
             task.invocation = None;
             task.output = output.clone();
+            // A terminal turn root releases its conversation's foreground slot.
+            if task.turn == Some(*task_id)
+                && let Some(conversation) = state.conversations.get_mut(&conversation_id)
+                && conversation.foreground_turn == Some(*task_id)
+            {
+                conversation.foreground_turn = None;
+            }
         }
         Mutation::AttachOwnedConversation {
             task_id,
@@ -373,6 +405,10 @@ pub(crate) enum StateError {
     CancellationFence(TaskId),
     #[error("task {0} invocation generation space is exhausted")]
     GenerationExhausted(TaskId),
+    #[error("conversation {0} already has a live foreground turn")]
+    ForegroundTurnBusy(ConversationId),
+    #[error("task {0} is not a valid foreground turn root")]
+    InvalidForegroundTurn(TaskId),
     #[error("task {0} is running without invocation metadata")]
     MissingInvocation(TaskId),
     #[error("input {0} cannot make the requested disposition transition")]

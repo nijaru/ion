@@ -24,7 +24,7 @@ pub use session::{
     CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest,
     InputReceipt, InputRequest, Interruption, InterruptionReason, Session, SessionError,
     Settlement, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError, TaskReceipt,
-    TaskRequest,
+    TaskRequest, TurnCancellation,
 };
 pub use task::{
     AbortContext, InvocationKind, PlannedEntry, PlannedTask, PlannedTaskRef, ResourceDomain,

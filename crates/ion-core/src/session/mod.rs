@@ -9,7 +9,7 @@ mod wait;
 
 pub use command::{
     ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest, InputReceipt, InputRequest,
-    SessionError, TaskReceipt, TaskRequest,
+    SessionError, TaskReceipt, TaskRequest, TurnCancellation,
 };
 pub use owner::Session;
 pub use scheduler::{

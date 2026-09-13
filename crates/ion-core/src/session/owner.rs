@@ -5,6 +5,7 @@ use serde_json::Value;
 use crate::session::command::{
     CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
     InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt, TaskRequest,
+    TurnCancellation,
 };
 use crate::session::state::SessionState;
 use crate::session::transaction::Transaction;
@@ -90,6 +91,30 @@ impl Session {
         Ok(TaskReceipt {
             task_id,
             commit_seq,
+        })
+    }
+
+    /// Start a new foreground turn on `request.conversation_id`. The created
+    /// task is the turn root; successors created by its finalization plan
+    /// inherit the turn. Rejects if the conversation already has a live turn.
+    pub fn create_turn(&mut self, request: TaskRequest) -> Result<TaskReceipt, SessionError> {
+        let (task_id, commit_seq) =
+            self.transact(|transaction| transaction.create_turn(request))?;
+        Ok(TaskReceipt {
+            task_id,
+            commit_seq,
+        })
+    }
+
+    /// Cancel every non-terminal task scoped to the foreground turn rooted at
+    /// `root`. Returns the affected task ids so the driver can signal local
+    /// invocations. Durable cancellation is committed before any signal.
+    pub(crate) fn cancel_turn(&mut self, root: TaskId) -> Result<TurnCancellation, SessionError> {
+        self.ensure_open()?;
+        let (cancelled, commit_seq) = self.transact(|transaction| transaction.cancel_turn(root))?;
+        Ok(TurnCancellation {
+            commit_seq,
+            cancelled,
         })
     }
 

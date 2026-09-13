@@ -250,6 +250,16 @@ Independent read-only tools may run concurrently under resource limits. Mutating
 
 Ordinary tool definitions do not receive arbitrary session transaction authority. Trusted built-in task adapters mediate durable worker/job creation and other session-affecting operations.
 
+### Foreground turns
+
+Dependency edges order work; they are not cancellation or ownership scope. A conversation instead holds one authoritative foreground-turn slot, and each task records the turn root it belongs to (`None` is background or retained-worker work). A turn root records its own id and occupies the slot until it becomes terminal.
+
+A generation settlement's successors inherit the settling task's turn. A plan marks a successor `background` when it must outlive the turn, which is how retained workers survive cancellation.
+
+Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, and then signals the affected local invocations. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. The slot is released when the turn root becomes terminal. Starting a new turn while one is live is rejected until the slot is free.
+
+This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Input admission, queued follow-ups and idle-conversation scheduling remain K5 policy built on this slot; a consumed entry reference is only one of several distinct facts about an input.
+
 ## 11. Inputs and communication
 
 Acceptance, placement, model consumption and answer settlement are distinct facts.

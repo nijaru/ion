@@ -95,6 +95,21 @@ pub struct InputReceipt {
     pub replayed: bool,
 }
 
+/// Result of cancelling one foreground turn. `cancelled` lists the tasks whose
+/// durable cancellation mark committed in this batch; local signals may follow.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TurnCancellation {
+    pub commit_seq: CommitSeq,
+    pub cancelled: Vec<TaskId>,
+}
+
+impl TurnCancellation {
+    #[must_use]
+    pub fn changed(&self) -> bool {
+        !self.cancelled.is_empty()
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct InvocationReceipt {
     pub(crate) generation: u64,
@@ -112,6 +127,8 @@ pub(crate) struct CancellationReceipt {
 pub enum SessionError {
     #[error("session is closed or faulted")]
     Closed,
+    #[error("conversation {0} already has a live foreground turn")]
+    ForegroundTurnBusy(ConversationId),
     #[error("{0}")]
     Persistence(String),
     #[error("unknown conversation {0}")]

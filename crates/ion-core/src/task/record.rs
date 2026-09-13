@@ -17,6 +17,9 @@ pub struct TaskRecord {
     pub checkpoint: Option<Value>,
     pub dependencies: Vec<TaskId>,
     pub owned_conversations: Vec<ConversationId>,
+    /// Foreground turn root this task belongs to, or `None` for background and
+    /// retained worker work. A turn root records its own id.
+    pub turn: Option<TaskId>,
     pub generation: u64,
     pub invocation: Option<TaskInvocation>,
     pub cancel_requested: bool,
@@ -43,12 +46,20 @@ impl TaskRecord {
             checkpoint: None,
             dependencies,
             owned_conversations: Vec::new(),
+            turn: None,
             generation: 0,
             invocation: None,
             cancel_requested: false,
             status: TaskStatus::Pending,
             output: None,
         }
+    }
+
+    /// Scope this task to an existing foreground turn (including a new root's own id).
+    #[must_use]
+    pub fn in_turn(mut self, turn: TaskId) -> Self {
+        self.turn = Some(turn);
+        self
     }
 }
 

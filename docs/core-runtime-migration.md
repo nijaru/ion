@@ -252,12 +252,14 @@ Implemented:
 - handler interruption (`TaskRunError`, panic, dropped future) -> no settlement, task stays running and recoverable;
 - serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup;
 - initial abort dispatch through the shared invocation path with separate bounded cleanup admission;
-- restricted finalization: `TaskCompletion::with_plan` commits transcript entries and successor tasks atomically with the outcome; plan-local handles resolve to session IDs only at commit, and any error rolls back the settlement and every planned write.
+- restricted finalization: `TaskCompletion::with_plan` commits transcript entries and successor tasks atomically with the outcome; plan-local handles resolve to session IDs only at commit, and any error rolls back the settlement and every planned write;
+- foreground-turn membership: `Session::create_turn` opens one authoritative slot per conversation, plan successors inherit the turn unless marked background, `TaskDriver::cancel_turn` durably cancels every non-terminal task in the turn and then signals local invocations, and a terminal turn root releases the slot.
 
 Still open:
 
 - typed task authoring adapter over the erased registry;
 - planned owned-conversation creation and scratch retirement (K6);
+- input admission/queued-follow-up/idle scheduling policy on the foreground slot (K5);
 - writable ownership release after local joins (K4 SQLite).
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:

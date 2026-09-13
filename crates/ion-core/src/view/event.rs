@@ -25,6 +25,8 @@ pub enum Change {
         task_id: TaskId,
         conversation_id: ConversationId,
     },
+    /// The conversation's foreground turn slot changed (opened or released).
+    ForegroundTurnChanged(ConversationId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
