@@ -4,7 +4,8 @@ use std::sync::{
 };
 
 use super::*;
-use crate::session::transaction::MutationBatch;
+use crate::session::state::apply_mutation;
+use crate::session::transaction::{Mutation, MutationBatch};
 use crate::store::StoreError;
 use crate::{
     AbortContext, CloseMode, RunningTask, TaskCompletion, TaskContext, TaskDriver, TaskFuture,
@@ -169,4 +170,137 @@ async fn store_failure_fences_and_joins_live_invocations() {
     assert!(running.await.unwrap().is_err());
     assert_eq!(driver.snapshot().await, before);
     driver.close(CloseMode::Fault).await;
+}
+
+/// A store that only records committed write sets. If resident semantics can be
+/// rebuilt from these batches alone, the persistence contract is sufficient for
+/// a real backend (SQLite in K4).
+#[derive(Debug, Clone, Default)]
+struct RecordingStore {
+    batches: Arc<std::sync::Mutex<Vec<MutationBatch>>>,
+}
+
+impl Persistence for RecordingStore {
+    fn commit(&mut self, batch: &MutationBatch) -> Result<(), StoreError> {
+        self.batches
+            .lock()
+            .expect("batch mutex")
+            .push(batch.clone());
+        Ok(())
+    }
+}
+
+fn replay(batches: &[MutationBatch], session_id: crate::SessionId) -> SessionState {
+    let mut state = SessionState::empty(session_id);
+    for batch in batches {
+        for write in &batch.writes {
+            apply_mutation(&mut state, write).expect("committed write applies");
+            if let Mutation::AdmitInput(input) = write {
+                state.input_commits.insert(input.id, batch.commit_seq);
+            }
+        }
+        state.last_seq = Some(batch.last_seq);
+        state.last_commit = Some(batch.commit_seq);
+    }
+    state
+}
+
+/// The committed write set must reconstruct equivalent semantic records,
+/// including same-batch references (owned conversation + reciprocal task link,
+/// and planned successor entries/tasks) and duplicate-input receipt mappings.
+#[test]
+fn committed_write_set_reconstructs_resident_state() {
+    use crate::conversation::context::ContextControl;
+    use crate::{
+        ConversationSpec, EntryKind, EntryRequest, InputBody, InputMode, InputRequest, InputSender,
+        InvocationKind, PlannedEntry, PlannedTask, TaskPlan,
+    };
+
+    let recording = RecordingStore::default();
+    let mut session =
+        Session::with_store(crate::SessionId::new(), Box::new(recording.clone())).expect("session");
+    let root = session.root_conversation();
+
+    session
+        .create_conversation(ConversationSpec::independent())
+        .expect("conversation");
+    session
+        .append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: serde_json::json!({"text": "hello"}),
+            projection: Vec::new(),
+            context: ContextControl::none(),
+        })
+        .expect("entry");
+    session
+        .admit_input(InputRequest {
+            target: root,
+            sender: InputSender::User,
+            mode: InputMode::Submit,
+            request_key: Some(crate::RequestKey::new("key").expect("key")),
+            body: InputBody::Text("go".to_owned()),
+        })
+        .expect("input");
+
+    // A foreground turn with a checkpoint, then an atomic finalization plan that
+    // creates an entry plus two successors, one background.
+    let turn = session
+        .create_turn(TaskRequest {
+            conversation_id: root,
+            kind: TaskKindName::new("generation").expect("kind"),
+            schema_version: 1,
+            input: serde_json::json!({"prompt": "hi"}),
+            dependencies: Vec::new(),
+        })
+        .expect("turn");
+    let invocation = session
+        .reserve_task_invocation(turn.task_id, InvocationKind::Execute)
+        .expect("reserve");
+    session
+        .checkpoint_task(
+            turn.task_id,
+            invocation.generation,
+            Some(serde_json::json!({"attempt": 1})),
+            None,
+        )
+        .expect("checkpoint");
+    let mut plan = TaskPlan::new();
+    plan.append_entry(PlannedEntry {
+        conversation_id: root,
+        kind: EntryKind::new("assistant").expect("entry kind"),
+        data: serde_json::json!({"text": "calling tools"}),
+        projection: Vec::new(),
+        context: ContextControl::none(),
+    });
+    let scoped = plan.create_task(PlannedTask {
+        conversation_id: root,
+        kind: TaskKindName::new("tool").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"call": "a"}),
+        dependencies: Vec::new(),
+        background: false,
+    });
+    plan.create_task(PlannedTask {
+        conversation_id: root,
+        kind: TaskKindName::new("tool").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"call": "b"}),
+        dependencies: vec![crate::TaskDependency::Planned(scoped)],
+        background: true,
+    });
+    session
+        .settle_task_with(
+            turn.task_id,
+            invocation.generation,
+            TaskCompletion::completed(serde_json::json!("dispatched")).outcome,
+            None,
+            |transaction| transaction.apply_task_plan(&plan, turn.task_id),
+        )
+        .expect("settle with plan");
+
+    let batches = recording.batches.lock().expect("batch mutex").clone();
+    let reconstructed = replay(&batches, session.session_id());
+    assert_eq!(reconstructed, session.state);
+    assert_eq!(reconstructed.input_commits.len(), 1);
 }

@@ -41,9 +41,19 @@ impl Session {
     }
 
     pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
+        Self::with_store(session_id, Box::new(MemoryStore::new()))
+    }
+
+    /// Build a session over an explicit persistence sink. Tests use it to
+    /// verify that a committed write set reconstructs resident semantics; K4
+    /// reopen uses the same seam to install a reconstructed store.
+    pub(crate) fn with_store(
+        session_id: SessionId,
+        store: Box<dyn Persistence>,
+    ) -> Result<Self, SessionError> {
         let mut session = Self {
             state: SessionState::empty(session_id),
-            store: Box::<MemoryStore>::default(),
+            store,
             closed: false,
             fault: tokio_util::sync::CancellationToken::new(),
             observations: VecDeque::new(),
@@ -401,8 +411,11 @@ impl Session {
         self.ensure_open()?;
         let mut transaction = Transaction::new(&self.state);
         let value = build(&mut transaction)?;
-        let (batch, prepared_state) = transaction.finish()?;
-        let event = batch.event();
+        let (batch, changes, prepared_state) = transaction.finish()?;
+        let event = CommitEvent {
+            commit_seq: batch.commit_seq,
+            changes,
+        };
         let commit_seq = event.commit_seq;
         if let Err(error) = self.store.commit(&batch) {
             self.close();

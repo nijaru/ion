@@ -94,6 +94,8 @@ A command:
 6. publishes committed observations;
 7. dispatches admitted external work only after mutation authority is released.
 
+The batch is the durable write set: a persistence backend must be able to reconstruct equivalent semantic records from it without depending on the observation vocabulary. Observation invalidations are carried separately.
+
 Resident `SessionState` belongs to the session owner, not the persistence backend. The writer prepares and validates the complete next state with its mutation batch, commits the batch through a narrow private persistence interface, then installs the prepared resident state and publishes observations. Installation introduces no fallible semantic work after durability.
 
 Any persistence error conservatively fences the writable session handle and fault-stops local invocations. Failed persistence does not install the prepared state or publish committed observations. Reopen and recover durable state; never guess whether a batch committed.
@@ -254,9 +256,11 @@ Ordinary tool definitions do not receive arbitrary session transaction authority
 
 Dependency edges order work; they are not cancellation or ownership scope. A conversation instead holds one authoritative foreground-turn slot, and each task records the turn root it belongs to (`None` is background or retained-worker work). A turn root records its own id and occupies the slot until it becomes terminal.
 
-A generation settlement's successors inherit the settling task's turn. A plan marks a successor `background` when it must outlive the turn, which is how retained workers survive cancellation.
+A generation settlement's successors inherit the settling task's turn. A plan marks a successor `background` when it must outlive the turn, which is how retained workers survive cancellation; that is an authorized lifetime choice for a trusted kind, not a general way for any plan to escape cancellation scope.
 
-Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, and then signals the affected local invocations. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. The slot is released when the turn root becomes terminal. Starting a new turn while one is live is rejected until the slot is free.
+Cancelling a turn durably marks every non-terminal task scoped to that turn root, including the root, and then signals the affected local invocations. It does not touch terminal tasks, background tasks, owned conversations or unrelated turns. A successor created by cleanup after the turn was cancelled is born cancelled, so an abort cannot smuggle new runnable work into a stopped turn.
+
+The slot is released only when the turn has no remaining non-terminal member, not when the root settles. A terminal root with live tools or a continuation still owns the slot, so a second foreground chain cannot interleave with the first. Background work never holds the slot and never delays its release. Starting a new turn while one is live is rejected until the slot is free.
 
 This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Input admission, queued follow-ups and idle-conversation scheduling remain K5 policy built on this slot; a consumed entry reference is only one of several distinct facts about an input.
 

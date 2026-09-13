@@ -8,7 +8,7 @@ use crate::session::command::{
 };
 use crate::session::state::{SessionState, apply_mutation};
 use crate::task::{PlannedTask, TaskDependency, TaskPlan};
-use crate::view::{Change, CommitEvent};
+use crate::view::Change;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
     InvocationKind, LocalSeq, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
@@ -51,27 +51,29 @@ pub(crate) enum Mutation {
         task_id: TaskId,
         conversation_id: ConversationId,
     },
+    /// Release a conversation's foreground slot once its turn has no remaining
+    /// non-terminal members.
+    ReleaseForegroundTurn {
+        conversation_id: ConversationId,
+        task_id: TaskId,
+    },
 }
 
-#[derive(Debug)]
+/// The complete durable write set of one commit. Observation invalidations are
+/// kept separately by the caller so persistence never depends on the view
+/// vocabulary. A store must be able to reconstruct equivalent semantic records
+/// from `writes` alone.
+#[derive(Debug, Clone)]
 pub(crate) struct MutationBatch {
     pub(crate) commit_seq: CommitSeq,
     pub(crate) last_seq: LocalSeq,
-    changes: Vec<Change>,
-}
-
-impl MutationBatch {
-    pub(crate) fn event(&self) -> CommitEvent {
-        CommitEvent {
-            commit_seq: self.commit_seq,
-            changes: self.changes.clone(),
-        }
-    }
+    pub(crate) writes: Vec<Mutation>,
 }
 
 pub(crate) struct Transaction {
     draft: SessionState,
     admitted_inputs: Vec<InputId>,
+    writes: Vec<Mutation>,
     changes: Vec<Change>,
 }
 
@@ -80,6 +82,7 @@ impl Transaction {
         Self {
             draft: state.clone(),
             admitted_inputs: Vec::new(),
+            writes: Vec::new(),
             changes: Vec::new(),
         }
     }
@@ -270,10 +273,23 @@ impl Transaction {
             task.input.clone(),
             dependencies,
         );
-        let record = match turn {
+        let mut record = match turn {
             Some(turn) => record.in_turn(turn),
             None => record,
         };
+        // A cancelled turn admits no new runnable work. Successors that inherit
+        // the turn are born cancelled so an abort's cleanup cannot smuggle
+        // ordinary work into a turn the caller already stopped. `background`
+        // successors are outside the turn by construction and are the trusted
+        // kind's explicit lifetime choice.
+        if record.turn.is_some_and(|root| {
+            self.draft
+                .tasks
+                .get(&root)
+                .is_some_and(|task| task.cancel_requested)
+        }) {
+            record.cancel_requested = true;
+        }
         self.stage(Mutation::CreateTask(record), Change::TaskCreated(id))?;
         Ok(())
     }
@@ -483,6 +499,7 @@ impl Transaction {
         output: Option<TaskOutput>,
     ) -> Result<(), SessionError> {
         self.assert_task_write_authority(task_id, generation)?;
+        let turn = self.draft.tasks.get(&task_id).and_then(|task| task.turn);
         self.stage(
             Mutation::SettleTask {
                 task_id,
@@ -491,10 +508,41 @@ impl Transaction {
                 output,
             },
             Change::TaskSettled(task_id),
-        )
+        )?;
+
+        // The foreground slot covers the whole chain, not just the root task.
+        // Release it only when no non-terminal member of the turn remains.
+        let Some(root) = turn else {
+            return Ok(());
+        };
+        let holder = self
+            .draft
+            .conversations
+            .values()
+            .find(|conversation| conversation.foreground_turn == Some(root))
+            .map(|conversation| conversation.id);
+        let Some(conversation_id) = holder else {
+            return Ok(());
+        };
+        let remaining =
+            self.draft.tasks.values().any(|task| {
+                task.turn == Some(root) && !matches!(task.status, TaskStatus::Terminal(_))
+            });
+        if !remaining {
+            self.stage(
+                Mutation::ReleaseForegroundTurn {
+                    conversation_id,
+                    task_id: root,
+                },
+                Change::ForegroundTurnChanged(conversation_id),
+            )?;
+        }
+        Ok(())
     }
 
-    pub(crate) fn finish(mut self) -> Result<(MutationBatch, SessionState), SessionError> {
+    pub(crate) fn finish(
+        mut self,
+    ) -> Result<(MutationBatch, Vec<Change>, SessionState), SessionError> {
         let last_seq = self.allocate()?;
         let commit_seq = CommitSeq::new(last_seq.get())?;
         for input_id in &self.admitted_inputs {
@@ -505,8 +553,9 @@ impl Transaction {
             MutationBatch {
                 commit_seq,
                 last_seq,
-                changes: self.changes,
+                writes: self.writes,
             },
+            self.changes,
             self.draft,
         ))
     }
@@ -522,6 +571,7 @@ impl Transaction {
 
     fn stage(&mut self, mutation: Mutation, change: Change) -> Result<(), SessionError> {
         apply_mutation(&mut self.draft, &mutation).map_err(map_state)?;
+        self.writes.push(mutation);
         self.changes.push(change);
         Ok(())
     }

@@ -231,6 +231,16 @@ impl TaskDriver {
         }
     }
 
+    /// Admit a new foreground turn on its conversation. Rejected while that
+    /// conversation already has a live turn chain.
+    pub async fn create_turn(
+        &self,
+        request: crate::TaskRequest,
+    ) -> Result<crate::TaskReceipt, TaskDriverError> {
+        let mut session = self.session.lock().await;
+        Ok(session.create_turn(request)?)
+    }
+
     pub async fn assign_input(
         &self,
         input_id: InputId,

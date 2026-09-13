@@ -14,7 +14,7 @@ use crate::{
 /// draft clones map structure without copying record payloads; a mutation only
 /// deep-copies the records it actually touches (copy-on-write). K4 replaces the
 /// remaining per-commit map clone with typed indexed storage reads.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SessionState {
     pub(crate) session_id: SessionId,
     pub(crate) last_seq: Option<LocalSeq>,
@@ -196,22 +196,21 @@ pub(crate) fn apply_mutation(
             outcome,
             output,
         } => {
-            let conversation_id = state
-                .tasks
-                .get(task_id)
-                .ok_or(StateError::UnknownTask(*task_id))?
-                .conversation_id;
             let task = authorized_task_mut(state, *task_id, *generation)?;
             task.status = TaskStatus::Terminal(outcome.clone());
             task.invocation = None;
             task.output = output.clone();
-            // A terminal turn root releases its conversation's foreground slot.
-            if task.turn == Some(*task_id)
-                && let Some(conversation) = conversation_mut(state, conversation_id)
-                && conversation.foreground_turn == Some(*task_id)
-            {
-                conversation.foreground_turn = None;
+        }
+        Mutation::ReleaseForegroundTurn {
+            conversation_id,
+            task_id,
+        } => {
+            let conversation = conversation_mut(state, *conversation_id)
+                .ok_or(StateError::UnknownConversation(*conversation_id))?;
+            if conversation.foreground_turn != Some(*task_id) {
+                return Err(StateError::InvalidForegroundTurn(*task_id));
             }
+            conversation.foreground_turn = None;
         }
         Mutation::AttachOwnedConversation {
             task_id,
