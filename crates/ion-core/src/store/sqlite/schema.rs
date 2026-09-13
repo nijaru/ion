@@ -94,7 +94,7 @@ CREATE TABLE task_ownership (
 pub(crate) fn initialize(connection: &Connection) -> Result<(), StoreError> {
     let existing: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if existing != 0 {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "refusing to initialize a database that already has schema version {existing}"
         )));
     }
@@ -106,7 +106,7 @@ pub(crate) fn initialize(connection: &Connection) -> Result<(), StoreError> {
 pub(crate) fn verify(connection: &Connection) -> Result<(), StoreError> {
     let version: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if version != SCHEMA_VERSION {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "unsupported session schema version {version}; this build writes version {SCHEMA_VERSION}"
         )));
     }

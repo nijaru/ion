@@ -279,9 +279,23 @@ async fn reopening_reconstructs_entries_inputs_tasks_and_turns() {
     assert_eq!(replay.input_id, input.id);
     assert_eq!(reopened.summary(), summary, "replay commits nothing new");
 
-    // Opening a second authority over the same file is a read; it starts no work.
-    let second = Session::open(db.path()).expect("second open");
-    assert_eq!(second.snapshot(), before);
+    // A live owner is exclusive: a second writable authority is refused before it
+    // can reconstruct anything, let alone dispatch.
+    let refused = Session::open(db.path()).expect_err("a live owner is exclusive");
+    assert!(
+        matches!(refused, SessionError::SessionInUse(_)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        reopened.snapshot(),
+        before,
+        "the refused open changed nothing"
+    );
+
+    // Releasing the owner hands the same durable state to the next process.
+    drop(reopened);
+    let next = Session::open(db.path()).expect("open after the owner went away");
+    assert_eq!(next.snapshot(), before);
 }
 
 #[tokio::test]
@@ -404,15 +418,17 @@ async fn reopening_leaves_running_tasks_for_explicit_recovery() {
     );
 }
 
+/// Exclusive ownership (`k4_ownership.rs`) makes a second live store authority
+/// unreachable through the API, so the commit-cursor compare-and-set is
+/// exercised the way it now earns its keep: a writer that bypassed ownership
+/// has moved the cursor and the owner's next commit must be fenced rather than
+/// silently interleaving.
 #[tokio::test]
-async fn a_stale_writer_authority_is_fenced() {
+async fn a_commit_cursor_moved_behind_the_writer_fences_it() {
     let db = TempDb::new("fence");
     let path = db.path().to_path_buf();
-    let _original = Session::create(&path).expect("create");
-
-    let mut first = Session::open(&path).expect("first");
-    let mut second = Session::open(&path).expect("second");
-    let root = first.root_conversation();
+    let mut session = Session::create(&path).expect("create");
+    let root = session.root_conversation();
     let entry = |text: &str| EntryRequest {
         conversation_id: root,
         kind: EntryKind::new("note").expect("entry kind"),
@@ -421,17 +437,34 @@ async fn a_stale_writer_authority_is_fenced() {
         context: ContextControl::none(),
     };
 
-    first.append_entry(entry("from first")).expect("commit");
-    let error = second
+    session.append_entry(entry("from first")).expect("commit");
+    let committed = session.summary().last_commit;
+    {
+        let foreign = rusqlite::Connection::open(&path).expect("foreign connection");
+        foreign
+            .execute(
+                "UPDATE session_meta SET last_commit = last_commit + 1 WHERE id = 1",
+                [],
+            )
+            .expect("advance the cursor behind the owner's back");
+    }
+
+    let error = session
         .append_entry(entry("from second"))
         .expect_err("a stale authority must be rejected");
-    assert!(matches!(error, SessionError::Persistence(_)));
+    assert!(matches!(error, SessionError::Persistence(_)), "{error:?}");
+    assert_eq!(
+        session.summary().last_commit,
+        committed,
+        "the failed commit changed no resident cursor"
+    );
     // The fenced authority is closed rather than left usable.
     assert!(matches!(
-        second.append_entry(entry("again")),
+        session.append_entry(entry("again")),
         Err(SessionError::Closed)
     ));
 
+    drop(session);
     let durable = Session::open(&path).expect("reopen");
     let texts: Vec<_> = durable
         .snapshot()
@@ -510,7 +543,10 @@ fn committed_writes_survive_process_death() {
     );
     assert!(reopened.summary().last_commit.local_seq().get() > 0);
 
-    // Recovery is idempotent: a second open sees exactly the same history.
+    // Recovery is idempotent: after the first reopen releases ownership, the
+    // next one sees exactly the same history.
+    let snapshot = reopened.snapshot();
+    drop(reopened);
     let again = Session::open(db.path()).expect("second reopen");
-    assert_eq!(again.snapshot(), reopened.snapshot());
+    assert_eq!(again.snapshot(), snapshot);
 }

@@ -18,7 +18,7 @@ struct FaultStore(Arc<AtomicBool>);
 impl Persistence for FaultStore {
     fn commit(&mut self, _: &MutationBatch) -> Result<(), StoreError> {
         if self.0.load(Ordering::SeqCst) {
-            Err(StoreError("injected failure".into()))
+            Err(StoreError::other("injected failure"))
         } else {
             Ok(())
         }

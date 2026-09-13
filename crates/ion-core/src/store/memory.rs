@@ -43,7 +43,7 @@ impl MemoryStore {
                 | Mutation::CloseTurn { .. } => true,
             };
             if !unique {
-                return Err(StoreError(
+                return Err(StoreError::other(
                     "durable write set creates an identity twice".to_owned(),
                 ));
             }
@@ -59,7 +59,7 @@ impl Persistence for MemoryStore {
                 .last_seq
                 .is_some_and(|current| batch.last_seq <= current)
         {
-            return Err(StoreError("invalid commit sequence".to_owned()));
+            return Err(StoreError::other("invalid commit sequence".to_owned()));
         }
         self.guard_creations(&batch.writes)?;
         self.last_seq = Some(batch.last_seq);

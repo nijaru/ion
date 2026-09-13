@@ -58,7 +58,7 @@ impl Session {
     pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
         let session_id = SessionId::new();
         let store = crate::store::sqlite::SqliteStore::create(path.as_ref(), session_id)
-            .map_err(|error| SessionError::Persistence(error.to_string()))?;
+            .map_err(crate::store::StoreError::into_session_error)?;
         Self::with_store(session_id, Box::new(store))
     }
 
@@ -69,7 +69,7 @@ impl Session {
     /// opening a session never starts work.
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
         let (store, state) = crate::store::sqlite::SqliteStore::open(path.as_ref())
-            .map_err(|error| SessionError::Persistence(error.to_string()))?;
+            .map_err(crate::store::StoreError::into_session_error)?;
         Ok(Self::from_state(state, Box::new(store)))
     }
 
@@ -520,6 +520,16 @@ impl Session {
     pub(crate) fn close(&mut self) {
         self.closed = true;
         self.changes.send_replace(());
+    }
+
+    /// Give up cross-process writable ownership of the session database.
+    ///
+    /// Called by the driver once closes have fenced canonical writes and joined
+    /// local invocations, so a later process can take the session over. The lock
+    /// is released by dropping it, which also happens when the session itself is
+    /// dropped or the process exits.
+    pub(crate) fn release_ownership(&mut self) {
+        self.store.release_ownership();
     }
 
     /// Turn members that are already durably cancelled but were never

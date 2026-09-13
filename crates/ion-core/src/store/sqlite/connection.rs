@@ -13,7 +13,14 @@ use super::StoreError;
 use crate::SessionId;
 
 fn configure(connection: &Connection) -> Result<(), StoreError> {
-    connection.pragma_update(None, "journal_mode", "WAL")?;
+    // The journal mode is a persistent property of the database file, and
+    // asking to change it takes an exclusive lock. Read it first and only ask
+    // when it differs, so opening a database another connection is using stays
+    // a read instead of a lock fight.
+    let mode: String = connection.query_row("PRAGMA journal_mode", [], |row| row.get(0))?;
+    if !mode.eq_ignore_ascii_case("wal") {
+        connection.pragma_update(None, "journal_mode", "WAL")?;
+    }
     connection.pragma_update(None, "synchronous", "FULL")?;
     connection.pragma_update(None, "busy_timeout", 5_000)?;
     connection.pragma_update(None, "foreign_keys", true)?;
@@ -30,14 +37,9 @@ pub(crate) fn create(path: &Path) -> Result<Connection, StoreError> {
     Ok(connection)
 }
 
-/// Open an existing database file. Never creates one.
+/// Open an existing database file. Never creates one; the caller checks
+/// existence before taking ownership so a missing database leaves no lock file.
 pub(crate) fn open(path: &Path) -> Result<Connection, StoreError> {
-    if !path.exists() {
-        return Err(StoreError(format!(
-            "session database {} does not exist",
-            path.display()
-        )));
-    }
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_WRITE)?;
     configure(&connection)?;
     Ok(connection)
@@ -53,7 +55,9 @@ pub(crate) fn record_session_id(
         [session_id.as_uuid().to_string()],
     )?;
     if inserted != 1 {
-        return Err(StoreError("session metadata was not created".to_owned()));
+        return Err(StoreError::other(
+            "session metadata was not created".to_owned(),
+        ));
     }
     Ok(())
 }
@@ -65,7 +69,7 @@ pub(crate) fn read_session_id(connection: &Connection) -> Result<SessionId, Stor
         |row| row.get(0),
     )?;
     raw.parse()
-        .map_err(|error| StoreError(format!("invalid session id in database: {error}")))
+        .map_err(|error| StoreError::other(format!("invalid session id in database: {error}")))
 }
 
 /// Metadata read during reconstruction.

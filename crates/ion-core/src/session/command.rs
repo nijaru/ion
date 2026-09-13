@@ -162,6 +162,10 @@ pub enum SessionError {
     ForegroundTurnBusy(ConversationId),
     #[error("{0}")]
     Persistence(String),
+    /// Another live process holds writable ownership of this session database,
+    /// so this process could not become the session's writer.
+    #[error("session database {} is owned by another live process", .0.display())]
+    SessionInUse(std::path::PathBuf),
     #[error("unknown conversation {0}")]
     UnknownConversation(ConversationId),
     #[error("unknown input {0}")]

@@ -25,7 +25,7 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
         ],
     )?;
     if advanced != 1 {
-        return Err(StoreError(
+        return Err(StoreError::other(
             "commit cursor advanced by another writer; this authority is fenced".to_owned(),
         ));
     }
@@ -117,7 +117,9 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
             [root.get()],
         )?;
         if updated != 1 {
-            return Err(StoreError("root conversation was not recorded".to_owned()));
+            return Err(StoreError::other(
+                "root conversation was not recorded".to_owned(),
+            ));
         }
     }
 

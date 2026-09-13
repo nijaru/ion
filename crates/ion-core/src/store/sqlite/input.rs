@@ -69,8 +69,9 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<(Input, Option<CommitS
         let (id, conversation_id, request_key, sender, mode, body, disposition, commit_seq) = row?;
         let request_key = request_key
             .map(|key| {
-                RequestKey::new(key)
-                    .map_err(|error| StoreError(format!("input {id} has an invalid key: {error}")))
+                RequestKey::new(key).map_err(|error| {
+                    StoreError::other(format!("input {id} has an invalid key: {error}"))
+                })
             })
             .transpose()?;
         inputs.push((

@@ -40,8 +40,9 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Entry>, StoreError> {
     let mut entries = Vec::new();
     for row in rows {
         let (id, conversation_id, kind, data, projection, context) = row?;
-        let kind = EntryKind::new(kind)
-            .map_err(|error| StoreError(format!("entry {id} has an invalid kind: {error}")))?;
+        let kind = EntryKind::new(kind).map_err(|error| {
+            StoreError::other(format!("entry {id} has an invalid kind: {error}"))
+        })?;
         entries.push(Entry {
             id: id_from(id)?,
             conversation_id: id_from(conversation_id)?,

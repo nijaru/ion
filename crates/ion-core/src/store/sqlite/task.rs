@@ -93,7 +93,9 @@ pub(crate) fn close_turn(
         params![root.get(), closed_by.get()],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!("task {root} was not an open turn root")));
+        return Err(StoreError::other(format!(
+            "task {root} was not an open turn root"
+        )));
     }
     Ok(())
 }
@@ -115,7 +117,9 @@ pub(crate) fn reserve(
         ],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!("task {task_id} was not reserved")));
+        return Err(StoreError::other(format!(
+            "task {task_id} was not reserved"
+        )));
     }
     Ok(())
 }
@@ -139,7 +143,7 @@ pub(crate) fn checkpoint(
         ],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "task {task_id} generation {generation} is not the stored invocation"
         )));
     }
@@ -155,7 +159,7 @@ pub(crate) fn mark_cancellation(
         [task_id.get()],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!("task {task_id} was not found")));
+        return Err(StoreError::other(format!("task {task_id} was not found")));
     }
     Ok(())
 }
@@ -178,7 +182,7 @@ pub(crate) fn settle(
         ],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "task {task_id} generation {generation} is not the stored invocation"
         )));
     }
@@ -261,11 +265,11 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
             "running" => TaskStatus::Running,
             "terminal" => {
                 TaskStatus::Terminal(json_from(outcome.as_deref().ok_or_else(|| {
-                    StoreError(format!("task {id} is terminal without an outcome"))
+                    StoreError::other(format!("task {id} is terminal without an outcome"))
                 })?)?)
             }
             other => {
-                return Err(StoreError(format!(
+                return Err(StoreError::other(format!(
                     "task {id} has unknown lifecycle state {other:?}"
                 )));
             }
@@ -273,8 +277,9 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
         tasks.push(TaskRecord {
             id: task_id,
             conversation_id: id_from(conversation_id)?,
-            kind: crate::TaskKindName::new(kind)
-                .map_err(|error| StoreError(format!("task {id} has an invalid kind: {error}")))?,
+            kind: crate::TaskKindName::new(kind).map_err(|error| {
+                StoreError::other(format!("task {id} has an invalid kind: {error}"))
+            })?,
             schema_version,
             input: json_from(&input)?,
             checkpoint: checkpoint.as_deref().map(json_from).transpose()?,
@@ -291,7 +296,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<TaskRecord>, StoreErro
             turn: turn.map(id_from).transpose()?,
             turn_closed_by: turn_closed_by.map(id_from).transpose()?,
             generation: u64::try_from(generation)
-                .map_err(|_| StoreError(format!("task {id} has a negative generation")))?,
+                .map_err(|_| StoreError::other(format!("task {id} has a negative generation")))?,
             invocation: invocation.as_deref().map(json_from).transpose()?,
             cancel_requested,
             status,

@@ -50,7 +50,7 @@ pub(crate) fn set_foreground_turn(
         ],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "conversation {conversation_id} foreground slot did not match the write set"
         )));
     }
@@ -67,7 +67,7 @@ pub(crate) fn set_retired(
         params![conversation_id.get(), retired],
     )?;
     if updated != 1 {
-        return Err(StoreError(format!(
+        return Err(StoreError::other(format!(
             "conversation {conversation_id} retirement did not match the write set"
         )));
     }
@@ -100,7 +100,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreEr
             }),
             (None, None) => None,
             _ => {
-                return Err(StoreError(format!(
+                return Err(StoreError::other(format!(
                     "conversation {id} has a partial history parent"
                 )));
             }

@@ -39,6 +39,10 @@ impl TaskDriver {
         }
         loop {
             if self.active.lock().expect("active task mutex").is_empty() {
+                // Ownership is released last: admission is closed, canonical
+                // writes are fenced and every local invocation has joined, so
+                // another process may now take the session over.
+                self.session.lock().await.release_ownership();
                 return;
             }
             drained.changed().await.expect("driver owns drain sender");
