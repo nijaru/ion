@@ -237,11 +237,27 @@ impl Session {
         }
     }
 
+    /// Committed observation tail after `cursor`.
+    ///
+    /// `cursor = None` means "everything still retained" and never asks for a
+    /// reset. A cursor older than retained coverage, or one ahead of this
+    /// session's last commit (another session, or a reopened store), returns
+    /// `reset_required` with no events so the caller resnapshots instead of
+    /// silently believing it is current.
     #[must_use]
     pub fn observations_after(&self, cursor: Option<CommitSeq>) -> ObservationBatch {
-        let reset_required = match (cursor, self.dropped_through) {
-            (Some(cursor), Some(dropped)) => cursor <= dropped,
-            _ => false,
+        let last_commit = self
+            .state
+            .last_commit
+            .expect("initialized session has first commit");
+        let reset_required = match cursor {
+            None => false,
+            Some(cursor) => {
+                cursor > last_commit
+                    || self
+                        .dropped_through
+                        .is_some_and(|dropped| cursor <= dropped)
+            }
         };
         if reset_required {
             return ObservationBatch {

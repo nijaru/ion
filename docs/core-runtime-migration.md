@@ -316,10 +316,10 @@ Index tuning, measured thresholds and cold-history paging remain P2 work; these 
 
 Also required before the SQLite interface is frozen (flagged by the 2026-09-13 design review):
 
-6. reads must be fallible — a missing record and a storage failure are different results, so `Option<Record>` alone is insufficient once a real backend exists;
-7. the driver must expose bounded reads (summary, record lookup, transcript page) and observation polling; today only `Session::snapshot` is reachable through `TaskDriver`, which forces full-state materialization for a live client;
-8. observation recovery needs a coverage floor: an event tail or an explicit "resnapshot required" for cursors older than retained coverage, with defined `cursor = None` and future-cursor behavior;
-9. every projection whose state changes must be invalidated — for example releasing the foreground slot emits `ForegroundTurnChanged`, not only `TaskSettled`.
+6. reads must be fallible — a missing record and a storage failure are different results, so `Option<Record>` alone is insufficient once a real backend exists. **Still open:** the resident read path cannot fail, so this lands with the SQLite read path rather than as speculative `Result` plumbing;
+7. ~~the driver must expose bounded reads (summary, record lookup, transcript page) and observation polling~~ **done:** `TaskDriver::{summary, task, conversation_entries, observations_after, changed}`; covered by `tests/k4_reads.rs`;
+8. ~~observation recovery needs a coverage floor~~ **done:** `observations_after` returns `reset_required` for a cursor older than retained coverage or ahead of the last commit, and `None` means "everything retained" without asking for a reset;
+9. ~~every projection whose state changes must be invalidated~~ **done:** opening and releasing the foreground slot both emit `ForegroundTurnChanged`, asserted in `tests/k4_reads.rs`.
 
 Expensive frozen-cutoff context construction must move outside mutation authority; indexed storage alone does not fix the current call structure.
 

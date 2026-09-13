@@ -10,9 +10,10 @@ use crate::ResourceDomain;
 use crate::session::command::{InvocationReceipt, TurnCancellation};
 use crate::task::{ContextFuture, TaskRuntime};
 use crate::{
-    AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, RunningTask,
-    Session, SessionError, SessionSnapshot, TaskCompletion, TaskContext, TaskContextError, TaskId,
-    TaskKind, TaskOutcome, TaskRecord, TaskRegistry, TaskRunError, TaskStatus,
+    AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, ObservationBatch,
+    RunningTask, Session, SessionError, SessionSnapshot, SessionSummary, TaskCompletion,
+    TaskContext, TaskContextError, TaskId, TaskKind, TaskOutcome, TaskRecord, TaskRegistry,
+    TaskRunError, TaskStatus,
 };
 
 #[derive(Clone)]
@@ -22,6 +23,7 @@ pub struct TaskDriver {
     capacity: super::TaskCapacity,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     drained: tokio::sync::watch::Sender<()>,
+    changes: tokio::sync::watch::Receiver<()>,
     stopping: CancellationToken,
     fault: CancellationToken,
 }
@@ -39,12 +41,14 @@ impl TaskDriver {
         capacity: super::TaskCapacity,
     ) -> Self {
         let fault = session.fault_signal();
+        let changes = session.subscribe();
         Self {
             capacity,
             session: Arc::new(Mutex::new(session)),
             registry: Arc::new(std::sync::RwLock::new(registry)),
             active: Arc::new(StdMutex::new(HashMap::new())),
             drained: tokio::sync::watch::channel(()).0,
+            changes,
             stopping: CancellationToken::new(),
             fault,
         }
@@ -90,6 +94,43 @@ impl TaskDriver {
 
     pub async fn snapshot(&self) -> SessionSnapshot {
         self.session.lock().await.snapshot()
+    }
+
+    /// Bounded overview: counts and cursors only. A live client should prefer
+    /// this plus [`Self::observations_after`] over [`Self::snapshot`].
+    pub async fn summary(&self) -> SessionSummary {
+        self.session.lock().await.summary()
+    }
+
+    /// Look up one task record without materializing any other record.
+    pub async fn task(&self, task_id: TaskId) -> Option<TaskRecord> {
+        self.session.lock().await.task_record(task_id)
+    }
+
+    /// Read one bounded page of a conversation's fork-visible transcript.
+    pub async fn conversation_entries(
+        &self,
+        conversation_id: crate::ConversationId,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> Result<crate::EntryPage, SessionError> {
+        self.session
+            .lock()
+            .await
+            .conversation_entries(conversation_id, after, limit)
+    }
+
+    /// Committed observation tail after `cursor`. `reset_required` means the
+    /// caller's cursor is outside retained coverage and it must resnapshot.
+    pub async fn observations_after(&self, cursor: Option<CommitSeq>) -> ObservationBatch {
+        self.session.lock().await.observations_after(cursor)
+    }
+
+    /// Resolve when a change has been committed since this call started. This
+    /// is the polling-free companion to [`Self::observations_after`]; it
+    /// carries no payload, so a waiter still reads the tail itself.
+    pub async fn changed(&self) {
+        let _ = self.changes.clone().changed().await;
     }
 
     pub async fn drive_task(&self, task_id: TaskId) -> Result<DriveOutcome, TaskDriverError> {
