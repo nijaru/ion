@@ -177,6 +177,10 @@ A durable cancellation/abort mark may coexist with `running` while the old invoc
 
 Terminal outcomes distinguish at least completed, failed, aborted/cancelled and indeterminate, plus orphaned/unsupported when missing task implementation policy requires it.
 
+A process-local interruption is not a terminal outcome. A handler that panics, the async runtime dropping a future, or a `TaskRunError` leaves the durable task running with its checkpoint intact; only an explicit later drive enters `recover` or `abort`. A terminal `failed` is written only for a known application failure with no unresolved external action, and a terminal `indeterminate` records work whose external effect may have happened but cannot be safely reconciled. Converting an interruption into `failed` would discard that distinction, so the driver never does it.
+
+A terminal `unsupported` is written only for work that never dispatched. If a task is already running and its `(kind, schema_version)` implementation is unavailable, recovery is blocked: the driver rejects the drive without consuming a generation or writing an outcome, and the record stays durable until the implementation is registered. This keeps a temporarily missing extension or task version from irreversibly discarding recoverable work.
+
 A task records kind/schema revision, owning conversation, immutable typed input, optional complete typed checkpoint, fixed dependencies, owned child conversations, required foreground/background metadata, durable cancellation state, invocation generation/fencing metadata, bounded output reference and terminal outcome.
 
 ### One authoring contract

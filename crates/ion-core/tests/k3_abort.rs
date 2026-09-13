@@ -65,6 +65,13 @@ fn driver(session: Session, probe: Arc<Probe>) -> TaskDriver {
         TaskCapacity::default().with_limit(ResourceDomain::Model, NonZeroUsize::new(1).unwrap()),
     )
 }
+fn settled(outcome: ion_core::DriveOutcome) -> ion_core::Settlement {
+    match outcome {
+        ion_core::DriveOutcome::Settled(settlement) => settlement,
+        other => panic!("expected settlement, got {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn cancellation_before_first_drive_dispatches_exactly_one_abort() {
     let mut session = Session::new().unwrap();
@@ -72,7 +79,7 @@ async fn cancellation_before_first_drive_dispatches_exactly_one_abort() {
     let probe = Arc::new(Probe::default());
     let driver = driver(session, probe.clone());
     driver.cancel_task(task).await.unwrap();
-    let result = driver.drive_task(task).await.unwrap();
+    let result = settled(driver.drive_task(task).await.unwrap());
     assert_eq!(result.invocation_kind, InvocationKind::Abort);
     assert_eq!(result.generation, 1);
     assert_eq!(result.outcome.kind, TaskOutcomeKind::Aborted);
@@ -92,7 +99,7 @@ async fn cancellation_of_dependency_blocked_drive_dispatches_abort() {
     });
     tokio::task::yield_now().await;
     driver.cancel_task(second).await.unwrap();
-    let result = drive.await.unwrap().unwrap();
+    let result = settled(drive.await.unwrap().unwrap());
     assert_eq!(result.outcome.kind, TaskOutcomeKind::Aborted);
     assert_eq!(result.generation, 1);
     assert_eq!(probe.executes.load(Ordering::SeqCst), 0);
@@ -117,7 +124,7 @@ async fn cancelled_capacity_waiter_cleans_up_while_model_slot_remains_occupied()
     });
     probe.admission.notified().await;
     driver.cancel_task(second).await.unwrap();
-    let result = second_drive.await.unwrap().unwrap();
+    let result = settled(second_drive.await.unwrap().unwrap());
     assert_eq!(result.outcome.kind, TaskOutcomeKind::Aborted);
     assert_eq!(result.invocation_kind, InvocationKind::Abort);
     assert_eq!(result.generation, 1);

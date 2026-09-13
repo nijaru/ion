@@ -66,6 +66,13 @@ impl TaskCompletion {
         Self::terminal(TaskOutcomeKind::Failed, value)
     }
 
+    /// Terminal outcome for work whose external effect may have happened but
+    /// cannot be safely reconciled. Retain the evidence in `value`.
+    #[must_use]
+    pub fn indeterminate(value: Value) -> Self {
+        Self::terminal(TaskOutcomeKind::Indeterminate, value)
+    }
+
     #[must_use]
     pub fn unsupported(value: Value) -> Self {
         Self::terminal(TaskOutcomeKind::Unsupported, value)
@@ -86,28 +93,20 @@ impl TaskCompletion {
     }
 }
 
+/// An interrupted invocation, not a terminal application outcome. The durable
+/// task remains recoverable. Use `TaskCompletion::failed` for a known failure
+/// with no unresolved external action, or Indeterminate with retained evidence.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
-#[error("{message}")]
-pub struct TaskRunError {
-    message: String,
+pub enum TaskRunError {
+    #[error("task invocation interrupted: {0}")]
+    Interrupted(String),
+    #[error(transparent)]
+    Runtime(#[from] super::TaskContextError),
 }
 
 impl TaskRunError {
     #[must_use]
     pub fn new(message: impl Into<String>) -> Self {
-        Self {
-            message: message.into(),
-        }
-    }
-
-    #[must_use]
-    pub fn message(&self) -> &str {
-        &self.message
-    }
-}
-
-impl From<super::TaskContextError> for TaskRunError {
-    fn from(error: super::TaskContextError) -> Self {
-        Self::new(error.to_string())
+        Self::Interrupted(message.into())
     }
 }

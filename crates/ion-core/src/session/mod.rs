@@ -12,7 +12,10 @@ pub use command::{
     SessionError, TaskReceipt, TaskRequest,
 };
 pub use owner::Session;
-pub use scheduler::{CloseMode, DriveOutcome, TaskCancellation, TaskDriver, TaskDriverError};
+pub use scheduler::{
+    CloseMode, DriveOutcome, Interruption, InterruptionReason, Settlement, TaskCancellation,
+    TaskDriver, TaskDriverError,
+};
 
 #[cfg(test)]
 mod tests;

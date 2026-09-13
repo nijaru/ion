@@ -1,9 +1,9 @@
 use std::sync::Arc;
 
 use ion_core::{
-    AbortContext, InvocationKind, Session, TaskCompletion, TaskContext, TaskDriver,
-    TaskDriverError, TaskFuture, TaskKind, TaskKindName, TaskOutcomeKind, TaskRegistry,
-    TaskRequest, TaskRunError, TaskStatus,
+    AbortContext, DriveOutcome, InterruptionReason, InvocationKind, Session, Settlement,
+    TaskCompletion, TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskKind, TaskKindName,
+    TaskOutcomeKind, TaskRegistry, TaskRequest, TaskRunError, TaskStatus,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -82,6 +82,50 @@ impl TaskKind for ErrorKind {
     }
 }
 
+struct FailedKind;
+
+impl TaskKind for FailedKind {
+    fn execute<'a>(
+        &'a self,
+        _task: ion_core::RunningTask,
+        _context: TaskContext,
+    ) -> TaskFuture<'a> {
+        Box::pin(async move { Ok(TaskCompletion::failed(json!("known failure"))) })
+    }
+
+    fn recover<'a>(&'a self, task: ion_core::RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: ion_core::RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async move { Ok(TaskCompletion::aborted(json!("cancelled"))) })
+    }
+}
+
+struct IndeterminateKind;
+
+impl TaskKind for IndeterminateKind {
+    fn execute<'a>(
+        &'a self,
+        _task: ion_core::RunningTask,
+        _context: TaskContext,
+    ) -> TaskFuture<'a> {
+        Box::pin(async move {
+            Ok(TaskCompletion::indeterminate(json!(
+                {"dispatch": "unknown", "evidence": "sent request, no response"}
+            )))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: ion_core::RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: ion_core::RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async move { Ok(TaskCompletion::aborted(json!("cancelled"))) })
+    }
+}
+
 struct PanicKind;
 
 impl TaskKind for PanicKind {
@@ -99,6 +143,20 @@ impl TaskKind for PanicKind {
 
     fn abort<'a>(&'a self, _task: ion_core::RunningTask, _context: AbortContext) -> TaskFuture<'a> {
         Box::pin(async move { Ok(TaskCompletion::aborted(json!("cancelled"))) })
+    }
+}
+
+fn settled(outcome: DriveOutcome) -> Settlement {
+    match outcome {
+        DriveOutcome::Settled(settlement) => settlement,
+        other => panic!("expected a settlement, got {other:?}"),
+    }
+}
+
+fn interrupted_reason(outcome: DriveOutcome) -> InterruptionReason {
+    match outcome {
+        DriveOutcome::Interrupted(interruption) => interruption.reason,
+        other => panic!("expected an interruption, got {other:?}"),
     }
 }
 
@@ -132,7 +190,7 @@ fn driver_with_kind(
 async fn driver_executes_checkpointing_task_outside_session_mutation() {
     let (driver, task_id) = driver_with_kind("checkpoint", Arc::new(CheckpointKind));
 
-    let outcome = driver.drive_task(task_id).await.expect("drive task");
+    let outcome = settled(driver.drive_task(task_id).await.expect("drive task"));
     assert_eq!(outcome.invocation_kind, InvocationKind::Execute);
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Completed);
     assert!(outcome.settlement_commit > outcome.reservation_commit);
@@ -165,7 +223,7 @@ async fn cancellation_signals_live_task_then_runs_fresh_abort_invocation() {
     let cancellation = driver.cancel_task(task_id).await.expect("cancel task");
     assert!(cancellation.changed);
 
-    let outcome = drive.await.expect("join driver").expect("drive outcome");
+    let outcome = settled(drive.await.expect("join driver").expect("drive outcome"));
     assert_eq!(outcome.invocation_kind, InvocationKind::Abort);
     assert_eq!(outcome.generation, 2);
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Aborted);
@@ -175,7 +233,7 @@ async fn cancellation_signals_live_task_then_runs_fresh_abort_invocation() {
 async fn settlement_committing_before_cancellation_wins() {
     let (driver, task_id) = driver_with_kind("checkpoint", Arc::new(CheckpointKind));
 
-    let outcome = driver.drive_task(task_id).await.expect("drive task");
+    let outcome = settled(driver.drive_task(task_id).await.expect("drive task"));
     let cancellation = driver.cancel_task(task_id).await.expect("cancel task");
 
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Completed);
@@ -189,7 +247,7 @@ async fn missing_task_kind_settles_unsupported_without_data_loss() {
     let task = task(&mut session, "missing");
     let driver = TaskDriver::new(session, TaskRegistry::new());
 
-    let outcome = driver.drive_task(task.task_id).await.expect("drive task");
+    let outcome = settled(driver.drive_task(task.task_id).await.expect("drive task"));
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Unsupported);
     let snapshot = driver.snapshot().await;
     assert_eq!(snapshot.tasks.len(), 1);
@@ -197,21 +255,64 @@ async fn missing_task_kind_settles_unsupported_without_data_loss() {
 }
 
 #[tokio::test]
-async fn task_error_settles_failed() {
-    let (driver, task_id) = driver_with_kind("error", Arc::new(ErrorKind));
+async fn known_application_failure_settles_failed() {
+    let (driver, task_id) = driver_with_kind("failed", Arc::new(FailedKind));
 
-    let outcome = driver.drive_task(task_id).await.expect("drive task");
+    let outcome = settled(driver.drive_task(task_id).await.expect("drive task"));
     assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Failed);
-    assert_eq!(outcome.outcome.value, json!({"error": "expected failure"}));
+    assert_eq!(outcome.outcome.value, json!("known failure"));
 }
 
 #[tokio::test]
-async fn task_panic_settles_failed() {
+async fn unresolved_external_uncertainty_settles_indeterminate() {
+    let (driver, task_id) = driver_with_kind("indeterminate", Arc::new(IndeterminateKind));
+
+    let outcome = settled(driver.drive_task(task_id).await.expect("drive task"));
+    assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Indeterminate);
+    assert_eq!(
+        outcome.outcome.value["evidence"],
+        json!("sent request, no response")
+    );
+}
+
+#[tokio::test]
+async fn handler_error_interrupts_and_stays_recoverable() {
+    let (driver, task_id) = driver_with_kind("error", Arc::new(ErrorKind));
+
+    let outcome = driver.drive_task(task_id).await.expect("drive task");
+    assert_eq!(
+        interrupted_reason(outcome),
+        InterruptionReason::HandlerFailed("expected failure".to_owned())
+    );
+    let snapshot = driver.snapshot().await;
+    assert!(matches!(snapshot.tasks[0].status, TaskStatus::Running));
+    assert_eq!(snapshot.tasks[0].generation, 1);
+
+    // A second explicit drive selects Recover and is still not terminalized.
+    let recovered = driver.drive_task(task_id).await.expect("drive task again");
+    match recovered {
+        DriveOutcome::Interrupted(interruption) => assert_eq!(interruption.generation, 2),
+        other => panic!("expected interruption, got {other:?}"),
+    }
+    assert!(matches!(
+        driver.snapshot().await.tasks[0].status,
+        TaskStatus::Running
+    ));
+}
+
+#[tokio::test]
+async fn handler_panic_interrupts_without_terminal_settlement() {
     let (driver, task_id) = driver_with_kind("panic", Arc::new(PanicKind));
 
     let outcome = driver.drive_task(task_id).await.expect("drive task");
-    assert_eq!(outcome.outcome.kind, TaskOutcomeKind::Failed);
-    assert_eq!(outcome.outcome.value, json!({"error": "task panicked"}));
+    assert_eq!(
+        interrupted_reason(outcome),
+        InterruptionReason::HandlerPanicked
+    );
+    assert!(matches!(
+        driver.snapshot().await.tasks[0].status,
+        TaskStatus::Running
+    ));
 }
 
 #[tokio::test]

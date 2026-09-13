@@ -246,13 +246,16 @@ Implemented:
 - fresh abort generation after the old invocation joins;
 - local duplicate-drive rejection;
 - dependency readiness check at reservation;
-- missing implementation -> durable `Unsupported`;
-- task error/panic -> durable `Failed`;
-- serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup.
+- missing implementation for never-dispatched work -> durable `Unsupported`;
+- unavailable implementation for already-running work -> recovery blocked without consuming a generation or writing state;
+- known application failure -> durable `Failed`; unresolved external uncertainty -> durable `Indeterminate`;
+- handler interruption (`TaskRunError`, panic, dropped future) -> no settlement, task stays running and recoverable;
+- serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup;
+- initial abort dispatch through the shared invocation path with separate bounded cleanup admission.
 
 Still open:
 
-- interruption/uncertainty policy and recoverable missing-implementation behavior;
+- restricted typed finalization (non-noop terminal plan/closure) and typed task authoring adapter;
 - writable ownership release after local joins (K4 SQLite).
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:

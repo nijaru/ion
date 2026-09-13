@@ -111,7 +111,9 @@ async fn dropping_wait_does_not_cancel_task_and_cancel_wakes_dependency_wait() {
     pending(dependencies.as_mut());
     driver.cancel_task(second).await.unwrap();
     assert!(dependencies.await.unwrap().cancel_requested);
-    let outcome = driver.drive_task(second).await.unwrap();
+    let ion_core::DriveOutcome::Settled(outcome) = driver.drive_task(second).await.unwrap() else {
+        panic!("expected settlement");
+    };
     assert_eq!(outcome.outcome.kind, ion_core::TaskOutcomeKind::Aborted);
     assert_eq!(outcome.invocation_kind, ion_core::InvocationKind::Abort);
     assert_eq!(outcome.generation, 1);

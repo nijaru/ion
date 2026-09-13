@@ -96,6 +96,10 @@ pub enum TaskContextError {
     Cancelled,
     #[error("task invocation is stale")]
     Stale,
+    #[error("session is closed")]
+    Closed,
+    #[error("session persistence failed: {0}")]
+    Persistence(String),
     #[error("task runtime rejected the commit: {0}")]
     Runtime(String),
 }

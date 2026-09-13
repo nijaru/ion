@@ -6,18 +6,19 @@ use thiserror::Error;
 use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
+use crate::ResourceDomain;
 use crate::session::command::InvocationReceipt;
 use crate::task::{ContextFuture, TaskRuntime};
 use crate::{
     AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, RunningTask,
     Session, SessionError, SessionSnapshot, TaskCompletion, TaskContext, TaskContextError, TaskId,
-    TaskKind, TaskOutcome, TaskRecord, TaskRegistry, TaskStatus,
+    TaskKind, TaskOutcome, TaskRecord, TaskRegistry, TaskRunError, TaskStatus,
 };
 
 #[derive(Clone)]
 pub struct TaskDriver {
     pub(super) session: Arc<Mutex<Session>>,
-    registry: Arc<TaskRegistry>,
+    registry: Arc<std::sync::RwLock<TaskRegistry>>,
     capacity: super::TaskCapacity,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     drained: tokio::sync::watch::Sender<()>,
@@ -41,12 +42,50 @@ impl TaskDriver {
         Self {
             capacity,
             session: Arc::new(Mutex::new(session)),
-            registry: Arc::new(registry),
+            registry: Arc::new(std::sync::RwLock::new(registry)),
             active: Arc::new(StdMutex::new(HashMap::new())),
             drained: tokio::sync::watch::channel(()).0,
             stopping: CancellationToken::new(),
             fault,
         }
+    }
+
+    /// Restore a missing implementation without touching durable task data.
+    /// A previously running task stays blocked until its kind is registered.
+    pub fn register_task_kind(
+        &self,
+        kind: crate::TaskKindName,
+        schema_version: u32,
+        handler: Arc<dyn TaskKind>,
+    ) -> Result<(), crate::TaskRegistryError> {
+        self.registry
+            .write()
+            .expect("task registry lock")
+            .register(kind, schema_version, handler)
+    }
+
+    fn handler_for(&self, task: &TaskRecord) -> Result<Option<Arc<dyn TaskKind>>, TaskDriverError> {
+        let handler = self
+            .registry
+            .read()
+            .expect("task registry lock")
+            .get(&task.kind, task.schema_version);
+        if handler.is_none() && matches!(task.status, TaskStatus::Running) {
+            return Err(TaskDriverError::RecoveryBlocked {
+                task_id: task.id,
+                kind: task.kind.clone(),
+                schema_version: task.schema_version,
+            });
+        }
+        Ok(handler)
+    }
+
+    fn resource_domain(&self, task: &TaskRecord) -> Option<ResourceDomain> {
+        self.registry
+            .read()
+            .expect("task registry lock")
+            .get(&task.kind, task.schema_version)
+            .and_then(|handler| handler.resource_domain())
     }
 
     pub async fn snapshot(&self) -> SessionSnapshot {
@@ -72,10 +111,9 @@ impl TaskDriver {
         active: ActiveInvocation,
     ) -> Result<DriveOutcome, TaskDriverError> {
         let eligible = self.wait_dependencies(task_id).await?;
-        let handler = self.registry.get(&eligible.kind, eligible.schema_version);
         let mut cleanup = eligible.cancel_requested;
         let cancellation = active.token();
-        let (task, receipt, permit) = loop {
+        let (task, receipt, handler, permit) = loop {
             let permit = if cleanup {
                 Some(self.cleanup_permit().await?)
             } else {
@@ -84,7 +122,7 @@ impl TaskDriver {
                     () = self.stopping.cancelled() => return Err(SessionError::Closed.into()),
                     () = self.fault.cancelled() => return Err(SessionError::Closed.into()),
                     () = cancellation.cancelled() => { cleanup = true; continue; }
-                    permit = self.capacity.acquire(handler.as_ref().and_then(|kind| kind.resource_domain())) => permit,
+                    permit = self.capacity.acquire(self.resource_domain(&eligible)) => permit,
                 }
             };
             let mut session = self.session.lock().await;
@@ -99,29 +137,34 @@ impl TaskDriver {
                 cleanup = true;
                 continue;
             }
+            let handler = self.handler_for(&task)?;
             let receipt = session.reserve_task_invocation(task_id, kind)?;
-            break (task, receipt, permit);
+            break (task, receipt, handler, permit);
         };
 
         let running = running_task(task, receipt);
-        let completion = match handler.as_ref() {
-            Some(handler) => {
-                self.run_handler(handler.clone(), running.clone(), active.token())
-                    .await
-            }
-            None => TaskCompletion::unsupported(json!({
+        // A pending kind with no registered implementation settles Unsupported
+        // without losing its record. A running task never reaches here:
+        // `handler_for` blocks recovery instead of fabricating terminal state.
+        let Some(handler) = handler else {
+            let completion = TaskCompletion::unsupported(json!({
                 "kind": running.kind.as_str(),
                 "schema_version": running.schema_version,
                 "reason": "task kind is not registered"
-            })),
+            }));
+            return self.settle(running, Ok(completion)).await;
         };
+
+        let completion = self
+            .run_handler(handler.clone(), running.clone(), active.token())
+            .await;
 
         if running.invocation_kind == InvocationKind::Abort {
             return self.settle(running, completion).await;
         }
 
         drop(permit);
-        self.finish_normal(running, completion, handler).await
+        self.finish_normal(running, completion, Some(handler)).await
     }
 
     /// Stop admission and canonical writes, then join all local drives.
@@ -191,35 +234,32 @@ impl TaskDriver {
     async fn finish_normal(
         &self,
         running: RunningTask,
-        completion: TaskCompletion,
+        completion: Result<TaskCompletion, InterruptionReason>,
         handler: Option<Arc<dyn TaskKind>>,
     ) -> Result<DriveOutcome, TaskDriverError> {
         let task_id = running.id;
         {
             let mut session = self.session.lock().await;
+            session.ensure_open()?;
             let task = session
                 .task_record(task_id)
                 .ok_or(SessionError::UnknownTask(task_id))?;
             if !task.cancel_requested {
-                let TaskCompletion { outcome, output } = completion;
-                let (_, commit_seq) = session.settle_task_with(
-                    running.id,
-                    running.generation,
-                    outcome.clone(),
-                    output,
-                    |_| Ok(()),
-                )?;
-                return Ok(DriveOutcome {
-                    task_id: running.id,
-                    invocation_kind: running.invocation_kind,
-                    generation: running.generation,
-                    reservation_commit: running.reservation_commit,
-                    settlement_commit: commit_seq,
-                    outcome,
-                });
+                return match completion {
+                    Ok(completion) => self.settle_in_session(&mut session, &running, completion),
+                    Err(reason) => Ok(DriveOutcome::Interrupted(Interruption {
+                        task_id: running.id,
+                        invocation_kind: running.invocation_kind,
+                        generation: running.generation,
+                        reservation_commit: running.reservation_commit,
+                        reason,
+                    })),
+                };
             }
         }
 
+        // Cancellation committed during the normal invocation; the old
+        // invocation already joined, so cleanup runs as a fresh abort generation.
         self.run_abort(task_id, handler).await
     }
 
@@ -240,22 +280,21 @@ impl TaskDriver {
         let _permit = self.cleanup_permit().await?;
         let running = {
             let mut session = self.session.lock().await;
+            session.ensure_open()?;
             let receipt = session.reserve_task_invocation(task_id, InvocationKind::Abort)?;
             let task = session
                 .task_record(task_id)
                 .ok_or(SessionError::UnknownTask(task_id))?;
             running_task(task, receipt)
         };
+        // Cleanup requires the registered kind. Without it the task stays
+        // durably running and cancelled for a later explicit abort drive.
         let completion = match handler {
             Some(handler) => {
                 self.run_handler(handler, running.clone(), CancellationToken::new())
                     .await
             }
-            None => TaskCompletion::unsupported(json!({
-                "kind": running.kind.as_str(),
-                "schema_version": running.schema_version,
-                "reason": "task kind is not registered during abort"
-            })),
+            None => Err(InterruptionReason::HandlerUnavailable),
         };
         self.settle(running, completion).await
     }
@@ -265,7 +304,7 @@ impl TaskDriver {
         handler: Arc<dyn TaskKind>,
         running: RunningTask,
         cancellation: CancellationToken,
-    ) -> TaskCompletion {
+    ) -> Result<TaskCompletion, InterruptionReason> {
         let runtime: Arc<dyn TaskRuntime> = Arc::new(SessionTaskRuntime {
             session: self.session.clone(),
         });
@@ -290,33 +329,61 @@ impl TaskDriver {
             result = &mut join => result,
             () = self.fault.cancelled() => { join.abort(); join.await }
         };
-        completion_from_join(result)
+        match result {
+            Ok(Ok(completion)) => Ok(completion),
+            Ok(Err(TaskRunError::Interrupted(message))) => {
+                Err(InterruptionReason::HandlerFailed(message))
+            }
+            Ok(Err(TaskRunError::Runtime(error))) => Err(InterruptionReason::Runtime(error)),
+            Err(join) if join.is_panic() => Err(InterruptionReason::HandlerPanicked),
+            Err(join) => Err(InterruptionReason::HandlerFailed(join.to_string())),
+        }
     }
 
-    async fn settle(
+    fn settle_in_session(
         &self,
-        running: RunningTask,
+        session: &mut Session,
+        running: &RunningTask,
         completion: TaskCompletion,
     ) -> Result<DriveOutcome, TaskDriverError> {
         let TaskCompletion { outcome, output } = completion;
-        let (_, commit_seq) = {
-            let mut session = self.session.lock().await;
-            session.settle_task_with(
-                running.id,
-                running.generation,
-                outcome.clone(),
-                output,
-                |_| Ok(()),
-            )?
-        };
-        Ok(DriveOutcome {
+        let (_, commit_seq) = session.settle_task_with(
+            running.id,
+            running.generation,
+            outcome.clone(),
+            output,
+            |_| Ok(()),
+        )?;
+        Ok(DriveOutcome::Settled(Settlement {
             task_id: running.id,
             invocation_kind: running.invocation_kind,
             generation: running.generation,
             reservation_commit: running.reservation_commit,
             settlement_commit: commit_seq,
             outcome,
-        })
+        }))
+    }
+
+    async fn settle(
+        &self,
+        running: RunningTask,
+        completion: Result<TaskCompletion, InterruptionReason>,
+    ) -> Result<DriveOutcome, TaskDriverError> {
+        match completion {
+            Ok(completion) => {
+                let mut session = self.session.lock().await;
+                self.settle_in_session(&mut session, &running, completion)
+            }
+            // No durable settlement: the task remains running and is retried
+            // through an explicit Recover or Abort drive.
+            Err(reason) => Ok(DriveOutcome::Interrupted(Interruption {
+                task_id: running.id,
+                invocation_kind: running.invocation_kind,
+                generation: running.generation,
+                reservation_commit: running.reservation_commit,
+                reason,
+            })),
+        }
     }
 }
 
@@ -345,6 +412,8 @@ fn context_error(error: SessionError) -> TaskContextError {
     match error {
         SessionError::CancellationFence(_) => TaskContextError::Cancelled,
         SessionError::StaleInvocation { .. } => TaskContextError::Stale,
+        SessionError::Closed => TaskContextError::Closed,
+        SessionError::Persistence(message) => TaskContextError::Persistence(message),
         other => TaskContextError::Runtime(other.to_string()),
     }
 }
@@ -375,18 +444,6 @@ fn next_invocation(task: &TaskRecord) -> Option<InvocationKind> {
             TaskStatus::Running => Some(InvocationKind::Recover),
             TaskStatus::Terminal(_) => None,
         }
-    }
-}
-
-fn completion_from_join(
-    join: Result<Result<TaskCompletion, crate::TaskRunError>, tokio::task::JoinError>,
-) -> TaskCompletion {
-    match join {
-        Ok(Ok(completion)) => completion,
-        Ok(Err(error)) => TaskCompletion::failed(json!({"error": error.message()})),
-        Err(error) => TaskCompletion::failed(json!({
-            "error": if error.is_panic() { "task panicked" } else { "task join failed" }
-        })),
     }
 }
 
@@ -441,13 +498,42 @@ pub enum CloseMode {
 }
 
 #[derive(Debug, Clone, PartialEq)]
-pub struct DriveOutcome {
+pub enum DriveOutcome {
+    /// The task reached a durable terminal outcome.
+    Settled(Settlement),
+    /// The invocation was interrupted or left unresolved external uncertainty.
+    /// No terminal state was written; the durable task is still recoverable.
+    Interrupted(Interruption),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Settlement {
     pub task_id: TaskId,
     pub invocation_kind: InvocationKind,
     pub generation: u64,
     pub reservation_commit: CommitSeq,
     pub settlement_commit: CommitSeq,
     pub outcome: TaskOutcome,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Interruption {
+    pub task_id: TaskId,
+    pub invocation_kind: InvocationKind,
+    pub generation: u64,
+    pub reservation_commit: CommitSeq,
+    pub reason: InterruptionReason,
+}
+
+/// A process-local interruption, never a durable terminal outcome. A handler
+/// that detects real external uncertainty must instead return an
+/// `Indeterminate` completion with retained evidence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InterruptionReason {
+    HandlerFailed(String),
+    HandlerPanicked,
+    HandlerUnavailable,
+    Runtime(TaskContextError),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -466,12 +552,20 @@ pub enum TaskDriverError {
     AlreadyActive(TaskId),
     #[error("task {0} is already terminal")]
     AlreadyTerminal(TaskId),
+    #[error(
+        "task {task_id} is running but {kind} v{schema_version} is not registered; recovery is blocked"
+    )]
+    RecoveryBlocked {
+        task_id: TaskId,
+        kind: crate::TaskKindName,
+        schema_version: u32,
+    },
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ConversationId, TaskKindName, TaskOutcomeKind};
+    use crate::{ConversationId, TaskFuture, TaskKindName, TaskOutcomeKind};
 
     fn task(status: TaskStatus, cancel_requested: bool) -> TaskRecord {
         let mut task = TaskRecord::pending(
@@ -511,5 +605,66 @@ mod tests {
             )),
             None
         );
+    }
+
+    struct Completing;
+
+    impl TaskKind for Completing {
+        fn execute<'a>(&'a self, _task: RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+            Box::pin(async { Ok(TaskCompletion::completed(serde_json::json!("done"))) })
+        }
+
+        fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+            self.execute(task, context)
+        }
+
+        fn abort<'a>(&'a self, _task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+            Box::pin(async { Ok(TaskCompletion::aborted(serde_json::json!("aborted"))) })
+        }
+    }
+
+    #[tokio::test]
+    async fn running_task_with_missing_kind_blocks_recovery_until_registered() {
+        let mut session = Session::new().expect("session");
+        let kind = TaskKindName::new("later").expect("kind");
+        let task = session
+            .create_task(crate::session::command::TaskRequest {
+                conversation_id: session.root_conversation(),
+                kind: kind.clone(),
+                schema_version: 1,
+                input: serde_json::Value::Null,
+                dependencies: Vec::new(),
+            })
+            .expect("task");
+        // Simulate a durable running task recovered from storage without its kind.
+        session
+            .reserve_task_invocation(task.task_id, InvocationKind::Execute)
+            .expect("reserve");
+
+        let driver = TaskDriver::new(session, TaskRegistry::new());
+        let error = driver
+            .drive_task(task.task_id)
+            .await
+            .expect_err("recovery must be blocked");
+        assert!(matches!(error, TaskDriverError::RecoveryBlocked { .. }));
+
+        // Blocked recovery fabricates no terminal state and consumes no generation.
+        let snapshot = driver.snapshot().await;
+        assert!(matches!(snapshot.tasks[0].status, TaskStatus::Running));
+        assert_eq!(snapshot.tasks[0].generation, 1);
+        assert!(!snapshot.tasks[0].cancel_requested);
+
+        // Registering the missing implementation restores explicit recovery.
+        driver
+            .register_task_kind(kind, 1, Arc::new(Completing))
+            .expect("register");
+        match driver.drive_task(task.task_id).await.expect("drive") {
+            DriveOutcome::Settled(settlement) => {
+                assert_eq!(settlement.invocation_kind, InvocationKind::Recover);
+                assert_eq!(settlement.generation, 2);
+                assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Completed);
+            }
+            other => panic!("expected settlement, got {other:?}"),
+        }
     }
 }

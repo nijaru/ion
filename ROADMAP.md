@@ -108,12 +108,12 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- distinguish handler interruption and unresolved external work from known terminal application failure;
-- preserve recovery eligibility when a previously running task implementation is unavailable;
+- restricted typed task finalization so a generation can atomically settle with its successor entries, tasks and ownership writes;
+- typed task authoring adapter over the erased registry;
 
 - writable ownership release after local joins (K4).
 
-The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch and cancellation during saturated capacity admission are now covered by outcome-sensitive tests in `k3_abort.rs`: exactly one Abort invocation, no normal execution, and separate bounded cleanup admission. Persisted reopen coverage remains open.
+The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch, cancellation during saturated capacity admission, and interruption/uncertainty handling are covered by outcome-sensitive tests in `k3_abort.rs` and `k3_driver.rs`: exactly one Abort invocation, no normal execution, separate bounded cleanup admission, interrupted invocations that stay running and recoverable, known-failure versus indeterminate settlements, and blocked recovery for a running task whose implementation is unavailable. Persisted reopen coverage remains open.
 
 Persistence-backed evidence remains open:
 
