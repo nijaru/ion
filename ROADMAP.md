@@ -13,7 +13,7 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 | Task execution/recovery | K2 lifecycle boundary plus K3 driver implemented, including waits, capacity, close, interruption/uncertainty, finalization, turns and readiness dispatch | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs`; `crates/ion-core/tests/k5_chain.rs` |
 | IDs/order | Session-local typed sequence implemented, including SQLite representation | R0.4; K1/K2/K4 |
 | AI boundary | Independent provider-neutral `ion-ai` contract crate implemented | R0.5; `crates/ion-ai/` |
-| Storage topology/engine | Per-session SQLite schema v3 implemented; OS ownership exclusion and bounded residency remain open; process-death evidence is limited to acknowledged entry commits | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
+| Storage topology/engine | Per-session SQLite schema v3 with exclusive ownership implemented; bounded residency remains open; process-death evidence is limited to acknowledged entry commits | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
 | Fresh production core | Legacy runtime removed; scripted generation/tool chain works; no real-provider coding loop yet | cleanup commit `2d273f78`; evidence log below |
 | TUI/group target | Interaction requirements drafted; fresh application/TUI not yet rebuilt | TERMINAL.md |
 
@@ -27,11 +27,11 @@ The 2026-09-13 source review at `888d103c` preserves the core architecture but s
 
 ### Repair and delivery order
 
-All items below are **open**. This is the work-order authority; the K/P sections retain subsystem scope, not a competing execution sequence.
+**R1 is closed at `5bf3ea87`**; R2–R8 are open. This table is the work-order authority; the K/P sections retain subsystem scope, not a competing execution sequence.
 
 | Order | Observable behavior / semantic owner | Failure boundary and acceptance evidence |
 |---|---|---|
-| R1 — exclusive writable ownership | Session host/store owns an OS-held exclusive lock before reconstruction or recovery; cursor CAS remains defense-in-depth; load uses a consistent snapshot | Two subprocesses: A parks after dispatch; B must be refused before recovery/external action. Kill A and prove B can acquire ownership. Close releases ownership only after joins and storage close. CAS alone cannot fence overlapping external execution. |
+| R1 — exclusive writable ownership | **Closed `5bf3ea87`.** The store holds a kernel-held lock before any SQLite open, schema check or reconstruction, and releases it last in close; cursor CAS remains defense-in-depth; load reads one transaction | Refusal is `SessionError::SessionInUse` and happens before reconstruction, so a refused process observes and changes nothing. A child process is refused while the parent lives and commits after the parent releases. Graceful and fault close both release ownership. `k4_ownership.rs` also asserts, against a concurrent raw writer, that no visible entry is newer than the committed cursor. |
 | R2 — durable turn control | Turn cancellation barrier is independent of the root task's terminal outcome; `turn_closed_by` denotes closure provenance, not the answer | Settle the generation root, keep a child live, cancel, then let child abort cleanup plan successors. None escapes cancellation, including across reopen. Test settlement/mark ordering. Preserve terminal operation outcomes. |
 | R3 — fail-closed recovery | Built-in generation/tool adapters distinguish absent checkpoints from corrupt/unsupported checkpoints; prepared tool identity and recovery policy survive catalog changes | Malformed generation/tool checkpoint, removed tool and changed retry policy across reopen must neither repeat an uncertain action nor fabricate a known result. Use an external witness for dispatch-window crash tests. |
 | R4 — input placement and answer attempts | Input/transcript writer commits the user entry once before provider dispatch; generation answer attempts and their outcomes are separate | Cancel before first token, end incomplete, close/reopen and explicitly retry: one accepted input, one user entry, a new answer attempt, no permanently stranded request. Preserve truthful assistant failure/uncertainty. |
@@ -113,7 +113,7 @@ K2's lifecycle paths are exercised through the K3 production driver so they are 
 
 ### K3 — task driver
 
-**Status: core driver implemented; exclusive ownership and reviewed turn-control gaps remain open (R1/R2).**
+**Status: core driver implemented; reviewed turn-control gap remains open (R2).**
 
 Implemented now:
 
@@ -131,18 +131,17 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- OS-held writable ownership before reconstruction/recovery and release after local joins/storage close (R1);
 - durable turn cancellation independent of a terminal root operation (R2).
 
 The typed authoring adapter is implemented in `task/typed.rs`: `TaskRegistry::register_typed` erases a `TypedHandler` into the ordinary registry entry shape, input/checkpoint decode and result encode go through the durable JSON shapes, and terminal/failed/aborted/indeterminate stay distinct. An undecodable checkpoint or un-encodable result interrupts an already-dispatched task instead of terminalizing it; only never-dispatched work settles a structured `Failed`.
 
 The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Initial cancellation dispatch, cancellation during saturated capacity admission, and interruption/uncertainty handling are covered by outcome-sensitive tests in `k3_abort.rs` and `k3_driver.rs`: exactly one Abort invocation, no normal execution, separate bounded cleanup admission, interrupted invocations that stay running and recoverable, known-failure versus indeterminate settlements, and blocked recovery for a running task whose implementation is unavailable. Persisted reopen coverage remains open.
 
-K4 now supplies persisted reopen and explicit-drive evidence. Cross-process ownership exclusion and dispatch-window crash recovery remain open (R1/R3); the acknowledged-entry process-death test is not evidence for those boundaries.
+K4 now supplies persisted reopen, exclusive-ownership and explicit-drive evidence. Cross-process dispatch-window crash recovery remains open (R3); the acknowledged-entry process-death test is not evidence for that boundary.
 
 ### K4 — fresh SQLite session store
 
-**Status: SQLite schema v3 implemented; exclusive ownership, restart coverage and bounded storage repairs remain open (R1/R5/R6).**
+**Status: SQLite schema v3 with exclusive ownership implemented; restart coverage and bounded storage repairs remain open (R5/R6).**
 
 The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
 
@@ -349,6 +348,8 @@ Keep runtime performance separate from model effectiveness. Record source revisi
 Agent-effectiveness optimization starts from a stable M1/M2 baseline. More context, more agents, memory systems and richer coordination surfaces must demonstrate benefit rather than receive architectural preference.
 
 ## Evidence log
+
+2026-09-13: R1 exclusive writable session ownership at `5bf3ea87`. A session now holds a kernel-held advisory lock on a file beside its database from before any SQLite open, schema check or reconstruction until close has fenced writes and joined local invocations; the commit-cursor compare-and-set remains as the fence against a writer that bypassed ownership. The refusal is now a distinct `SessionError::SessionInUse` rather than a generic persistence failure, reconstruction reads one transaction, opening a missing database leaves no lock file, and a database that is already in WAL no longer takes an exclusive lock just to restate its journal mode. Acquisition waits up to ~100ms for a lock that may be mid-handover: the kernel releases the lock at process exit or exec, and a process that has just forked shares its open file descriptions with the child until that child execs, so without the wait an unrelated fork in the same process makes a free lock look held. The wait was measured against a reproducer that forked ~3900 children while four threads acquired and released locks continuously: with one attempt the threads panicked within milliseconds, and with the bounded wait 4027 acquisitions were delayed with a worst case of 9ms and none failed. `tests/k4_ownership.rs` covers the in-process refusal, that a refused open observes and changes nothing, release after graceful and fault close, a child process refused while the parent lives that commits after the parent releases, and 150 reconstructions against a concurrent raw writer asserting no visible entry is newer than the committed cursor. `k4_sqlite.rs` keeps reopen coverage and now exercises the cursor fence with a foreign writer. Format, strict workspace Clippy and the full workspace test suite (167 tests) pass. Not established: a torn-read race was never observed, which is not proof that none is possible, and read-only inspection by a second process is unimplemented — today every open is a writable owner.
 
 Entries below are chronological evidence at their named revisions, not a second current-status list. The 2026-09-13 review at `888d103c` supersedes earlier general claims of a complete cancelled-turn admission barrier and observation-gap handling: R2 covers cancellation after root settlement, and R5 covers restart coverage. Existing tests remain useful but do not cover those scenarios.
 

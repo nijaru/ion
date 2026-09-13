@@ -235,7 +235,7 @@ K2 lifecycle primitives are exercised by K3 production code instead of being tes
 
 ### K3 — task driver
 
-**Core driver implemented; R1 exclusive ownership and R2 turn-control repairs remain open.**
+**Core driver implemented; R2 turn-control repair remains open.**
 
 Implemented:
 
@@ -260,20 +260,19 @@ Implemented:
 Still open:
 
 - independent durable turn cancellation control (R2), including cancellation after root settlement;
-- writable OS ownership acquisition before reconstruction/recovery and release after joins/storage close (R1);
 - reclamation beyond archival retirement (later K6); planned owned-conversation creation is implemented.
 
 The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
 
-- targeted cross-process dispatch-window and exclusive-ownership evidence (R1/R3); existing K4 reopen and acknowledged-entry process-death tests do not establish these.
+- targeted cross-process dispatch-window crash evidence (R3); the acknowledged-entry process-death test does not establish it.
 
 Do not add a second scheduler to solve these. Extend the same session/task driver boundary.
 
 ### K4 — SQLite session store
 
-**Per-session SQLite store and process-death evidence implemented.**
+**Per-session SQLite store, exclusive ownership and process-death evidence implemented.**
 
 `Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 3 (version 2 added the `retired` conversation flag and version 3 the turn-completion receipt; older development databases are refused rather than migrated): session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
 
@@ -282,6 +281,8 @@ Evidence is in-process plus one real process-death test (`tests/k4_sqlite.rs`). 
 What that does **not** establish: durability under machine power loss or kernel failure, which depends on the filesystem honouring `fsync` and cannot be tested from inside one machine. The claim is scoped to process death, which is what the test actually observes.
 
 `TaskDriver::{create, open, create_with_capacity, open_with_capacity}` are the client entry points, so a caller never constructs a `Session` itself; opening through the driver still reads only.
+
+Ownership is exclusive and distinguishable: `Session::open`/`create` take a kernel-held lock before touching SQLite and release it last during close, a second live process fails with `SessionError::SessionInUse` before it reconstructs anything, and reconstruction reads one transaction. A read-only inspection mode would need a shared lock and does not exist.
 
 Still open for this slice: cold-history reads, since the resident store still holds every record after open and the per-commit map-structure clone remains; a `Session::create` path that refuses an occupied file is covered, but backup/repair and orphan-artifact handling are not; and index tuning.
 
