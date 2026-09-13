@@ -419,3 +419,76 @@ async fn a_stale_writer_authority_is_fenced() {
         .collect();
     assert_eq!(texts, vec![json!("from first")]);
 }
+
+/// Environment variable naming the database a crash child should write to.
+const CRASH_DB: &str = "ION_K4_CRASH_DB";
+
+/// Payloads the crash child commits and the parent then looks for.
+const CRASH_PAYLOADS: [&str; 3] = [
+    "committed-before-crash-0",
+    "committed-before-crash-1",
+    "committed-before-crash-2",
+];
+
+/// Run only inside the child process spawned by
+/// `committed_writes_survive_process_death`. It commits, then dies without
+/// unwinding, closing or checkpointing anything.
+#[test]
+fn crash_child_commits_then_dies() {
+    let Some(path) = std::env::var_os(CRASH_DB) else {
+        return;
+    };
+    let mut session = Session::create(&path).expect("create");
+    let root = session.root_conversation();
+    for payload in CRASH_PAYLOADS {
+        session
+            .append_entry(EntryRequest {
+                conversation_id: root,
+                kind: EntryKind::new("note").expect("entry kind"),
+                data: json!({"payload": payload}),
+                projection: Vec::new(),
+                context: ContextControl::none(),
+            })
+            .expect("commit");
+    }
+    // No destructors, no clean close, no WAL checkpoint: the process simply
+    // stops. Everything already committed must still be there.
+    std::process::abort();
+}
+
+#[cfg(unix)]
+#[test]
+fn committed_writes_survive_process_death() {
+    use std::os::unix::process::ExitStatusExt;
+
+    let db = TempDb::new("crash");
+    let status = std::process::Command::new(std::env::current_exe().expect("test binary"))
+        .args(["--exact", "crash_child_commits_then_dies", "--nocapture"])
+        .env(CRASH_DB, db.path())
+        .status()
+        .expect("spawn crash child");
+
+    assert_eq!(
+        status.signal(),
+        Some(6),
+        "the child must die on SIGABRT, not exit or panic: {status:?}"
+    );
+
+    let reopened = Session::open(db.path()).expect("reopen after process death");
+    let payloads: Vec<_> = reopened
+        .snapshot()
+        .entries
+        .iter()
+        .map(|entry| entry.data["payload"].clone())
+        .collect();
+    assert_eq!(
+        payloads,
+        CRASH_PAYLOADS.map(|payload| json!(payload)).to_vec(),
+        "every commit acknowledged before the crash must be durable"
+    );
+    assert!(reopened.summary().last_commit.local_seq().get() > 0);
+
+    // Recovery is idempotent: a second open sees exactly the same history.
+    let again = Session::open(db.path()).expect("second reopen");
+    assert_eq!(again.snapshot(), reopened.snapshot());
+}

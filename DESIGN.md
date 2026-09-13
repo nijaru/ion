@@ -421,7 +421,7 @@ Do not split one session transaction across category-specific WAL databases. Ind
 
 SQLite is the baseline. P2 validates physical topology, indexes, WAL/checkpoint behavior, history scale, backup/repair and artifact publication before making performance claims. A second engine such as Turso must earn inclusion through measurements or a concrete sync requirement; do not build a generic multi-backend framework preemptively.
 
-The durability floor is WAL journalling with `synchronous = FULL`: a committed transaction is durable across process death and OS failure to the extent the filesystem honours `fsync`. `NORMAL` trades that for fewer syncs and is deliberately not used. The store writes only committed write sets, and it advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a second live authority is fenced instead of silently interleaving with the first.
+The durability floor is WAL journalling with `synchronous = FULL`: a committed transaction survives process death. `NORMAL` trades that for fewer syncs and is deliberately not used. Machine power loss is a filesystem property rather than a store guarantee, so it is not claimed from a single-machine test. The store writes only committed write sets, and it advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a second live authority is fenced instead of silently interleaving with the first.
 
 Opening a session reads durable records only. A task that was running when the process died is reconstructed as running and is entered through an explicit recovery drive; opening never starts work.
 
