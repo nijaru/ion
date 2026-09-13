@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -9,18 +10,22 @@ use crate::{
     TaskStatus,
 };
 
+/// Resident semantic state. Records are held behind `Arc` so a transaction
+/// draft clones map structure without copying record payloads; a mutation only
+/// deep-copies the records it actually touches (copy-on-write). K4 replaces the
+/// remaining per-commit map clone with typed indexed storage reads.
 #[derive(Debug, Clone)]
 pub(crate) struct SessionState {
     pub(crate) session_id: SessionId,
     pub(crate) last_seq: Option<LocalSeq>,
     pub(crate) last_commit: Option<CommitSeq>,
     pub(crate) root_conversation: Option<ConversationId>,
-    pub(crate) conversations: BTreeMap<ConversationId, Conversation>,
-    pub(crate) entries: BTreeMap<EntryId, Entry>,
-    pub(crate) inputs: BTreeMap<InputId, Input>,
+    pub(crate) conversations: BTreeMap<ConversationId, Arc<Conversation>>,
+    pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
+    pub(crate) inputs: BTreeMap<InputId, Arc<Input>>,
     pub(crate) request_keys: HashMap<RequestKey, InputId>,
     pub(crate) input_commits: HashMap<InputId, CommitSeq>,
-    pub(crate) tasks: BTreeMap<TaskId, TaskRecord>,
+    pub(crate) tasks: BTreeMap<TaskId, Arc<TaskRecord>>,
 }
 
 impl SessionState {
@@ -64,10 +69,22 @@ impl SessionState {
             self.entries
                 .values()
                 .filter(|entry| entry.conversation_id == conversation_id)
-                .cloned(),
+                .map(|entry| (**entry).clone()),
         );
         Ok(visible)
     }
+}
+
+fn conversation_mut(state: &mut SessionState, id: ConversationId) -> Option<&mut Conversation> {
+    state.conversations.get_mut(&id).map(Arc::make_mut)
+}
+
+fn task_mut(state: &mut SessionState, id: TaskId) -> Option<&mut TaskRecord> {
+    state.tasks.get_mut(&id).map(Arc::make_mut)
+}
+
+fn input_mut(state: &mut SessionState, id: InputId) -> Option<&mut Input> {
+    state.inputs.get_mut(&id).map(Arc::make_mut)
 }
 
 pub(crate) fn apply_mutation(
@@ -81,7 +98,7 @@ pub(crate) fn apply_mutation(
             }
             if state
                 .conversations
-                .insert(conversation.id, *conversation)
+                .insert(conversation.id, Arc::new(*conversation))
                 .is_some()
             {
                 return Err(StateError::DuplicateConversation(conversation.id));
@@ -91,19 +108,27 @@ pub(crate) fn apply_mutation(
         Mutation::CreateConversation(conversation) => {
             if state
                 .conversations
-                .insert(conversation.id, *conversation)
+                .insert(conversation.id, Arc::new(*conversation))
                 .is_some()
             {
                 return Err(StateError::DuplicateConversation(conversation.id));
             }
         }
         Mutation::AppendEntry(entry) => {
-            if state.entries.insert(entry.id, entry.clone()).is_some() {
+            if state
+                .entries
+                .insert(entry.id, Arc::new(entry.clone()))
+                .is_some()
+            {
                 return Err(StateError::DuplicateEntry(entry.id));
             }
         }
         Mutation::AdmitInput(input) => {
-            if state.inputs.insert(input.id, input.clone()).is_some() {
+            if state
+                .inputs
+                .insert(input.id, Arc::new(input.clone()))
+                .is_some()
+            {
                 return Err(StateError::DuplicateInput(input.id));
             }
             if let Some(key) = &input.request_key
@@ -117,7 +142,11 @@ pub(crate) fn apply_mutation(
             disposition,
         } => apply_input_disposition(state, *input_id, *disposition)?,
         Mutation::CreateTask(task) => {
-            if state.tasks.insert(task.id, task.clone()).is_some() {
+            if state
+                .tasks
+                .insert(task.id, Arc::new(task.clone()))
+                .is_some()
+            {
                 return Err(StateError::DuplicateTask(task.id));
             }
         }
@@ -125,19 +154,17 @@ pub(crate) fn apply_mutation(
             conversation_id,
             task_id,
         } => {
-            let conversation = state
-                .conversations
-                .get_mut(conversation_id)
-                .ok_or(StateError::UnknownConversation(*conversation_id))?;
-            if conversation.foreground_turn.is_some() {
-                return Err(StateError::ForegroundTurnBusy(*conversation_id));
-            }
             let task = state
                 .tasks
                 .get(task_id)
                 .ok_or(StateError::UnknownTask(*task_id))?;
             if task.conversation_id != *conversation_id || task.turn != Some(*task_id) {
                 return Err(StateError::InvalidForegroundTurn(*task_id));
+            }
+            let conversation = conversation_mut(state, *conversation_id)
+                .ok_or(StateError::UnknownConversation(*conversation_id))?;
+            if conversation.foreground_turn.is_some() {
+                return Err(StateError::ForegroundTurnBusy(*conversation_id));
             }
             conversation.foreground_turn = Some(*task_id);
         }
@@ -157,10 +184,7 @@ pub(crate) fn apply_mutation(
             task.output = output.clone();
         }
         Mutation::MarkTaskCancellation(task_id) => {
-            let task = state
-                .tasks
-                .get_mut(task_id)
-                .ok_or(StateError::UnknownTask(*task_id))?;
+            let task = task_mut(state, *task_id).ok_or(StateError::UnknownTask(*task_id))?;
             if matches!(task.status, TaskStatus::Terminal(_)) {
                 return Err(StateError::TaskAlreadyTerminal(*task_id));
             }
@@ -183,7 +207,7 @@ pub(crate) fn apply_mutation(
             task.output = output.clone();
             // A terminal turn root releases its conversation's foreground slot.
             if task.turn == Some(*task_id)
-                && let Some(conversation) = state.conversations.get_mut(&conversation_id)
+                && let Some(conversation) = conversation_mut(state, conversation_id)
                 && conversation.foreground_turn == Some(*task_id)
             {
                 conversation.foreground_turn = None;
@@ -193,10 +217,7 @@ pub(crate) fn apply_mutation(
             task_id,
             conversation_id,
         } => {
-            let task = state
-                .tasks
-                .get_mut(task_id)
-                .ok_or(StateError::UnknownTask(*task_id))?;
+            let task = task_mut(state, *task_id).ok_or(StateError::UnknownTask(*task_id))?;
             if task.owned_conversations.contains(conversation_id) {
                 return Err(StateError::DuplicateOwnership {
                     task_id: *task_id,
@@ -214,16 +235,19 @@ fn apply_input_disposition(
     input_id: InputId,
     disposition: InputDisposition,
 ) -> Result<(), StateError> {
-    let input = state
-        .inputs
-        .get(&input_id)
-        .ok_or(StateError::UnknownInput(input_id))?;
-    if input.disposition == disposition {
+    let (target, current) = {
+        let input = state
+            .inputs
+            .get(&input_id)
+            .ok_or(StateError::UnknownInput(input_id))?;
+        (input.target, input.disposition)
+    };
+    if current == disposition {
         return Ok(());
     }
 
     let valid_transition = matches!(
-        (&input.disposition, &disposition),
+        (&current, &disposition),
         (InputDisposition::Queued, InputDisposition::Assigned(_))
             | (InputDisposition::Queued, InputDisposition::Consumed(_))
             | (InputDisposition::Queued, InputDisposition::Cancelled)
@@ -240,7 +264,7 @@ fn apply_input_disposition(
                 .tasks
                 .get(&task_id)
                 .ok_or(StateError::UnknownTask(task_id))?;
-            if task.conversation_id != input.target {
+            if task.conversation_id != target {
                 return Err(StateError::InvalidInputDisposition(input_id));
             }
         }
@@ -249,16 +273,14 @@ fn apply_input_disposition(
                 .entries
                 .get(&entry_id)
                 .ok_or(StateError::InvisibleParentCutoff(entry_id))?;
-            if entry.conversation_id != input.target {
+            if entry.conversation_id != target {
                 return Err(StateError::InvalidInputDisposition(input_id));
             }
         }
         InputDisposition::Queued | InputDisposition::Cancelled => {}
     }
 
-    state
-        .inputs
-        .get_mut(&input_id)
+    input_mut(state, input_id)
         .expect("validated input remains present")
         .disposition = disposition;
     Ok(())
@@ -319,6 +341,7 @@ fn reserve_task(
         .tasks
         .get_mut(&task_id)
         .expect("validated task remains present");
+    let task = Arc::make_mut(task);
     task.generation = generation;
     task.invocation = Some(TaskInvocation { generation, kind });
     task.status = TaskStatus::Running;
@@ -330,10 +353,7 @@ fn authorized_task_mut(
     task_id: TaskId,
     generation: u64,
 ) -> Result<&mut TaskRecord, StateError> {
-    let task = state
-        .tasks
-        .get_mut(&task_id)
-        .ok_or(StateError::UnknownTask(task_id))?;
+    let task = task_mut(state, task_id).ok_or(StateError::UnknownTask(task_id))?;
     if !matches!(task.status, TaskStatus::Running) {
         return Err(StateError::TaskNotRunning(task_id));
     }

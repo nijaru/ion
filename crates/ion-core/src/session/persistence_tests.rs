@@ -36,6 +36,48 @@ fn create(session: &mut Session) -> TaskId {
         .task_id
 }
 
+/// A commit must not deep-copy unrelated durable records. Records are shared by
+/// `Arc`, so an untouched task keeps its allocation across another task's
+/// checkpoint, while the touched record is replaced copy-on-write.
+#[test]
+fn commit_copies_only_touched_task_records() {
+    let mut session = Session::new().expect("session");
+    let touched = create(&mut session);
+    let untouched = create(&mut session);
+    let invocation = session
+        .reserve_task_invocation(touched, InvocationKind::Execute)
+        .expect("reserve");
+
+    let touched_before = session.task_record_ptr(touched).expect("touched record");
+    let untouched_before = session
+        .task_record_ptr(untouched)
+        .expect("untouched record");
+
+    session
+        .checkpoint_task(
+            touched,
+            invocation.generation,
+            Some(serde_json::json!({"phase": "copy-on-write"})),
+            None,
+        )
+        .expect("checkpoint");
+
+    assert_eq!(
+        session.task_record_ptr(untouched),
+        Some(untouched_before),
+        "an untouched task must keep its resident allocation"
+    );
+    assert_ne!(
+        session.task_record_ptr(touched),
+        Some(touched_before),
+        "the touched task is replaced copy-on-write"
+    );
+    assert_eq!(
+        session.task_record(touched).unwrap().checkpoint,
+        Some(serde_json::json!({"phase": "copy-on-write"}))
+    );
+}
+
 #[test]
 fn failed_persistence_does_not_install_draft_or_publish_successors() {
     let mut session = Session::new().unwrap();

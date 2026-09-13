@@ -208,10 +208,22 @@ impl Session {
             last_commit: state
                 .last_commit
                 .expect("initialized session has first commit"),
-            conversations: state.conversations.values().copied().collect(),
-            entries: state.entries.values().cloned().collect(),
-            inputs: state.inputs.values().cloned().collect(),
-            tasks: state.tasks.values().cloned().collect(),
+            conversations: state.conversations.values().map(|value| **value).collect(),
+            entries: state
+                .entries
+                .values()
+                .map(|value| (**value).clone())
+                .collect(),
+            inputs: state
+                .inputs
+                .values()
+                .map(|value| (**value).clone())
+                .collect(),
+            tasks: state
+                .tasks
+                .values()
+                .map(|value| (**value).clone())
+                .collect(),
         }
     }
 
@@ -262,7 +274,17 @@ impl Session {
     }
 
     pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
-        self.state.tasks.get(&task_id).cloned()
+        self.state.tasks.get(&task_id).map(|task| (**task).clone())
+    }
+
+    /// Test-only pointer to a task's resident allocation, used to prove that a
+    /// commit does not deep-copy unrelated task payloads.
+    #[cfg(test)]
+    pub(crate) fn task_record_ptr(&self, task_id: TaskId) -> Option<usize> {
+        self.state
+            .tasks
+            .get(&task_id)
+            .map(|task| std::sync::Arc::as_ptr(task) as usize)
     }
 
     pub(crate) fn set_input_disposition(

@@ -300,15 +300,15 @@ The exact private Rust shape may be a narrow store trait, enum or another simple
 
 Semantic ownership is not the same as keeping every record in memory. `Session` owns the semantics, but it must not require full-history residency, and no commit may cost O(history).
 
-Chosen shape: **typed indexed reads plus a small transaction overlay**. The owner reads committed records through typed point/range queries and stages writes as an overlay; a commit validates against base-plus-overlay, persists the overlay, then applies it to resident indexes. This is preferred over a bounded resident working set with ad-hoc loaders because it avoids hand-built cache invalidation and keeps one read path.
+Chosen shape: **typed indexed reads plus a small transaction overlay**, extended by a copy-on-write resident representation. Decision records and session state hold records behind `Arc`, so a transaction draft clones map structure without copying record payloads and a mutation deep-copies only the records it touches. This is preferred over a bounded resident working set with ad-hoc loaders because it avoids hand-built cache invalidation and keeps one read path.
 
 Required K4 invariants:
 
-1. checkpointing an active task must not copy or hydrate unrelated historical task payloads;
-2. session summaries and observation recovery use bounded views, not full-state snapshots;
+1. checkpointing an active task must not copy or hydrate unrelated historical task payloads (satisfied by copy-on-write resident records, covered by `commit_copies_only_touched_task_records`);
+2. session summaries and observation recovery use bounded views, not full-state snapshots (`SessionSummary`, `Session::conversation_entries`);
 3. context construction at a frozen cutoff can run without holding the mutation line;
 4. a durable commit followed by an unexpected resident-apply failure is a fail-stop/reopen condition, never silent divergence;
-5. the current `Transaction::new` full-`SessionState` clone is a K2 proof shortcut and must be removed here.
+5. the remaining per-commit map-structure clone in `Transaction::new` is removed when reads move to indexed storage; it no longer copies payloads.
 
 Index tuning, measured thresholds and cold-history paging remain P2 work; these are structural requirements.
 
