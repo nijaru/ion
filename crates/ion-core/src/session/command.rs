@@ -155,6 +155,8 @@ pub enum SessionError {
     IdempotencyConflict(RequestKey),
     #[error(transparent)]
     InvalidFork(#[from] ForkError),
+    #[error("context control does not form a complete provider-safe context: {0}")]
+    IncompleteContextControl(crate::conversation::context::ContextError),
     #[error(transparent)]
     Id(#[from] IdError),
     #[error("session invariant failed: {0}")]

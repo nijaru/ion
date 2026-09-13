@@ -153,7 +153,9 @@ Compaction appends a summary entry with a new head. Handoff appends a model-visi
 
 Context edits may omit or replace earlier projections, but the vocabulary stays constrained. Do not expose arbitrary reordering capable of creating impossible provider histories.
 
-A context head used as a retained boundary must land on a complete tool exchange. P2 measures cold construction across long histories, dense edits and deep forks before selecting indexes/caches or claiming complexity bounds.
+A context head used as a retained boundary must land on a complete tool exchange. The writer validates the resulting projection whenever a control claims to establish a usable context: appending a head or edit rejects an incomplete exchange or an orphaned tool result and consumes no sequence values. Plain appends stay unvalidated so an in-flight tool exchange remains durably recordable. Projection rejects a tool result whose originating assistant call is not present in the same selected range, so omitting a call cannot leave its result behind. Tool-call identity is scoped to its originating assistant message rather than treated as globally unique.
+
+P2 measures cold construction across long histories, dense edits and deep forks before selecting indexes/caches or claiming complexity bounds.
 
 ### Historical forks
 

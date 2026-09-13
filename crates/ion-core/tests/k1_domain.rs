@@ -1,6 +1,6 @@
 use ion_ai::{Content, Message, Role, ToolCall, ToolResult};
 use ion_core::conversation::context::{
-    ContextControl, ContextEdit, ForkError, project, validate_fork_cutoff,
+    ContextControl, ContextEdit, ContextError, ForkError, project, validate_fork_cutoff,
 };
 use ion_core::{ConversationId, Entry, EntryId, EntryKind};
 
@@ -144,4 +144,92 @@ fn tool_completion_order_is_normalized_to_source_call_order() {
         })
         .collect();
     assert_eq!(call_ids, vec!["a", "b"]);
+}
+
+fn call(id: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![Content::ToolCall(ToolCall {
+            id: id.to_owned(),
+            name: "read".to_owned(),
+            arguments: serde_json::json!({"path": id}),
+        })],
+        provider_replay: None,
+    }
+}
+
+fn result(id: &str, value: &str) -> Message {
+    Message {
+        role: Role::Tool,
+        content: vec![Content::ToolResult(ToolResult {
+            call_id: id.to_owned(),
+            name: "read".to_owned(),
+            result: serde_json::json!(value),
+        })],
+        provider_replay: None,
+    }
+}
+
+#[test]
+fn omitting_an_assistant_call_leaves_no_orphan_tool_result() {
+    let assistant = entry(1, vec![call("a")], ContextControl::none());
+    let tool = entry(2, vec![result("a", "A")], ContextControl::none());
+    let omit = entry(
+        3,
+        vec![text(Role::User, "note")],
+        ContextControl {
+            head: None,
+            edits: vec![ContextEdit::Omit {
+                target: assistant.id,
+            }],
+        },
+    );
+    let history = vec![assistant, tool, omit];
+
+    assert!(matches!(
+        project(&history),
+        Err(ContextError::OrphanToolResult)
+    ));
+}
+
+#[test]
+fn head_boundary_inside_a_tool_exchange_is_rejected() {
+    let assistant = entry(1, vec![call("a")], ContextControl::none());
+    let tool = entry(2, vec![result("a", "A")], ContextControl::none());
+    let summary = entry(
+        3,
+        vec![text(Role::User, "summary")],
+        ContextControl::head(tool.id),
+    );
+    let history = vec![assistant, tool, summary];
+
+    // A head boundary on the tool result excludes its assistant call, so the
+    // projected context would start with an orphan tool result.
+    assert!(matches!(
+        project(&history),
+        Err(ContextError::OrphanToolResult)
+    ));
+}
+
+#[test]
+fn incomplete_exchange_is_rejected_but_independent_exchanges_pass() {
+    let first = entry(1, vec![call("a")], ContextControl::none());
+    let dangling = entry(
+        2,
+        vec![text(Role::User, "interrupt")],
+        ContextControl::none(),
+    );
+    assert!(matches!(
+        project(&[first.clone(), dangling]),
+        Err(ContextError::MissingToolResult(id)) if id == "a"
+    ));
+
+    // Distinct exchanges may reuse a call id: it is only meaningful within its
+    // own originating assistant message.
+    let first_result = entry(3, vec![result("a", "A")], ContextControl::none());
+    let bridge = entry(4, vec![text(Role::User, "next")], ContextControl::none());
+    let second = entry(5, vec![call("a")], ContextControl::none());
+    let second_result = entry(6, vec![result("a", "A2")], ContextControl::none());
+    let history = vec![first, first_result, bridge, second, second_result];
+    project(&history).expect("independent exchanges are valid");
 }

@@ -87,6 +87,13 @@ fn normalize_tool_exchanges(messages: Vec<Message>) -> Result<Vec<Message>, Cont
 
     while index < messages.len() {
         let message = &messages[index];
+        // A tool result is only valid inside the exchange of the assistant
+        // message that made its call. Encountering one here means the call was
+        // omitted or a head/cutoff split the exchange, which is not a valid
+        // provider request or safe fork boundary.
+        if message.role == Role::Tool {
+            return Err(ContextError::OrphanToolResult);
+        }
         if message.role != Role::Assistant {
             output.push(message.clone());
             index += 1;
@@ -168,6 +175,8 @@ pub enum ContextError {
     DuplicateToolResult(String),
     #[error("tool call {0} has no result at this context boundary")]
     MissingToolResult(String),
+    #[error("tool result appears without its originating assistant call in this context")]
+    OrphanToolResult,
     #[error("tool result references unknown call {0}")]
     UnknownToolResult(String),
 }

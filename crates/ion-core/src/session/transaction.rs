@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
-use crate::conversation::context::validate_fork_cutoff;
+use crate::conversation::context::{project, validate_fork_cutoff};
 use crate::session::command::{
     ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
 };
@@ -167,6 +167,17 @@ impl Transaction {
             request.projection,
             request.context,
         );
+        // A head or edit claims to establish a usable context boundary, so the
+        // resulting provider-neutral context must be complete now. Plain appends
+        // remain unvalidated so in-flight tool exchanges are still durable.
+        if entry.context.head.is_some() || !entry.context.edits.is_empty() {
+            let mut history = self
+                .draft
+                .visible_entries(request.conversation_id)
+                .map_err(map_state)?;
+            history.push(entry.clone());
+            project(&history).map_err(SessionError::IncompleteContextControl)?;
+        }
         self.stage(Mutation::AppendEntry(entry), Change::EntryAppended(id))?;
         Ok(id)
     }

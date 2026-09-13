@@ -1,14 +1,38 @@
 use ion_ai::{Content, Message, Role};
-use ion_core::conversation::context::ContextControl;
+use ion_core::conversation::context::{ContextControl, ContextEdit};
 use ion_core::{
-    ConversationSpec, EntryKind, EntryRequest, HistoryParent, InputBody, InputMode, InputRequest,
-    InputSender, RequestKey, Session, SessionError, TaskKindName, TaskRequest,
+    ConversationSpec, EntryId, EntryKind, EntryRequest, HistoryParent, InputBody, InputMode,
+    InputRequest, InputSender, RequestKey, Session, SessionError, TaskKindName, TaskRequest,
 };
 
 fn user_message(text: &str) -> Message {
     Message {
         role: Role::User,
         content: vec![Content::Text(text.to_owned())],
+        provider_replay: None,
+    }
+}
+
+fn assistant_call(id: &str) -> Message {
+    Message {
+        role: Role::Assistant,
+        content: vec![Content::ToolCall(ion_ai::ToolCall {
+            id: id.to_owned(),
+            name: "read".to_owned(),
+            arguments: serde_json::json!({"path": "a"}),
+        })],
+        provider_replay: None,
+    }
+}
+
+fn tool_result(id: &str) -> Message {
+    Message {
+        role: Role::Tool,
+        content: vec![Content::ToolResult(ion_ai::ToolResult {
+            call_id: id.to_owned(),
+            name: "read".to_owned(),
+            result: serde_json::json!("A"),
+        })],
         provider_replay: None,
     }
 }
@@ -142,6 +166,75 @@ fn owned_conversation_and_reciprocal_task_link_commit_atomically() {
         .find(|conversation| conversation.id == worker.conversation_id)
         .expect("worker conversation");
     assert_eq!(conversation.owner_task, Some(task.id));
+}
+
+#[test]
+fn context_controls_must_form_a_complete_provider_context() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let append = |session: &mut Session, projection: Vec<Message>, context: ContextControl| {
+        session.append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("test").expect("entry kind"),
+            data: serde_json::Value::Null,
+            projection,
+            context,
+        })
+    };
+
+    // A plain assistant tool call stays durably appendable while tools run.
+    let call = append(
+        &mut session,
+        vec![assistant_call("a")],
+        ContextControl::none(),
+    )
+    .expect("tool call");
+    let result =
+        append(&mut session, vec![tool_result("a")], ContextControl::none()).expect("tool result");
+
+    // A head boundary that starts at the bare tool result is incomplete.
+    let before = session.snapshot().last_commit;
+    let error = append(
+        &mut session,
+        vec![user_message("summary")],
+        ContextControl::head(result.entry_id),
+    )
+    .expect_err("head on an orphaned result must be rejected");
+    assert!(matches!(error, SessionError::IncompleteContextControl(_)));
+    assert_eq!(session.snapshot().last_commit, before);
+
+    // Omitting the originating call but keeping its result is also invalid.
+    let error = append(
+        &mut session,
+        vec![user_message("note")],
+        ContextControl {
+            head: None,
+            edits: vec![ContextEdit::Omit {
+                target: call.entry_id,
+            }],
+        },
+    )
+    .expect_err("orphan tool result must be rejected");
+    assert!(matches!(error, SessionError::IncompleteContextControl(_)));
+    assert_eq!(session.snapshot().last_commit, before);
+
+    // Retaining the complete exchange from its originating call commits.
+    let summary = append(
+        &mut session,
+        vec![user_message("summary")],
+        ContextControl::head(call.entry_id),
+    )
+    .expect("complete exchange head boundary");
+    assert_eq!(summary.entry_id.get(), before.get() + 1);
+
+    // A fork at the now-unreferenced assistant call is still incomplete.
+    let error = session
+        .create_conversation(ConversationSpec::fork(
+            root,
+            EntryId::new(call.entry_id.get()).expect("entry id"),
+        ))
+        .expect_err("incomplete fork cutoff must be rejected");
+    assert!(matches!(error, SessionError::InvalidFork(_)));
 }
 
 #[test]

@@ -75,7 +75,7 @@ The current kernel has one serialized semantic mutation line, typed atomic mutat
 
 - create session/root conversation;
 - create independent/forked/owned conversations with reciprocal task ownership;
-- append immutable entries/context controls;
+- append immutable entries/context controls, rejecting a head or edit whose resulting projection is not a complete provider-safe context (orphaned tool result or dangling call) without consuming sequence values;
 - accept/dedupe/place inputs with exact request-key replay/conflict;
 - create tasks and dependency edges;
 - reserve execute/recover/abort invocations with generation fencing;
