@@ -57,6 +57,7 @@ crates/ion-core/
     session/
       mod.rs
       owner.rs
+      state.rs
       command.rs
       transaction.rs
       scheduler.rs
@@ -148,7 +149,8 @@ Owns canonical session mutation and task driving.
 
 Current split:
 
-- `owner.rs`: resident session owner, public mutation methods, snapshots and bounded observations;
+- `owner.rs`: resident session owner, persistence-before-install commit ordering, public mutation methods, snapshots and bounded observations;
+- `state.rs`: resident records/indexes and semantic mutation application; persistence owns no copy of this state;
 - `command.rs`: typed command/receipt/error vocabulary;
 - `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
 - `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership, cancellation signaling and close/join policy;
@@ -178,9 +180,9 @@ TUI-specific focus, drafts, layout and rendering stay outside `ion-core`.
 
 Owns persistence only.
 
-The K2 `MemoryStore` intentionally combines resident state and commit application because it is the smallest deterministic proof. K4 should separate resident semantic state from durable persistence so SQLite does not become the semantic mutation owner.
+The K4 prerequisite split is implemented. `Session` owns resident `SessionState`; `MemoryStore` is a volatile commit sink with no semantic records. A crate-private `Persistence` contract accepts validated batches. Transaction building prepares the next resident state; the writer installs it only after persistence succeeds, avoiding fallible semantic application after durability. Errors fence the owner and signal fault close to live drives.
 
-Preferred K4 dependency shape:
+Current dependency shape:
 
 ```text
 Session owner

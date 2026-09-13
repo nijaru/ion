@@ -252,8 +252,7 @@ Implemented:
 
 Still open:
 
-- persistence-store fail-stop propagation to task drivers;
-- writable ownership release after local joins.
+- writable ownership release after local joins (K4 SQLite).
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
 
@@ -269,7 +268,7 @@ Implement a fresh schema as one database for one session. Do not migrate old tab
 
 Follow the SQLite module boundaries in `docs/source-layout.md`: connection/open policy, schema, atomic commit application and focused per-record reads/writes. Do not create another monolithic `sql.rs`/`queries.rs` file.
 
-Before adding SQL, cleanly separate resident semantic state from the persistence sink/source. The current `MemoryStore` owns both the resident `SessionState` and commit application because it was intentionally the cheapest K2 proof. K4 should avoid teaching the session writer to query SQLite as its mutation authority. Preferred direction:
+The pre-SQL resident/persistence split is implemented. `Session` owns `SessionState`, and the crate-private `Persistence` interface accepts validated batches. The transaction's prepared state is installed only after a successful commit; failed persistence leaves resident records and observations unchanged, fences canonical writes, and signals local fault shutdown. `MemoryStore` retains only volatile commit ordering, not another semantic state copy. The resulting boundary is:
 
 ```text
 Session owner

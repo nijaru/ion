@@ -94,7 +94,9 @@ A command:
 6. publishes committed observations;
 7. dispatches admitted external work only after mutation authority is released.
 
-A persistence result that is uncertain fences the writable session handle. Reopen and recover durable state; never guess whether a batch committed.
+Resident `SessionState` belongs to the session owner, not the persistence backend. The writer prepares and validates the complete next state with its mutation batch, commits the batch through a narrow private persistence interface, then installs the prepared resident state and publishes observations. Installation introduces no fallible semantic work after durability.
+
+Any persistence error conservatively fences the writable session handle and fault-stops local invocations. Failed persistence does not install the prepared state or publish committed observations. Reopen and recover durable state; never guess whether a batch committed.
 
 The host owns an exclusive cross-process writable-session lock and releases it last during close. PID/heartbeat/stale-timestamp heuristics are not ownership.
 

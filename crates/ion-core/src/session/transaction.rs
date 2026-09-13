@@ -6,7 +6,7 @@ use crate::conversation::context::validate_fork_cutoff;
 use crate::session::command::{
     ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
 };
-use crate::store::{SessionState, apply_mutation};
+use crate::session::state::{SessionState, apply_mutation};
 use crate::view::{Change, CommitEvent};
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
@@ -324,15 +324,24 @@ impl Transaction {
         )
     }
 
-    pub(crate) fn finish(mut self) -> Result<MutationBatch, SessionError> {
+    pub(crate) fn finish(mut self) -> Result<(MutationBatch, SessionState), SessionError> {
         let last_seq = self.allocate()?;
         let commit_seq = CommitSeq::new(last_seq.get())?;
-        Ok(MutationBatch {
-            commit_seq,
-            last_seq,
-            mutations: self.mutations,
-            changes: self.changes,
-        })
+        for mutation in &self.mutations {
+            if let Mutation::AdmitInput(input) = mutation {
+                self.draft.input_commits.insert(input.id, commit_seq);
+            }
+        }
+        self.draft.last_commit = Some(commit_seq);
+        Ok((
+            MutationBatch {
+                commit_seq,
+                last_seq,
+                mutations: self.mutations,
+                changes: self.changes,
+            },
+            self.draft,
+        ))
     }
 
     fn allocate(&mut self) -> Result<LocalSeq, SessionError> {
@@ -372,21 +381,25 @@ fn authorize_task_write(task: &TaskRecord, generation: u64) -> Result<(), Sessio
     Ok(())
 }
 
-fn map_state(error: crate::store::StateError) -> SessionError {
+fn map_state(error: crate::session::state::StateError) -> SessionError {
     match error {
-        crate::store::StateError::UnknownConversation(id) => SessionError::UnknownConversation(id),
-        crate::store::StateError::UnknownInput(id) => SessionError::UnknownInput(id),
-        crate::store::StateError::UnknownTask(id) => SessionError::UnknownTask(id),
-        crate::store::StateError::TaskNotPending(id) => SessionError::TaskNotPending(id),
-        crate::store::StateError::TaskNotRunning(id) => SessionError::TaskNotRunning(id),
-        crate::store::StateError::TaskAlreadyTerminal(id) => SessionError::TaskAlreadyTerminal(id),
-        crate::store::StateError::DependenciesNotReady(id) => {
+        crate::session::state::StateError::UnknownConversation(id) => {
+            SessionError::UnknownConversation(id)
+        }
+        crate::session::state::StateError::UnknownInput(id) => SessionError::UnknownInput(id),
+        crate::session::state::StateError::UnknownTask(id) => SessionError::UnknownTask(id),
+        crate::session::state::StateError::TaskNotPending(id) => SessionError::TaskNotPending(id),
+        crate::session::state::StateError::TaskNotRunning(id) => SessionError::TaskNotRunning(id),
+        crate::session::state::StateError::TaskAlreadyTerminal(id) => {
+            SessionError::TaskAlreadyTerminal(id)
+        }
+        crate::session::state::StateError::DependenciesNotReady(id) => {
             SessionError::DependenciesNotReady(id)
         }
-        crate::store::StateError::InvalidInvocationKind { task_id, kind } => {
+        crate::session::state::StateError::InvalidInvocationKind { task_id, kind } => {
             SessionError::InvalidInvocationKind { task_id, kind }
         }
-        crate::store::StateError::StaleInvocation {
+        crate::session::state::StateError::StaleInvocation {
             task_id,
             generation,
             current,
@@ -395,8 +408,10 @@ fn map_state(error: crate::store::StateError) -> SessionError {
             generation,
             current,
         },
-        crate::store::StateError::CancellationFence(id) => SessionError::CancellationFence(id),
-        crate::store::StateError::InvalidInputDisposition(id) => {
+        crate::session::state::StateError::CancellationFence(id) => {
+            SessionError::CancellationFence(id)
+        }
+        crate::session::state::StateError::InvalidInputDisposition(id) => {
             SessionError::InvalidInputDisposition(id)
         }
         other => SessionError::Invariant(other.to_string()),

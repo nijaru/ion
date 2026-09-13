@@ -108,7 +108,6 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- automatic fail-stop propagation if the persistence store faults while tasks are live (K4 split);
 - writable ownership release after local joins (K4).
 
 The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Persistence-backed evidence remains open:
@@ -117,7 +116,9 @@ The storage-independent wait/capacity/close slice implements client task/depende
 
 ### K4 — fresh SQLite session store
 
-**Status: next major implementation stage.**
+**Status: resident-state/persistence prerequisite implemented; SQLite remains open.**
+
+The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
 
 Implement a fresh schema for one session database. Do not migrate old lane/operation tables in place while designing the core.
 

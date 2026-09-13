@@ -37,6 +37,7 @@ impl TaskDriver {
         registry: TaskRegistry,
         capacity: super::TaskCapacity,
     ) -> Self {
+        let fault = session.fault_signal();
         Self {
             capacity,
             session: Arc::new(Mutex::new(session)),
@@ -44,7 +45,7 @@ impl TaskDriver {
             active: Arc::new(StdMutex::new(HashMap::new())),
             drained: tokio::sync::watch::channel(()).0,
             stopping: CancellationToken::new(),
-            fault: CancellationToken::new(),
+            fault,
         }
     }
 
@@ -75,6 +76,7 @@ impl TaskDriver {
         let _permit = tokio::select! {
             biased;
             () = self.stopping.cancelled() => return Err(SessionError::Closed.into()),
+            () = self.fault.cancelled() => return Err(SessionError::Closed.into()),
             permit = self.capacity.acquire(handler.as_ref().and_then(|kind| kind.resource_domain())) => permit,
         };
         let (task, receipt) = {

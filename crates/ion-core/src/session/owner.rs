@@ -6,20 +6,27 @@ use crate::session::command::{
     CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
     InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt, TaskRequest,
 };
-use crate::session::transaction::{MutationBatch, Transaction};
-use crate::store::MemoryStore;
+use crate::session::state::SessionState;
+use crate::session::transaction::Transaction;
+use crate::store::{MemoryStore, Persistence};
 use crate::view::{CommitEvent, ObservationBatch, SessionSnapshot};
 use crate::{
     CommitSeq, ConversationId, InputDisposition, InputId, InvocationKind, RequestKey, SessionId,
     TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
 };
 
+#[cfg(test)]
+#[path = "persistence_tests.rs"]
+mod persistence_tests;
+
 const OBSERVATION_CAPACITY: usize = 128;
 
 #[derive(Debug)]
 pub struct Session {
-    store: MemoryStore,
+    state: SessionState,
+    store: Box<dyn Persistence>,
     closed: bool,
+    fault: tokio_util::sync::CancellationToken,
     observations: VecDeque<CommitEvent>,
     dropped_through: Option<CommitSeq>,
     changes: tokio::sync::watch::Sender<()>,
@@ -32,8 +39,10 @@ impl Session {
 
     pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
         let mut session = Self {
-            store: MemoryStore::new(session_id),
+            state: SessionState::empty(session_id),
+            store: Box::<MemoryStore>::default(),
             closed: false,
+            fault: tokio_util::sync::CancellationToken::new(),
             observations: VecDeque::new(),
             dropped_through: None,
             changes: tokio::sync::watch::channel(()).0,
@@ -44,13 +53,12 @@ impl Session {
 
     #[must_use]
     pub fn session_id(&self) -> SessionId {
-        self.store.state().session_id
+        self.state.session_id
     }
 
     #[must_use]
     pub fn root_conversation(&self) -> ConversationId {
-        self.store
-            .state()
+        self.state
             .root_conversation
             .expect("initialized session has root conversation")
     }
@@ -104,7 +112,7 @@ impl Session {
 
     #[must_use]
     pub fn snapshot(&self) -> SessionSnapshot {
-        let state = self.store.state();
+        let state = &self.state;
         SessionSnapshot {
             session_id: state.session_id,
             root_conversation: state
@@ -145,6 +153,10 @@ impl Session {
         }
     }
 
+    pub(crate) fn fault_signal(&self) -> tokio_util::sync::CancellationToken {
+        self.fault.clone()
+    }
+
     pub(crate) fn ensure_open(&self) -> Result<(), SessionError> {
         if self.closed {
             Err(SessionError::Closed)
@@ -163,7 +175,7 @@ impl Session {
     }
 
     pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
-        self.store.state().tasks.get(&task_id).cloned()
+        self.state.tasks.get(&task_id).cloned()
     }
 
     pub(crate) fn set_input_disposition(
@@ -208,7 +220,7 @@ impl Session {
         task_id: TaskId,
     ) -> Result<CancellationReceipt, SessionError> {
         self.ensure_open()?;
-        let state = self.store.state();
+        let state = &self.state;
         let task = state
             .tasks
             .get(&task_id)
@@ -249,7 +261,7 @@ impl Session {
         key: &RequestKey,
         request: &InputRequest,
     ) -> Result<Option<InputReceipt>, SessionError> {
-        let state = self.store.state();
+        let state = &self.state;
         let Some(input_id) = state.request_keys.get(key).copied() else {
             return Ok(None);
         };
@@ -278,20 +290,21 @@ impl Session {
         build: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
     ) -> Result<(T, CommitSeq), SessionError> {
         self.ensure_open()?;
-        let mut transaction = Transaction::new(self.store.state());
+        let mut transaction = Transaction::new(&self.state);
         let value = build(&mut transaction)?;
-        let batch = transaction.finish()?;
+        let (batch, prepared_state) = transaction.finish()?;
         let event = batch.event();
         let commit_seq = event.commit_seq;
-        self.commit(batch)?;
+        if let Err(error) = self.store.commit(&batch) {
+            self.close();
+            self.fault.cancel();
+            return Err(SessionError::Persistence(error.to_string()));
+        }
+        // The fully validated draft is installed only after persistence succeeds.
+        // Installation cannot introduce a fallible semantic step after durability.
+        self.state = prepared_state;
         self.publish(event);
         Ok((value, commit_seq))
-    }
-
-    fn commit(&mut self, batch: MutationBatch) -> Result<(), SessionError> {
-        self.store
-            .commit(batch)
-            .map_err(|error| SessionError::Invariant(error.to_string()))
     }
 
     fn publish(&mut self, event: CommitEvent) {
