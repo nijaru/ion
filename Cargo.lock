@@ -579,6 +579,7 @@ dependencies = [
 name = "ion-core"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "ion-ai",
  "rusqlite",
  "serde",

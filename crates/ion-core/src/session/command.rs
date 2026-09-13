@@ -95,6 +95,19 @@ pub struct InputReceipt {
     pub replayed: bool,
 }
 
+/// Receipt for a submitted input that opened the foreground turn answering it.
+///
+/// `task_id` is the turn root the input was bound to. A replay returns the same
+/// input without a new commit; `task_id` is present while the input is still
+/// `Assigned`, and `None` once it has been consumed (or was cancelled).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SubmissionReceipt {
+    pub input_id: InputId,
+    pub task_id: Option<TaskId>,
+    pub commit_seq: CommitSeq,
+    pub replayed: bool,
+}
+
 /// Result of cancelling one foreground turn. `cancelled` lists the tasks whose
 /// durable cancellation mark committed in this batch; local signals may follow.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,9 +141,13 @@ pub enum SessionError {
     #[error("session is closed or faulted")]
     Closed,
     #[error(
-        "task finalization plan exceeds the bounded plan size: {entries} entries, {tasks} tasks"
+        "task finalization plan exceeds the bounded plan size: {entries} entries, {inputs} input bindings, {tasks} tasks"
     )]
-    PlanTooLarge { entries: usize, tasks: usize },
+    PlanTooLarge {
+        entries: usize,
+        inputs: usize,
+        tasks: usize,
+    },
     #[error("conversation {0} already has a live foreground turn")]
     ForegroundTurnBusy(ConversationId),
     #[error("{0}")]
@@ -172,6 +189,11 @@ pub enum SessionError {
     GenerationExhausted(TaskId),
     #[error("input {0} cannot make the requested disposition transition")]
     InvalidInputDisposition(InputId),
+    #[error("input targets conversation {input} but its turn task belongs to {task}")]
+    InputTargetMismatch {
+        input: ConversationId,
+        task: ConversationId,
+    },
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]

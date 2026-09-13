@@ -292,6 +292,21 @@ impl TaskDriver {
         Ok(session.create_turn(request)?)
     }
 
+    /// Admit `input` and open the turn that answers it, binding the input to the
+    /// new turn root in one commit.
+    ///
+    /// This is the one entry point that turns a user submission into work. It
+    /// starts nothing: the returned turn still needs an explicit drive, and a
+    /// duplicate request key replays without opening a second turn.
+    pub async fn submit_input(
+        &self,
+        input: crate::InputRequest,
+        task: crate::TaskRequest,
+    ) -> Result<crate::SubmissionReceipt, TaskDriverError> {
+        let mut session = self.session.lock().await;
+        Ok(session.submit_input(input, task)?)
+    }
+
     pub async fn assign_input(
         &self,
         input_id: InputId,
@@ -585,6 +600,17 @@ impl TaskRuntime for SessionTaskRuntime {
             let session = self.session.lock().await;
             session.ensure_open().map_err(context_error)?;
             session.dependency_outcomes(task_id).map_err(context_error)
+        })
+    }
+
+    fn assigned_inputs<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> ContextFuture<'a, Result<Vec<crate::Input>, TaskContextError>> {
+        Box::pin(async move {
+            let session = self.session.lock().await;
+            session.ensure_open().map_err(context_error)?;
+            Ok(session.assigned_inputs(task_id))
         })
     }
 }

@@ -4,8 +4,8 @@ use serde_json::Value;
 
 use crate::session::command::{
     CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
-    InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt, TaskRequest,
-    TurnCancellation,
+    InputReceipt, InputRequest, InvocationReceipt, SessionError, SubmissionReceipt, TaskReceipt,
+    TaskRequest, TurnCancellation,
 };
 use crate::session::state::{RunnableTask, SessionState};
 use crate::session::transaction::Transaction;
@@ -174,6 +174,41 @@ impl Session {
         })
     }
 
+    /// Admit `input` and open the foreground turn that answers it, in one
+    /// commit. The input is bound to the created turn root.
+    ///
+    /// A duplicate request key replays the original submission without a new
+    /// commit and without opening a second turn; the same key with different
+    /// content or routing is a conflict. Nothing is driven here: admitting work
+    /// never starts it.
+    pub fn submit_input(
+        &mut self,
+        input: InputRequest,
+        task: TaskRequest,
+    ) -> Result<SubmissionReceipt, SessionError> {
+        self.ensure_open()?;
+        if input.target != task.conversation_id {
+            return Err(SessionError::InputTargetMismatch {
+                input: input.target,
+                task: task.conversation_id,
+            });
+        }
+        if let Some(key) = input.request_key.as_ref()
+            && let Some(receipt) = self.replay_submission(key, &input)?
+        {
+            return Ok(receipt);
+        }
+
+        let ((input_id, task_id), commit_seq) =
+            self.transact(|transaction| transaction.create_input_turn(input, task))?;
+        Ok(SubmissionReceipt {
+            input_id,
+            task_id: Some(task_id),
+            commit_seq,
+            replayed: false,
+        })
+    }
+
     /// Whether a task wait should resolve: terminal, cancelled, or fully
     /// unblocked. Kept on the state owner so the wait and dispatch paths cannot
     /// drift apart.
@@ -223,6 +258,20 @@ impl Session {
             });
         }
         Ok(outcomes)
+    }
+
+    /// The admitted inputs durably bound to `task_id`, in admission order.
+    ///
+    /// The disposition is the binding, so a task can only see inputs admitted
+    /// for it. This is the read the generation kind uses instead of receiving a
+    /// session handle or an input id it could widen.
+    pub(crate) fn assigned_inputs(&self, task_id: TaskId) -> Vec<crate::Input> {
+        self.state
+            .inputs
+            .values()
+            .filter(|input| input.disposition == InputDisposition::Assigned(task_id))
+            .map(|input| (**input).clone())
+            .collect()
     }
 
     /// Bounded overview: counts only, no transcript or task payloads.
@@ -467,6 +516,35 @@ impl Session {
             transaction.settle_task(task_id, generation, outcome, output)?;
             Ok(value)
         })
+    }
+
+    /// Replay an already-admitted submission: the same input without a new
+    /// commit. The turn root is recovered from the binding, so a retried submit
+    /// cannot open a second turn for the same input.
+    fn replay_submission(
+        &self,
+        key: &RequestKey,
+        request: &InputRequest,
+    ) -> Result<Option<SubmissionReceipt>, SessionError> {
+        let Some(receipt) = self.replay_input(key, request)? else {
+            return Ok(None);
+        };
+        let task_id =
+            self.state
+                .inputs
+                .get(&receipt.input_id)
+                .and_then(|input| match input.disposition {
+                    InputDisposition::Assigned(task_id) => Some(task_id),
+                    InputDisposition::Queued
+                    | InputDisposition::Consumed(_)
+                    | InputDisposition::Cancelled => None,
+                });
+        Ok(Some(SubmissionReceipt {
+            input_id: receipt.input_id,
+            task_id,
+            commit_seq: receipt.commit_seq,
+            replayed: true,
+        }))
     }
 
     fn replay_input(

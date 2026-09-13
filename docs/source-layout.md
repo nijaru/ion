@@ -1,6 +1,6 @@
 # Source layout for the clean rewrite
 
-Status: active implementation layout; K0-K2 implemented and K3 in progress, 2026-09-12.
+Status: active implementation layout; K0-K5 implemented, 2026-09-13.
 
 This document owns source/module organization for the clean rewrite described in `docs/core-runtime-migration.md`. It is subordinate to `DESIGN.md`: if the semantic architecture changes, this layout changes with it. File boundaries are not compatibility promises.
 
@@ -91,7 +91,8 @@ crates/ion-core/
         task.rs
         artifact.rs
 
-    # K5+:
+    # K5 built-ins (implemented): generation, the one-call tool kind and the
+    # post-tools join
     builtin/
       mod.rs
       generation.rs
@@ -230,6 +231,8 @@ Initial K5 built-ins:
 - post-tools/join continuation.
 
 The generic scheduler must not branch on these names. If a built-in needs specialized behavior, it uses the same task capabilities available to an appropriate registered kind.
+
+Implemented as `builtin::{generation, tool, post_tools}`. `Builtins` registers all three under canonical names over one `ion_ai::ModelService` and one `ToolCatalog`; a client composes them like any other kind. `tool.rs` also owns the `Tool`/`ToolCatalog` seam that tool execution receives through.
 
 Worker creation is primarily conversation ownership/admission mediated by a trusted task/tool capability, not a separate swarm runtime.
 

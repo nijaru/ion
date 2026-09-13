@@ -206,20 +206,37 @@ impl Transaction {
     ) -> Result<Vec<TaskId>, SessionError> {
         if plan.entries().len() > crate::task::MAX_PLAN_ENTRIES
             || plan.tasks().len() > crate::task::MAX_PLAN_TASKS
+            || plan.inputs().len() > crate::task::MAX_PLAN_INPUTS
         {
             return Err(SessionError::PlanTooLarge {
                 entries: plan.entries().len(),
+                inputs: plan.inputs().len(),
                 tasks: plan.tasks().len(),
             });
         }
+        let mut entry_ids = Vec::with_capacity(plan.entries().len());
         for entry in plan.entries() {
-            self.append_entry(EntryRequest {
+            entry_ids.push(self.append_entry(EntryRequest {
                 conversation_id: entry.conversation_id,
                 kind: entry.kind.clone(),
                 data: entry.data.clone(),
                 projection: entry.projection.clone(),
                 context: entry.context.clone(),
+            })?);
+        }
+
+        // An input and the transcript entry that carries it become durable in the
+        // same commit, so a consumed input always has its content present.
+        for binding in plan.inputs() {
+            if binding.entry.plan_id() != plan.id() {
+                return Err(SessionError::Invariant(
+                    "plan consumes an entry from a different plan".to_owned(),
+                ));
+            }
+            let entry_id = *entry_ids.get(binding.entry.index()).ok_or_else(|| {
+                SessionError::Invariant("plan consumes an entry that was not planned".to_owned())
             })?;
+            self.set_input_disposition(binding.input, InputDisposition::Consumed(entry_id))?;
         }
 
         // Successors inherit the settling task's turn, unless the plan marks
@@ -312,6 +329,26 @@ impl Transaction {
         }
         self.stage(Mutation::CreateTask(record), Change::TaskCreated(id))?;
         Ok(())
+    }
+
+    /// Admit an input and open the foreground turn that will answer it, binding
+    /// the input to the new turn root in one commit. Either the input is admitted
+    /// and bound, or nothing changes.
+    pub(crate) fn create_input_turn(
+        &mut self,
+        input: InputRequest,
+        task: TaskRequest,
+    ) -> Result<(InputId, TaskId), SessionError> {
+        if input.target != task.conversation_id {
+            return Err(SessionError::InputTargetMismatch {
+                input: input.target,
+                task: task.conversation_id,
+            });
+        }
+        let input_id = self.admit_input(input)?;
+        let task_id = self.create_turn(task)?;
+        self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
+        Ok((input_id, task_id))
     }
 
     pub(crate) fn admit_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {

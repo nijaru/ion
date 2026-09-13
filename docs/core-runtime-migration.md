@@ -1,6 +1,6 @@
 # Core rewrite plan
 
-Status: K0-K2 implemented; K3 core task driver validated and still in progress, 2026-09-12.
+Status: K0-K5 implemented; K6 next, 2026-09-13.
 
 This document translates `DESIGN.md` into implementation order. The old runtime is not a compatibility target. Git history is the archive. `docs/source-layout.md` owns source/module organization for the fresh implementation. `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
 
@@ -258,8 +258,7 @@ Implemented:
 Still open:
 
 - planned owned-conversation creation and scratch retirement (K6);
-- plan data bindings (originating entry, dependency outcomes, frozen context cutoff) and enforced plan bounds (K5);
-- input admission/queued-follow-up/idle scheduling policy on the foreground slot (K5);
+- queued follow-ups and idle-conversation scheduling on the foreground slot (K5);
 - writable ownership release after local joins (K4 SQLite).
 
 The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
@@ -272,7 +271,7 @@ Do not add a second scheduler to solve these. Extend the same session/task drive
 
 ### K4 — SQLite session store
 
-**Per-session SQLite store implemented; process-death evidence still outstanding.**
+**Per-session SQLite store and process-death evidence implemented.**
 
 `Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 1: session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
 
@@ -333,9 +332,9 @@ For old development data, preserve/archive/refuse according to the pre-1.0 polic
 
 ### K5 — generation + tool chain
 
-**Chain backbone implemented; scripted model service and real tool executor still open.**
+**Implemented over `ion-ai`; provider catalogue and idle scheduling remain.**
 
-Implemented: an invocation can read its own conversation transcript as bounded pages and its own dependencies' resolved outcomes, and a settlement dispatches the successors it made runnable. `tests/k5_chain.rs` proves the shape end to end:
+The production built-ins live in `crates/ion-core/src/builtin/`. `Builtins` registers `generation`, `tool` and `post_tools` under their canonical names over one `ModelService` and one `ToolCatalog`; the scheduler branches on no built-in name. `tests/k5_chain.rs` keeps the shape proof with scripted in-test kinds, and `tests/k5_generation.rs` runs the same chain through the real kinds:
 
 ```text
 input
@@ -345,14 +344,15 @@ input
  -> final generation
 ```
 
-with B settling before A while the join still observes A,B, the continuation generation reading the transcript entry the join appended, the whole chain occupying one foreground-turn slot until its final settlement, and rows running on readiness dispatch alone after the turn root is driven.
+A generation invocation reads its own transcript in bounded pages, records the last observed entry as the frozen context cutoff, projects it with `conversation::context::project`, adds the input durably bound to its task, calls `ModelService::stream`, and settles with a plan that appends the user and assistant entries, consumes the input and creates the tool children plus the join. The tool kind runs exactly one call against the catalogue and settles with the real `ToolResult`; the join reads its dependencies in dependency order and appends one entry whose projection is consecutive tool messages in call order, then starts the continuation generation. In-flight model and tool calls observe the durable cancellation signal, and a stream that ends without an explicit `Completed` settles `Failed` with its evidence, appending nothing.
+
+Submission binds an input to a generation task: `Session::submit_input` admits the input, opens the foreground turn and records `Queued -> Assigned(task)` in one commit, and the generation settlement moves `Assigned -> Consumed(entry)` in the same commit that appends the entry carrying the input's content. `TaskPlan` gained plan-local entry handles and input consumptions, so this binding uses the ordinary restricted-finalization path; `TaskContext::assigned_input` reads only the input bound to the invocation's own task. Exact request-key replay is unchanged and never opens a second turn.
 
 Still open for this slice:
 
-- the model calls are a scripted in-test kind, not `ion-ai`'s model service plus a narrow tool executor;
-- input admission and queued follow-ups do not yet bind a pending user input to a generation task;
-- dispatch is unscoped to the foreground slot: it drives any successor the settlement unblocked, including background work, which is intended, but there is no idle scheduling while a turn waits for the next input;
-- the readiness scan compares dependency lists per settlement, which is fine at this scale and is index work under P2.
+- a production provider catalogue (auth, wire adapters, model listing);
+- queued follow-ups and idle scheduling while a turn waits for the next input;
+- context/output bounds, and the readiness scan's per-settlement dependency-list comparison, which is index work under P2.
 
 ### K6 — workers
 

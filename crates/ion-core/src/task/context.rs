@@ -6,7 +6,7 @@ use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::{CommitSeq, EntryId, EntryPage, TaskId, TaskKindName, TaskOutcome, TaskOutput};
+use crate::{CommitSeq, EntryId, EntryPage, Input, TaskId, TaskKindName, TaskOutcome, TaskOutput};
 
 pub(crate) type ContextFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -44,6 +44,12 @@ pub(crate) trait TaskRuntime: Send + Sync {
         &'a self,
         task_id: TaskId,
     ) -> ContextFuture<'a, Result<Vec<DependencyOutcome>, TaskContextError>>;
+
+    /// The inputs durably bound to this invocation's task, in admission order.
+    fn assigned_inputs<'a>(
+        &'a self,
+        task_id: TaskId,
+    ) -> ContextFuture<'a, Result<Vec<Input>, TaskContextError>>;
 }
 
 #[derive(Clone)]
@@ -100,6 +106,16 @@ impl TaskContext {
     /// was created to join.
     pub async fn dependency_outcomes(&self) -> Result<Vec<DependencyOutcome>, TaskContextError> {
         self.runtime.dependency_outcomes(self.task_id).await
+    }
+
+    /// The admitted inputs durably bound to this invocation's task, in
+    /// admission order.
+    ///
+    /// The binding is the task's own `Assigned` disposition, so this cannot read
+    /// an unrelated or unbound input. A kind that answers no input gets an empty
+    /// list, and every returned input can be consumed by the same settlement.
+    pub async fn assigned_inputs(&self) -> Result<Vec<Input>, TaskContextError> {
+        self.runtime.assigned_inputs(self.task_id).await
     }
 
     #[must_use]

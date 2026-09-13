@@ -5,6 +5,7 @@
 //! runtime APIs are intentionally not preserved during the pre-1.0 clean rewrite.
 
 mod artifact;
+pub mod builtin;
 pub mod conversation;
 mod id;
 pub mod session;
@@ -23,16 +24,17 @@ pub use id::{
 pub use session::{
     CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest,
     InputReceipt, InputRequest, Interruption, InterruptionReason, Session, SessionError,
-    Settlement, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError, TaskReceipt,
-    TaskRequest, TurnCancellation,
+    Settlement, SubmissionReceipt, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError,
+    TaskReceipt, TaskRequest, TurnCancellation,
 };
 pub use task::{
-    AbortContext, DependencyOutcome, InvocationKind, MAX_PLAN_ENTRIES, MAX_PLAN_TASKS,
-    PlannedEntry, PlannedTask, PlannedTaskRef, ResourceDomain, RunningTask, TaskCompletion,
-    TaskContext, TaskContextError, TaskDependency, TaskFuture, TaskInvocation, TaskKind,
-    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskPlan,
-    TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus, TypedAbortContext,
-    TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport, TypedTask,
+    AbortContext, DependencyOutcome, InvocationKind, MAX_PLAN_ENTRIES, MAX_PLAN_INPUTS,
+    MAX_PLAN_TASKS, PlannedEntry, PlannedEntryRef, PlannedTask, PlannedTaskRef, ResourceDomain,
+    RunningTask, TaskCompletion, TaskContext, TaskContextError, TaskDependency, TaskFuture,
+    TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
+    TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus,
+    TypedAbortContext, TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport,
+    TypedTask,
 };
 pub use view::{
     Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,

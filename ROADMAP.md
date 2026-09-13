@@ -110,8 +110,7 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- input admission, queued follow-ups and idle scheduling on the foreground-turn slot (K5);
-- plan data bindings (originating entry, dependency outcomes, frozen context cutoff) and enforced plan bounds (K5);
+- queued follow-ups and idle scheduling on the foreground-turn slot (K5);
 - writable ownership release after local joins (K4).
 
 The typed authoring adapter is implemented in `task/typed.rs`: `TaskRegistry::register_typed` erases a `TypedHandler` into the ordinary registry entry shape, input/checkpoint decode and result encode go through the durable JSON shapes, and terminal/failed/aborted/indeterminate stay distinct. An undecodable checkpoint or un-encodable result interrupts an already-dispatched task instead of terminalizing it; only never-dispatched work settles a structured `Failed`.
@@ -138,7 +137,9 @@ K4 should preserve the K2 ordering contract: validate/build against resident sta
 
 ### K5 — one generation/tool chain
 
-Use `ion-ai`'s scripted model service and a narrow tool executor:
+**Status: implemented; provider catalogue and idle scheduling remain.**
+
+The built-in kinds live in `crates/ion-core/src/builtin/` and use the ordinary task contract:
 
 ```text
 input
@@ -148,7 +149,11 @@ input
  -> final generation
 ```
 
-Generation settlement atomically creates all tool children plus the join. Tool B may settle before A; provider projection still emits A then B.
+`Builtins` registers `generation`, `tool` and `post_tools` over one `ion_ai::ModelService` and one `ToolCatalog`; the scheduler branches on no built-in name. Generation reads its conversation transcript in bounded pages at a frozen cutoff, projects it with `conversation::context::project`, adds the input durably bound to its task, calls the model service, and settles with a plan that appends its transcript entries, consumes its input and creates the tool children plus the join. Tool B may settle before A; provider projection still emits A then B, because the join reads its dependencies in dependency order. A stream that ends without a completed response settles `Failed` with the retained evidence instead of appending a partial answer, and an in-flight model or tool call observes the durable cancellation signal.
+
+Input submission (`Session::submit_input` / `TaskDriver::submit_input`) admits the input and opens the turn that answers it in one commit, binding the input to the turn root (`Queued -> Assigned(task)`); the generation consumes it into the entry carrying its content (`Assigned -> Consumed(entry)`) in its settlement plan. Exact request-key replay is unchanged and no second turn is opened on replay.
+
+Still open for this slice: a production provider catalogue, context/output bounds (P2) and idle scheduling while a turn waits for the next input.
 
 ### K6 — workers as owned conversations
 
@@ -325,3 +330,5 @@ Agent-effectiveness optimization starts from a stable M1/M2 baseline. More conte
 2026-09-13: K4 per-session SQLite store implemented. `Session::create(path)`/`Session::open(path)` are live over a fresh schema (version 1) covering session metadata and cursors, conversations, entries, inputs with durable request-key/admission-commit mappings, and tasks with dependency and ownership child tables. A commit applies its whole write set plus a commit-cursor compare-and-set in one SQLite transaction, so a second live authority is fenced and left closed rather than interleaved; the durability floor is WAL with `synchronous = FULL`. `tests/k4_sqlite.rs` shows a representative write set reconstructing an identical snapshot across close and reopen, duplicate-input replay surviving reopen, stale-authority fencing, and an interrupted task reopening as running with nothing implicitly started. A subprocess test commits three entries and then dies on `SIGABRT` with no cleanup; the parent finds every acknowledged commit durable and recovery idempotent. That establishes process-death durability, not power-loss durability, which is a filesystem property this test cannot observe. Driver-side reads are now bounded (`summary`/`task`/`conversation_entries`/`observations_after`/`changed`), observation recovery reports a coverage gap or an unknown cursor as `reset_required`, and opening a session performs no work.
 
 2026-09-13: K5 chain backbone implemented. An invocation now reads through `TaskContext`: its own conversation transcript as bounded pages at an optional cutoff, and its own fixed dependencies' resolved outcomes in dependency order. A settlement dispatches the work it made runnable — successors the plan created plus dependents of the settled task whose dependencies are now terminal — so admitting a task still never starts it, and a candidate with no registered kind stays pending for an explicit drive instead of being settled `unsupported`. `tests/k5_chain.rs` runs generation, two tool branches settling out of order, a join that reads both resolved outcomes in dependency order, and a continuation generation that reads the transcript the join appended; the whole chain occupies one foreground-turn slot until its final settlement and runs on readiness dispatch alone after the turn root is driven. The model calls are still a scripted in-test kind rather than `ion-ai`'s model service plus a real tool executor, and input admission does not yet bind a pending user input to a generation task.
+
+2026-09-13: K5 generation/tool chain made real over `ion-ai`. `crates/ion-core/src/builtin/` now holds the production `generation`, `tool` and `post_tools` kinds, registered through the ordinary `TaskRegistry` with no scheduler branch on their names. A generation invocation reads its conversation transcript in bounded pages, records the last observed entry as the frozen context cutoff, projects it with the pure `conversation::context::project`, appends the input durably bound to its task, calls `ion_ai::ModelService`, and settles with a plan carrying the user and assistant entries, the input consumption, one tool task per call and the join. The tool kind runs exactly one call against a `ToolCatalog` and settles with the real `ToolResult`; the join reads its dependencies in dependency order, appends one tool-result entry with consecutive tool messages, and starts the continuation generation. A stream that ends without an explicit `Completed` settles `Failed` with its evidence and appends nothing, so a partial answer cannot become history; in-flight model and tool calls both observe the durable cancellation signal. `TaskPlan` gained plan-local entry handles and input consumptions, so `Assigned -> Consumed(entry)` commits atomically with the entry that carries the content, and `TaskContext::assigned_inputs` reads only the inputs bound to the invocation's own task. Submission (`Session::submit_input`, `TaskDriver::submit_input`) admits the input and opens the answering turn plus the `Queued -> Assigned(task)` binding in one commit; a rejected submission admits nothing and duplicate request keys replay without opening a second turn. `tests/k5_generation.rs` covers the full chain with request inspection, replay after consumption, incomplete-answer rejection, a cancelled in-flight tool call, and submission rollback. Format, strict workspace Clippy and the full workspace test suite pass.

@@ -8,6 +8,7 @@ repository.workspace = true
 description = "Ion durable session, conversation, and task kernel"
 
 [dependencies]
+futures-util = "0.3.34"
 ion-ai.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }

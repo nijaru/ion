@@ -195,6 +195,32 @@ fn input_disposition_tracks_assignment_then_consumption() {
 }
 
 #[test]
+fn submission_rejects_an_input_aimed_at_another_conversation() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let other = session
+        .create_conversation(ConversationSpec::independent())
+        .expect("conversation")
+        .conversation_id;
+    let before = session.snapshot();
+
+    let error = session
+        .submit_input(
+            InputRequest {
+                target: other,
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: None,
+                body: InputBody::Text("elsewhere".to_owned()),
+            },
+            task_request(root, Vec::new()),
+        )
+        .expect_err("a mismatched target must be rejected");
+    assert!(matches!(error, SessionError::InputTargetMismatch { .. }));
+    assert_eq!(session.snapshot(), before, "nothing was admitted");
+}
+
+#[test]
 fn failed_terminal_plan_rolls_back_successors_and_sequence_values() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();

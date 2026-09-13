@@ -13,8 +13,8 @@ pub use invocation::{InvocationKind, TaskInvocation};
 pub use kind::{ResourceDomain, RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};
 pub use output::TaskOutput;
 pub use plan::{
-    MAX_PLAN_ENTRIES, MAX_PLAN_TASKS, PlannedEntry, PlannedTask, PlannedTaskRef, TaskDependency,
-    TaskPlan,
+    MAX_PLAN_ENTRIES, MAX_PLAN_INPUTS, MAX_PLAN_TASKS, PlannedEntry, PlannedEntryRef, PlannedTask,
+    PlannedTaskRef, TaskDependency, TaskPlan,
 };
 pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,

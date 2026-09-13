@@ -211,13 +211,14 @@ Trusted task code receives an invocation-scoped `TaskContext`. Its durable commi
 An invocation also reads through `TaskContext`, and only through it:
 
 - its own conversation's transcript, one bounded page at a time, at an optional cutoff;
-- the resolved outcomes of its own fixed dependencies, in dependency order.
+- the resolved outcomes of its own fixed dependencies, in dependency order;
+- the admitted inputs durably bound to this task, in admission order.
 
-Both are fallible reads of committed state. A dependency is terminal before an invocation is reserved, so reading outcomes is not a wait. Reads are scoped to the invocation's conversation and its own dependency list rather than exposing the session: an invocation cannot observe unrelated conversations and cannot widen its own input.
+These are fallible reads of committed state. A dependency is terminal before an invocation is reserved, so reading outcomes is not a wait. Reads are scoped to the invocation's conversation, its own dependency list and its own input binding rather than exposing the session: an invocation cannot observe unrelated conversations, cannot read an unbound input and cannot widen its own input.
 
 A settlement makes its successors runnable, and the driver dispatches work a settlement made runnable: the successors that plan created, plus dependents of the settled task whose dependencies are now all terminal. Dispatch is scoped to what the settlement touched, so admitting a task still never starts it. A candidate whose kind is not registered stays pending for an explicit drive rather than being settled `unsupported`, so an implementation can still be registered later. Each dispatched candidate is an ordinary owned invocation: close joins it, a second local drive for the same task is rejected, and cancellation still fences reservation.
 
-The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically. The implemented part of that contract is a bounded `TaskPlan` attached to a task completion: it queues immutable transcript entries and successor tasks, and a successor may depend on an existing task or on a task planned earlier in the same plan. Plan-local handles become real session-local IDs only when the writer applies the plan, so no ID escapes before commit. The writer revalidates invocation generation, cancellation and authority, applies entries then successors, and commits outcome and plan in one batch; any failure rolls back the outcome and every planned write. Planned owned conversations and scratch retirement are deferred to K6.
+The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically. The implemented part of that contract is a bounded `TaskPlan` attached to a task completion: it queues immutable transcript entries, input consumptions and successor tasks, and a successor may depend on an existing task or on a task planned earlier in the same plan. Plan-local handles become real session-local IDs only when the writer applies the plan, so no ID escapes before commit. The writer revalidates invocation generation, cancellation and authority, applies entries, then input bindings, then successors, and commits outcome and plan in one batch; any failure rolls back the outcome and every planned write, so a consumed input and the entry carrying its content become durable together or not at all. Planned owned conversations and scratch retirement are deferred to K6.
 
 ### Optional phase helper
 
@@ -253,7 +254,7 @@ input
               -> next generation or final answer
 ```
 
-A generation settlement atomically appends its successful assistant entry and creates every required tool child plus the join/continuation before becoming terminal.
+A generation settlement atomically appends the transcript entries the answer produced and creates every required tool child plus the join/continuation before becoming terminal. When the generation answers an admitted input, that settlement also appends the user entry carrying the input's content and consumes the input in the same commit; an answer that never completes leaves the input bound and appends nothing.
 
 Tool tasks may finish in any order. Transcript chronology records completion order; model projection restores tool-result order to the originating assistant call order.
 
@@ -271,7 +272,7 @@ Cancelling a turn durably marks every non-terminal task scoped to that turn root
 
 The slot is released only when the turn has no remaining non-terminal member, not when the root settles. A terminal root with live tools or a continuation still owns the slot, so a second foreground chain cannot interleave with the first. Background work never holds the slot and never delays its release. Starting a new turn while one is live is rejected until the slot is free.
 
-This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Input admission, queued follow-ups and idle-conversation scheduling remain K5 policy built on this slot; a consumed entry reference is only one of several distinct facts about an input.
+This reference is deliberately lightweight: there is no separate durable `Turn` entity and no long-running coordinator task. Submission admits an input and opens the turn that answers it in one commit, binding the input to the turn root; the generation that answers it consumes the input when it appends the entry carrying its content. Queued follow-ups and idle-conversation scheduling remain K5 policy built on this slot, and a consumed entry reference is only one of several distinct facts about an input.
 
 ## 11. Inputs and communication
 
@@ -290,6 +291,8 @@ Initial modes:
 | Notice/write | retain attributed input/entry according to policy | no implicit wake unless requested |
 
 Exact duplicate request-key replay returns the original receipt. Rebinding the same key to different target/content/mode rejects `IdempotencyConflict`.
+
+Submission is atomic where it matters: admitting an input and opening the turn that answers it commit together with the binding, so an accepted input always has a task and a rejected submission admits nothing. Nothing is driven by submission. Binding to a task (`Assigned`) and consuming it into an entry (`Consumed`) are separate durable steps; a task with no assigned input simply reads its transcript.
 
 Inter-worker communication uses this same input substrate rather than another mailbox truth model.
 
