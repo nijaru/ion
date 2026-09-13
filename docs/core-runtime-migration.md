@@ -352,7 +352,8 @@ Still open for this slice:
 
 - a production provider catalogue (auth, wire adapters, model listing);
 - queued follow-ups and idle scheduling while a turn waits for the next input;
-- context/output bounds, and the readiness scan's per-settlement dependency-list comparison, which is index work under P2.
+- context/output bounds, and the readiness scan's per-settlement dependency-list comparison, which is index work under P2;
+- transcript completeness after a cancelled turn. A turn cancelled between the assistant entry with tool calls and the post-tools join leaves that exchange without results, so the next context build in that conversation fails `MissingToolResult`. Resolving it with a head/edit or a recorded result is not yet policy; the join and the cancelled tool branches are the natural owners.
 
 ### K6 — workers
 

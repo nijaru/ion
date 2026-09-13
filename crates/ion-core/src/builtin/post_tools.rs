@@ -5,6 +5,10 @@
 //! results in the order of the assistant call that produced them. The join reads
 //! its dependencies in dependency order, which is call order, and appends them
 //! as consecutive tool messages.
+//!
+//! Known gap: a turn cancelled between the assistant entry and this join leaves
+//! the exchange without results. Resolving that (a head/edit or a recorded
+//! aborted result) is not yet policy, so this entry is not always appended.
 
 use ion_ai::{Content, Message, Role, ToolResult};
 use serde_json::json;

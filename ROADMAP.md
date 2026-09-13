@@ -153,7 +153,7 @@ input
 
 Input submission (`Session::submit_input` / `TaskDriver::submit_input`) admits the input and opens the turn that answers it in one commit, binding the input to the turn root (`Queued -> Assigned(task)`); the generation consumes it into the entry carrying its content (`Assigned -> Consumed(entry)`) in its settlement plan. Exact request-key replay is unchanged and no second turn is opened on replay.
 
-Still open for this slice: a production provider catalogue, context/output bounds (P2) and idle scheduling while a turn waits for the next input.
+Still open for this slice: a production provider catalogue, context/output bounds (P2), idle scheduling while a turn waits for the next input, and one transcript-completeness gap — a turn cancelled after the assistant entry with tool calls but before the join leaves that exchange without its tool results, so a later context build in that conversation fails `MissingToolResult` until a head/edit or a recorded result resolves it. No policy does that yet.
 
 ### K6 — workers as owned conversations
 
