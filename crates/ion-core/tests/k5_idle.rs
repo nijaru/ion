@@ -15,12 +15,16 @@ use ion_ai::{
 use ion_core::builtin::{Builtins, ToolCatalog};
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    ConversationId, EntryKind, InputBody, InputDisposition, InputMode, InputRequest, InputSender,
-    PlannedEntry, RequestKey, RunningTask, Session, SessionError, TaskCompletion, TaskContext,
-    TaskDriver, TaskDriverError, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan, TaskRecord,
-    TaskRegistry, TurnTemplate,
+    CloseMode, ConversationId, EntryKind, InputBody, InputDisposition, InputMode, InputRequest,
+    InputSender, PlannedEntry, PlannedTask, RequestKey, RunningTask, Session, SessionError,
+    TaskCompletion, TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskId, TaskKind,
+    TaskKindName, TaskPlan, TaskRecord, TaskRegistry, TurnTemplate,
 };
 use serde_json::json;
+
+mod support;
+
+use support::TempDb;
 
 fn kind(name: &str) -> TaskKindName {
     TaskKindName::new(name).expect("task kind")
@@ -211,6 +215,17 @@ async fn steering_a_busy_conversation_is_deferred_to_the_next_turn_boundary() {
     assert!(!steer.started_turn(), "a steer waits for a turn boundary");
 
     driver.drive_task(first_turn).await.expect("drive");
+
+    // Wait for the successor turn rather than assuming the spawned drive ran.
+    let second_turn = driver
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|task| task.id != first_turn)
+        .map(|task| task.id)
+        .expect("the steer opened the next turn");
+    wait(&driver, second_turn).await;
 
     // The in-flight turn never saw the steer; it is answered by its own
     // successor turn. Mid-turn injection is not built yet.
@@ -474,4 +489,440 @@ fn assistant_text(text: &str) -> Message {
         content: vec![Content::Text(text.to_owned())],
         provider_replay: None,
     }
+}
+
+/// Blocks until its turn is cancelled, so a test can hold a conversation busy.
+struct Held {
+    entered: Arc<tokio::sync::Notify>,
+}
+
+impl TaskKind for Held {
+    fn execute<'a>(&'a self, _task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            self.entered.notify_one();
+            context.cancelled().await;
+            Ok(TaskCompletion::completed(json!("held until cancelled")))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: RunningTask, _context: ion_core::AbortContext) -> TaskFuture<'a> {
+        Box::pin(async { Ok(TaskCompletion::aborted(json!("stopped"))) })
+    }
+}
+
+/// Settles immediately, leaving one successor in another conversation that
+/// still belongs to this turn.
+struct FanTo {
+    other: ConversationId,
+}
+
+impl TaskKind for FanTo {
+    fn execute<'a>(&'a self, task: RunningTask, _context: TaskContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            let mut plan = TaskPlan::new();
+            plan.create_task(PlannedTask {
+                conversation_id: self.other,
+                kind: kind("answer"),
+                schema_version: 1,
+                input: json!({}),
+                dependencies: Vec::new(),
+                background: false,
+            });
+            let _ = task;
+            Ok(TaskCompletion::completed(json!("fanned out")).with_plan(plan))
+        })
+    }
+
+    fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+        self.execute(task, context)
+    }
+
+    fn abort<'a>(&'a self, _task: RunningTask, _context: ion_core::AbortContext) -> TaskFuture<'a> {
+        Box::pin(async { Ok(TaskCompletion::aborted(json!("aborted"))) })
+    }
+}
+
+#[tokio::test]
+async fn a_settlement_that_released_no_slot_starts_no_queued_turn() {
+    // The conversation is idle with queued input, and an unrelated background
+    // task settles in it. No turn slot was released, so nothing may start.
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let queued = session
+        .queue_input(input(root, "turn-1", InputMode::FollowUp, "waiting"))
+        .expect("queued input")
+        .input_id;
+    let background = session
+        .create_task(ion_core::TaskRequest {
+            conversation_id: root,
+            kind: kind("answer"),
+            schema_version: 1,
+            input: json!({}),
+            dependencies: Vec::new(),
+        })
+        .expect("background task")
+        .task_id;
+    let driver = TaskDriver::new(session, answer_registry()).with_turn_template(answer_template());
+
+    driver
+        .drive_task(background)
+        .await
+        .expect("drive the background task");
+    let snapshot = driver.snapshot().await;
+    assert_eq!(snapshot.tasks.len(), 1, "no turn was started");
+    assert_eq!(
+        snapshot
+            .inputs
+            .iter()
+            .find(|input| input.id == queued)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Queued
+    );
+}
+
+#[tokio::test]
+async fn a_cross_conversation_turn_member_releases_the_slot_owner() {
+    // A turn member in another conversation can be the last one alive. The
+    // conversation that owns the slot is the one that must be scheduled.
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let other = session
+        .create_conversation(ion_core::ConversationSpec::independent())
+        .expect("second conversation")
+        .conversation_id;
+    let queued = session
+        .queue_input(input(root, "turn-1", InputMode::FollowUp, "resumed"))
+        .expect("queued input")
+        .input_id;
+
+    let mut registry = answer_registry();
+    registry
+        .register(kind("fan-to"), 1, Arc::new(FanTo { other }))
+        .expect("register fan");
+    let driver = TaskDriver::new(session, registry).with_turn_template(answer_template());
+
+    let first = driver
+        .submit_input(
+            input(root, "turn-2", InputMode::Submit, "start"),
+            ion_core::TaskRequest {
+                conversation_id: root,
+                kind: kind("fan-to"),
+                schema_version: 1,
+                input: json!({}),
+                dependencies: Vec::new(),
+            },
+        )
+        .await
+        .expect("explicit turn");
+    let first_turn = first.task_id.expect("turn root");
+    driver.drive_task(first_turn).await.expect("drive the root");
+
+    // The member in the other conversation settles; that is the settlement which
+    // releases the root conversation's slot.
+    let member = driver
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|task| task.conversation_id == other)
+        .map(|task| task.id)
+        .expect("cross-conversation member");
+    wait(&driver, member).await;
+
+    let successor = driver
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|task| task.id != first_turn && task.id != member)
+        .map(|task| task.id)
+        .expect("the queued input started a turn in the slot owner");
+    wait(&driver, successor).await;
+    assert!(matches!(
+        driver
+            .snapshot()
+            .await
+            .inputs
+            .iter()
+            .find(|input| input.id == queued)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Consumed(_)
+    ));
+}
+
+#[tokio::test]
+async fn a_clone_shares_the_turn_configuration() {
+    let held = Arc::new(tokio::sync::Notify::new());
+    let mut registry = answer_registry();
+    registry
+        .register(
+            kind("held"),
+            1,
+            Arc::new(Held {
+                entered: held.clone(),
+            }),
+        )
+        .expect("register held");
+
+    // The handle that starts work is not the handle that was configured.
+    let unconfigured = TaskDriver::new(Session::new().expect("session"), registry);
+    let configured = unconfigured.clone().with_turn_template(answer_template());
+
+    let root = configured.snapshot().await.root_conversation;
+    let first = configured
+        .submit_input(
+            input(root, "turn-1", InputMode::Submit, "start"),
+            ion_core::TaskRequest {
+                conversation_id: root,
+                kind: kind("held"),
+                schema_version: 1,
+                input: json!({}),
+                dependencies: Vec::new(),
+            },
+        )
+        .await
+        .expect("explicit turn");
+    let first_turn = first.task_id.expect("turn root");
+    let follow_up = unconfigured
+        .admit_input(input(root, "turn-2", InputMode::FollowUp, "next"))
+        .await
+        .expect("follow-up through the other handle");
+    assert!(!follow_up.started_turn(), "the conversation is busy");
+
+    let drive = tokio::spawn({
+        let unconfigured = unconfigured.clone();
+        async move { unconfigured.drive_task(first_turn).await }
+    });
+    held.notified().await;
+    unconfigured.cancel_turn(first_turn).await.expect("cancel");
+    drive.await.unwrap().expect("drive");
+
+    // The unconfigured handle still schedules the queued follow-up, because the
+    // turn shape is shared configuration rather than per-handle state.
+    let successor = unconfigured
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|task| task.id != first_turn)
+        .map(|task| task.id)
+        .expect("the queued follow-up must start a successor turn");
+    wait(&unconfigured, successor).await;
+}
+
+#[tokio::test]
+async fn an_invalidated_candidate_does_not_block_the_next() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let first = session
+        .queue_input(input(root, "turn-1", InputMode::FollowUp, "first"))
+        .expect("first queued")
+        .input_id;
+    let second = session
+        .queue_input(input(root, "turn-2", InputMode::FollowUp, "second"))
+        .expect("second queued")
+        .input_id;
+    let entry = session
+        .append_entry(ion_core::EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("note").expect("entry kind"),
+            data: json!({}),
+            projection: Vec::new(),
+            context: ContextControl::none(),
+        })
+        .expect("entry")
+        .entry_id;
+    let driver = TaskDriver::new(session, answer_registry()).with_turn_template(answer_template());
+    driver
+        .consume_input(first, entry)
+        .await
+        .expect("consume the first candidate");
+
+    // The earliest candidate is no longer queued, so scheduling must fall
+    // through to the next one instead of reporting nothing to do.
+    let turn = driver
+        .schedule_next_turn(root)
+        .await
+        .expect("schedule")
+        .expect("the second candidate starts a turn");
+    wait(&driver, turn).await;
+    assert!(matches!(
+        driver
+            .snapshot()
+            .await
+            .inputs
+            .iter()
+            .find(|input| input.id == second)
+            .expect("second input")
+            .disposition,
+        InputDisposition::Consumed(_)
+    ));
+}
+
+#[tokio::test]
+async fn an_unregistered_turn_kind_leaves_input_queued() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let queued = session
+        .queue_input(input(root, "turn-1", InputMode::FollowUp, "waiting"))
+        .expect("queued input")
+        .input_id;
+    // A driver that cannot run the template's kind must not bind input to a turn
+    // that would settle Unsupported.
+    let driver =
+        TaskDriver::new(session, TaskRegistry::new()).with_turn_template(answer_template());
+
+    assert_eq!(
+        driver.schedule_next_turn(root).await.expect("schedule"),
+        None
+    );
+    let snapshot = driver.snapshot().await;
+    assert!(snapshot.tasks.is_empty(), "no turn was admitted");
+    assert_eq!(
+        snapshot
+            .inputs
+            .iter()
+            .find(|input| input.id == queued)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Queued
+    );
+
+    // Once the kind is available the input is still answerable.
+    driver
+        .register_task_kind(kind("answer"), 1, Arc::new(Answer))
+        .expect("register the kind");
+    let turn = driver
+        .schedule_next_turn(root)
+        .await
+        .expect("schedule")
+        .expect("the queued input now starts a turn");
+    wait(&driver, turn).await;
+    assert!(matches!(
+        driver
+            .snapshot()
+            .await
+            .inputs
+            .iter()
+            .find(|input| input.id == queued)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Consumed(_)
+    ));
+}
+
+#[tokio::test]
+async fn cancelling_a_turn_still_schedules_the_queued_follow_up() {
+    let held = Arc::new(tokio::sync::Notify::new());
+    let mut registry = answer_registry();
+    registry
+        .register(
+            kind("held"),
+            1,
+            Arc::new(Held {
+                entered: held.clone(),
+            }),
+        )
+        .expect("register held");
+    let driver = TaskDriver::new(Session::new().expect("session"), registry)
+        .with_turn_template(answer_template());
+    let root = driver.snapshot().await.root_conversation;
+
+    let first = driver
+        .submit_input(
+            input(root, "turn-1", InputMode::Submit, "start"),
+            ion_core::TaskRequest {
+                conversation_id: root,
+                kind: kind("held"),
+                schema_version: 1,
+                input: json!({}),
+                dependencies: Vec::new(),
+            },
+        )
+        .await
+        .expect("explicit turn");
+    let first_turn = first.task_id.expect("turn root");
+    let follow_up = driver
+        .admit_input(input(root, "turn-2", InputMode::FollowUp, "next"))
+        .await
+        .expect("follow-up");
+    assert!(!follow_up.started_turn());
+
+    let drive = tokio::spawn({
+        let driver = driver.clone();
+        async move { driver.drive_task(first_turn).await }
+    });
+    held.notified().await;
+    driver.cancel_turn(first_turn).await.expect("cancel");
+    drive.await.unwrap().expect("drive");
+
+    // The abort settlement released the slot, so the follow-up admitted during
+    // cancellation runs as its own turn.
+    let successor = driver
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|task| task.id != first_turn)
+        .map(|task| task.id)
+        .expect("the queued follow-up must start a successor turn");
+    wait(&driver, successor).await;
+    assert!(matches!(
+        driver
+            .snapshot()
+            .await
+            .inputs
+            .iter()
+            .find(|input| input.id == follow_up.input_id)
+            .expect("follow-up")
+            .disposition,
+        InputDisposition::Consumed(_)
+    ));
+    assert_eq!(
+        transcript(&driver, root).await,
+        vec![("user".to_owned(), "next".to_owned())],
+        "the cancelled turn contributed no entry"
+    );
+}
+
+#[tokio::test]
+async fn a_reopened_session_resumes_queued_input() {
+    let db = TempDb::new("k5-idle");
+    let mut session = Session::create(db.path()).expect("create");
+    let root = session.root_conversation();
+    let queued = session
+        .queue_input(input(root, "turn-1", InputMode::FollowUp, "resumed"))
+        .expect("queued input")
+        .input_id;
+    let driver = TaskDriver::new(session, answer_registry());
+    driver.close(CloseMode::Graceful).await;
+    drop(driver);
+
+    let reopened = TaskDriver::open(db.path(), answer_registry())
+        .expect("open")
+        .with_turn_template(answer_template());
+    assert!(reopened.snapshot().await.tasks.is_empty());
+    let turn = reopened
+        .schedule_next_turn(root)
+        .await
+        .expect("schedule")
+        .expect("a durable queued input starts a turn");
+    wait(&reopened, turn).await;
+    assert!(matches!(
+        reopened
+            .snapshot()
+            .await
+            .inputs
+            .iter()
+            .find(|input| input.id == queued)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Consumed(_)
+    ));
 }

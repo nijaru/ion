@@ -94,6 +94,21 @@ pub(super) fn admission(mode: InputMode, busy: bool) -> Admission {
 }
 
 impl TaskDriver {
+    /// Whether this driver can actually run a turn of this shape.
+    ///
+    /// Scheduling must not bind input to a turn nobody can execute: a
+    /// never-dispatched task with an unregistered kind settles `Unsupported`,
+    /// which would leave the input assigned to a terminal task and unable to be
+    /// answered again. The input stays queued so it can be scheduled once the
+    /// kind is registered.
+    fn runnable(&self, template: &TurnTemplate) -> bool {
+        self.registry
+            .read()
+            .expect("task registry lock")
+            .get(&template.kind, template.schema_version)
+            .is_some()
+    }
+
     /// Start and drive the next turn for `conversation_id` if it is idle and has
     /// a queued input whose mode starts one.
     ///
@@ -107,35 +122,46 @@ impl TaskDriver {
         &self,
         conversation_id: ConversationId,
     ) -> Result<Option<TaskId>, TaskDriverError> {
-        let Some(template) = self.turn_template.as_ref() else {
+        let Some(template) = self.turn_template() else {
             return Ok(None);
         };
+        if !self.runnable(&template) {
+            return Ok(None);
+        }
         let request = template.request(conversation_id);
-        let queued = {
-            let session = self.session.lock().await;
-            session.ensure_open()?;
-            session.next_schedulable_input(conversation_id)
-        };
-        let Some(input_id) = queued else {
-            return Ok(None);
-        };
 
-        let task_id = {
-            let mut session = self.session.lock().await;
-            session.ensure_open()?;
-            match session.bind_turn_for_input(input_id, request) {
-                Ok(task_id) => task_id,
-                // Another actor took the slot or the input first. The policy
-                // simply has nothing to do, and the input is still durable.
-                Err(
-                    SessionError::ForegroundTurnBusy(_)
-                    | SessionError::InvalidInputDisposition(_)
-                    | SessionError::UnknownInput(_),
-                ) => return Ok(None),
-                Err(error) => return Err(error.into()),
-            }
-        };
-        self.spawn_drive(task_id);
-        Ok(Some(task_id))
+        // The selection and the binding are separate writer acquisitions, so a
+        // candidate can be answered by someone else in between. Reselecting then
+        // cannot spin: a disposition only moves forward, so an invalidated
+        // candidate is not selected again.
+        loop {
+            let queued = {
+                let session = self.session.lock().await;
+                session.ensure_open()?;
+                session.next_schedulable_input(conversation_id)
+            };
+            let Some(input_id) = queued else {
+                return Ok(None);
+            };
+
+            let task_id = {
+                let mut session = self.session.lock().await;
+                session.ensure_open()?;
+                match session.bind_turn_for_input(input_id, request.clone()) {
+                    Ok(task_id) => task_id,
+                    // Another actor answered this input first; try the next one.
+                    Err(
+                        SessionError::InvalidInputDisposition(_) | SessionError::UnknownInput(_),
+                    ) => {
+                        continue;
+                    }
+                    // Another actor took the slot; there is nothing left to do.
+                    Err(SessionError::ForegroundTurnBusy(_)) => return Ok(None),
+                    Err(error) => return Err(error.into()),
+                }
+            };
+            self.spawn_drive(task_id);
+            return Ok(Some(task_id));
+        }
     }
 }

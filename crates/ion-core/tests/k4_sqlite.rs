@@ -3,7 +3,7 @@
 //! These tests exercise the durable boundary rather than the resident one: what
 //! survives a close, what a second authority can do, and what opening does.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Arc;
 
 use ion_core::conversation::context::ContextControl;
@@ -15,35 +15,12 @@ use ion_core::{
 };
 use serde_json::json;
 
+mod support;
+
+use support::TempDb;
+
 fn kind(name: &str) -> TaskKindName {
     TaskKindName::new(name).expect("task kind")
-}
-
-/// Removes the database and its WAL sidecars when the test ends.
-struct TempDb {
-    path: PathBuf,
-}
-
-impl TempDb {
-    fn new(name: &str) -> Self {
-        let path = std::env::temp_dir().join(format!(
-            "ion-k4-{name}-{}.sqlite",
-            ion_core::SessionId::new()
-        ));
-        Self { path }
-    }
-
-    fn path(&self) -> &Path {
-        &self.path
-    }
-}
-
-impl Drop for TempDb {
-    fn drop(&mut self) {
-        for suffix in ["", "-wal", "-shm"] {
-            let _ = std::fs::remove_file(format!("{}{suffix}", self.path.display()));
-        }
-    }
 }
 
 /// Settles with a plan that leaves one scoped successor, so the turn stays live.

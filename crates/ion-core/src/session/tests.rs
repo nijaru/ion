@@ -132,7 +132,7 @@ fn reservation_checkpoint_and_recovery_are_generation_fenced() {
         .expect_err("old generation must be fenced");
     assert!(matches!(stale, SessionError::StaleInvocation { .. }));
 
-    let (successor, _) = session
+    let settlement = session
         .settle_task_with(
             task.task_id,
             recover.generation,
@@ -141,6 +141,7 @@ fn reservation_checkpoint_and_recovery_are_generation_fenced() {
             |transaction| transaction.create_task(task_request(root, Vec::new())),
         )
         .expect("terminal plan");
+    let successor = settlement.value;
     let snapshot = session.snapshot();
     let settled = snapshot
         .tasks

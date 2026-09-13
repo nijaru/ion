@@ -19,10 +19,13 @@ use crate::{
 #[derive(Clone)]
 pub struct TaskDriver {
     pub(super) session: Arc<Mutex<Session>>,
-    registry: Arc<std::sync::RwLock<TaskRegistry>>,
+    pub(super) registry: Arc<std::sync::RwLock<TaskRegistry>>,
     capacity: super::TaskCapacity,
     /// Turn shape for a conversation that answers queued input on its own.
-    pub(super) turn_template: Option<super::TurnTemplate>,
+    ///
+    /// Shared by every handle, so a clone cannot disagree about how a
+    /// conversation answers queued input.
+    pub(super) turn_template: Arc<std::sync::RwLock<Option<super::TurnTemplate>>>,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     drained: tokio::sync::watch::Sender<()>,
     changes: tokio::sync::watch::Sender<()>,
@@ -97,7 +100,7 @@ impl TaskDriver {
             capacity,
             session: Arc::new(Mutex::new(session)),
             registry: Arc::new(std::sync::RwLock::new(registry)),
-            turn_template: None,
+            turn_template: Arc::new(std::sync::RwLock::new(None)),
             active: Arc::new(StdMutex::new(HashMap::new())),
             drained: tokio::sync::watch::channel(()).0,
             changes,
@@ -110,10 +113,23 @@ impl TaskDriver {
     /// its own. Without a template, admission still queues, but nothing is
     /// scheduled automatically and a turn-starting mode on an idle conversation
     /// is refused rather than silently dropped.
+    ///
+    /// The configuration is shared with every handle of this driver, including
+    /// clones, so two handles cannot disagree about automatic turn shape.
     #[must_use]
-    pub fn with_turn_template(mut self, template: super::TurnTemplate) -> Self {
-        self.turn_template = Some(template);
+    pub fn with_turn_template(self, template: super::TurnTemplate) -> Self {
+        *self
+            .turn_template
+            .write()
+            .expect("turn template lock is never poisoned") = Some(template);
         self
+    }
+
+    pub(super) fn turn_template(&self) -> Option<super::TurnTemplate> {
+        self.turn_template
+            .read()
+            .expect("turn template lock is never poisoned")
+            .clone()
     }
 
     /// Restore a missing implementation without touching durable task data.
@@ -377,8 +393,7 @@ impl TaskDriver {
         input: crate::InputRequest,
     ) -> Result<crate::AdmissionReceipt, TaskDriverError> {
         let turn = self
-            .turn_template
-            .as_ref()
+            .turn_template()
             .map(|template| template.request(input.target));
         let mut session = self.session.lock().await;
         Ok(session.admit_input(input, turn)?)
@@ -448,14 +463,11 @@ impl TaskDriver {
         };
 
         match settled {
-            Some(Ok((outcome, created))) => {
+            Some(Ok((outcome, created, released))) => {
                 // Work this settlement unblocked becomes runnable here, and only
                 // here: admission never starts work on its own.
                 self.dispatch_runnable(task_id, &created).await;
-                // If the settlement also released the conversation's turn slot, a
-                // queued input may now own it. A scheduling failure is not a
-                // settlement failure.
-                let _ = self.schedule_next_turn(running.conversation_id).await;
+                self.schedule_released(&released).await;
                 Ok(outcome)
             }
             Some(Err(error)) => Err(error),
@@ -599,13 +611,13 @@ impl TaskDriver {
         session: &mut Session,
         running: &RunningTask,
         completion: TaskCompletion,
-    ) -> Result<(DriveOutcome, Vec<TaskId>), TaskDriverError> {
+    ) -> Result<(DriveOutcome, Vec<TaskId>, Vec<crate::ConversationId>), TaskDriverError> {
         let TaskCompletion {
             outcome,
             output,
             plan,
         } = completion;
-        let (created, commit_seq) = session.settle_task_with(
+        let settlement = session.settle_task_with(
             running.id,
             running.generation,
             outcome.clone(),
@@ -618,11 +630,20 @@ impl TaskDriver {
                 invocation_kind: running.invocation_kind,
                 generation: running.generation,
                 reservation_commit: running.reservation_commit,
-                settlement_commit: commit_seq,
+                settlement_commit: settlement.commit_seq,
                 outcome,
             }),
-            created,
+            settlement.value,
+            settlement.released_turns,
         ))
+    }
+
+    /// Schedule queued input for the conversations this settlement released.
+    /// A scheduling failure is not a settlement failure.
+    async fn schedule_released(&self, released: &[crate::ConversationId]) {
+        for conversation_id in released {
+            let _ = self.schedule_next_turn(*conversation_id).await;
+        }
     }
 
     async fn settle(
@@ -636,9 +657,9 @@ impl TaskDriver {
                     let mut session = self.session.lock().await;
                     self.settle_in_session(&mut session, &running, completion)
                 };
-                let (outcome, created) = settled?;
+                let (outcome, created, released) = settled?;
                 self.dispatch_runnable(running.id, &created).await;
-                let _ = self.schedule_next_turn(running.conversation_id).await;
+                self.schedule_released(&released).await;
                 Ok(outcome)
             }
             // No durable settlement: the task remains running and is retried

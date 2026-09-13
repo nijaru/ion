@@ -24,6 +24,17 @@ mod persistence_tests;
 
 const OBSERVATION_CAPACITY: usize = 128;
 
+/// The durable result of settling one task.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct TaskSettlement<T> {
+    pub(crate) value: T,
+    pub(crate) commit_seq: CommitSeq,
+    /// Conversations whose foreground slot this settlement released. Idle
+    /// scheduling is scoped to exactly these, so a settlement that released
+    /// nothing cannot start unrelated queued work.
+    pub(crate) released_turns: Vec<ConversationId>,
+}
+
 #[derive(Debug)]
 pub struct Session {
     state: SessionState,
@@ -566,12 +577,17 @@ impl Session {
         outcome: TaskOutcome,
         output: Option<TaskOutput>,
         plan: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
-    ) -> Result<(T, CommitSeq), SessionError> {
-        self.transact(|transaction| {
+    ) -> Result<TaskSettlement<T>, SessionError> {
+        let ((value, released_turns), commit_seq) = self.transact(|transaction| {
             transaction.assert_task_write_authority(task_id, generation)?;
             let value = plan(transaction)?;
             transaction.settle_task(task_id, generation, outcome, output)?;
-            Ok(value)
+            Ok((value, transaction.take_released_turns()))
+        })?;
+        Ok(TaskSettlement {
+            value,
+            commit_seq,
+            released_turns,
         })
     }
 

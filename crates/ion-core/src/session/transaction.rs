@@ -81,6 +81,7 @@ pub(crate) struct Transaction {
     admitted_inputs: Vec<InputId>,
     writes: Vec<Mutation>,
     changes: Vec<Change>,
+    released_turns: Vec<ConversationId>,
 }
 
 impl Transaction {
@@ -91,6 +92,7 @@ impl Transaction {
             admitted_inputs: Vec::new(),
             writes: Vec::new(),
             changes: Vec::new(),
+            released_turns: Vec::new(),
         }
     }
 
@@ -641,8 +643,16 @@ impl Transaction {
                 },
                 Change::ForegroundTurnChanged(conversation_id),
             )?;
+            self.released_turns.push(conversation_id);
         }
         Ok(())
+    }
+
+    /// Conversations whose foreground slot this transaction releases. A
+    /// settlement uses this to schedule only the conversation that actually
+    /// became idle, rather than every conversation it touched.
+    pub(crate) fn take_released_turns(&mut self) -> Vec<ConversationId> {
+        std::mem::take(&mut self.released_turns)
     }
 
     pub(crate) fn finish(
