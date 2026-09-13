@@ -206,7 +206,7 @@ Async Rust stack state is process-local and **not durable continuation**. Proces
 
 Trusted task code receives an invocation-scoped `TaskContext`. Its durable commit path can replace the complete checkpoint and perform narrowly authorized canonical writes. Every commit revalidates task identity, invocation generation and cancellation authority on the session writer.
 
-The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically.
+The terminal plan/closure is applied by the writer so outcome, final writes, successor creation/ownership changes and scratch retirement can settle atomically. The implemented part of that contract is a bounded `TaskPlan` attached to a task completion: it queues immutable transcript entries and successor tasks, and a successor may depend on an existing task or on a task planned earlier in the same plan. Plan-local handles become real session-local IDs only when the writer applies the plan, so no ID escapes before commit. The writer revalidates invocation generation, cancellation and authority, applies entries then successors, and commits outcome and plan in one batch; any failure rolls back the outcome and every planned write. Planned owned conversations and scratch retirement are deferred to K6.
 
 ### Optional phase helper
 

@@ -7,6 +7,7 @@ use crate::session::command::{
     ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
 };
 use crate::session::state::{SessionState, apply_mutation};
+use crate::task::{PlannedTask, TaskDependency, TaskPlan};
 use crate::view::{Change, CommitEvent};
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
@@ -180,6 +181,74 @@ impl Transaction {
         }
         self.stage(Mutation::AppendEntry(entry), Change::EntryAppended(id))?;
         Ok(id)
+    }
+
+    /// Apply a trusted task's finalization plan. Entries are staged first, then
+    /// successor tasks in plan order with all IDs allocated up front so planned
+    /// dependencies resolve without exposing IDs before commit. Any error rolls
+    /// back the whole transaction, including the settling task.
+    pub(crate) fn apply_task_plan(&mut self, plan: &TaskPlan) -> Result<(), SessionError> {
+        for entry in plan.entries() {
+            self.append_entry(EntryRequest {
+                conversation_id: entry.conversation_id,
+                kind: entry.kind.clone(),
+                data: entry.data.clone(),
+                projection: entry.projection.clone(),
+                context: entry.context.clone(),
+            })?;
+        }
+
+        let mut planned_ids = Vec::with_capacity(plan.tasks().len());
+        for _ in plan.tasks() {
+            planned_ids.push(TaskId::new(self.allocate()?.get())?);
+        }
+        for (index, task) in plan.tasks().iter().enumerate() {
+            self.create_planned_task(task, planned_ids[index], &planned_ids)?;
+        }
+        Ok(())
+    }
+
+    fn create_planned_task(
+        &mut self,
+        task: &PlannedTask,
+        id: TaskId,
+        planned_ids: &[TaskId],
+    ) -> Result<(), SessionError> {
+        if !self.draft.conversations.contains_key(&task.conversation_id) {
+            return Err(SessionError::UnknownConversation(task.conversation_id));
+        }
+        let mut seen = HashSet::with_capacity(task.dependencies.len());
+        let mut dependencies = Vec::with_capacity(task.dependencies.len());
+        for dependency in &task.dependencies {
+            let dependency_id = match dependency {
+                TaskDependency::Existing(id) => *id,
+                TaskDependency::Planned(reference) => {
+                    // A plan may only depend on tasks planned earlier, which keeps
+                    // the successor graph acyclic by construction.
+                    *planned_ids.get(reference.index()).ok_or_else(|| {
+                        SessionError::Invariant("plan dependency is not yet planned".to_owned())
+                    })?
+                }
+            };
+            if !seen.insert(dependency_id) {
+                return Err(SessionError::DuplicateDependency(dependency_id));
+            }
+            if !self.draft.tasks.contains_key(&dependency_id) {
+                return Err(SessionError::UnknownTask(dependency_id));
+            }
+            dependencies.push(dependency_id);
+        }
+
+        let record = TaskRecord::pending(
+            id,
+            task.conversation_id,
+            task.kind.clone(),
+            task.schema_version,
+            task.input.clone(),
+            dependencies,
+        );
+        self.stage(Mutation::CreateTask(record), Change::TaskCreated(id))?;
+        Ok(())
     }
 
     pub(crate) fn admit_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {

@@ -27,9 +27,9 @@ pub use session::{
     TaskRequest,
 };
 pub use task::{
-    AbortContext, InvocationKind, ResourceDomain, RunningTask, TaskCompletion, TaskContext,
-    TaskContextError, TaskFuture, TaskInvocation, TaskKind, TaskKindName, TaskKindNameError,
-    TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord, TaskRegistry, TaskRegistryError,
-    TaskRunError, TaskStatus,
+    AbortContext, InvocationKind, PlannedEntry, PlannedTask, PlannedTaskRef, ResourceDomain,
+    RunningTask, TaskCompletion, TaskContext, TaskContextError, TaskDependency, TaskFuture,
+    TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
+    TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus,
 };
 pub use view::{Change, CommitEvent, ObservationBatch, SessionSnapshot};

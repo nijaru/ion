@@ -251,11 +251,13 @@ Implemented:
 - known application failure -> durable `Failed`; unresolved external uncertainty -> durable `Indeterminate`;
 - handler interruption (`TaskRunError`, panic, dropped future) -> no settlement, task stays running and recoverable;
 - serialized cancel/settle decision: settlement wins if it commits first, otherwise abort owns cleanup;
-- initial abort dispatch through the shared invocation path with separate bounded cleanup admission.
+- initial abort dispatch through the shared invocation path with separate bounded cleanup admission;
+- restricted finalization: `TaskCompletion::with_plan` commits transcript entries and successor tasks atomically with the outcome; plan-local handles resolve to session IDs only at commit, and any error rolls back the settlement and every planned write.
 
 Still open:
 
-- restricted typed finalization (non-noop terminal plan/closure) and typed task authoring adapter;
+- typed task authoring adapter over the erased registry;
+- planned owned-conversation creation and scratch retirement (K6);
 - writable ownership release after local joins (K4 SQLite).
 
 Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:

@@ -108,8 +108,7 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- restricted typed task finalization so a generation can atomically settle with its successor entries, tasks and ownership writes;
-- typed task authoring adapter over the erased registry;
+- typed task authoring adapter over the erased registry (task authors still handle `serde_json::Value`);
 
 - writable ownership release after local joins (K4).
 

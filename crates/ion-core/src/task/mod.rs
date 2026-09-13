@@ -2,6 +2,7 @@ mod context;
 mod invocation;
 mod kind;
 mod output;
+mod plan;
 mod record;
 mod registry;
 
@@ -10,6 +11,7 @@ pub(crate) use context::{ContextFuture, TaskRuntime};
 pub use invocation::{InvocationKind, TaskInvocation};
 pub use kind::{ResourceDomain, RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};
 pub use output::TaskOutput;
+pub use plan::{PlannedEntry, PlannedTask, PlannedTaskRef, TaskDependency, TaskPlan};
 pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,
 };

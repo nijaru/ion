@@ -346,13 +346,17 @@ impl TaskDriver {
         running: &RunningTask,
         completion: TaskCompletion,
     ) -> Result<DriveOutcome, TaskDriverError> {
-        let TaskCompletion { outcome, output } = completion;
+        let TaskCompletion {
+            outcome,
+            output,
+            plan,
+        } = completion;
         let (_, commit_seq) = session.settle_task_with(
             running.id,
             running.generation,
             outcome.clone(),
             output,
-            |_| Ok(()),
+            |transaction| transaction.apply_task_plan(&plan),
         )?;
         Ok(DriveOutcome::Settled(Settlement {
             task_id: running.id,

@@ -4,7 +4,7 @@ use std::pin::Pin;
 use serde_json::Value;
 use thiserror::Error;
 
-use super::{AbortContext, TaskContext, TaskKindName, TaskOutput};
+use super::{AbortContext, TaskContext, TaskKindName, TaskOutput, TaskPlan};
 use crate::{CommitSeq, ConversationId, InvocationKind, TaskId, TaskOutcome, TaskOutcomeKind};
 
 pub type TaskFuture<'a> =
@@ -48,6 +48,8 @@ pub struct RunningTask {
 pub struct TaskCompletion {
     pub outcome: TaskOutcome,
     pub output: Option<TaskOutput>,
+    /// Canonical successor writes committed atomically with this outcome.
+    pub plan: TaskPlan,
 }
 
 impl TaskCompletion {
@@ -83,12 +85,21 @@ impl TaskCompletion {
         Self {
             outcome: TaskOutcome { kind, value },
             output: None,
+            plan: TaskPlan::default(),
         }
     }
 
     #[must_use]
     pub fn with_output(mut self, output: TaskOutput) -> Self {
         self.output = Some(output);
+        self
+    }
+
+    /// Commit the plan atomically with this outcome. The writer revalidates
+    /// invocation generation, cancellation and authority before applying it.
+    #[must_use]
+    pub fn with_plan(mut self, plan: TaskPlan) -> Self {
+        self.plan = plan;
         self
     }
 }
