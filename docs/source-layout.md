@@ -213,7 +213,7 @@ Keep the store interface crate-private and narrow. It is not a promise of interc
 
 `store/sqlite/` owns all SQLite details. No other module imports `rusqlite`, raw SQL, or holds a SQLite connection. The per-session store is implemented; `Session::create`/`Session::open` are the public entry points and `SqliteStore` stays crate-private.
 
-- `schema.rs`: schema/version/DDL only, currently version 1;
+- `schema.rs`: schema/version/DDL only, currently version 2;
 - `connection.rs`: open policy (WAL with `synchronous = FULL`, `busy_timeout`), create-versus-open, session identity and metadata reads;
 - `commit.rs`: application of one atomic semantic mutation batch, including the commit-cursor compare-and-set that fences a stale writer authority;
 - `conversation.rs`, `entry.rs`, `input.rs`, `task.rs`: focused per-record writes plus the reads open-time reconstruction composes;

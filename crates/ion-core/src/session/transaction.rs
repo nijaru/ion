@@ -59,6 +59,11 @@ pub(crate) enum Mutation {
         conversation_id: ConversationId,
         task_id: TaskId,
     },
+    /// Retire a conversation into a read-only archive, or reactivate it.
+    SetConversationRetired {
+        conversation_id: ConversationId,
+        retired: bool,
+    },
 }
 
 /// The complete durable write set of one commit. Observation invalidations are
@@ -131,6 +136,7 @@ impl Transaction {
             parent: spec.parent,
             owner_task: spec.owner_task,
             foreground_turn: None,
+            retired: false,
         };
         self.stage(
             Mutation::CreateConversation(conversation),
@@ -452,6 +458,36 @@ impl Transaction {
         let task_id = self.create_turn(turn)?;
         self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
         Ok(task_id)
+    }
+
+    /// Retire a conversation into a read-only archive. See
+    /// `retire_conversation` in `state.rs` for the preconditions.
+    pub(crate) fn retire_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<(), SessionError> {
+        self.stage(
+            Mutation::SetConversationRetired {
+                conversation_id,
+                retired: true,
+            },
+            Change::ConversationRetirementChanged(conversation_id),
+        )
+    }
+
+    /// Reactivate a retired conversation. This clears the flag and nothing else:
+    /// no task is created, no input is resurrected and no drive is scheduled.
+    pub(crate) fn reactivate_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<(), SessionError> {
+        self.stage(
+            Mutation::SetConversationRetired {
+                conversation_id,
+                retired: false,
+            },
+            Change::ConversationRetirementChanged(conversation_id),
+        )
     }
 
     pub(crate) fn queue_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {
@@ -801,6 +837,15 @@ fn map_state(error: crate::session::state::StateError) -> SessionError {
         }
         crate::session::state::StateError::ForegroundTurnBusy(id) => {
             SessionError::ForegroundTurnBusy(id)
+        }
+        crate::session::state::StateError::ConversationRetired(id) => {
+            SessionError::ConversationRetired(id)
+        }
+        crate::session::state::StateError::ConversationNotOwned(id) => {
+            SessionError::ConversationNotOwned(id)
+        }
+        crate::session::state::StateError::ConversationHasLiveWork(id) => {
+            SessionError::ConversationHasLiveWork(id)
         }
         other => SessionError::Invariant(other.to_string()),
     }

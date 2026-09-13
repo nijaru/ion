@@ -197,6 +197,28 @@ impl TaskDriver {
             .conversation_record(conversation_id)
     }
 
+    /// Retire an owned conversation into a read-only archive.
+    ///
+    /// Rejected unless the conversation is an owned worker with no live work, so
+    /// retirement never races a running chain. Queued-but-unstarted input is
+    /// cancelled in the same commit; nothing else is touched.
+    pub async fn retire_conversation(
+        &self,
+        conversation_id: crate::ConversationId,
+    ) -> Result<CommitSeq, TaskDriverError> {
+        let mut session = self.session.lock().await;
+        Ok(session.retire_conversation(conversation_id)?)
+    }
+
+    /// Reactivate a retired conversation. It starts no work.
+    pub async fn reactivate_conversation(
+        &self,
+        conversation_id: crate::ConversationId,
+    ) -> Result<CommitSeq, TaskDriverError> {
+        let mut session = self.session.lock().await;
+        Ok(session.reactivate_conversation(conversation_id)?)
+    }
+
     /// The conversations a task owns, in creation order.
     ///
     /// A spawn task's worker conversation gets a real ID only when its plan

@@ -19,6 +19,9 @@ pub struct Conversation {
     /// The non-terminal foreground turn root, if any. One authoritative slot per
     /// conversation; background work and retained workers never occupy it.
     pub foreground_turn: Option<TaskId>,
+    /// Retired conversations are read-only archives: history, ownership and
+    /// terminal work are preserved, and no writer may add work to them.
+    pub retired: bool,
 }
 
 impl Conversation {
@@ -29,6 +32,7 @@ impl Conversation {
             parent: None,
             owner_task: None,
             foreground_turn: None,
+            retired: false,
         }
     }
 
@@ -43,7 +47,14 @@ impl Conversation {
             parent,
             owner_task: Some(owner_task),
             foreground_turn: None,
+            retired: false,
         }
+    }
+
+    /// Whether this conversation accepts new work.
+    #[must_use]
+    pub const fn accepts_work(&self) -> bool {
+        !self.retired
     }
 }
 

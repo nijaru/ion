@@ -170,7 +170,12 @@ pub(crate) fn apply_mutation(
                 return Err(StateError::DuplicateConversation(conversation.id));
             }
         }
+        Mutation::SetConversationRetired {
+            conversation_id,
+            retired,
+        } => retire_conversation(state, *conversation_id, *retired)?,
         Mutation::AppendEntry(entry) => {
+            ensure_accepts_work(state, entry.conversation_id)?;
             if state
                 .entries
                 .insert(entry.id, Arc::new(entry.clone()))
@@ -180,6 +185,7 @@ pub(crate) fn apply_mutation(
             }
         }
         Mutation::AdmitInput(input) => {
+            ensure_accepts_work(state, input.target)?;
             if state
                 .inputs
                 .insert(input.id, Arc::new(input.clone()))
@@ -198,6 +204,7 @@ pub(crate) fn apply_mutation(
             disposition,
         } => apply_input_disposition(state, *input_id, *disposition)?,
         Mutation::CreateTask(task) => {
+            ensure_accepts_work(state, task.conversation_id)?;
             if state
                 .tasks
                 .insert(task.id, Arc::new(task.clone()))
@@ -210,6 +217,7 @@ pub(crate) fn apply_mutation(
             conversation_id,
             task_id,
         } => {
+            ensure_accepts_work(state, *conversation_id)?;
             let task = state
                 .tasks
                 .get(task_id)
@@ -282,6 +290,75 @@ pub(crate) fn apply_mutation(
             task.owned_conversations.push(*conversation_id);
         }
     }
+    Ok(())
+}
+
+fn ensure_accepts_work(
+    state: &SessionState,
+    conversation_id: ConversationId,
+) -> Result<(), StateError> {
+    let conversation = state
+        .conversations
+        .get(&conversation_id)
+        .ok_or(StateError::UnknownConversation(conversation_id))?;
+    if conversation.retired {
+        return Err(StateError::ConversationRetired(conversation_id));
+    }
+    Ok(())
+}
+
+/// Retire or reactivate a conversation.
+///
+/// Retirement is a worker-lifetime operation on an owned conversation, and it
+/// requires quiescence: no foreground slot and no non-terminal task. Work that
+/// was queued but never started is cancelled in the same commit, because
+/// retirement stops future work. Everything already durable - history,
+/// ownership, terminal outcomes and checkpoints - is preserved, and an inherited
+/// cutoff in another conversation is unaffected.
+fn retire_conversation(
+    state: &mut SessionState,
+    conversation_id: ConversationId,
+    retired: bool,
+) -> Result<(), StateError> {
+    let conversation = state
+        .conversations
+        .get(&conversation_id)
+        .ok_or(StateError::UnknownConversation(conversation_id))?;
+    if conversation.retired == retired {
+        return Ok(());
+    }
+    if !retired {
+        conversation_mut(state, conversation_id)
+            .expect("validated conversation remains present")
+            .retired = false;
+        return Ok(());
+    }
+    if conversation.owner_task.is_none() {
+        return Err(StateError::ConversationNotOwned(conversation_id));
+    }
+    if conversation.foreground_turn.is_some()
+        || state.tasks.values().any(|task| {
+            task.conversation_id == conversation_id
+                && !matches!(task.status, TaskStatus::Terminal(_))
+        })
+    {
+        return Err(StateError::ConversationHasLiveWork(conversation_id));
+    }
+
+    let queued: Vec<InputId> = state
+        .inputs
+        .values()
+        .filter(|input| {
+            input.target == conversation_id && input.disposition == InputDisposition::Queued
+        })
+        .map(|input| input.id)
+        .collect();
+    for input_id in queued {
+        apply_input_disposition(state, input_id, InputDisposition::Cancelled)?;
+    }
+    conversation_mut(state, conversation_id)
+        .expect("validated conversation remains present")
+        .retired = true;
     Ok(())
 }
 
@@ -488,4 +565,10 @@ pub(crate) enum StateError {
     MissingInvocation(TaskId),
     #[error("input {0} cannot make the requested disposition transition")]
     InvalidInputDisposition(InputId),
+    #[error("conversation {0} is retired and accepts no new work")]
+    ConversationRetired(ConversationId),
+    #[error("conversation {0} has live work and cannot be retired")]
+    ConversationHasLiveWork(ConversationId),
+    #[error("conversation {0} is not an owned worker and cannot be retired")]
+    ConversationNotOwned(ConversationId),
 }

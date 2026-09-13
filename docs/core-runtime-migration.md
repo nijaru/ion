@@ -272,7 +272,7 @@ Do not add a second scheduler to solve these. Extend the same session/task drive
 
 **Per-session SQLite store and process-death evidence implemented.**
 
-`Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 1: session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
+`Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 2 (version 1 added the `retired` conversation flag; older development databases are refused rather than migrated): session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
 
 Evidence is in-process plus one real process-death test (`tests/k4_sqlite.rs`). In-process: a representative write set — history-parented conversation, entries, input admission and disposition, a pending task, a dependent task, a task-owned conversation, two turns with different foreground-slot outcomes, a checkpoint, a finalization plan and a durable cancellation mark — reconstructs an identical snapshot after close and reopen; duplicate-input replay survives reopen; a stale second authority is fenced and left closed; and an interrupted task reopens as running with nothing implicitly started. Process death: a child process commits three entries and then dies on `SIGABRT` without unwinding, closing or checkpointing; the parent finds all three commits durable and recovery idempotent.
 
@@ -372,13 +372,15 @@ Still open for this slice:
 
 The production entry point is `builtin::worker`: a `worker` task's immutable input is a `WorkerSpec` (a brief and an optional inherited seed), and its settlement plans the owned conversation, the brief as a transcript entry with a user projection, and the worker's initial generation as a background task. The brief is an entry rather than an admitted input, so there is no admission receipt to replay and no input to consume; `DESIGN.md` §11 already allows a task with no assigned input to read its transcript. Reads are bounded: `TaskDriver::{conversation, owned_conversations}` look up one conversation record and a task's owned list without materializing the session.
 
+Retirement is implemented as a read-only archive: `Conversation.retired` (schema version 2), `Session::retire_conversation` / `reactivate_conversation` and the same pair on the driver. Retirement requires an owned conversation with no foreground turn and no non-terminal task; input that was queued but never started is cancelled in the same commit. Every writer path rejects a retired conversation — transcript entries, task creation, input admission, opening a turn, and settlement plans — while reads, history, ownership, terminal outcomes and checkpoints are preserved, and inheriting a cutoff from a retired ancestor stays allowed. `tests/k6_retirement.rs` covers quiescence, the rejection paths including a rolled-back plan, cancellation of unstarted input, ownership, reactivation, reopen and the schema refusal.
+
 Still open for this slice, in the order they block each other:
 
 - **joined runs.** A joined worker needs a dependency carrying its *final* result back to the creator. Settling the worker's initial generation is not that barrier: a generation settles as soon as it has planned its tool children and the continuation.
 - **worker-local turn scope.** A worker conversation currently holds no foreground turn, so its work is background: it survives creator cancellation (correct for retained) but a follow-up admitted to a running worker could start a second generation beside the first.
 - the command surface for send/follow-up, inspect and wait as first-class operations rather than composed primitives;
 - interruption scoped to one worker run, which today is either one task or the creator's whole turn;
-- reuse of a retained worker, nested ownership limits, and retirement.
+- reuse of a retained worker and nested ownership limits.
 
 Create owned conversations through the same writer:
 

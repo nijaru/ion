@@ -101,6 +101,10 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
                 task_id,
                 conversation_id,
             } => task::attach_owned_conversation(&transaction, *task_id, *conversation_id)?,
+            Mutation::SetConversationRetired {
+                conversation_id,
+                retired,
+            } => conversation::set_retired(&transaction, *conversation_id, *retired)?,
         }
     }
 

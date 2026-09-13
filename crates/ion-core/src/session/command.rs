@@ -208,6 +208,12 @@ pub enum SessionError {
         "mode {mode:?} starts a turn on an idle conversation, but no turn request was supplied"
     )]
     MissingTurnRequest { mode: InputMode },
+    #[error("conversation {0} is retired and accepts no new work")]
+    ConversationRetired(ConversationId),
+    #[error("conversation {0} is not an owned worker and cannot be retired")]
+    ConversationNotOwned(ConversationId),
+    #[error("conversation {0} has live work and cannot be retired")]
+    ConversationHasLiveWork(ConversationId),
     #[error("request key {0} is already bound to different input content or routing")]
     IdempotencyConflict(RequestKey),
     #[error(transparent)]

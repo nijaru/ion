@@ -27,6 +27,8 @@ pub enum Change {
     },
     /// The conversation's foreground turn slot changed (opened or released).
     ForegroundTurnChanged(ConversationId),
+    /// The conversation was retired or reactivated.
+    ConversationRetirementChanged(ConversationId),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

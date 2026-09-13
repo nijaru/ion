@@ -185,6 +185,31 @@ impl Session {
         })
     }
 
+    /// Retire an owned conversation into a read-only archive, in one commit.
+    ///
+    /// Retirement requires quiescence: the conversation must be an owned worker
+    /// with no foreground turn and no non-terminal task. Input that was queued
+    /// but never started is cancelled in the same commit, because retirement
+    /// stops future work; history, ownership, terminal outcomes and checkpoints
+    /// are preserved, and it is idempotent.
+    pub fn retire_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<CommitSeq, SessionError> {
+        self.transact(|transaction| transaction.retire_conversation(conversation_id))
+            .map(|(_, commit_seq)| commit_seq)
+    }
+
+    /// Reactivate a retired conversation. It starts no work and resurrects no
+    /// input; the caller drives anything it wants to happen next.
+    pub fn reactivate_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<CommitSeq, SessionError> {
+        self.transact(|transaction| transaction.reactivate_conversation(conversation_id))
+            .map(|(_, commit_seq)| commit_seq)
+    }
+
     /// The earliest queued input of `conversation_id` whose mode starts a turn,
     /// if the conversation currently holds no foreground turn.
     pub(crate) fn next_schedulable_input(

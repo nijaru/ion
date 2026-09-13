@@ -8,8 +8,10 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-/// Bumping this requires a defined migration or an explicit refusal policy.
-pub(crate) const SCHEMA_VERSION: i64 = 1;
+/// Version 2 adds `conversations.retired`. Pre-1.0 development databases of an
+/// older version are refused rather than migrated, per the policy in
+/// `docs/core-runtime-migration.md`; `verify` is the refusal.
+pub(crate) const SCHEMA_VERSION: i64 = 2;
 
 const DDL: &str = r"
 CREATE TABLE session_meta (
@@ -25,7 +27,8 @@ CREATE TABLE conversations (
     parent_id      INTEGER,
     parent_at      INTEGER,
     owner_task     INTEGER,
-    foreground_turn INTEGER
+    foreground_turn INTEGER,
+    retired        INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE entries (
