@@ -170,7 +170,9 @@ Retirement is implemented as a read-only archive: a durable `Conversation.retire
 
 Worker-local turn scope is implemented: `PlannedTurn::{Inherit, Own, Background}` replaced the `background` flag, and `Own` opens the target conversation's foreground slot in the same commit that creates the successor rooting it (rejected with a full rollback when the slot is already held). The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: follow-ups queue behind it and drain into their own successor turns, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle as soon as the spawn settles.
 
-Still open, in the order they block each other: **joined runs against a worker-owned turn** (a dependency carrying the worker's final result back is needed, and the creator must decide what it does with a worker that owns its own turn), the command surface for send/follow-up, inspect and wait, interruption scoped to one worker run as a first-class operation, reuse, and nested ownership limits.
+Turn completion is durable: the turn root records the member whose settlement closed the turn, written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose it as the client's "the worker's whole chain answered" wait.
+
+Still open, in the order they block each other: **the dependency edge on a turn plus the collector** (a task cannot yet depend on a turn, and the edge must reject the aggregate cycle a backward-only reference check cannot see), the command surface for send/follow-up, inspect and wait, interruption scoped to one worker run as a first-class operation, reuse, and nested ownership limits.
 
 Implement the control surface through the same session/task kernel:
 
