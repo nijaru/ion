@@ -353,7 +353,11 @@ Cancellation is not rollback. If an external action may already have happened, r
 
 Subtree/group cancellation establishes its admission barrier before traversing descendants so concurrent child creation cannot escape the target scope.
 
-Host close stops admission, signals/joins local invocations according to policy, preserves unfinished durable tasks for recovery, flushes committed state and releases the ownership lock last.
+Host close stops admission and fences canonical writes before joining local invocations. Graceful close signals normal invocations cooperatively and waits for normal/abort handlers to return. Fault close aborts and joins local async futures; it cannot interrupt blocking code that does not yield. Neither mode writes durable cancellation or terminal outcomes for unfinished work. Graceful close may be escalated to fault close. Persistence flush and ownership release remain K4 responsibilities; ownership must be released last.
+
+An admitted local drive is owned by the driver, not the caller awaiting its receipt. Dropping a caller does not detach an untracked handler or permit a duplicate invocation.
+
+Client task/dependency waits subscribe before checking committed state and recheck on coalescible commit notifications. They acquire no resource permits. Dependencies are fixed at task creation and reference only existing tasks, forming a DAG by creation order; self/forward references reject. Invocation contexts do not expose dynamic task waits. Eligible drives may acquire one task-kind-selected resource domain (model, tool or process), with independent process-local limits. Unconfigured domains are unlimited. These permits and notifications are not durable task truth.
 
 ## 16. Observations and clients
 

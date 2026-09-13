@@ -60,6 +60,8 @@ crates/ion-core/
       command.rs
       transaction.rs
       scheduler.rs
+      wait.rs
+      capacity.rs
       # add focused modules below when behavior is large enough:
       # handle.rs
       # cancellation.rs
@@ -149,7 +151,9 @@ Current split:
 - `owner.rs`: resident session owner, public mutation methods, snapshots and bounded observations;
 - `command.rs`: typed command/receipt/error vocabulary;
 - `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
-- `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership and cancellation signaling.
+- `scheduler.rs`: K3 task driver, registry dispatch, local invocation ownership, cancellation signaling and close/join policy;
+- `wait.rs`: client task/dependency waits over committed-state wake signals;
+- `capacity.rs`: independent process-local scarce-resource limits.
 
 As behavior grows, split by real ownership:
 

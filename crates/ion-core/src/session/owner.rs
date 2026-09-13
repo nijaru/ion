@@ -19,8 +19,10 @@ const OBSERVATION_CAPACITY: usize = 128;
 #[derive(Debug)]
 pub struct Session {
     store: MemoryStore,
+    closed: bool,
     observations: VecDeque<CommitEvent>,
     dropped_through: Option<CommitSeq>,
+    changes: tokio::sync::watch::Sender<()>,
 }
 
 impl Session {
@@ -31,8 +33,10 @@ impl Session {
     pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
         let mut session = Self {
             store: MemoryStore::new(session_id),
+            closed: false,
             observations: VecDeque::new(),
             dropped_through: None,
+            changes: tokio::sync::watch::channel(()).0,
         };
         session.transact(|transaction| transaction.create_root())?;
         Ok(session)
@@ -82,6 +86,7 @@ impl Session {
     }
 
     pub fn admit_input(&mut self, request: InputRequest) -> Result<InputReceipt, SessionError> {
+        self.ensure_open()?;
         if let Some(key) = request.request_key.as_ref()
             && let Some(receipt) = self.replay_input(key, &request)?
         {
@@ -140,6 +145,23 @@ impl Session {
         }
     }
 
+    pub(crate) fn ensure_open(&self) -> Result<(), SessionError> {
+        if self.closed {
+            Err(SessionError::Closed)
+        } else {
+            Ok(())
+        }
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.closed = true;
+        self.changes.send_replace(());
+    }
+
+    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
+        self.changes.subscribe()
+    }
+
     pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
         self.store.state().tasks.get(&task_id).cloned()
     }
@@ -185,6 +207,7 @@ impl Session {
         &mut self,
         task_id: TaskId,
     ) -> Result<CancellationReceipt, SessionError> {
+        self.ensure_open()?;
         let state = self.store.state();
         let task = state
             .tasks
@@ -254,6 +277,7 @@ impl Session {
         &mut self,
         build: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
     ) -> Result<(T, CommitSeq), SessionError> {
+        self.ensure_open()?;
         let mut transaction = Transaction::new(self.store.state());
         let value = build(&mut transaction)?;
         let batch = transaction.finish()?;
@@ -277,5 +301,6 @@ impl Session {
             self.dropped_through = Some(dropped.commit_seq);
         }
         self.observations.push_back(event);
+        self.changes.send_replace(());
     }
 }

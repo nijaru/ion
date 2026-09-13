@@ -21,14 +21,14 @@ pub use id::{
     ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
 };
 pub use session::{
-    ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest, InputReceipt,
-    InputRequest, Session, SessionError, TaskCancellation, TaskDriver, TaskDriverError,
-    TaskReceipt, TaskRequest,
+    CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt, EntryRequest,
+    InputReceipt, InputRequest, Session, SessionError, TaskCancellation, TaskCapacity, TaskDriver,
+    TaskDriverError, TaskReceipt, TaskRequest,
 };
 pub use task::{
-    AbortContext, InvocationKind, RunningTask, TaskCompletion, TaskContext, TaskContextError,
-    TaskFuture, TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome,
-    TaskOutcomeKind, TaskOutput, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError,
-    TaskStatus,
+    AbortContext, InvocationKind, ResourceDomain, RunningTask, TaskCompletion, TaskContext,
+    TaskContextError, TaskFuture, TaskInvocation, TaskKind, TaskKindName, TaskKindNameError,
+    TaskOutcome, TaskOutcomeKind, TaskOutput, TaskRecord, TaskRegistry, TaskRegistryError,
+    TaskRunError, TaskStatus,
 };
 pub use view::{Change, CommitEvent, ObservationBatch, SessionSnapshot};

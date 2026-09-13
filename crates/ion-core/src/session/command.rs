@@ -110,6 +110,8 @@ pub(crate) struct CancellationReceipt {
 
 #[derive(Debug, Error)]
 pub enum SessionError {
+    #[error("session is closed or faulted")]
+    Closed,
     #[error("unknown conversation {0}")]
     UnknownConversation(ConversationId),
     #[error("unknown input {0}")]

@@ -8,7 +8,7 @@ mod registry;
 pub use context::{AbortContext, TaskContext, TaskContextError};
 pub(crate) use context::{ContextFuture, TaskRuntime};
 pub use invocation::{InvocationKind, TaskInvocation};
-pub use kind::{RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};
+pub use kind::{ResourceDomain, RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};
 pub use output::TaskOutput;
 pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,

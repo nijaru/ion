@@ -10,7 +10,19 @@ use crate::{CommitSeq, ConversationId, InvocationKind, TaskId, TaskOutcome, Task
 pub type TaskFuture<'a> =
     Pin<Box<dyn Future<Output = Result<TaskCompletion, TaskRunError>> + Send + 'a>>;
 
+/// A single scarce resource held only while an eligible invocation runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ResourceDomain {
+    Model,
+    Tool,
+    Process,
+}
+
 pub trait TaskKind: Send + Sync {
+    fn resource_domain(&self) -> Option<ResourceDomain> {
+        None
+    }
+
     fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a>;
 
     fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a>;

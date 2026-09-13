@@ -16,18 +16,35 @@ use crate::{
 
 #[derive(Clone)]
 pub struct TaskDriver {
-    session: Arc<Mutex<Session>>,
+    pub(super) session: Arc<Mutex<Session>>,
     registry: Arc<TaskRegistry>,
+    capacity: super::TaskCapacity,
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
+    drained: tokio::sync::watch::Sender<()>,
+    stopping: CancellationToken,
+    fault: CancellationToken,
 }
 
 impl TaskDriver {
     #[must_use]
     pub fn new(session: Session, registry: TaskRegistry) -> Self {
+        Self::with_capacity(session, registry, super::TaskCapacity::default())
+    }
+
+    #[must_use]
+    pub fn with_capacity(
+        session: Session,
+        registry: TaskRegistry,
+        capacity: super::TaskCapacity,
+    ) -> Self {
         Self {
+            capacity,
             session: Arc::new(Mutex::new(session)),
             registry: Arc::new(registry),
             active: Arc::new(StdMutex::new(HashMap::new())),
+            drained: tokio::sync::watch::channel(()).0,
+            stopping: CancellationToken::new(),
+            fault: CancellationToken::new(),
         }
     }
 
@@ -36,7 +53,30 @@ impl TaskDriver {
     }
 
     pub async fn drive_task(&self, task_id: TaskId) -> Result<DriveOutcome, TaskDriverError> {
-        let active = ActiveInvocation::acquire(self.active.clone(), task_id)?;
+        // Admission and close are serialized by the session writer. The owned
+        // drive outlives its caller so dropping a receipt cannot orphan a handler.
+        let session = self.session.lock().await;
+        session.ensure_open()?;
+        let active = ActiveInvocation::acquire(self.active.clone(), task_id, self.drained.clone())?;
+        let driver = self.clone();
+        let join = tokio::spawn(async move { driver.drive_owned(task_id, active).await });
+        drop(session);
+        join.await
+            .map_err(|error| TaskDriverError::DriverJoin(error.to_string()))?
+    }
+
+    async fn drive_owned(
+        &self,
+        task_id: TaskId,
+        active: ActiveInvocation,
+    ) -> Result<DriveOutcome, TaskDriverError> {
+        let eligible = self.wait_dependencies(task_id).await?;
+        let handler = self.registry.get(&eligible.kind, eligible.schema_version);
+        let _permit = tokio::select! {
+            biased;
+            () = self.stopping.cancelled() => return Err(SessionError::Closed.into()),
+            permit = self.capacity.acquire(handler.as_ref().and_then(|kind| kind.resource_domain())) => permit,
+        };
         let (task, receipt) = {
             let mut session = self.session.lock().await;
             let task = session
@@ -47,7 +87,6 @@ impl TaskDriver {
             (task, receipt)
         };
 
-        let handler = self.registry.get(&task.kind, task.schema_version);
         let running = running_task(task, receipt);
         let completion = match handler.as_ref() {
             Some(handler) => {
@@ -66,6 +105,30 @@ impl TaskDriver {
         }
 
         self.finish_normal(running, completion, handler).await
+    }
+
+    /// Stop admission and canonical writes, then join all local drives.
+    /// Graceful close asks normal handlers to return cooperatively; fault close
+    /// drops their futures after fencing. Neither marks durable cancellation.
+    pub async fn close(&self, mode: CloseMode) {
+        let mut drained = self.drained.subscribe();
+        {
+            let mut session = self.session.lock().await;
+            session.close();
+            self.stopping.cancel();
+            if mode == CloseMode::Fault {
+                self.fault.cancel();
+            }
+            for token in self.active.lock().expect("active task mutex").values() {
+                token.cancel();
+            }
+        }
+        loop {
+            if self.active.lock().expect("active task mutex").is_empty() {
+                return;
+            }
+            drained.changed().await.expect("driver owns drain sender");
+        }
     }
 
     pub async fn cancel_task(&self, task_id: TaskId) -> Result<TaskCancellation, TaskDriverError> {
@@ -178,15 +241,18 @@ impl TaskDriver {
         });
         let context = TaskContext::new(runtime, running.id, running.generation, cancellation);
         let invocation_kind = running.invocation_kind;
-        let join = tokio::spawn(async move {
+        let mut join = tokio::spawn(async move {
             match invocation_kind {
                 InvocationKind::Execute => handler.execute(running, context).await,
                 InvocationKind::Recover => handler.recover(running, context).await,
                 InvocationKind::Abort => unreachable!("abort uses restricted context"),
             }
-        })
-        .await;
-        completion_from_join(join)
+        });
+        let result = tokio::select! {
+            result = &mut join => result,
+            () = self.fault.cancelled() => { join.abort(); join.await }
+        };
+        completion_from_join(result)
     }
 
     async fn run_abort_handler(
@@ -198,8 +264,12 @@ impl TaskDriver {
             session: self.session.clone(),
         });
         let context = AbortContext::new(runtime, running.id, running.generation);
-        let join = tokio::spawn(async move { handler.abort(running, context).await }).await;
-        completion_from_join(join)
+        let mut join = tokio::spawn(async move { handler.abort(running, context).await });
+        let result = tokio::select! {
+            result = &mut join => result,
+            () = self.fault.cancelled() => { join.abort(); join.await }
+        };
+        completion_from_join(result)
     }
 
     async fn settle(
@@ -303,12 +373,14 @@ struct ActiveInvocation {
     active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
     task_id: TaskId,
     token: CancellationToken,
+    drained: tokio::sync::watch::Sender<()>,
 }
 
 impl ActiveInvocation {
     fn acquire(
         active: Arc<StdMutex<HashMap<TaskId, CancellationToken>>>,
         task_id: TaskId,
+        drained: tokio::sync::watch::Sender<()>,
     ) -> Result<Self, TaskDriverError> {
         let token = CancellationToken::new();
         {
@@ -322,6 +394,7 @@ impl ActiveInvocation {
             active,
             task_id,
             token,
+            drained,
         })
     }
 
@@ -336,7 +409,14 @@ impl Drop for ActiveInvocation {
             .lock()
             .expect("active task mutex")
             .remove(&self.task_id);
+        self.drained.send_replace(());
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CloseMode {
+    Graceful,
+    Fault,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -357,6 +437,8 @@ pub struct TaskCancellation {
 
 #[derive(Debug, Error)]
 pub enum TaskDriverError {
+    #[error("local task driver failed to join: {0}")]
+    DriverJoin(String),
     #[error(transparent)]
     Session(#[from] SessionError),
     #[error("task {0} already has a live local invocation")]

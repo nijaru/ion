@@ -252,10 +252,11 @@ Implemented:
 
 Still open:
 
-- first-class wait/dependency subscriptions and wakeups;
-- explicit execution/resource capacity accounting and capacity-safe waits;
-- host close/fault/join policy for live invocations;
-- session/store fail-stop propagation to task drivers;
+- persistence-store fail-stop propagation to task drivers;
+- writable ownership release after local joins.
+
+Storage-independent waits, capacity and close are implemented: client waits recheck committed state after notifications; dependency waits precede independent resource permits; admitted drives outlive callers; graceful close signals and joins, while fault close aborts and joins async futures. Both fence canonical writes without durably cancelling unfinished work. Dependencies are immutable backward references; dynamic invocation waits are not exposed. Persistence-dependent work remains:
+
 - persistence-backed reopen/recovery tests once K4 exists.
 
 Do not add a second scheduler to solve these. Extend the same session/task driver boundary.

@@ -108,10 +108,11 @@ Implemented now:
 
 Still open before K3 is considered complete:
 
-- first-class task/dependency wait APIs and wakeups that do not consume execution capacity;
-- explicit capacity/resource scheduling rather than caller-driven retries;
-- host close/fault/join behavior for live invocations;
-- fail-stop behavior if the session owner/store faults while tasks are live;
+- automatic fail-stop propagation if the persistence store faults while tasks are live (K4 split);
+- writable ownership release after local joins (K4).
+
+The storage-independent wait/capacity/close slice implements client task/dependency waits over committed-state notifications, independent optional model/tool/process limits, driver-owned invocation lifetime across caller disappearance, and graceful/fault close with canonical-write fencing and local joins. Immutable dependencies reject self/forward references by requiring existing tasks; there is no dynamic invocation wait graph. Deterministic tests live in `k3_waits.rs`, `k3_close.rs` and the capacity unit tests. Format, strict workspace Clippy and full workspace tests pass for this slice. Persistence-backed evidence remains open:
+
 - persisted reopen/crash recovery and explicit resume/drive, which require K4 storage to test honestly.
 
 ### K4 — fresh SQLite session store
