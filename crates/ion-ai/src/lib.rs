@@ -11,10 +11,10 @@ mod usage;
 
 pub use content::{Content, ToolCall, ToolResult};
 pub use error::{ProviderError, ProviderErrorKind};
-pub use message::{Message, Role};
+pub use message::{Message, ProviderReplay, Role};
 pub use model::ModelRef;
 pub use request::ModelRequest;
-pub use response::{ModelResponse, ModelStreamEvent};
+pub use response::{IncompleteReason, ModelResponse, ModelStreamEvent, ResponseTermination};
 pub use scripted::{Script, ScriptedModelService};
 pub use service::{BoxFuture, ModelService, ModelStream};
 pub use tool::ToolSpec;

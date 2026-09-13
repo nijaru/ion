@@ -333,9 +333,11 @@ ScriptedModelService
 
 The model service receives no `SessionId`, `ConversationId`, `TaskId`, database command, credential-store handle or runtime mutation signal.
 
-Provider-specific opaque replay metadata may be attached to otherwise provider-neutral assistant content. Another provider may ignore incompatible metadata safely.
+Provider-specific opaque replay metadata may be attached to otherwise provider-neutral assistant content, carrying its originating provider so an adapter explicitly decides whether reuse is valid. It is preserved verbatim; dropping or reconstructing it is an explicit adapter decision, never a silent default.
 
-Typed provider failures cross the boundary as facts. Generation tasks own durable retry/backoff/compaction/usage policy. Hidden provider/SDK retries that bypass durable attempt accounting are disabled or controlled.
+A finished transport stream is not necessarily a complete answer. Responses carry termination state (`Completed` or `Incomplete` with a reason such as output-token or context exhaustion), and a generation task must not settle an incomplete response as a successful final answer. Reported usage distinguishes unknown from a reported zero, so an interrupted request is never silently accounted as free.
+
+Typed provider failures cross the boundary as facts. Generation tasks own durable retry/backoff/compaction/usage policy, and they freeze request-relevant identity (model/settings, context cutoff, tool specifications, implementation revision) at the durable boundary so recovery cannot silently continue against changed inputs. Provisional stream output carries stable task/invocation identity so late frames cannot attach to a successor generation. Hidden provider/SDK retries that bypass durable attempt accounting are disabled or controlled.
 
 The later provider pass extends `ion-ai` roughly as:
 
@@ -391,7 +393,7 @@ Conversation/session summaries must not require loading every historical transcr
 
 ## 17. Persistence
 
-Semantic rule: one session has one crash-atomic canonical store boundary.
+Semantic rule: one session has one crash-atomic canonical store boundary. Semantic ownership of a session does not imply full-history residency: the owner reads committed records through typed indexed queries and stages a small transaction overlay, so a commit never costs O(history) and checkpointing an active task never hydrates unrelated historical payloads. Session summaries and observation recovery use bounded views rather than full-state snapshots.
 
 Leading physical topology:
 

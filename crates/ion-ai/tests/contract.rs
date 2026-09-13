@@ -1,8 +1,8 @@
 use futures_util::StreamExt;
 use ion_ai::{
-    Content, Message, ModelRef, ModelRequest, ModelResponse, ModelService, ModelStreamEvent,
-    ProviderError, ProviderErrorKind, Role, Script, ScriptedModelService, ToolCall, ToolSpec,
-    Usage,
+    Content, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse, ModelService,
+    ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, ResponseTermination, Role,
+    Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
 };
 
 fn request() -> ModelRequest {
@@ -28,28 +28,38 @@ fn request() -> ModelRequest {
     }
 }
 
+fn response(message: Message, usage: Usage, termination: ResponseTermination) -> ModelResponse {
+    ModelResponse {
+        message,
+        usage,
+        termination,
+    }
+}
+
 #[tokio::test]
 async fn scripted_service_streams_provider_neutral_events() {
-    let usage = Usage {
-        input_tokens: 10,
-        output_tokens: 4,
-    };
+    let usage = Usage::known(10, 4);
     let tool_call = ToolCall {
         id: "call-1".to_owned(),
         name: "read".to_owned(),
         arguments: serde_json::json!({"path": "src/lib.rs"}),
     };
-    let response = ModelResponse {
-        message: Message {
+    let response = response(
+        Message {
             role: Role::Assistant,
             content: vec![
                 Content::Text("I will inspect it.".to_owned()),
                 Content::ToolCall(tool_call.clone()),
             ],
-            provider_replay: Some(serde_json::json!({"opaque": "provider-state"})),
+            provider_replay: Some(ProviderReplay::new(
+                "scripted",
+                "reasoning",
+                serde_json::json!({"opaque": "provider-state"}),
+            )),
         },
         usage,
-    };
+        ResponseTermination::Completed,
+    );
     let expected = vec![
         ModelStreamEvent::TextDelta("I will inspect it.".to_owned()),
         ModelStreamEvent::ToolCall(tool_call),
@@ -68,8 +78,65 @@ async fn scripted_service_streams_provider_neutral_events() {
     assert_eq!(observed, expected);
     assert_eq!(
         observed.last(),
-        Some(&ModelStreamEvent::Completed(response))
+        Some(&ModelStreamEvent::Completed(response.clone()))
     );
+    assert!(response.is_complete());
+    let replay = response
+        .message
+        .provider_replay
+        .as_ref()
+        .expect("replay material");
+    assert!(replay.is_compatible_with("scripted"));
+    assert!(!replay.is_compatible_with("other-provider"));
+}
+
+#[tokio::test]
+async fn incomplete_termination_is_not_a_complete_answer() {
+    let response = response(
+        Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("partial".to_owned())],
+            provider_replay: None,
+        },
+        Usage::known(120, 0),
+        ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+    );
+    assert!(!response.is_complete());
+    assert_eq!(
+        response.termination,
+        ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+    );
+
+    let service = ScriptedModelService::new([Script::Stream(vec![
+        ModelStreamEvent::TextDelta("partial".to_owned()),
+        ModelStreamEvent::Completed(response),
+    ])]);
+    let stream = service.stream(request()).await.expect("open stream");
+    let observed: Vec<_> = stream
+        .map(|event| event.expect("scripted event"))
+        .collect()
+        .await;
+    match observed.last() {
+        Some(ModelStreamEvent::Completed(response)) => assert!(!response.is_complete()),
+        other => panic!("expected completion, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_usage_is_distinct_from_reported_zero() {
+    let unknown = Usage::unknown();
+    let zero = Usage::known(0, 0);
+    assert_ne!(unknown, zero);
+    assert!(!unknown.is_known());
+    assert!(zero.is_known());
+    // Structured usage also survives a round trip without collapsing to zero.
+    let encoded = serde_json::to_value(unknown).expect("serialize");
+    assert_eq!(
+        encoded,
+        serde_json::json!({"input_tokens": null, "output_tokens": null})
+    );
+    let decoded: Usage = serde_json::from_value(encoded).expect("deserialize");
+    assert_eq!(decoded, unknown);
 }
 
 #[tokio::test]

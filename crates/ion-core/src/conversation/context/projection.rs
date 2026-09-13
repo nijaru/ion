@@ -123,7 +123,8 @@ fn normalize_tool_exchanges(messages: Vec<Message>) -> Result<Vec<Message>, Cont
 
         output.push(message.clone());
         index += 1;
-        let mut results: HashMap<String, (ToolResult, Option<serde_json::Value>)> = HashMap::new();
+        let mut results: HashMap<String, (ToolResult, Option<ion_ai::ProviderReplay>)> =
+            HashMap::new();
         while index < messages.len() && messages[index].role == Role::Tool {
             let tool_message = &messages[index];
             for content in &tool_message.content {

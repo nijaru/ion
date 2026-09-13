@@ -296,6 +296,22 @@ commit path
 
 The exact private Rust shape may be a narrow store trait, enum or another simpler representation; do not generalize it into a public pluggable database framework. The important invariant is persistence-before-resident-apply/publish with exactly one semantic writer.
 
+#### Residency decision
+
+Semantic ownership is not the same as keeping every record in memory. `Session` owns the semantics, but it must not require full-history residency, and no commit may cost O(history).
+
+Chosen shape: **typed indexed reads plus a small transaction overlay**. The owner reads committed records through typed point/range queries and stages writes as an overlay; a commit validates against base-plus-overlay, persists the overlay, then applies it to resident indexes. This is preferred over a bounded resident working set with ad-hoc loaders because it avoids hand-built cache invalidation and keeps one read path.
+
+Required K4 invariants:
+
+1. checkpointing an active task must not copy or hydrate unrelated historical task payloads;
+2. session summaries and observation recovery use bounded views, not full-state snapshots;
+3. context construction at a frozen cutoff can run without holding the mutation line;
+4. a durable commit followed by an unexpected resident-apply failure is a fail-stop/reopen condition, never silent divergence;
+5. the current `Transaction::new` full-`SessionState` clone is a K2 proof shortcut and must be removed here.
+
+Index tuning, measured thresholds and cold-history paging remain P2 work; these are structural requirements.
+
 On open, SQLite reconstructs or lazily supplies the resident state needed by the kernel. Opening/inspection must not drive tasks. Running tasks remain durable records and are entered through explicit recovery drive.
 
 For old development data, preserve/archive/refuse according to the pre-1.0 policy. A migration can be written later only if preserving old sessions is actually valuable.
