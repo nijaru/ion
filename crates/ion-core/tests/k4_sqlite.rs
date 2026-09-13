@@ -307,6 +307,51 @@ async fn reopening_reconstructs_entries_inputs_tasks_and_turns() {
     assert_eq!(second.snapshot(), before);
 }
 
+#[tokio::test]
+async fn a_driver_creates_and_opens_an_on_disk_session() {
+    let db = TempDb::new("driver-open");
+    let driver = TaskDriver::create(db.path(), registry()).expect("create over the driver");
+    let root = driver.snapshot().await.root_conversation;
+    let turn = driver
+        .create_turn(TaskRequest {
+            conversation_id: root,
+            kind: kind("scoped"),
+            schema_version: 1,
+            input: json!({}),
+            dependencies: Vec::new(),
+        })
+        .await
+        .expect("turn");
+    driver.drive_task(turn.task_id).await.expect("drive");
+    let before = driver.snapshot().await;
+    let summary = driver.summary().await;
+    assert_eq!(
+        foreground(&driver, root).await,
+        Some(turn.task_id),
+        "the scoped successor still holds the slot"
+    );
+    driver.close(CloseMode::Graceful).await;
+    drop(driver);
+
+    // The client can reopen through the driver, and opening reads only: the
+    // pending successor is not driven and the slot is unchanged.
+    let reopened = TaskDriver::open(db.path(), registry()).expect("open over the driver");
+    assert_eq!(reopened.snapshot().await, before);
+    assert_eq!(reopened.summary().await, summary);
+    assert_eq!(foreground(&reopened, root).await, Some(turn.task_id));
+    assert_eq!(
+        reopened
+            .snapshot()
+            .await
+            .tasks
+            .iter()
+            .filter(|task| matches!(task.status, TaskStatus::Pending))
+            .count(),
+        1,
+        "opening starts no work"
+    );
+}
+
 /// A handler that panics leaves the task durably running, which is the state a
 /// reopened process has to find and explicitly recover.
 struct Panicking;

@@ -34,6 +34,55 @@ impl TaskDriver {
         Self::with_capacity(session, registry, super::TaskCapacity::default())
     }
 
+    /// Create a new on-disk session and drive it.
+    ///
+    /// The file gets a fresh schema; an existing database is refused. This is
+    /// the client entry point, so a caller never constructs a `Session` itself.
+    pub fn create(
+        path: impl AsRef<std::path::Path>,
+        registry: TaskRegistry,
+    ) -> Result<Self, TaskDriverError> {
+        Ok(Self::new(Session::create(path)?, registry))
+    }
+
+    /// Create a new on-disk session with explicit capacity limits.
+    pub fn create_with_capacity(
+        path: impl AsRef<std::path::Path>,
+        registry: TaskRegistry,
+        capacity: super::TaskCapacity,
+    ) -> Result<Self, TaskDriverError> {
+        Ok(Self::with_capacity(
+            Session::create(path)?,
+            registry,
+            capacity,
+        ))
+    }
+
+    /// Open an existing on-disk session and drive it.
+    ///
+    /// This reads durable records only. A task that was running when the process
+    /// died stays running and needs an explicit recovery drive, so opening a
+    /// session never starts work.
+    pub fn open(
+        path: impl AsRef<std::path::Path>,
+        registry: TaskRegistry,
+    ) -> Result<Self, TaskDriverError> {
+        Ok(Self::new(Session::open(path)?, registry))
+    }
+
+    /// Open an existing on-disk session with explicit capacity limits.
+    pub fn open_with_capacity(
+        path: impl AsRef<std::path::Path>,
+        registry: TaskRegistry,
+        capacity: super::TaskCapacity,
+    ) -> Result<Self, TaskDriverError> {
+        Ok(Self::with_capacity(
+            Session::open(path)?,
+            registry,
+            capacity,
+        ))
+    }
+
     #[must_use]
     pub fn with_capacity(
         session: Session,

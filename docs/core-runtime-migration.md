@@ -279,7 +279,9 @@ Evidence is in-process plus one real process-death test (`tests/k4_sqlite.rs`). 
 
 What that does **not** establish: durability under machine power loss or kernel failure, which depends on the filesystem honouring `fsync` and cannot be tested from inside one machine. The claim is scoped to process death, which is what the test actually observes.
 
-Still open for this slice: letting the driver open on-disk sessions (only `Session` does today); cold-history reads, since the resident store still holds every record after open and the per-commit map-structure clone remains; a `Session::create` path that refuses an occupied file is covered, but backup/repair and orphan-artifact handling are not; and index tuning.
+`TaskDriver::{create, open, create_with_capacity, open_with_capacity}` are the client entry points, so a caller never constructs a `Session` itself; opening through the driver still reads only.
+
+Still open for this slice: cold-history reads, since the resident store still holds every record after open and the per-commit map-structure clone remains; a `Session::create` path that refuses an occupied file is covered, but backup/repair and orphan-artifact handling are not; and index tuning.
 
 The pre-SQL work this section used to gate on is complete: the resident/persistence split, restricted task finalization with same-batch references, typed authoring adaptation, foreground-turn membership, safe context validation, and the bounded/fallible read and observation contract (invariants 7-9 below; invariant 6 lands with the SQLite read path).
 
