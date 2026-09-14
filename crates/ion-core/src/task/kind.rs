@@ -44,7 +44,7 @@ pub struct RunningTask {
     pub reservation_commit: CommitSeq,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct TaskCompletion {
     pub outcome: TaskOutcome,
     pub output: Option<TaskOutput>,

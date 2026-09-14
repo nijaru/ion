@@ -171,5 +171,13 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<SessionState, 
             .map_err(|error| StoreError::other(format!("invalid stored task: {error}")))?;
     }
 
+    // Parsing records individually does not re-establish the writer's
+    // invariants. A store that cannot have been produced by a valid commit
+    // sequence is refused before a writable owner exists; guessing a sequence or
+    // rewriting evidence would discard the fact that it is untrustworthy.
+    state
+        .validate_reconstruction()
+        .map_err(|error| StoreError::other(format!("inconsistent session: {error}")))?;
+
     Ok(state)
 }

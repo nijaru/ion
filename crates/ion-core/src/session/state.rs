@@ -13,11 +13,11 @@ use crate::{
     TaskKindName, TaskRecord, TaskStatus,
 };
 
-/// Resident semantic state. Records are held behind `Arc` so a transaction
-/// draft clones map structure without copying record payloads; a mutation only
-/// deep-copies the records it actually touches (copy-on-write). R6 replaces the
-/// remaining per-commit map clone and the whole-history scans with indexes and
-/// typed indexed storage reads.
+/// Resident semantic state. Records are held behind `Arc` so a command writes in
+/// place through the rollback journal and copies only the records it touches;
+/// the per-commit clone of every map was removed at `54367ada`, and the derived
+/// indexes below are the read path that replaced the whole-history scans. What
+/// remains open is residency: `open` still materializes every record (R6).
 ///
 /// `entries_by_conversation` is a derived index of `entries`: it answers "which
 /// entries belong to this conversation, in order" without scanning every entry
@@ -128,12 +128,17 @@ impl SessionState {
     }
 
     /// Store one input, refusing a duplicate id, and index it if it is queued.
+    ///
+    /// The rejection is checked before the record is stored, so a duplicate
+    /// leaves the resident record and its index exactly as they were; there is
+    /// no inverse to record because no write happened.
     pub(crate) fn insert_input(&mut self, input: Input) -> Result<(), StateError> {
         let id = input.id;
         let queued = input.disposition == InputDisposition::Queued;
-        if self.inputs.insert(id, Arc::new(input)).is_some() {
+        if let std::collections::btree_map::Entry::Occupied(_) = self.inputs.entry(id) {
             return Err(StateError::DuplicateInput(id));
         }
+        self.inputs.insert(id, Arc::new(input));
         if queued {
             self.queued.insert(id);
         }
@@ -141,14 +146,16 @@ impl SessionState {
     }
 
     /// Store one task, refusing a duplicate id, and index its turn and
-    /// dependencies.
+    /// dependencies. A duplicate leaves the stored task and its indexes
+    /// unchanged.
     pub(crate) fn insert_task(&mut self, task: TaskRecord) -> Result<(), StateError> {
         let id = task.id;
         let turn = task.turn;
         let dependencies = task.dependencies.clone();
-        if self.tasks.insert(id, Arc::new(task)).is_some() {
+        if let std::collections::btree_map::Entry::Occupied(_) = self.tasks.entry(id) {
             return Err(StateError::DuplicateTask(id));
         }
+        self.tasks.insert(id, Arc::new(task));
         if let Some(turn) = turn {
             self.tasks_by_turn.entry(turn).or_default().insert(id);
         }
@@ -185,9 +192,10 @@ impl SessionState {
     pub(crate) fn insert_entry(&mut self, entry: Entry) -> Result<(), StateError> {
         let conversation_id = entry.conversation_id;
         let entry_id = entry.id;
-        if self.entries.insert(entry_id, Arc::new(entry)).is_some() {
+        if let std::collections::btree_map::Entry::Occupied(_) = self.entries.entry(entry_id) {
             return Err(StateError::DuplicateEntry(entry_id));
         }
+        self.entries.insert(entry_id, Arc::new(entry));
         self.entries_by_conversation
             .entry(conversation_id)
             .or_default()
@@ -241,6 +249,383 @@ impl SessionState {
     /// One entry record, without materializing an index or a transcript.
     pub(crate) fn entry(&self, entry_id: EntryId) -> Option<&Entry> {
         self.entries.get(&entry_id).map(|entry| &**entry)
+    }
+
+    /// One conversation record.
+    pub(crate) fn conversation(&self, conversation_id: ConversationId) -> Option<&Conversation> {
+        self.conversations
+            .get(&conversation_id)
+            .map(|conversation| &**conversation)
+    }
+
+    /// Reject a reconstructed state that no valid commit sequence could have
+    /// produced.
+    ///
+    /// Opening a session loads records written by an earlier process, a damaged
+    /// database or an older build. Parsing individual records does not
+    /// re-establish the writer's invariants, so the whole state is checked before
+    /// a writable owner exists. A failure refuses the session instead of repairing
+    /// it: guessing a sequence or rewriting evidence would discard the very
+    /// fact that the store is no longer trustworthy.
+    pub(crate) fn validate_reconstruction(&self) -> Result<(), StateError> {
+        self.validate_sequence_bounds()?;
+        self.validate_conversations()?;
+        self.validate_entries()?;
+        self.validate_inputs()?;
+        self.validate_tasks()
+    }
+
+    /// Every durable id comes from one monotonic sequence and every commit from
+    /// the commit cursor, so neither may exceed what the metadata records.
+    fn validate_sequence_bounds(&self) -> Result<(), StateError> {
+        let records: usize =
+            self.conversations.len() + self.entries.len() + self.inputs.len() + self.tasks.len();
+        if records > 0 && self.last_seq.is_none() {
+            return Err(StateError::InconsistentReconstruction {
+                rule: "sequence bound",
+                detail: "records exist but no local sequence was recorded".to_owned(),
+            });
+        }
+        let bound = self.last_seq.map(LocalSeq::get).unwrap_or_default();
+        let within = |what: &str, id: i64| -> Result<(), StateError> {
+            if id > bound {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "sequence bound",
+                    detail: format!("{what} {id} exceeds the recorded sequence {bound}"),
+                });
+            }
+            Ok(())
+        };
+        for conversation in self.conversations.keys() {
+            within("conversation", conversation.get())?;
+        }
+        for entry in self.entries.keys() {
+            within("entry", entry.get())?;
+        }
+        for input in self.inputs.keys() {
+            within("input", input.get())?;
+        }
+        for task in self.tasks.keys() {
+            within("task", task.get())?;
+        }
+        if !self.input_commits.is_empty() && self.last_commit.is_none() {
+            return Err(StateError::InconsistentReconstruction {
+                rule: "commit bound",
+                detail: "committed inputs exist but no commit cursor was recorded".to_owned(),
+            });
+        }
+        let commit_bound = self.last_commit.map(CommitSeq::get).unwrap_or_default();
+        for (input, commit) in &self.input_commits {
+            if commit.get() > commit_bound {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "commit bound",
+                    detail: format!(
+                        "input {input} was admitted at commit {} beyond the recorded cursor {commit_bound}",
+                        commit.get()
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_conversations(&self) -> Result<(), StateError> {
+        let root =
+            self.root_conversation
+                .ok_or_else(|| StateError::InconsistentReconstruction {
+                    rule: "session root",
+                    detail: "no root conversation was recorded".to_owned(),
+                })?;
+        let root_record =
+            self.conversation(root)
+                .ok_or_else(|| StateError::InconsistentReconstruction {
+                    rule: "session root",
+                    detail: format!("root conversation {root} is missing"),
+                })?;
+        if root_record.owner_task.is_some() {
+            return Err(StateError::InconsistentReconstruction {
+                rule: "session root",
+                detail: format!("root conversation {root} is owned by a task"),
+            });
+        }
+        for conversation in self.conversations.values() {
+            let id = conversation.id;
+            if let Some(parent) = conversation.parent {
+                if self.conversation(parent.conversation_id).is_none() {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "history parent",
+                        detail: format!(
+                            "conversation {id} inherits from missing conversation {}",
+                            parent.conversation_id
+                        ),
+                    });
+                }
+                if self.entry(parent.at).is_none() {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "history parent",
+                        detail: format!(
+                            "conversation {id} inherits from missing entry {}",
+                            parent.at
+                        ),
+                    });
+                }
+            }
+            if let Some(owner) = conversation.owner_task {
+                let task = self.tasks.get(&owner).ok_or_else(|| {
+                    StateError::InconsistentReconstruction {
+                        rule: "ownership",
+                        detail: format!("conversation {id} is owned by missing task {owner}"),
+                    }
+                })?;
+                if !task.owned_conversations.contains(&id) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "ownership",
+                        detail: format!(
+                            "conversation {id} names owner {owner}, which does not own it"
+                        ),
+                    });
+                }
+            }
+            if let Some(turn) = conversation.foreground_turn {
+                let record = self.tasks.get(&turn).ok_or_else(|| {
+                    StateError::InconsistentReconstruction {
+                        rule: "foreground turn",
+                        detail: format!("conversation {id} holds missing turn {turn}"),
+                    }
+                })?;
+                if record.turn != Some(turn) || record.conversation_id != id {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "foreground turn",
+                        detail: format!("conversation {id} does not hold the root of turn {turn}"),
+                    });
+                }
+            }
+            if conversation.turn_cancelled && conversation.foreground_turn.is_none() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "foreground turn",
+                    detail: format!("conversation {id} records a cancelled turn but holds no slot"),
+                });
+            }
+            if conversation.retired && self.conversation_has_live_work(id) {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "retirement",
+                    detail: format!("retired conversation {id} still has live work"),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Whether a conversation holds a slot or non-terminal task, which retirement
+    /// is defined to exclude.
+    fn conversation_has_live_work(&self, conversation_id: ConversationId) -> bool {
+        self.conversations
+            .get(&conversation_id)
+            .is_some_and(|conversation| conversation.foreground_turn.is_some())
+            || self.tasks.values().any(|task| {
+                task.conversation_id == conversation_id
+                    && !matches!(task.status, TaskStatus::Terminal(_))
+            })
+    }
+
+    fn validate_entries(&self) -> Result<(), StateError> {
+        for entry in self.entries.values() {
+            if self.conversation(entry.conversation_id).is_none() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "entry conversation",
+                    detail: format!(
+                        "entry {} names missing conversation {}",
+                        entry.id, entry.conversation_id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_inputs(&self) -> Result<(), StateError> {
+        for input in self.inputs.values() {
+            if self.conversation(input.target).is_none() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "input target",
+                    detail: format!(
+                        "input {} targets missing conversation {}",
+                        input.id, input.target
+                    ),
+                });
+            }
+            let Some(placement) = input.disposition.placement() else {
+                continue;
+            };
+            let entry = self.entry(placement.entry).ok_or_else(|| {
+                StateError::InconsistentReconstruction {
+                    rule: "input placement",
+                    detail: format!(
+                        "input {} is placed at missing entry {}",
+                        input.id, placement.entry
+                    ),
+                }
+            })?;
+            if entry.conversation_id != input.target {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "input placement",
+                    detail: format!(
+                        "input {} is placed at an entry of another conversation",
+                        input.id
+                    ),
+                });
+            }
+            let turn = self.tasks.get(&placement.turn).ok_or_else(|| {
+                StateError::InconsistentReconstruction {
+                    rule: "input placement",
+                    detail: format!(
+                        "input {} is bound to missing turn {}",
+                        input.id, placement.turn
+                    ),
+                }
+            })?;
+            if turn.conversation_id != input.target {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "input placement",
+                    detail: format!(
+                        "input {} is bound to a turn of another conversation",
+                        input.id
+                    ),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_tasks(&self) -> Result<(), StateError> {
+        for task in self.tasks.values() {
+            let id = task.id;
+            if self.conversation(task.conversation_id).is_none() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "task conversation",
+                    detail: format!(
+                        "task {id} names missing conversation {}",
+                        task.conversation_id
+                    ),
+                });
+            }
+            for dependency in &task.dependencies {
+                if !self.tasks.contains_key(dependency) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "dependency",
+                        detail: format!("task {id} depends on missing task {dependency}"),
+                    });
+                }
+                if dependency.get() >= id.get() {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "dependency",
+                        detail: format!("task {id} depends forward on {dependency}"),
+                    });
+                }
+            }
+            for owned in &task.owned_conversations {
+                let conversation = self.conversation(*owned).ok_or_else(|| {
+                    StateError::InconsistentReconstruction {
+                        rule: "ownership",
+                        detail: format!("task {id} owns missing conversation {owned}"),
+                    }
+                })?;
+                if conversation.owner_task != Some(id) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "ownership",
+                        detail: format!(
+                            "task {id} lists conversation {owned}, which names another owner"
+                        ),
+                    });
+                }
+            }
+            if let Some(turn) = task.turn {
+                if turn.get() > id.get() {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "turn membership",
+                        detail: format!("task {id} belongs to later turn {turn}"),
+                    });
+                }
+                let root = self.tasks.get(&turn).ok_or_else(|| {
+                    StateError::InconsistentReconstruction {
+                        rule: "turn membership",
+                        detail: format!("task {id} belongs to missing turn {turn}"),
+                    }
+                })?;
+                if root.turn != Some(turn) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "turn membership",
+                        detail: format!("task {id} belongs to {turn}, which is not a turn root"),
+                    });
+                }
+            }
+            if let Some(closing) = task.turn_closed_by {
+                if task.turn != Some(id) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "turn receipt",
+                        detail: format!(
+                            "task {id} records closure but is not its conversation's turn root"
+                        ),
+                    });
+                }
+                let member = self.tasks.get(&closing).ok_or_else(|| {
+                    StateError::InconsistentReconstruction {
+                        rule: "turn receipt",
+                        detail: format!("turn {id} was closed by missing task {closing}"),
+                    }
+                })?;
+                if member.turn != Some(id) {
+                    return Err(StateError::InconsistentReconstruction {
+                        rule: "turn receipt",
+                        detail: format!("turn {id} was closed by non-member {closing}"),
+                    });
+                }
+            }
+            match task.status {
+                TaskStatus::Pending => {
+                    if task.generation != 0 || task.invocation.is_some() {
+                        return Err(StateError::InconsistentReconstruction {
+                            rule: "task lifecycle",
+                            detail: format!("pending task {id} records an invocation"),
+                        });
+                    }
+                }
+                TaskStatus::Running => {
+                    if task.generation == 0 || task.invocation.is_none() {
+                        return Err(StateError::InconsistentReconstruction {
+                            rule: "task lifecycle",
+                            detail: format!("running task {id} records no invocation"),
+                        });
+                    }
+                }
+                TaskStatus::Terminal(_) => {
+                    if task.generation == 0 {
+                        return Err(StateError::InconsistentReconstruction {
+                            rule: "task lifecycle",
+                            detail: format!("terminal task {id} records no invocation generation"),
+                        });
+                    }
+                    if task.invocation.is_some() {
+                        return Err(StateError::InconsistentReconstruction {
+                            rule: "task lifecycle",
+                            detail: format!("terminal task {id} still records an invocation"),
+                        });
+                    }
+                }
+            }
+            if let Some(invocation) = task.invocation
+                && invocation.generation != task.generation
+            {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "task lifecycle",
+                    detail: format!(
+                        "task {id} records generation {} with invocation generation {}",
+                        task.generation, invocation.generation
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// One page of a conversation's fork-visible entry order.
@@ -880,6 +1265,8 @@ pub(crate) enum StateError {
     },
     #[error("task {0} normal invocation is fenced by durable cancellation")]
     CancellationFence(TaskId),
+    #[error("inconsistent stored session ({rule}): {detail}")]
+    InconsistentReconstruction { rule: &'static str, detail: String },
     #[error("task {0} invocation generation space is exhausted")]
     GenerationExhausted(TaskId),
     #[error("conversation {0} already has a live foreground turn")]

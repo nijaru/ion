@@ -1,9 +1,10 @@
 use serde_json::json;
 
+use super::state::{SessionState, StateError};
 use super::*;
 use crate::{
-    ConversationId, InputBody, InputDisposition, InputMode, InputSender, InvocationKind,
-    TaskKindName, TaskOutcome, TaskOutcomeKind, TaskStatus,
+    CommitSeq, Conversation, ConversationId, InputBody, InputDisposition, InputMode, InputSender,
+    InvocationKind, TaskId, TaskKindName, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,
 };
 
 fn task_request(root: ConversationId, dependencies: Vec<crate::TaskId>) -> TaskRequest {
@@ -31,6 +32,128 @@ fn input_request(target: ConversationId, mode: InputMode) -> InputRequest {
         request_key: None,
         body: InputBody::Text("hello".to_owned()),
     }
+}
+
+#[test]
+fn a_duplicate_insert_leaves_records_and_indexes_unchanged() {
+    // The insertion owners are the only writers of the entry/task/input indexes,
+    // so a rejected duplicate must not have written the record it rejected. A
+    // resident-state comparison covers the private indexes as well as the
+    // records, which a public snapshot does not.
+    let mut state = SessionState::empty(crate::SessionId::new());
+    let conversation = ConversationId::new(1).expect("id");
+    state.conversations.insert(
+        conversation,
+        std::sync::Arc::new(Conversation::root(conversation)),
+    );
+    state.root_conversation = Some(conversation);
+    state.last_seq = Some(crate::LocalSeq::new(9).expect("sequence"));
+    state.last_commit = Some(CommitSeq::new(9).expect("commit"));
+
+    let entry_id = crate::EntryId::new(3).expect("id");
+    let entry = crate::Entry {
+        id: entry_id,
+        conversation_id: conversation,
+        kind: crate::EntryKind::new("user").expect("kind"),
+        data: json!({"text": "first"}),
+        projection: Vec::new(),
+        context: crate::conversation::context::ContextControl::none(),
+    };
+    state.insert_entry(entry.clone()).expect("first entry");
+    let task_id = TaskId::new(4).expect("id");
+    let task = TaskRecord::pending(
+        task_id,
+        conversation,
+        TaskKindName::new("test").expect("kind"),
+        1,
+        json!({"work": true}),
+        Vec::new(),
+    );
+    state.insert_task(task.clone()).expect("first task");
+    let input_id = crate::InputId::new(5).expect("id");
+    let input = crate::Input {
+        id: input_id,
+        target: conversation,
+        sender: InputSender::User,
+        mode: InputMode::QueueOnly,
+        request_key: None,
+        body: InputBody::Text("first".to_owned()),
+        disposition: InputDisposition::Queued,
+    };
+    state.insert_input(input.clone()).expect("first input");
+    let before = state.clone();
+
+    let mut replaced_entry = entry;
+    replaced_entry.data = json!({"text": "second"});
+    assert!(matches!(
+        state.insert_entry(replaced_entry),
+        Err(StateError::DuplicateEntry(id)) if id == entry_id
+    ));
+    let mut replaced_task = task;
+    replaced_task.input = json!({"work": false});
+    assert!(matches!(
+        state.insert_task(replaced_task),
+        Err(StateError::DuplicateTask(id)) if id == task_id
+    ));
+    let mut replaced_input = input;
+    replaced_input.body = InputBody::Text("second".to_owned());
+    assert!(matches!(
+        state.insert_input(replaced_input),
+        Err(StateError::DuplicateInput(id)) if id == input_id
+    ));
+
+    assert_eq!(state, before, "a rejected duplicate must change nothing");
+}
+
+#[test]
+fn reconstruction_refuses_a_store_that_no_commit_could_have_produced() {
+    let mut state = SessionState::empty(crate::SessionId::new());
+    let conversation = ConversationId::new(1).expect("id");
+    state.conversations.insert(
+        conversation,
+        std::sync::Arc::new(Conversation::root(conversation)),
+    );
+    state.root_conversation = Some(conversation);
+    state.last_seq = Some(crate::LocalSeq::new(4).expect("sequence"));
+    state.last_commit = Some(CommitSeq::new(1).expect("commit"));
+    state.validate_reconstruction().expect("a consistent store");
+
+    // A record beyond the recorded sequence is the state a lowered `last_seq`
+    // produces; it is refused rather than repaired.
+    state.conversations.insert(
+        ConversationId::new(9).expect("id"),
+        std::sync::Arc::new(Conversation::root(ConversationId::new(9).expect("id"))),
+    );
+    let beyond = state
+        .validate_reconstruction()
+        .expect_err("a record beyond the sequence must be refused");
+    assert!(matches!(
+        beyond,
+        StateError::InconsistentReconstruction { rule, .. } if rule == "sequence bound"
+    ));
+    state
+        .conversations
+        .remove(&ConversationId::new(9).expect("id"));
+    state.validate_reconstruction().expect("consistent again");
+
+    // An entry naming a conversation that was never stored.
+    state
+        .insert_entry(crate::Entry {
+            id: crate::EntryId::new(2).expect("id"),
+            conversation_id: ConversationId::new(3).expect("id"),
+            kind: crate::EntryKind::new("user").expect("kind"),
+            data: json!({"text": "orphan"}),
+            projection: Vec::new(),
+            context: crate::conversation::context::ContextControl::none(),
+        })
+        .expect("entry");
+    let orphan = state
+        .validate_reconstruction()
+        .expect_err("an orphaned entry must be refused");
+    assert!(matches!(
+        orphan,
+        StateError::InconsistentReconstruction { rule, .. } if rule == "entry conversation"
+    ));
 }
 
 #[test]

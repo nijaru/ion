@@ -24,7 +24,7 @@ static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
 /// applies the plan. References between planned objects use plan-local handles
 /// scoped to one plan identity, so no ID escapes before the creating transaction
 /// is durable and a handle cannot silently resolve inside a different plan.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct TaskPlan {
     id: u64,
     conversations: Vec<PlannedConversation>,

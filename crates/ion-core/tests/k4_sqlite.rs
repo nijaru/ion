@@ -466,6 +466,163 @@ impl TaskKind for Panicking {
     }
 }
 
+/// The fixed ids a fixture can address, taken from the records that were written
+/// rather than assumed.
+struct StoredIds {
+    _root: i64,
+    entry: i64,
+    conversation: i64,
+    task: i64,
+    dependent: i64,
+    owned: i64,
+}
+
+#[tokio::test]
+async fn an_inconsistent_store_is_refused_rather_than_repaired() {
+    let db = TempDb::new("inconsistent");
+    let path = db.path().to_path_buf();
+    let ids = record_a_representative_store(&path).await;
+    let entry = ids.entry;
+    let conversation = ids.conversation;
+    let task = ids.task;
+    let dependent = ids.dependent;
+    let owned = ids.owned;
+
+    // Each damage is valid SQL that a damaged database or an older build could
+    // present. `(name, statement, required rule)`.
+    let fixtures = [
+        (
+            "lowered-sequence",
+            format!("UPDATE session_meta SET last_seq = {entry} WHERE id = 1"),
+            "sequence bound",
+        ),
+        (
+            "running-without-invocation",
+            format!("UPDATE tasks SET state = 'running', invocation = NULL WHERE id = {task}"),
+            "task lifecycle",
+        ),
+        (
+            "terminal-with-an-invocation",
+            format!(
+                "UPDATE tasks SET state = 'terminal', outcome = '{{\"kind\":\"Completed\",\"value\":null}}', \
+                 invocation = '{{\"generation\":1,\"kind\":\"Execute\"}}' WHERE id = {task}"
+            ),
+            "task lifecycle",
+        ),
+        (
+            "ownership-without-reciprocity",
+            format!("UPDATE conversations SET owner_task = {task} WHERE id = {conversation}"),
+            "ownership",
+        ),
+        (
+            "ownership-the-task-does-not-list",
+            format!("DELETE FROM task_ownership WHERE conversation_id = {owned}"),
+            "ownership",
+        ),
+        (
+            "dependency-on-a-missing-task",
+            format!("UPDATE task_dependencies SET depends_on = 900 WHERE task_id = {dependent}"),
+            "dependency",
+        ),
+        (
+            "forward-dependency",
+            format!(
+                "INSERT INTO task_dependencies (task_id, position, depends_on) \
+                 VALUES ({task}, 0, {dependent})"
+            ),
+            "dependency",
+        ),
+        (
+            "entry-without-its-conversation",
+            format!("UPDATE entries SET conversation_id = 900 WHERE id = {entry}"),
+            "entry conversation",
+        ),
+    ];
+
+    for (name, damage, rule) in fixtures {
+        let copy = TempDb::new(&format!("inconsistent-{name}"));
+        let copy_path = copy.path().to_path_buf();
+        std::fs::copy(&path, &copy_path).expect("copy the store");
+        {
+            let connection = rusqlite::Connection::open(&copy_path).expect("raw open");
+            connection.execute(&damage, []).expect("apply the fixture");
+        }
+
+        let error = Session::open(&copy_path)
+            .err()
+            .unwrap_or_else(|| panic!("{name} must be refused"));
+        let message = error.to_string();
+        assert!(
+            message.contains(rule),
+            "{name} must be refused for {rule}, got: {message}"
+        );
+    }
+
+    // The undamaged store still opens: the fixtures above are the only
+    // difference, so a refusal is not a blanket rejection of stored sessions.
+    Session::open(&path).expect("the undamaged store still opens");
+}
+
+/// Store a small but representative session: a root, an unowned conversation, an
+/// entry, a task with a dependent, and a task-owned conversation.
+async fn record_a_representative_store(path: &Path) -> StoredIds {
+    let mut session = Session::create(path).expect("create");
+    let root = session.root_conversation();
+    let entry = session
+        .append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: json!({"text": "hello"}),
+            projection: Vec::new(),
+            context: ContextControl::none(),
+        })
+        .expect("entry")
+        .entry_id;
+    let conversation = session
+        .create_conversation(ConversationSpec {
+            parent: None,
+            owner_task: None,
+        })
+        .expect("conversation")
+        .conversation_id;
+    let task = session
+        .create_task(TaskRequest {
+            conversation_id: root,
+            kind: kind("tool"),
+            schema_version: 1,
+            input: json!({"call": "one"}),
+            dependencies: Vec::new(),
+        })
+        .expect("task")
+        .task_id;
+    let dependent = session
+        .create_task(TaskRequest {
+            conversation_id: root,
+            kind: kind("join"),
+            schema_version: 1,
+            input: json!({"waiting": true}),
+            dependencies: vec![task],
+        })
+        .expect("dependent")
+        .task_id;
+    let owned = session
+        .create_conversation(ConversationSpec {
+            parent: None,
+            owner_task: Some(task),
+        })
+        .expect("owned conversation")
+        .conversation_id;
+    drop(session);
+    StoredIds {
+        _root: root.get(),
+        entry: entry.get(),
+        conversation: conversation.get(),
+        task: task.get(),
+        dependent: dependent.get(),
+        owned: owned.get(),
+    }
+}
+
 #[tokio::test]
 async fn reopening_leaves_running_tasks_for_explicit_recovery() {
     let db = TempDb::new("running");
