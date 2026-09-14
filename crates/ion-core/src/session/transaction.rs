@@ -562,11 +562,12 @@ impl Transaction {
 
     /// The placement a retry or abandonment may act on.
     ///
-    /// The input must be placed, still bound to the attempt the caller names,
-    /// and that attempt must have closed its turn: a terminal root can still have
-    /// live members holding the slot. The placed entry must also still be part of
-    /// the context the next attempt would read, so "answering that input" is not
-    /// a claim about content an edit has removed.
+    /// The input must be placed, still bound to the attempt the caller names, and
+    /// that attempt must have closed its turn: a terminal root can still have live
+    /// members holding the slot. What the next attempt would actually send is not
+    /// checked here: the binding records answer intent, and what a request
+    /// included is evidence in that request, where an edit that drops the placed
+    /// content is visible.
     fn rebindable_placement(
         &mut self,
         input_id: InputId,
@@ -605,12 +606,6 @@ impl Transaction {
             .is_some_and(|task| task.turn_closed_by.is_some());
         if !closed {
             return Err(SessionError::TurnStillOpen(expected_turn));
-        }
-        let mut history = self.draft.visible_entries(target).map_err(map_state)?;
-        let projected = project(&history).map_err(SessionError::IncompleteContextControl)?;
-        if !projected.entry_ids.contains(&placement.entry) {
-            history.clear();
-            return Err(SessionError::PlacedEntryNotInContext(placement.entry));
         }
         Ok(placement)
     }

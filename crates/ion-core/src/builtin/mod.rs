@@ -26,8 +26,9 @@ pub const POST_TOOLS: &str = "post_tools";
 pub const WORKER: &str = "worker";
 
 /// Entry kinds these built-ins append. The transcript is append-only; these
-/// kinds describe the origin of each entry, not its provider wire shape.
-pub const USER_ENTRY: &str = "user";
+/// kinds describe the origin of each entry, not its provider wire shape. The
+/// kind an accepted input is placed under belongs to the input body instead
+/// (`conversation::input::INPUT_ENTRY`), because the session writer places it.
 pub const ASSISTANT_ENTRY: &str = "assistant";
 pub const TOOL_RESULT_ENTRY: &str = "tool_result";
 /// The seeded instruction of a spawned worker conversation.

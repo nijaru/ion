@@ -108,12 +108,6 @@ impl TaskContext {
         self.runtime.dependency_outcomes(self.task_id).await
     }
 
-    /// The admitted inputs durably bound to this invocation's task, in
-    /// admission order.
-    ///
-    /// The binding is the task's own `Assigned` disposition, so this cannot read
-    /// an unrelated or unbound input. A kind that answers no input gets an empty
-    /// list, and every returned input can be consumed by the same settlement.
     /// The accepted inputs whose placed entries this task's turn answers.
     ///
     /// Placement happens when the input is bound to its turn, so this is

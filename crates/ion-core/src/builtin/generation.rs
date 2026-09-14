@@ -1,14 +1,16 @@
 //! Generation as an ordinary task kind.
 //!
 //! One invocation reads its conversation transcript at a frozen cutoff, projects
-//! it into provider-neutral context, adds the inputs durably bound to this task,
-//! and freezes the complete model request in its durable checkpoint *before*
-//! dispatch. Recovery therefore replays the recorded request instead of
-//! silently rebuilding a different one from changed history, inputs or
+//! it into provider-neutral context (which already carries any accepted input the
+//! session placed there), and freezes the complete model request in its durable
+//! checkpoint *before* dispatch. Recovery therefore replays the recorded request
+//! instead of silently rebuilding a different one from changed history, inputs or
 //! configuration, and every attempt is accounted for.
 //!
-//! The settlement appends the transcript entries the answer produced, consumes
-//! the inputs it answered, and creates the tool children plus the join.
+//! The settlement appends the transcript entries the answer produced and creates
+//! the tool children plus the join. It places nothing: placement happened when
+//! the input was bound to this turn, so a failed answer cannot strand an accepted
+//! message outside history.
 
 use std::sync::Arc;
 
@@ -66,22 +68,21 @@ impl GenerationKind {
         // Accepted input is already in the transcript: the writer placed it when
         // it bound the input to this turn, so the projection above carries it and
         // this invocation adds nothing. What it records is which accepted inputs
-        // the request included, without duplicating their text.
-        let inputs = match context_cutoff {
-            None => Vec::new(),
-            Some(cutoff) => context
-                .placed_inputs()
-                .await?
-                .into_iter()
-                .filter(|input| {
-                    input
-                        .disposition
-                        .placement()
-                        .is_some_and(|placement| placement.entry <= cutoff)
-                })
-                .map(|input| input.id)
-                .collect(),
-        };
+        // this request actually included, taken from the projection that built the
+        // request: presence in the transcript, or an id below the cutoff, does not
+        // establish that an edit did not remove the content.
+        let inputs = context
+            .placed_inputs()
+            .await?
+            .into_iter()
+            .filter(|input| {
+                input
+                    .disposition
+                    .placement()
+                    .is_some_and(|placement| projection.contributing.contains(&placement.entry))
+            })
+            .map(|input| input.id)
+            .collect();
 
         Ok(FrozenRequest {
             request: ModelRequest {

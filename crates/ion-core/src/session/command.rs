@@ -212,8 +212,6 @@ pub enum SessionError {
     },
     #[error("turn {0} has not closed, so a new attempt would overlap live work")]
     TurnStillOpen(TaskId),
-    #[error("placed entry {0} is no longer part of the context an attempt would read")]
-    PlacedEntryNotInContext(EntryId),
     #[error("input targets conversation {input} but its turn task belongs to {task}")]
     InputTargetMismatch {
         input: ConversationId,

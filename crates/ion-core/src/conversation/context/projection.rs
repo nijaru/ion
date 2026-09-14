@@ -8,14 +8,22 @@ use crate::{Entry, EntryId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ContextProjection {
-    pub entry_ids: Vec<EntryId>,
+    /// The entries whose messages this projection actually contains, in
+    /// projection order.
+    ///
+    /// This is contribution, not selection: an entry an edit omits, or replaces
+    /// with no messages, contributes nothing and is absent, while a replaced
+    /// entry is present because its replacement is. A reader that needs to know
+    /// whether a request included some entry's content must ask this, not whether
+    /// the entry exists or precedes a cutoff.
+    pub contributing: Vec<EntryId>,
     pub messages: Vec<Message>,
 }
 
 pub fn project(entries: &[Entry]) -> Result<ContextProjection, ContextError> {
     if entries.is_empty() {
         return Ok(ContextProjection {
-            entry_ids: Vec::new(),
+            contributing: Vec::new(),
             messages: Vec::new(),
         });
     }
@@ -62,21 +70,30 @@ pub fn project(entries: &[Entry]) -> Result<ContextProjection, ContextError> {
         }
     }
 
-    let entry_ids = selected.iter().map(|entry| entry.id).collect();
+    let mut contributing = Vec::new();
     let mut messages = Vec::new();
     for entry in selected.drain(..) {
-        match winning_edits.get(&entry.id) {
-            Some(ContextEdit::Omit { .. }) => {}
+        let contributed = match winning_edits.get(&entry.id) {
+            Some(ContextEdit::Omit { .. }) => 0,
             Some(ContextEdit::Replace {
                 messages: replacement,
                 ..
-            }) => messages.extend(replacement.iter().cloned()),
-            None => messages.extend(entry.projection.iter().cloned()),
+            }) => {
+                messages.extend(replacement.iter().cloned());
+                replacement.len()
+            }
+            None => {
+                messages.extend(entry.projection.iter().cloned());
+                entry.projection.len()
+            }
+        };
+        if contributed > 0 {
+            contributing.push(entry.id);
         }
     }
 
     Ok(ContextProjection {
-        entry_ids,
+        contributing,
         messages: normalize_tool_exchanges(messages)?,
     })
 }

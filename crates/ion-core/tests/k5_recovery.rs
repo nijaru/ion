@@ -520,6 +520,24 @@ async fn an_intact_recorded_request_is_still_replayed_on_recovery() {
             "the replayed request is the recorded one, not a rebuilt one"
         );
     }
+    // Recovery replayed an attempt; it did not accept the input again.
+    let snapshot = reopened.snapshot().await;
+    assert_eq!(
+        snapshot
+            .entries
+            .iter()
+            .filter(|entry| entry.kind.as_str() == "user")
+            .count(),
+        1,
+        "a recovered attempt places the accepted input once"
+    );
+    assert_eq!(
+        snapshot.inputs[0]
+            .disposition
+            .placement()
+            .map(|placed| placed.turn),
+        Some(turn)
+    );
     reopened.close(CloseMode::Graceful).await;
 }
 

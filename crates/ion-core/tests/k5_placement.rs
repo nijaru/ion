@@ -13,6 +13,7 @@ use ion_ai::{
     ScriptedModelService, Usage,
 };
 use ion_core::builtin::Builtins;
+use ion_core::conversation::context::{ContextControl, ContextEdit};
 use ion_core::{
     CloseMode, ConversationId, DriveOutcome, InputBody, InputMode, InputPlacement, InputRequest,
     InputSender, RequestKey, Session, TaskDriver, TaskKindName, TaskOutcomeKind, TaskRegistry,
@@ -68,7 +69,10 @@ fn driver(scripts: impl IntoIterator<Item = Script>) -> (TaskDriver, Arc<Scripte
 }
 
 fn registry(scripts: impl IntoIterator<Item = Script>) -> TaskRegistry {
-    let service = Arc::new(ScriptedModelService::new(scripts));
+    registry_with(Arc::new(ScriptedModelService::new(scripts)))
+}
+
+fn registry_with(service: Arc<ScriptedModelService>) -> TaskRegistry {
     let mut registry = TaskRegistry::new();
     Builtins {
         model: model_ref(),
@@ -137,7 +141,8 @@ fn placement(snapshot: &ion_core::SessionSnapshot, input: ion_core::InputId) -> 
 
 #[tokio::test]
 async fn cancelling_before_the_first_token_still_places_the_input() {
-    let (driver, service) = driver([Script::Stream(vec![completed("never sent")])]);
+    let db = TempDb::new("r4-cancelled");
+    let driver = durable([Script::Stream(vec![completed("never sent")])], db.path());
     let root = driver.snapshot().await.root_conversation;
     let submitted = driver
         .submit_input(submission(root, "turn-1", "answer me"), turn_request(root))
@@ -155,22 +160,129 @@ async fn cancelling_before_the_first_token_still_places_the_input() {
         .await
         .expect("no stall")
         .expect("the aborted turn settles");
-    let TaskStatus::Terminal(outcome) = record.status else {
+    let TaskStatus::Terminal(outcome) = record.status.clone() else {
         panic!("the aborted turn is terminal");
     };
     assert_eq!(outcome.kind, TaskOutcomeKind::Aborted);
-
     assert_eq!(
         transcript(&driver, root).await,
         vec![("user".to_owned(), "answer me".to_owned())],
         "the accepted message is history even though no answer was attempted"
     );
-    let snapshot = driver.snapshot().await;
-    assert_eq!(placement(&snapshot, submitted.input_id).turn, turn);
-    assert!(
-        service.requests().is_empty(),
-        "cancellation before the first token must not call the provider"
+    let placed = placement(&driver.snapshot().await, submitted.input_id);
+    assert_eq!(placed.turn, turn);
+    driver.close(CloseMode::Graceful).await;
+    drop(driver);
+
+    // After a restart the placed input is still answerable, and the new attempt
+    // is not born cancelled: the barrier belonged to the turn that ended.
+    let reopened = reopen(db.path(), [Script::Stream(vec![completed("answered")])]);
+    assert_eq!(
+        transcript(&reopened, root).await,
+        vec![("user".to_owned(), "answer me".to_owned())],
+        "a handover places nothing new"
     );
+    let retry = reopened
+        .retry_input(submitted.input_id, turn, turn_request(root))
+        .await
+        .expect("a cancelled attempt can be retried");
+    let snapshot = reopened.snapshot().await;
+    assert_eq!(placement(&snapshot, submitted.input_id).entry, placed.entry);
+    assert!(
+        !snapshot
+            .tasks
+            .iter()
+            .find(|task| task.id == retry)
+            .expect("retry task")
+            .cancel_requested,
+        "a retry after cancellation is fresh work"
+    );
+    let conversation = snapshot
+        .conversations
+        .iter()
+        .find(|candidate| candidate.id == root)
+        .expect("root conversation");
+    assert!(!conversation.turn_cancelled, "the old barrier is over");
+    let DriveOutcome::Settled(settlement) = reopened.drive_task(retry).await.expect("drive") else {
+        panic!("the retry settles");
+    };
+    assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Completed);
+    assert!(
+        reopened.turn_closed_by(turn).await.is_some(),
+        "the cancelled attempt's closure receipt survives"
+    );
+    assert_eq!(
+        transcript(&reopened, root).await,
+        vec![
+            ("user".to_owned(), "answer me".to_owned()),
+            ("assistant".to_owned(), "answered".to_owned()),
+        ]
+    );
+    reopened.close(CloseMode::Graceful).await;
+}
+
+/// A terminal root is not a closed turn: live members still hold the slot, so a
+/// retry would overlap work that is still running.
+#[tokio::test]
+async fn a_retry_is_refused_while_a_member_of_the_turn_is_still_live() {
+    let mut registry = TaskRegistry::new();
+    let service = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+        ion_ai::ModelStreamEvent::Completed(ion_ai::ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall(ion_ai::ToolCall {
+                    id: "call-1".to_owned(),
+                    name: "echo".to_owned(),
+                    arguments: json!({}),
+                })],
+                provider_replay: None,
+            },
+            usage: Usage::known(1, 1),
+            termination: ResponseTermination::Completed,
+        }),
+    ])]));
+    registry
+        .register(
+            kind(ion_core::builtin::GENERATION),
+            1,
+            Arc::new(ion_core::builtin::GenerationKind::new(
+                model_ref(),
+                service,
+                Arc::new(ion_core::builtin::ToolCatalog::new()),
+            )),
+        )
+        .expect("generation");
+    registry
+        .register(
+            kind(ion_core::builtin::POST_TOOLS),
+            1,
+            Arc::new(ion_core::builtin::PostToolsKind),
+        )
+        .expect("post-tools");
+    // The tool kind is deliberately absent, so the turn's tool member stays
+    // pending and the turn never closes.
+    let driver = TaskDriver::new(Session::new().expect("session"), registry);
+    let root = driver.snapshot().await.root_conversation;
+    let submitted = driver
+        .submit_input(submission(root, "turn-1", "use a tool"), turn_request(root))
+        .await
+        .expect("submit");
+    let turn = submitted.task_id.expect("turn root");
+    let DriveOutcome::Settled(_) = driver.drive_task(turn).await.expect("drive") else {
+        panic!("the generation settles even though its tool child cannot run");
+    };
+    assert!(
+        driver.turn_closed_by(turn).await.is_none(),
+        "the turn is still open"
+    );
+    let refused = driver
+        .retry_input(submitted.input_id, turn, turn_request(root))
+        .await
+        .expect_err("a live turn cannot be retried");
+    assert!(matches!(
+        refused,
+        ion_core::TaskDriverError::Session(ion_core::SessionError::TurnStillOpen(id)) if id == turn
+    ));
 }
 
 #[tokio::test]
@@ -238,13 +350,17 @@ async fn a_failed_attempt_can_be_retried_after_reopen_without_a_second_entry() {
     let turn = submitted.task_id.expect("turn root");
     driver.drive_task(turn).await.expect("drive");
     let closed_by = driver.turn_closed_by(turn).await.expect("closure receipt");
+    let failed = driver.task(turn).await.expect("attempt").status;
     let placed = placement(&driver.snapshot().await, submitted.input_id);
     driver.close(CloseMode::Graceful).await;
     drop(driver);
 
     // An explicit retry answers the same placed input: no second admission, no
     // second user message, and a genuinely new attempt.
-    let reopened = reopen(db.path(), [Script::Stream(vec![completed("retried")])]);
+    let service = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+        completed("retried"),
+    ])]));
+    let reopened = TaskDriver::open(db.path(), registry_with(service.clone())).expect("reopen");
     let retry = reopened
         .retry_input(submitted.input_id, turn, turn_request(root))
         .await
@@ -264,6 +380,11 @@ async fn a_failed_attempt_can_be_retried_after_reopen_without_a_second_entry() {
         Some(closed_by),
         "the failed attempt's closure receipt is preserved"
     );
+    assert_eq!(
+        reopened.task(turn).await.expect("attempt").status,
+        failed,
+        "a retry never rewrites the failed attempt's outcome"
+    );
 
     let request = reopened
         .snapshot()
@@ -279,6 +400,15 @@ async fn a_failed_attempt_can_be_retried_after_reopen_without_a_second_entry() {
         panic!("the retry settles");
     };
     assert_eq!(settlement.outcome.kind, TaskOutcomeKind::Completed);
+    assert_eq!(
+        service
+            .requests()
+            .iter()
+            .filter(|request| request_includes_messages(request, "hello"))
+            .count(),
+        1,
+        "the retry sends the placed message exactly once"
+    );
     assert_eq!(
         transcript(&reopened, root).await,
         vec![
@@ -377,4 +507,151 @@ async fn a_retired_conversation_refuses_a_retry() {
         placed,
         "the refusal changed nothing"
     );
+}
+
+/// Provenance is contribution, not presence: an edit that omits the placed entry
+/// must not leave the frozen request claiming it included that input, and the
+/// input must still be answerable and answerable again.
+#[tokio::test]
+async fn an_omitted_input_is_not_claimed_as_included() {
+    let service = Arc::new(ScriptedModelService::new([
+        Script::Stream(vec![completed("first")]),
+        Script::Stream(vec![completed("second")]),
+    ]));
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let submitted = session
+        .admit_input(
+            submission(root, "turn-1", "please forget me"),
+            Some(turn_request(root)),
+        )
+        .expect("admit");
+    let turn = submitted.task_id.expect("turn root");
+    let placed = session.snapshot().inputs[0]
+        .disposition
+        .placement()
+        .expect("placed");
+
+    // The context control exists before the attempt freezes its request.
+    session
+        .append_entry(ion_core::EntryRequest {
+            conversation_id: root,
+            kind: ion_core::EntryKind::new("note").expect("entry kind"),
+            data: json!({"text": "context control"}),
+            projection: Vec::new(),
+            context: ContextControl {
+                head: None,
+                edits: vec![ContextEdit::Omit {
+                    target: placed.entry,
+                }],
+            },
+        })
+        .expect("an omit edit");
+
+    let driver = TaskDriver::new(session, registry_with(service.clone()));
+    driver.drive_task(turn).await.expect("drive the attempt");
+    assert!(
+        !request_includes(&service.requests()[0], "please forget me"),
+        "the omitted input is not in the request"
+    );
+    let checkpoint = driver
+        .task(turn)
+        .await
+        .expect("turn record")
+        .checkpoint
+        .expect("a frozen request");
+    assert_eq!(
+        checkpoint["inputs"],
+        json!([]),
+        "a frozen request must not claim an input it did not include"
+    );
+
+    // The input is still answerable: the binding records intent, and what the
+    // next attempt sends is decided by the context it reads.
+    let retry = driver
+        .retry_input(submitted.input_id, turn, turn_request(root))
+        .await
+        .expect("a retry does not require the input to be model-visible");
+    assert_eq!(
+        placement(&driver.snapshot().await, submitted.input_id).turn,
+        retry
+    );
+    driver.drive_task(retry).await.expect("drive the retry");
+    assert!(
+        !request_includes(&service.requests()[1], "please forget me"),
+        "the retry sends the context as it stands"
+    );
+}
+
+/// Abandonment records answer intent only, so an edit that drops the placed
+/// content from context must not make it impossible.
+#[tokio::test]
+async fn an_input_outside_the_context_can_still_be_abandoned() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let submitted = session
+        .admit_input(
+            submission(root, "turn-1", "hello"),
+            Some(turn_request(root)),
+        )
+        .expect("admit");
+    let turn = submitted.task_id.expect("turn root");
+    let placed = session.snapshot().inputs[0]
+        .disposition
+        .placement()
+        .expect("placed");
+    session
+        .append_entry(ion_core::EntryRequest {
+            conversation_id: root,
+            kind: ion_core::EntryKind::new("note").expect("entry kind"),
+            data: json!({"text": "context control"}),
+            projection: Vec::new(),
+            context: ContextControl {
+                head: None,
+                edits: vec![ContextEdit::Omit {
+                    target: placed.entry,
+                }],
+            },
+        })
+        .expect("an omit edit");
+
+    let driver = TaskDriver::new(
+        session,
+        registry([Script::Stream(vec![completed("answer")])]),
+    );
+    driver.drive_task(turn).await.expect("drive");
+    driver
+        .abandon_input(submitted.input_id, turn)
+        .await
+        .expect("abandonment does not depend on future model context");
+    let snapshot = driver.snapshot().await;
+    assert_eq!(
+        snapshot
+            .inputs
+            .iter()
+            .find(|input| input.id == submitted.input_id)
+            .expect("input")
+            .disposition,
+        ion_core::InputDisposition::Abandoned(placed),
+        "the placement is retained"
+    );
+}
+
+fn request_includes(request: &ion_ai::ModelRequest, text: &str) -> bool {
+    request.messages.iter().any(|message| {
+        message
+            .content
+            .iter()
+            .any(|content| matches!(content, Content::Text(found) if found.contains(text)))
+    })
+}
+
+fn request_includes_messages(request: &ion_ai::ModelRequest, text: &str) -> bool {
+    request.messages.iter().any(|message| {
+        message.role == Role::User
+            && message
+                .content
+                .iter()
+                .any(|content| matches!(content, Content::Text(found) if found.contains(text)))
+    })
 }

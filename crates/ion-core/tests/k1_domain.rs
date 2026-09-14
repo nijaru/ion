@@ -65,7 +65,7 @@ fn immutable_head_and_edit_projection_preserves_history() {
     let projected = project(&history).expect("project context");
 
     assert_eq!(
-        projected.entry_ids,
+        projected.contributing,
         vec![summary.id, retained.id, EntryId::new(4).unwrap()]
     );
     assert_eq!(
