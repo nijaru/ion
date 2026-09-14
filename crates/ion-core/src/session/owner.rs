@@ -43,6 +43,14 @@ pub struct Session {
     fault: tokio_util::sync::CancellationToken,
     observations: VecDeque<CommitEvent>,
     dropped_through: Option<CommitSeq>,
+    /// The earliest commit this session can serve a delta for.
+    ///
+    /// A live session observes every commit it makes, so it can answer any cursor
+    /// it ever issued. A reopened session instead learned its history from the
+    /// store: commits up to the loaded one happened before this process existed
+    /// and their events were never published here, so a cursor that predates that
+    /// boundary must resnapshot rather than receive an empty delta.
+    coverage_start: Option<CommitSeq>,
     changes: tokio::sync::watch::Sender<()>,
 }
 
@@ -70,7 +78,12 @@ impl Session {
     pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
         let (store, state) = crate::store::sqlite::SqliteStore::open(path.as_ref())
             .map_err(crate::store::StoreError::into_session_error)?;
-        Ok(Self::from_state(state, Box::new(store)))
+        let mut session = Self::from_state(state, Box::new(store));
+        // Coverage begins at the commit this process loaded: everything before it
+        // was reconstructed, not observed, so a cursor pointing into that history
+        // cannot be answered from here.
+        session.coverage_start = session.state.last_commit;
+        Ok(session)
     }
 
     pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
@@ -98,6 +111,7 @@ impl Session {
             fault: tokio_util::sync::CancellationToken::new(),
             observations: VecDeque::new(),
             dropped_through: None,
+            coverage_start: None,
             changes: tokio::sync::watch::channel(()).0,
         }
     }
@@ -499,7 +513,10 @@ impl Session {
     /// reset. A cursor older than retained coverage, or one ahead of this
     /// session's last commit (another session, or a reopened store), returns
     /// `reset_required` with no events so the caller resnapshots instead of
-    /// silently believing it is current.
+    /// silently believing it is current. Coverage is a property of this session's
+    /// own observations, so a cursor from before a restart, from a future
+    /// authority, or from evicted history all ask for a resnapshot; a cursor at or
+    /// after the loaded commit is answered normally.
     #[must_use]
     pub fn observations_after(&self, cursor: Option<CommitSeq>) -> ObservationBatch {
         let last_commit = self
@@ -510,6 +527,7 @@ impl Session {
             None => false,
             Some(cursor) => {
                 cursor > last_commit
+                    || self.coverage_start.is_some_and(|start| cursor < start)
                     || self
                         .dropped_through
                         .is_some_and(|dropped| cursor <= dropped)

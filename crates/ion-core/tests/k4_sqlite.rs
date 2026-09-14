@@ -238,6 +238,116 @@ async fn build_session(path: &Path) -> (TaskDriver, TaskId) {
     (driver, turn.task_id)
 }
 
+/// R5: observation coverage does not survive a restart by itself.
+///
+/// A reopened session learns its history from the store rather than from its own
+/// commits, so its event buffer starts empty. A cursor from before the restart
+/// must therefore require a resnapshot; returning an empty successful delta would
+/// tell the client it is current when commits it never saw are gone.
+#[test]
+fn an_observation_cursor_from_before_a_restart_requires_a_resnapshot() {
+    let db = TempDb::new("observations-restart");
+    let mut session = Session::create(db.path()).expect("create");
+    let conversation = session.root_conversation();
+    let cursor = session
+        .append_entry(note(conversation, "observed"))
+        .expect("commit")
+        .commit_seq;
+    // A commit the client has not observed, so its cursor is genuinely behind.
+    let unseen = session
+        .append_entry(note(conversation, "missed"))
+        .expect("commit")
+        .commit_seq;
+    assert!(unseen > cursor);
+    drop(session);
+
+    let mut reopened = Session::open(db.path()).expect("reopen");
+    assert_eq!(reopened.summary().last_commit, unseen);
+    let stale = reopened.observations_after(Some(cursor));
+    assert!(
+        stale.reset_required,
+        "a cursor from before the restart must resnapshot"
+    );
+    assert!(stale.events.is_empty());
+
+    // A client whose cursor is at the loaded commit saw everything durable, so it
+    // resumes streaming instead of resnapshotting.
+    let resumed = reopened.observations_after(Some(unseen));
+    assert!(!resumed.reset_required);
+    assert!(resumed.events.is_empty());
+
+    // And a commit after the reopen is an ordinary delta for that cursor.
+    let after = reopened
+        .append_entry(note(conversation, "after the restart"))
+        .expect("commit")
+        .commit_seq;
+    let delta = reopened.observations_after(Some(unseen));
+    assert!(!delta.reset_required);
+    assert_eq!(
+        delta.events.len(),
+        1,
+        "the post-restart commit is the delta"
+    );
+    assert_eq!(delta.events[0].commit_seq, after);
+}
+
+/// The positive control for the resnapshot rule: a client that reconnects after a
+/// restart with a cursor at the loaded commit keeps streaming deltas, including
+/// from the watch that wakes it.
+#[tokio::test]
+async fn a_reopened_session_streams_commits_after_the_loaded_one() {
+    let db = TempDb::new("observations-resume");
+    let mut session = Session::create(db.path()).expect("create");
+    let conversation = session.root_conversation();
+    let cursor = session
+        .append_entry(note(conversation, "before the restart"))
+        .expect("commit")
+        .commit_seq;
+    drop(session);
+
+    let driver = TaskDriver::open(db.path(), TaskRegistry::new()).expect("reopen");
+    assert_eq!(driver.summary().await.last_commit, cursor);
+    let waiter = driver.clone();
+    let waiting = tokio::spawn(async move { waiter.changed().await });
+    // Give the waiter a chance to subscribe before the commit.
+    tokio::task::yield_now().await;
+    let committed = driver
+        .create_turn(TaskRequest {
+            conversation_id: conversation,
+            kind: kind("unrelated"),
+            schema_version: 1,
+            input: json!({}),
+            dependencies: Vec::new(),
+        })
+        .await
+        .expect("commit")
+        .commit_seq;
+    tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("the waiter must wake")
+        .expect("join");
+
+    let batch = driver.observations_after(Some(cursor)).await;
+    assert!(!batch.reset_required);
+    assert!(
+        batch
+            .events
+            .iter()
+            .any(|event| event.commit_seq == committed),
+        "the commit that woke the waiter is in the delta from the loaded cursor"
+    );
+}
+
+fn note(conversation: ion_core::ConversationId, text: &str) -> EntryRequest {
+    EntryRequest {
+        conversation_id: conversation,
+        kind: ion_core::EntryKind::new("note").expect("entry kind"),
+        data: json!({"text": text}),
+        projection: Vec::new(),
+        context: ContextControl::none(),
+    }
+}
+
 #[tokio::test]
 async fn reopening_reconstructs_entries_inputs_tasks_and_turns() {
     let db = TempDb::new("roundtrip");
