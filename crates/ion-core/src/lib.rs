@@ -16,7 +16,7 @@ pub mod view;
 pub use artifact::Artifact;
 pub use conversation::{
     Conversation, Entry, EntryKind, EntryKindError, HistoryParent, Input, InputBody,
-    InputDisposition, InputMode, InputSender, RequestKey, RequestKeyError,
+    InputDisposition, InputMode, InputPlacement, InputSender, RequestKey, RequestKeyError,
 };
 pub use id::{
     ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
@@ -29,13 +29,12 @@ pub use session::{
 };
 pub use task::{
     AbortContext, DependencyOutcome, InvocationKind, MAX_PLAN_CONVERSATIONS, MAX_PLAN_ENTRIES,
-    MAX_PLAN_INPUTS, MAX_PLAN_TASKS, PlannedConversation, PlannedConversationRef, PlannedEntry,
-    PlannedEntryRef, PlannedTarget, PlannedTask, PlannedTaskRef, PlannedTurn, ResourceDomain,
-    RunningTask, TaskCompletion, TaskContext, TaskContextError, TaskDependency, TaskFuture,
-    TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind,
-    TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus,
-    TypedAbortContext, TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport,
-    TypedTask,
+    MAX_PLAN_TASKS, PlannedConversation, PlannedConversationRef, PlannedEntry, PlannedTarget,
+    PlannedTask, PlannedTaskRef, PlannedTurn, ResourceDomain, RunningTask, TaskCompletion,
+    TaskContext, TaskContextError, TaskDependency, TaskFuture, TaskInvocation, TaskKind,
+    TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskOutput, TaskPlan,
+    TaskRecord, TaskRegistry, TaskRegistryError, TaskRunError, TaskStatus, TypedAbortContext,
+    TypedContext, TypedFuture, TypedHandler, TypedOutcome, TypedReport, TypedTask,
 };
 pub use view::{
     Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,

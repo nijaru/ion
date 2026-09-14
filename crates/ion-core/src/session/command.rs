@@ -150,11 +150,10 @@ pub enum SessionError {
     #[error("session is closed or faulted")]
     Closed,
     #[error(
-        "task finalization plan exceeds the bounded plan size: {entries} entries, {inputs} input bindings, {conversations} conversations, {tasks} tasks"
+        "task finalization plan exceeds the bounded plan size: {entries} entries, {conversations} conversations, {tasks} tasks"
     )]
     PlanTooLarge {
         entries: usize,
-        inputs: usize,
         conversations: usize,
         tasks: usize,
     },
@@ -203,6 +202,18 @@ pub enum SessionError {
     GenerationExhausted(TaskId),
     #[error("input {0} cannot make the requested disposition transition")]
     InvalidInputDisposition(InputId),
+    #[error("input {0} has no placed entry, so there is nothing to retry or abandon")]
+    InputNotPlaced(InputId),
+    #[error("input {input} is answered by turn {current}, not the expected turn {expected}")]
+    StaleInputBinding {
+        input: InputId,
+        expected: TaskId,
+        current: TaskId,
+    },
+    #[error("turn {0} has not closed, so a new attempt would overlap live work")]
+    TurnStillOpen(TaskId),
+    #[error("placed entry {0} is no longer part of the context an attempt would read")]
+    PlacedEntryNotInContext(EntryId),
     #[error("input targets conversation {input} but its turn task belongs to {task}")]
     InputTargetMismatch {
         input: ConversationId,

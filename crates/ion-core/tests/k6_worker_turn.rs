@@ -14,10 +14,10 @@ use ion_ai::{
 };
 use ion_core::builtin::{Builtins, POST_TOOLS, TOOL, Tool, ToolCatalog, ToolFuture, WORKER};
 use ion_core::{
-    AdmissionReceipt, ConversationId, DriveOutcome, InputBody, InputDisposition, InputMode,
-    InputRequest, InputSender, PlannedTarget, PlannedTurn, RequestKey, Session, SessionError,
-    TaskCompletion, TaskDriver, TaskDriverError, TaskId, TaskKindName, TaskRegistry, TaskRequest,
-    TaskStatus, TurnTemplate,
+    AdmissionReceipt, ConversationId, DriveOutcome, InputBody, InputMode, InputRequest,
+    InputSender, PlannedTarget, PlannedTurn, RequestKey, Session, SessionError, TaskCompletion,
+    TaskDriver, TaskDriverError, TaskId, TaskKindName, TaskRegistry, TaskRequest, TaskStatus,
+    TurnTemplate,
 };
 use serde_json::json;
 use tokio::sync::Notify;
@@ -412,7 +412,7 @@ async fn a_follow_up_to_a_running_worker_queues_and_runs_after_it() {
             Role::User
         ]
     );
-    assert!(matches!(
+    assert!(
         harness
             .driver
             .snapshot()
@@ -421,9 +421,11 @@ async fn a_follow_up_to_a_running_worker_queues_and_runs_after_it() {
             .iter()
             .find(|input| input.id == follow_up.input_id)
             .expect("follow-up")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+            .disposition
+            .placement()
+            .is_some(),
+        "the worker's own follow-up is placed in its conversation"
+    );
 }
 
 #[tokio::test]

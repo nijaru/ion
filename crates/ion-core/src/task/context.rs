@@ -46,7 +46,7 @@ pub(crate) trait TaskRuntime: Send + Sync {
     ) -> ContextFuture<'a, Result<Vec<DependencyOutcome>, TaskContextError>>;
 
     /// The inputs durably bound to this invocation's task, in admission order.
-    fn assigned_inputs<'a>(
+    fn placed_inputs<'a>(
         &'a self,
         task_id: TaskId,
     ) -> ContextFuture<'a, Result<Vec<Input>, TaskContextError>>;
@@ -114,8 +114,13 @@ impl TaskContext {
     /// The binding is the task's own `Assigned` disposition, so this cannot read
     /// an unrelated or unbound input. A kind that answers no input gets an empty
     /// list, and every returned input can be consumed by the same settlement.
-    pub async fn assigned_inputs(&self) -> Result<Vec<Input>, TaskContextError> {
-        self.runtime.assigned_inputs(self.task_id).await
+    /// The accepted inputs whose placed entries this task's turn answers.
+    ///
+    /// Placement happens when the input is bound to its turn, so this is
+    /// provenance rather than a queue: the entry, not this read, is what the
+    /// model request is built from.
+    pub async fn placed_inputs(&self) -> Result<Vec<Input>, TaskContextError> {
+        self.runtime.placed_inputs(self.task_id).await
     }
 
     #[must_use]

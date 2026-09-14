@@ -52,14 +52,20 @@ fn admission_policy_follows_mode_and_conversation_state() {
             )
             .expect("idle admission");
         assert_eq!(receipt.started_turn(), starts, "idle {mode:?}");
-        let disposition = &session.snapshot().inputs[0].disposition;
+        let snapshot = session.snapshot();
+        let disposition = &snapshot.inputs[0].disposition;
         if starts {
+            // The turn-starting admission places the input in the same commit.
             assert_eq!(
-                disposition,
-                &InputDisposition::Assigned(receipt.task_id.expect("turn root"))
+                disposition.placement().expect("placed").turn,
+                receipt.task_id.expect("turn root")
+            );
+            assert!(
+                matches!(disposition, InputDisposition::Placed(_)),
+                "idle {mode:?}"
             );
         } else {
-            assert_eq!(disposition, &InputDisposition::Queued);
+            assert_eq!(disposition, &InputDisposition::Queued, "idle {mode:?}");
         }
     }
 
@@ -229,43 +235,72 @@ fn dependency_readiness_requires_terminal_predecessors() {
 }
 
 #[test]
-fn input_disposition_tracks_assignment_then_consumption() {
+fn placement_is_committed_with_the_turn_that_answers() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();
-    let input = session
-        .queue_input(InputRequest {
-            target: root,
-            sender: InputSender::User,
-            mode: InputMode::Submit,
-            request_key: None,
-            body: InputBody::Text("hello".to_owned()),
-        })
-        .expect("input");
-    let task = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("task");
-    session
-        .set_input_disposition(input.input_id, InputDisposition::Assigned(task.task_id))
-        .expect("assignment");
+    let receipt = session
+        .admit_input(
+            input_request(root, InputMode::Submit),
+            Some(task_request(root, Vec::new())),
+        )
+        .expect("admission");
+    let (input, turn) = (
+        receipt.input_id,
+        receipt
+            .task_id
+            .expect("a submitting admission starts a turn"),
+    );
 
-    let entry = session
-        .append_entry(EntryRequest {
-            conversation_id: root,
-            kind: crate::EntryKind::new("user").expect("entry kind"),
-            data: json!({"text": "hello"}),
-            projection: Vec::new(),
-            context: crate::conversation::context::ContextControl::none(),
-        })
-        .expect("entry");
-    session
-        .set_input_disposition(input.input_id, InputDisposition::Consumed(entry.entry_id))
-        .expect("consumption");
-    let before = session.snapshot().last_commit;
-    let invalid = session
-        .set_input_disposition(input.input_id, InputDisposition::Cancelled)
-        .expect_err("consumed input is terminal");
-    assert!(matches!(invalid, SessionError::InvalidInputDisposition(_)));
-    assert_eq!(session.snapshot().last_commit, before);
+    // Placement is part of the admission commit, not of the answer: the entry
+    // exists and the input names it before any invocation ran.
+    let snapshot = session.snapshot();
+    let entry = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.id == placement_of(&snapshot, input).entry)
+        .expect("placed entry");
+    assert_eq!(entry.kind.as_str(), ion_core_entry_kind());
+    assert_eq!(entry.data, json!({"text": "hello"}));
+    assert_eq!(placement_of(&snapshot, input).turn, turn);
+
+    // A retry must name the attempt it replaces, and the replaced attempt must
+    // have closed its turn, so two answer attempts cannot overlap.
+    let stale = session
+        .retry_input(
+            input,
+            turn,
+            task_request(session.root_conversation(), Vec::new()),
+        )
+        .expect_err("an open turn cannot be retried");
+    assert!(matches!(stale, SessionError::TurnStillOpen(root) if root == turn));
+    let other = session
+        .create_task(task_request(root, Vec::new()))
+        .expect("unrelated task");
+    let mismatch = session
+        .retry_input(input, other.task_id, task_request(root, Vec::new()))
+        .expect_err("a retry names the attempt it replaces");
+    assert!(matches!(mismatch, SessionError::StaleInputBinding { .. }));
+    assert!(matches!(
+        session
+            .abandon_input(input, other.task_id)
+            .expect_err("abandonment names the attempt it ends"),
+        SessionError::StaleInputBinding { .. }
+    ));
+}
+
+fn placement_of(snapshot: &crate::SessionSnapshot, input: crate::InputId) -> crate::InputPlacement {
+    snapshot
+        .inputs
+        .iter()
+        .find(|candidate| candidate.id == input)
+        .expect("admitted input")
+        .disposition
+        .placement()
+        .expect("a placed input")
+}
+
+fn ion_core_entry_kind() -> &'static str {
+    crate::conversation::INPUT_ENTRY
 }
 
 #[test]

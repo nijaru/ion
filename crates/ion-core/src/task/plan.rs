@@ -4,14 +4,13 @@ use serde_json::Value;
 
 use super::TaskKindName;
 use crate::conversation::context::ContextControl;
-use crate::{ConversationId, EntryKind, HistoryParent, InputId, TaskId};
+use crate::{ConversationId, EntryKind, HistoryParent, TaskId};
 
 /// Provisional per-plan bounds. The writer rejects an over-large plan so a bad
 /// or hostile trusted kind cannot commit an unbounded transaction. These are
 /// deliberately generous pending measured limits (P2).
 pub const MAX_PLAN_ENTRIES: usize = 256;
 pub const MAX_PLAN_TASKS: usize = 256;
-pub const MAX_PLAN_INPUTS: usize = 256;
 pub const MAX_PLAN_CONVERSATIONS: usize = 64;
 
 static NEXT_PLAN_ID: AtomicU64 = AtomicU64::new(1);
@@ -30,7 +29,6 @@ pub struct TaskPlan {
     id: u64,
     conversations: Vec<PlannedConversation>,
     entries: Vec<PlannedEntry>,
-    inputs: Vec<PlannedInput>,
     tasks: Vec<PlannedTask>,
 }
 
@@ -47,17 +45,13 @@ impl TaskPlan {
             id: NEXT_PLAN_ID.fetch_add(1, Ordering::Relaxed),
             conversations: Vec::new(),
             entries: Vec::new(),
-            inputs: Vec::new(),
             tasks: Vec::new(),
         }
     }
 
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.conversations.is_empty()
-            && self.entries.is_empty()
-            && self.inputs.is_empty()
-            && self.tasks.is_empty()
+        self.conversations.is_empty() && self.entries.is_empty() && self.tasks.is_empty()
     }
 
     /// Queue a conversation this plan creates and the settling task owns. It is
@@ -78,20 +72,8 @@ impl TaskPlan {
     /// Queue an immutable transcript entry and return a plan-local handle to it.
     /// Entries are applied in call order before any planned task, so a successor
     /// can rely on the entry existing.
-    pub fn append_entry(&mut self, entry: PlannedEntry) -> PlannedEntryRef {
-        let reference = PlannedEntryRef {
-            plan: self.id,
-            index: self.entries.len(),
-        };
+    pub fn append_entry(&mut self, entry: PlannedEntry) {
         self.entries.push(entry);
-        reference
-    }
-
-    /// Bind an admitted input to the planned entry that carries it. The input is
-    /// marked consumed in the same transaction, so an input and the transcript
-    /// content that answers it become durable together or not at all.
-    pub fn consume_input(&mut self, input: InputId, entry: PlannedEntryRef) {
-        self.inputs.push(PlannedInput { input, entry });
     }
 
     /// Queue a successor task. The returned handle can be used as a dependency
@@ -115,10 +97,6 @@ impl TaskPlan {
 
     pub(crate) fn entries(&self) -> &[PlannedEntry] {
         &self.entries
-    }
-
-    pub(crate) fn inputs(&self) -> &[PlannedInput] {
-        &self.inputs
     }
 
     pub(crate) fn tasks(&self) -> &[PlannedTask] {
@@ -219,25 +197,6 @@ pub enum TaskDependency {
     Planned(PlannedTaskRef),
 }
 
-/// Plan-local handle for a queued transcript entry. Not a durable identifier;
-/// it resolves to a real `EntryId` only when the writer applies the plan.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PlannedEntryRef {
-    plan: u64,
-    index: usize,
-}
-impl PlannedEntryRef {
-    #[must_use]
-    pub fn index(self) -> usize {
-        self.index
-    }
-
-    #[must_use]
-    pub fn plan_id(self) -> u64 {
-        self.plan
-    }
-}
-
 /// Plan-local handle for a conversation this plan creates. Not a durable
 /// identifier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -277,11 +236,4 @@ impl PlannedTaskRef {
     pub fn plan_id(self) -> u64 {
         self.plan
     }
-}
-
-/// One admitted input bound to the planned entry that carries its content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct PlannedInput {
-    pub(crate) input: InputId,
-    pub(crate) entry: PlannedEntryRef,
 }

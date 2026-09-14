@@ -10,10 +10,10 @@ use crate::ResourceDomain;
 use crate::session::command::{InvocationReceipt, TurnCancellation};
 use crate::task::{ContextFuture, TaskRuntime};
 use crate::{
-    AbortContext, CommitSeq, EntryId, InputDisposition, InputId, InvocationKind, ObservationBatch,
-    RunningTask, Session, SessionError, SessionSnapshot, SessionSummary, TaskCompletion,
-    TaskContext, TaskContextError, TaskId, TaskKind, TaskOutcome, TaskRecord, TaskRegistry,
-    TaskRunError, TaskStatus,
+    AbortContext, CommitSeq, EntryId, InputId, InvocationKind, ObservationBatch, RunningTask,
+    Session, SessionError, SessionSnapshot, SessionSummary, TaskCompletion, TaskContext,
+    TaskContextError, TaskId, TaskKind, TaskOutcome, TaskRecord, TaskRegistry, TaskRunError,
+    TaskStatus,
 };
 
 #[derive(Clone)]
@@ -438,22 +438,30 @@ impl TaskDriver {
         Ok(session.admit_input(input, Some(task))?)
     }
 
-    pub async fn assign_input(
+    /// Start a new answer attempt for a placed input.
+    ///
+    /// `expected_turn` is the attempt being replaced: a client that retries from
+    /// a stale view is refused rather than silently stacked on a newer attempt.
+    /// Nothing is driven here; the caller drives the returned turn.
+    pub async fn retry_input(
         &self,
         input_id: InputId,
-        task_id: TaskId,
-    ) -> Result<CommitSeq, TaskDriverError> {
+        expected_turn: TaskId,
+        turn: crate::TaskRequest,
+    ) -> Result<TaskId, TaskDriverError> {
         let mut session = self.session.lock().await;
-        Ok(session.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?)
+        Ok(session.retry_input(input_id, expected_turn, turn)?)
     }
 
-    pub async fn consume_input(
+    /// Record that a placed input will not be answered again. Running work is
+    /// not cancelled.
+    pub async fn abandon_input(
         &self,
         input_id: InputId,
-        entry_id: EntryId,
+        expected_turn: TaskId,
     ) -> Result<CommitSeq, TaskDriverError> {
         let mut session = self.session.lock().await;
-        Ok(session.set_input_disposition(input_id, InputDisposition::Consumed(entry_id))?)
+        Ok(session.abandon_input(input_id, expected_turn)?)
     }
 
     async fn finish_normal(
@@ -716,14 +724,15 @@ impl TaskRuntime for SessionTaskRuntime {
         })
     }
 
-    fn assigned_inputs<'a>(
+    fn placed_inputs<'a>(
         &'a self,
         task_id: TaskId,
     ) -> ContextFuture<'a, Result<Vec<crate::Input>, TaskContextError>> {
         Box::pin(async move {
             let session = self.session.lock().await;
             session.ensure_open().map_err(context_error)?;
-            Ok(session.assigned_inputs(task_id))
+            let turn = session.task_record(task_id).and_then(|task| task.turn);
+            Ok(turn.map_or_else(Vec::new, |turn| session.placed_inputs(turn)))
         })
     }
 }

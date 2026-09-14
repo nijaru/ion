@@ -22,13 +22,13 @@ use serde_json::{Value, json};
 
 use super::checkpoint::{Checkpoint, decode};
 use super::tool::ToolCatalog;
-use super::{ASSISTANT_ENTRY, POST_TOOLS, SCHEMA_VERSION, TOOL, USER_ENTRY, entry_kind, task_kind};
+use super::{ASSISTANT_ENTRY, POST_TOOLS, SCHEMA_VERSION, TOOL, entry_kind, task_kind};
 use crate::conversation::context::{ContextControl, project};
 use crate::task::{
     PlannedEntry, PlannedTask, PlannedTaskRef, PlannedTurn, TaskDependency, TaskPlan,
 };
 use crate::{
-    AbortContext, Entry, EntryId, InputBody, InputId, ResourceDomain, RunningTask, TaskCompletion,
+    AbortContext, Entry, EntryId, InputId, ResourceDomain, RunningTask, TaskCompletion,
     TaskContext, TaskFuture, TaskKind, TaskOutcomeKind, TaskRunError,
 };
 
@@ -63,25 +63,30 @@ impl GenerationKind {
             ))
         })?;
 
-        let mut messages = projection.messages;
-        let mut inputs = Vec::new();
-        for input in context.assigned_inputs().await? {
-            let InputBody::Text(text) = &input.body;
-            messages.push(Message {
-                role: Role::User,
-                content: vec![Content::Text(text.clone())],
-                provider_replay: None,
-            });
-            inputs.push(FrozenInput {
-                id: input.id,
-                text: text.clone(),
-            });
-        }
+        // Accepted input is already in the transcript: the writer placed it when
+        // it bound the input to this turn, so the projection above carries it and
+        // this invocation adds nothing. What it records is which accepted inputs
+        // the request included, without duplicating their text.
+        let inputs = match context_cutoff {
+            None => Vec::new(),
+            Some(cutoff) => context
+                .placed_inputs()
+                .await?
+                .into_iter()
+                .filter(|input| {
+                    input
+                        .disposition
+                        .placement()
+                        .is_some_and(|placement| placement.entry <= cutoff)
+                })
+                .map(|input| input.id)
+                .collect(),
+        };
 
         Ok(FrozenRequest {
             request: ModelRequest {
                 model: self.model.clone(),
-                messages,
+                messages: projection.messages,
                 tools: self.tools.specs(),
             },
             context_cutoff,
@@ -157,21 +162,10 @@ impl TaskKind for GenerationKind {
                 .collect();
             let text = message_text(&response.message);
 
+            // The accepted input is already placed, so the settlement appends only
+            // what the answer produced. A cancelled or failed answer therefore
+            // leaves the accepted message in the history.
             let mut plan = TaskPlan::new();
-            for input in &frozen.inputs {
-                let reference = plan.append_entry(PlannedEntry {
-                    conversation_id: conversation_id.into(),
-                    kind: entry_kind(USER_ENTRY),
-                    data: json!({"text": input.text}),
-                    projection: vec![Message {
-                        role: Role::User,
-                        content: vec![Content::Text(input.text.clone())],
-                        provider_replay: None,
-                    }],
-                    context: ContextControl::none(),
-                });
-                plan.consume_input(input.id, reference);
-            }
             plan.append_entry(PlannedEntry {
                 conversation_id: conversation_id.into(),
                 kind: entry_kind(ASSISTANT_ENTRY),
@@ -241,14 +235,11 @@ impl TaskKind for GenerationKind {
 struct FrozenRequest {
     request: ModelRequest,
     context_cutoff: Option<EntryId>,
-    inputs: Vec<FrozenInput>,
+    /// The accepted inputs whose placed entries this request's transcript
+    /// included, for provenance only. The entry is the content authority, so the
+    /// text is not duplicated here.
+    inputs: Vec<InputId>,
     attempts: u32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FrozenInput {
-    id: InputId,
-    text: String,
 }
 
 fn encode(frozen: &FrozenRequest) -> Result<Value, TaskRunError> {

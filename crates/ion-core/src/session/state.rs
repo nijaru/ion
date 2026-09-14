@@ -6,8 +6,8 @@ use thiserror::Error;
 use crate::session::transaction::Mutation;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation, TaskKindName,
-    TaskRecord, TaskStatus,
+    InputPlacement, InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation,
+    TaskKindName, TaskRecord, TaskStatus,
 };
 
 /// Resident semantic state. Records are held behind `Arc` so a transaction
@@ -337,6 +337,62 @@ fn ensure_accepts_work(
 
 /// Retire or reactivate a conversation.
 ///
+/// Check that a placement names real history and a real answering turn.
+///
+/// The turn must be a root in the input's conversation, and the entry must be the
+/// content this input's body places: a binding to an unrelated entry would make
+/// "answering that input" a claim about text the model never saw.
+fn validate_placement(
+    state: &SessionState,
+    input_id: InputId,
+    target: ConversationId,
+    current: &InputDisposition,
+    placement: &InputPlacement,
+) -> Result<(), StateError> {
+    let task = state
+        .tasks
+        .get(&placement.turn)
+        .ok_or(StateError::UnknownTask(placement.turn))?;
+    if task.conversation_id != target || task.turn != Some(placement.turn) {
+        return Err(StateError::InvalidInputDisposition(input_id));
+    }
+    let entry = state
+        .entries
+        .get(&placement.entry)
+        .ok_or(StateError::InvisibleParentCutoff(placement.entry))?;
+    if entry.conversation_id != target {
+        return Err(StateError::InvalidInputDisposition(input_id));
+    }
+    let input = state
+        .inputs
+        .get(&input_id)
+        .ok_or(StateError::UnknownInput(input_id))?;
+    let placed = input.body.placement();
+    if entry.kind != placed.kind || entry.data != placed.data {
+        return Err(StateError::InvalidInputDisposition(input_id));
+    }
+    // An existing placement keeps its entry: a retry answers the same message
+    // rather than pointing the binding at some other entry.
+    if let Some(previous) = current.placement()
+        && previous.entry != placement.entry
+    {
+        return Err(StateError::InvalidInputDisposition(input_id));
+    }
+    Ok(())
+}
+
+/// The conversation's inputs that were admitted and never started.
+pub(crate) fn queued_inputs(state: &SessionState, conversation_id: ConversationId) -> Vec<InputId> {
+    state
+        .inputs
+        .values()
+        .filter(|input| {
+            input.target == conversation_id && input.disposition == InputDisposition::Queued
+        })
+        .map(|input| input.id)
+        .collect()
+}
+
 /// Retirement is a worker-lifetime operation on an owned conversation, and it
 /// requires quiescence: no foreground slot and no non-terminal task. Work that
 /// was queued but never started is cancelled in the same commit, because
@@ -373,15 +429,10 @@ fn retire_conversation(
         return Err(StateError::ConversationHasLiveWork(conversation_id));
     }
 
-    let queued: Vec<InputId> = state
-        .inputs
-        .values()
-        .filter(|input| {
-            input.target == conversation_id && input.disposition == InputDisposition::Queued
-        })
-        .map(|input| input.id)
-        .collect();
-    for input_id in queued {
+    // The transaction stages these cancellations explicitly so they are durable;
+    // applying them here as well keeps the resident invariant true for any caller
+    // that applies the mutation without staging them.
+    for input_id in queued_inputs(state, conversation_id) {
         apply_input_disposition(state, input_id, InputDisposition::Cancelled)?;
     }
     conversation_mut(state, conversation_id)
@@ -406,36 +457,24 @@ fn apply_input_disposition(
         return Ok(());
     }
 
+    // Queued input may be placed or withdrawn. Placed content is never erased:
+    // a placed input can move to another attempt or be abandoned, but not back to
+    // `Queued` and not to a payload-free `Cancelled` that would lose its entry.
     let valid_transition = matches!(
         (&current, &disposition),
-        (InputDisposition::Queued, InputDisposition::Assigned(_))
-            | (InputDisposition::Queued, InputDisposition::Consumed(_))
+        (InputDisposition::Queued, InputDisposition::Placed(_))
             | (InputDisposition::Queued, InputDisposition::Cancelled)
-            | (InputDisposition::Assigned(_), InputDisposition::Consumed(_))
-            | (InputDisposition::Assigned(_), InputDisposition::Cancelled)
+            | (InputDisposition::Placed(_), InputDisposition::Placed(_))
+            | (InputDisposition::Placed(_), InputDisposition::Abandoned(_))
+            | (InputDisposition::Abandoned(_), InputDisposition::Placed(_))
     );
     if !valid_transition {
         return Err(StateError::InvalidInputDisposition(input_id));
     }
 
     match disposition {
-        InputDisposition::Assigned(task_id) => {
-            let task = state
-                .tasks
-                .get(&task_id)
-                .ok_or(StateError::UnknownTask(task_id))?;
-            if task.conversation_id != target {
-                return Err(StateError::InvalidInputDisposition(input_id));
-            }
-        }
-        InputDisposition::Consumed(entry_id) => {
-            let entry = state
-                .entries
-                .get(&entry_id)
-                .ok_or(StateError::InvisibleParentCutoff(entry_id))?;
-            if entry.conversation_id != target {
-                return Err(StateError::InvalidInputDisposition(input_id));
-            }
+        InputDisposition::Placed(placement) | InputDisposition::Abandoned(placement) => {
+            validate_placement(state, input_id, target, &current, &placement)?;
         }
         InputDisposition::Queued | InputDisposition::Cancelled => {}
     }

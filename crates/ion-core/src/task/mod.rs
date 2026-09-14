@@ -13,9 +13,9 @@ pub use invocation::{InvocationKind, TaskInvocation};
 pub use kind::{ResourceDomain, RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};
 pub use output::TaskOutput;
 pub use plan::{
-    MAX_PLAN_CONVERSATIONS, MAX_PLAN_ENTRIES, MAX_PLAN_INPUTS, MAX_PLAN_TASKS, PlannedConversation,
-    PlannedConversationRef, PlannedEntry, PlannedEntryRef, PlannedTarget, PlannedTask,
-    PlannedTaskRef, PlannedTurn, TaskDependency, TaskPlan,
+    MAX_PLAN_CONVERSATIONS, MAX_PLAN_ENTRIES, MAX_PLAN_TASKS, PlannedConversation,
+    PlannedConversationRef, PlannedEntry, PlannedTarget, PlannedTask, PlannedTaskRef, PlannedTurn,
+    TaskDependency, TaskPlan,
 };
 pub use record::{
     TaskKindName, TaskKindNameError, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,

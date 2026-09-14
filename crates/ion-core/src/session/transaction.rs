@@ -2,18 +2,20 @@ use std::collections::HashSet;
 
 use serde_json::Value;
 
+use crate::conversation::context::ContextControl;
 use crate::conversation::context::{project, validate_fork_cutoff};
 use crate::session::command::{
     ConversationSpec, EntryRequest, InputRequest, SessionError, TaskRequest,
 };
 use crate::session::idle::Admission;
 use crate::session::idle::admission;
-use crate::session::state::{SessionState, apply_mutation};
+use crate::session::state::{SessionState, apply_mutation, queued_inputs};
 use crate::task::{PlannedTask, PlannedTurn, TaskDependency, TaskPlan};
 use crate::view::Change;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InvocationKind, LocalSeq, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
+    InputPlacement, InvocationKind, LocalSeq, TaskId, TaskOutcome, TaskOutput, TaskRecord,
+    TaskStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -232,12 +234,10 @@ impl Transaction {
     ) -> Result<Vec<TaskId>, SessionError> {
         if plan.entries().len() > crate::task::MAX_PLAN_ENTRIES
             || plan.tasks().len() > crate::task::MAX_PLAN_TASKS
-            || plan.inputs().len() > crate::task::MAX_PLAN_INPUTS
             || plan.conversations().len() > crate::task::MAX_PLAN_CONVERSATIONS
         {
             return Err(SessionError::PlanTooLarge {
                 entries: plan.entries().len(),
-                inputs: plan.inputs().len(),
                 conversations: plan.conversations().len(),
                 tasks: plan.tasks().len(),
             });
@@ -264,20 +264,6 @@ impl Transaction {
                 projection: entry.projection.clone(),
                 context: entry.context.clone(),
             })?);
-        }
-
-        // An input and the transcript entry that carries it become durable in the
-        // same commit, so a consumed input always has its content present.
-        for binding in plan.inputs() {
-            if binding.entry.plan_id() != plan.id() {
-                return Err(SessionError::Invariant(
-                    "plan consumes an entry from a different plan".to_owned(),
-                ));
-            }
-            let entry_id = *entry_ids.get(binding.entry.index()).ok_or_else(|| {
-                SessionError::Invariant("plan consumes an entry that was not planned".to_owned())
-            })?;
-            self.set_input_disposition(binding.input, InputDisposition::Consumed(entry_id))?;
         }
 
         // A successor joins the settling task's turn unless the plan says
@@ -466,7 +452,7 @@ impl Transaction {
                 }
                 let input_id = self.queue_input(request)?;
                 let task_id = self.create_turn(turn)?;
-                self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
+                self.place_input(input_id, task_id)?;
                 Ok((input_id, Some(task_id)))
             }
         }
@@ -495,8 +481,146 @@ impl Transaction {
             });
         }
         let task_id = self.create_turn(turn)?;
-        self.set_input_disposition(input_id, InputDisposition::Assigned(task_id))?;
+        self.place_input(input_id, task_id)?;
         Ok(task_id)
+    }
+
+    /// Place an input in its conversation and bind it to the turn that will
+    /// answer it, in the commit that creates that turn.
+    ///
+    /// Placement is independent of answer success: the accepted message becomes
+    /// history before any invocation runs, so a cancelled, failed or interrupted
+    /// answer cannot strand it outside the transcript. Placement happens here
+    /// rather than at admission for a queued input, because a running generation
+    /// re-reads the transcript when it freezes a request and must not see a
+    /// later turn's message.
+    fn place_input(&mut self, input_id: InputId, turn: TaskId) -> Result<EntryId, SessionError> {
+        let Some(input) = self.draft.inputs.get(&input_id) else {
+            return Err(SessionError::UnknownInput(input_id));
+        };
+        if input.disposition != InputDisposition::Queued {
+            return Err(SessionError::InvalidInputDisposition(input_id));
+        }
+        let (target, body) = (input.target, input.body.clone());
+        let placement = body.placement();
+        let entry = self.append_entry(EntryRequest {
+            conversation_id: target,
+            kind: placement.kind,
+            data: placement.data,
+            projection: placement.projection,
+            context: ContextControl::none(),
+        })?;
+        self.set_input_disposition(
+            input_id,
+            InputDisposition::Placed(InputPlacement { entry, turn }),
+        )?;
+        Ok(entry)
+    }
+
+    /// Start a new answer attempt for an input that is already placed.
+    ///
+    /// The transcript is untouched: the placed entry is the input's content, and
+    /// a retry answers it again instead of admitting the message twice. The
+    /// caller names the attempt it is replacing, so a stale retry cannot rebind
+    /// an input that has already moved on.
+    pub(crate) fn retry_input(
+        &mut self,
+        input_id: InputId,
+        expected_turn: TaskId,
+        turn: TaskRequest,
+    ) -> Result<TaskId, SessionError> {
+        let placement = self.rebindable_placement(input_id, expected_turn)?;
+        if turn.conversation_id != self.input_target(input_id)? {
+            return Err(SessionError::InputTargetMismatch {
+                input: self.input_target(input_id)?,
+                task: turn.conversation_id,
+            });
+        }
+        let task_id = self.create_turn(turn)?;
+        self.set_input_disposition(
+            input_id,
+            InputDisposition::Placed(InputPlacement {
+                entry: placement.entry,
+                turn: task_id,
+            }),
+        )?;
+        Ok(task_id)
+    }
+
+    /// Record that a placed input will not be answered by another attempt.
+    ///
+    /// The placement is preserved: abandonment ends the answer intent, not the
+    /// accepted message, and it cancels no work that is already running.
+    pub(crate) fn abandon_input(
+        &mut self,
+        input_id: InputId,
+        expected_turn: TaskId,
+    ) -> Result<(), SessionError> {
+        let placement = self.rebindable_placement(input_id, expected_turn)?;
+        self.set_input_disposition(input_id, InputDisposition::Abandoned(placement))
+    }
+
+    /// The placement a retry or abandonment may act on.
+    ///
+    /// The input must be placed, still bound to the attempt the caller names,
+    /// and that attempt must have closed its turn: a terminal root can still have
+    /// live members holding the slot. The placed entry must also still be part of
+    /// the context the next attempt would read, so "answering that input" is not
+    /// a claim about content an edit has removed.
+    fn rebindable_placement(
+        &mut self,
+        input_id: InputId,
+        expected_turn: TaskId,
+    ) -> Result<InputPlacement, SessionError> {
+        let (target, placement) = {
+            let input = self
+                .draft
+                .inputs
+                .get(&input_id)
+                .ok_or(SessionError::UnknownInput(input_id))?;
+            let Some(placement) = input.disposition.placement() else {
+                return Err(SessionError::InputNotPlaced(input_id));
+            };
+            (input.target, placement)
+        };
+        if placement.turn != expected_turn {
+            return Err(SessionError::StaleInputBinding {
+                input: input_id,
+                expected: expected_turn,
+                current: placement.turn,
+            });
+        }
+        let conversation = self
+            .draft
+            .conversations
+            .get(&target)
+            .ok_or(SessionError::UnknownConversation(target))?;
+        if !conversation.accepts_work() {
+            return Err(SessionError::ConversationRetired(target));
+        }
+        let closed = self
+            .draft
+            .tasks
+            .get(&expected_turn)
+            .is_some_and(|task| task.turn_closed_by.is_some());
+        if !closed {
+            return Err(SessionError::TurnStillOpen(expected_turn));
+        }
+        let mut history = self.draft.visible_entries(target).map_err(map_state)?;
+        let projected = project(&history).map_err(SessionError::IncompleteContextControl)?;
+        if !projected.entry_ids.contains(&placement.entry) {
+            history.clear();
+            return Err(SessionError::PlacedEntryNotInContext(placement.entry));
+        }
+        Ok(placement)
+    }
+
+    fn input_target(&self, input_id: InputId) -> Result<ConversationId, SessionError> {
+        self.draft
+            .inputs
+            .get(&input_id)
+            .map(|input| input.target)
+            .ok_or(SessionError::UnknownInput(input_id))
     }
 
     /// Retire a conversation into a read-only archive. See
@@ -505,6 +629,12 @@ impl Transaction {
         &mut self,
         conversation_id: ConversationId,
     ) -> Result<(), SessionError> {
+        // Queued input is cancelled in the same commit as the flag: retirement
+        // stops future work, so the cancellation has to be durable rather than a
+        // resident side effect that a reopen would undo.
+        for input_id in queued_inputs(&self.draft, conversation_id) {
+            self.set_input_disposition(input_id, InputDisposition::Cancelled)?;
+        }
         self.stage(
             Mutation::SetConversationRetired {
                 conversation_id,

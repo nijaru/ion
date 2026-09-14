@@ -13,10 +13,9 @@ use ion_ai::{
     ScriptedModelService, Usage,
 };
 use ion_core::builtin::{Builtins, ToolCatalog};
-use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    CloseMode, ConversationId, EntryKind, InputBody, InputDisposition, InputMode, InputRequest,
-    InputSender, PlannedEntry, PlannedTask, PlannedTurn, RequestKey, RunningTask, Session,
+    CloseMode, ConversationId, InputBody, InputDisposition, InputMode, InputPlacement,
+    InputRequest, InputSender, PlannedTask, PlannedTurn, RequestKey, RunningTask, Session,
     SessionError, TaskCompletion, TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskId,
     TaskKind, TaskKindName, TaskPlan, TaskRecord, TaskRegistry, TurnTemplate,
 };
@@ -30,27 +29,16 @@ fn kind(name: &str) -> TaskKindName {
     TaskKindName::new(name).expect("task kind")
 }
 
-/// Answers every input bound to it by appending one user entry per input, so a
-/// test can see exactly which input each turn consumed.
+/// Answers the turn it roots. The writer places accepted input when it binds the
+/// input to this turn, so the kind appends nothing: what a test sees in the
+/// transcript is placement, not answer output.
 struct Answer;
 
 impl TaskKind for Answer {
-    fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
+    fn execute<'a>(&'a self, _task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
         Box::pin(async move {
-            let inputs = context.assigned_inputs().await?;
-            let mut plan = TaskPlan::new();
-            for input in &inputs {
-                let InputBody::Text(text) = &input.body;
-                let reference = plan.append_entry(PlannedEntry {
-                    conversation_id: (task.conversation_id).into(),
-                    kind: EntryKind::new("user").expect("entry kind"),
-                    data: json!({"text": text}),
-                    projection: Vec::new(),
-                    context: ContextControl::none(),
-                });
-                plan.consume_input(input.id, reference);
-            }
-            Ok(TaskCompletion::completed(json!({"answered": inputs.len()})).with_plan(plan))
+            let inputs = context.placed_inputs().await?;
+            Ok(TaskCompletion::completed(json!({"answered": inputs.len()})))
         })
     }
 
@@ -180,21 +168,27 @@ async fn a_queued_follow_up_starts_the_next_turn_when_the_first_finishes() {
         ]
     );
     let snapshot = driver.snapshot().await;
+    // Both inputs are placed: the first when its own turn opened, the second
+    // when the released slot bound it to its successor turn.
+    let entries = driver
+        .conversation_entries(root, None, 8)
+        .await
+        .expect("transcript")
+        .entries;
     assert_eq!(
-        snapshot.inputs[0].disposition,
-        InputDisposition::Consumed(
-            driver
-                .conversation_entries(root, None, 1)
-                .await
-                .expect("first entry")
-                .entries[0]
-                .id
-        )
+        snapshot.inputs[0].disposition.placement(),
+        Some(InputPlacement {
+            entry: entries[0].id,
+            turn: first_turn,
+        })
     );
-    assert!(matches!(
-        snapshot.inputs[1].disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(
+        snapshot.inputs[1].disposition.placement(),
+        Some(InputPlacement {
+            entry: entries[1].id,
+            turn: second_turn,
+        })
+    );
     assert_eq!(foreground(&snapshot, root), None);
 }
 
@@ -237,12 +231,14 @@ async fn steering_a_busy_conversation_is_deferred_to_the_next_turn_boundary() {
         ]
     );
     let snapshot = driver.snapshot().await;
-    let consumed_from = snapshot
+    let placed_from = snapshot
         .inputs
         .iter()
-        .map(|input| match input.disposition {
-            InputDisposition::Consumed(entry) => Some((input.id, entry)),
-            _ => None,
+        .map(|input| {
+            input
+                .disposition
+                .placement()
+                .map(|placed| (input.id, placed.entry))
         })
         .collect::<Vec<_>>();
     let entries = driver
@@ -250,11 +246,11 @@ async fn steering_a_busy_conversation_is_deferred_to_the_next_turn_boundary() {
         .await
         .expect("transcript");
     assert_eq!(
-        consumed_from[0],
+        placed_from[0],
         Some((first.input_id, entries.entries[0].id))
     );
     assert_eq!(
-        consumed_from[1],
+        placed_from[1],
         Some((steer.input_id, entries.entries[1].id))
     );
 }
@@ -400,16 +396,18 @@ async fn schedule_next_turn_answers_input_queued_before_the_call() {
     wait(&driver, turn).await;
 
     let snapshot = driver.snapshot().await;
-    assert!(matches!(
-        snapshot
-            .inputs
-            .iter()
-            .find(|input| input.id == queued)
-            .expect("input")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(
+        placement_turn(&snapshot, queued),
+        Some(turn),
+        "scheduling places the queued input with the turn it started"
+    );
     assert_eq!(foreground(&snapshot, root), None);
+    // Placement moves the input out of the candidate set, so scheduling it again
+    // reports nothing to do instead of answering the same input twice.
+    assert_eq!(
+        driver.schedule_next_turn(root).await.expect("schedule"),
+        None
+    );
 }
 
 #[tokio::test]
@@ -643,17 +641,25 @@ async fn a_cross_conversation_turn_member_releases_the_slot_owner() {
         .map(|task| task.id)
         .expect("the queued input started a turn in the slot owner");
     wait(&driver, successor).await;
-    assert!(matches!(
-        driver
-            .snapshot()
-            .await
-            .inputs
-            .iter()
-            .find(|input| input.id == queued)
-            .expect("queued input")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(
+        placement_turn(&driver.snapshot().await, queued),
+        Some(successor)
+    );
+}
+
+/// The turn an input is currently placed with, if it has been placed.
+fn placement_turn(
+    snapshot: &ion_core::SessionSnapshot,
+    input: ion_core::InputId,
+) -> Option<TaskId> {
+    snapshot
+        .inputs
+        .iter()
+        .find(|candidate| candidate.id == input)
+        .expect("admitted input")
+        .disposition
+        .placement()
+        .map(|placed| placed.turn)
 }
 
 #[tokio::test]
@@ -717,55 +723,6 @@ async fn a_clone_shares_the_turn_configuration() {
 }
 
 #[tokio::test]
-async fn an_invalidated_candidate_does_not_block_the_next() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let first = session
-        .queue_input(input(root, "turn-1", InputMode::FollowUp, "first"))
-        .expect("first queued")
-        .input_id;
-    let second = session
-        .queue_input(input(root, "turn-2", InputMode::FollowUp, "second"))
-        .expect("second queued")
-        .input_id;
-    let entry = session
-        .append_entry(ion_core::EntryRequest {
-            conversation_id: root,
-            kind: EntryKind::new("note").expect("entry kind"),
-            data: json!({}),
-            projection: Vec::new(),
-            context: ContextControl::none(),
-        })
-        .expect("entry")
-        .entry_id;
-    let driver = TaskDriver::new(session, answer_registry()).with_turn_template(answer_template());
-    driver
-        .consume_input(first, entry)
-        .await
-        .expect("consume the first candidate");
-
-    // The earliest candidate is no longer queued, so scheduling must fall
-    // through to the next one instead of reporting nothing to do.
-    let turn = driver
-        .schedule_next_turn(root)
-        .await
-        .expect("schedule")
-        .expect("the second candidate starts a turn");
-    wait(&driver, turn).await;
-    assert!(matches!(
-        driver
-            .snapshot()
-            .await
-            .inputs
-            .iter()
-            .find(|input| input.id == second)
-            .expect("second input")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
-}
-
-#[tokio::test]
 async fn an_unregistered_turn_kind_leaves_input_queued() {
     let mut session = Session::new().expect("session");
     let root = session.root_conversation();
@@ -804,17 +761,7 @@ async fn an_unregistered_turn_kind_leaves_input_queued() {
         .expect("schedule")
         .expect("the queued input now starts a turn");
     wait(&driver, turn).await;
-    assert!(matches!(
-        driver
-            .snapshot()
-            .await
-            .inputs
-            .iter()
-            .find(|input| input.id == queued)
-            .expect("queued input")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(placement_turn(&driver.snapshot().await, queued), Some(turn));
 }
 
 #[tokio::test]
@@ -873,21 +820,20 @@ async fn cancelling_a_turn_still_schedules_the_queued_follow_up() {
         .map(|task| task.id)
         .expect("the queued follow-up must start a successor turn");
     wait(&driver, successor).await;
-    assert!(matches!(
-        driver
-            .snapshot()
-            .await
-            .inputs
-            .iter()
-            .find(|input| input.id == follow_up.input_id)
-            .expect("follow-up")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(
+        placement_turn(&driver.snapshot().await, follow_up.input_id),
+        Some(successor)
+    );
+    // The cancelled turn contributed no answer, but the input it accepted is
+    // placed: an unanswered request stays history instead of being stranded
+    // outside the transcript, and the follow-up turn answers the conversation as
+    // it stands.
     assert_eq!(
         transcript(&driver, root).await,
-        vec![("user".to_owned(), "next".to_owned())],
-        "the cancelled turn contributed no entry"
+        vec![
+            ("user".to_owned(), "start".to_owned()),
+            ("user".to_owned(), "next".to_owned()),
+        ]
     );
 }
 
@@ -914,15 +860,8 @@ async fn a_reopened_session_resumes_queued_input() {
         .expect("schedule")
         .expect("a durable queued input starts a turn");
     wait(&reopened, turn).await;
-    assert!(matches!(
-        reopened
-            .snapshot()
-            .await
-            .inputs
-            .iter()
-            .find(|input| input.id == queued)
-            .expect("queued input")
-            .disposition,
-        InputDisposition::Consumed(_)
-    ));
+    assert_eq!(
+        placement_turn(&reopened.snapshot().await, queued),
+        Some(turn)
+    );
 }

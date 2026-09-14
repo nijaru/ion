@@ -25,9 +25,9 @@ use ion_core::builtin::{
 };
 use ion_core::{
     AdmissionReceipt, ConversationId, DriveOutcome, InputBody, InputDisposition, InputMode,
-    InputRequest, InputSender, InvocationKind, RequestKey, Session, SessionError, TaskDriver,
-    TaskDriverError, TaskId, TaskKindName, TaskOutcomeKind, TaskRecord, TaskRegistry, TaskRequest,
-    TaskStatus,
+    InputPlacement, InputRequest, InputSender, InvocationKind, RequestKey, Session, SessionError,
+    TaskDriver, TaskDriverError, TaskId, TaskKindName, TaskOutcomeKind, TaskRecord, TaskRegistry,
+    TaskRequest, TaskStatus,
 };
 use serde_json::{Value, json};
 use tokio::sync::Notify;
@@ -305,15 +305,19 @@ async fn submitted_input_drives_a_real_generation_tool_chain() {
             .expect("submit");
         let turn = submitted.task_id.expect("a submission binds its turn root");
 
-        // Admission bound the input and opened the slot, but started no work:
-        // the turn root is still pending until it is explicitly driven.
+        // Admission placed the input, opened the slot and started no work: the
+        // turn root is still pending until it is explicitly driven, and the
+        // accepted message is already history.
         let snapshot = driver.snapshot().await;
         let input = snapshot
             .inputs
             .iter()
             .find(|input| input.id == submitted.input_id)
             .expect("admitted input");
-        assert_eq!(input.disposition, InputDisposition::Assigned(turn));
+        assert_eq!(
+            input.disposition.placement().map(|placed| placed.turn),
+            Some(turn)
+        );
         assert_eq!(foreground(&snapshot, root), Some(turn));
         assert_eq!(
             snapshot
@@ -366,14 +370,21 @@ async fn submitted_input_drives_a_real_generation_tool_chain() {
     assert_eq!(kinds, ["user", "assistant", "tool_result", "assistant"]);
 
     let snapshot = driver.snapshot().await;
-    // Consuming the input is part of the same commit that appended its entry.
+    // The placement, its entry and the answering turn were committed together
+    // before the first model request.
     let user_entry = page.entries[0].id;
     let input = snapshot
         .inputs
         .iter()
         .find(|input| input.id == submitted.input_id)
         .expect("admitted input");
-    assert_eq!(input.disposition, InputDisposition::Consumed(user_entry));
+    assert_eq!(
+        input.disposition.placement(),
+        Some(InputPlacement {
+            entry: user_entry,
+            turn,
+        })
+    );
     assert!(
         snapshot
             .tasks
@@ -456,7 +467,11 @@ async fn a_completed_submission_replays_instead_of_opening_a_second_turn() {
         .expect("replay");
     assert!(replay.replayed);
     assert_eq!(replay.input_id, first.input_id);
-    assert_eq!(replay.task_id, None, "a consumed input has no live binding");
+    assert_eq!(
+        replay.task_id,
+        Some(turn),
+        "a replay reports the turn that answers the placed input"
+    );
     assert_eq!(replay.commit_seq, first.commit_seq);
 
     let snapshot = driver.snapshot().await;
@@ -502,6 +517,8 @@ async fn replaying_an_admission_reports_a_queued_input_without_a_turn() {
     assert_eq!(snapshot.inputs[0].disposition, InputDisposition::Queued);
 }
 
+/// A failed answer must not strand the accepted request: the placed message is
+/// already history, and only the answer is missing.
 #[tokio::test]
 async fn an_incomplete_answer_is_not_appended_as_history() {
     let (driver, _service) = builtin_driver([Script::Stream(vec![ModelStreamEvent::TextDelta(
@@ -523,15 +540,21 @@ async fn an_incomplete_answer_is_not_appended_as_history() {
         json!("model response ended before a complete answer")
     );
 
-    // Nothing was appended and the input is still bound to the task, so the
-    // partial answer cannot be mistaken for a finished turn.
-    assert!(
-        driver
-            .conversation_entries(root, None, 8)
-            .await
-            .expect("transcript")
-            .entries
-            .is_empty()
+    // The partial answer is not appended, while the accepted input that was
+    // placed before dispatch is: a failed answer leaves the request inspectable
+    // in the transcript rather than stranded outside it.
+    let entries = driver
+        .conversation_entries(root, None, 8)
+        .await
+        .expect("transcript")
+        .entries;
+    assert_eq!(
+        entries
+            .iter()
+            .map(|entry| (entry.kind.as_str(), entry.data["text"].clone()))
+            .collect::<Vec<_>>(),
+        vec![("user", json!("hello"))],
+        "only the placed input is history"
     );
     let input = driver
         .snapshot()
@@ -540,7 +563,13 @@ async fn an_incomplete_answer_is_not_appended_as_history() {
         .into_iter()
         .find(|input| input.id == submitted.input_id)
         .expect("admitted input");
-    assert_eq!(input.disposition, InputDisposition::Assigned(turn));
+    assert_eq!(
+        input.disposition.placement(),
+        Some(InputPlacement {
+            entry: entries[0].id,
+            turn,
+        })
+    );
 }
 
 #[tokio::test]

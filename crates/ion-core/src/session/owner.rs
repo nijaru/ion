@@ -231,7 +231,8 @@ impl Session {
             .map(|input| input.id)
     }
 
-    /// Bind an already-queued input to a new turn in one commit.
+    /// Bind an already-queued input to a new turn in one commit, placing its
+    /// entry in the same commit.
     pub(crate) fn bind_turn_for_input(
         &mut self,
         input_id: InputId,
@@ -239,6 +240,27 @@ impl Session {
     ) -> Result<TaskId, SessionError> {
         self.transact(|transaction| transaction.bind_turn_for_input(input_id, turn))
             .map(|(task_id, _)| task_id)
+    }
+
+    /// Start a new answer attempt for a placed input, in one commit.
+    pub fn retry_input(
+        &mut self,
+        input_id: InputId,
+        expected_turn: TaskId,
+        turn: TaskRequest,
+    ) -> Result<TaskId, SessionError> {
+        self.transact(|transaction| transaction.retry_input(input_id, expected_turn, turn))
+            .map(|(task_id, _)| task_id)
+    }
+
+    /// Record that a placed input will not be answered again.
+    pub fn abandon_input(
+        &mut self,
+        input_id: InputId,
+        expected_turn: TaskId,
+    ) -> Result<CommitSeq, SessionError> {
+        self.transact(|transaction| transaction.abandon_input(input_id, expected_turn))
+            .map(|(_, commit_seq)| commit_seq)
     }
 
     /// Admit an input and apply the mode/state admission policy for its
@@ -330,16 +352,23 @@ impl Session {
         Ok(outcomes)
     }
 
-    /// The admitted inputs durably bound to `task_id`, in admission order.
+    /// The placed inputs whose turn is `turn`, in admission order.
     ///
-    /// The disposition is the binding, so a task can only see inputs admitted
-    /// for it. This is the read the generation kind uses instead of receiving a
-    /// session handle or an input id it could widen.
-    pub(crate) fn assigned_inputs(&self, task_id: TaskId) -> Vec<crate::Input> {
+    /// The placement is the binding, so a task can only see inputs admitted for
+    /// its own turn. This is the provenance read the generation kind uses instead
+    /// of receiving a session handle or an input id it could widen: the entry is
+    /// the content authority, and this says which accepted input a request
+    /// included.
+    pub(crate) fn placed_inputs(&self, turn: TaskId) -> Vec<crate::Input> {
         self.state
             .inputs
             .values()
-            .filter(|input| input.disposition == InputDisposition::Assigned(task_id))
+            .filter(|input| {
+                input
+                    .disposition
+                    .placement()
+                    .is_some_and(|placement| placement.turn == turn)
+            })
             .map(|input| (**input).clone())
             .collect()
     }
@@ -573,16 +602,6 @@ impl Session {
             .map(|task| std::sync::Arc::as_ptr(task) as usize)
     }
 
-    pub(crate) fn set_input_disposition(
-        &mut self,
-        input_id: InputId,
-        disposition: InputDisposition,
-    ) -> Result<CommitSeq, SessionError> {
-        let (_, commit_seq) =
-            self.transact(|transaction| transaction.set_input_disposition(input_id, disposition))?;
-        Ok(commit_seq)
-    }
-
     pub(crate) fn reserve_task_invocation(
         &mut self,
         task_id: TaskId,
@@ -669,16 +688,14 @@ impl Session {
         let Some(receipt) = self.replay_input(key, request)? else {
             return Ok(None);
         };
-        let task_id =
-            self.state
-                .inputs
-                .get(&receipt.input_id)
-                .and_then(|input| match input.disposition {
-                    InputDisposition::Assigned(task_id) => Some(task_id),
-                    InputDisposition::Queued
-                    | InputDisposition::Consumed(_)
-                    | InputDisposition::Cancelled => None,
-                });
+        // A replay reports the turn that answers the input now: placement made the
+        // binding durable, so a client replaying its request after a failure sees
+        // the attempt it must retry rather than a task it must invent.
+        let task_id = self
+            .state
+            .inputs
+            .get(&receipt.input_id)
+            .and_then(|input| input.disposition.answering_turn());
         Ok(Some(AdmissionReceipt {
             input_id: receipt.input_id,
             task_id,

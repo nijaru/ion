@@ -149,7 +149,7 @@ async fn build_session(path: &Path) -> (TaskDriver, TaskId) {
         })
         .expect("fork")
         .conversation_id;
-    let admitted = session
+    session
         .queue_input(InputRequest {
             target: root,
             sender: InputSender::User,
@@ -157,8 +157,7 @@ async fn build_session(path: &Path) -> (TaskDriver, TaskId) {
             request_key: Some(RequestKey::new("durable-key").expect("key")),
             body: InputBody::Text("go".to_owned()),
         })
-        .expect("input")
-        .input_id;
+        .expect("input");
 
     let pending = session
         .create_task(TaskRequest {
@@ -235,10 +234,6 @@ async fn build_session(path: &Path) -> (TaskDriver, TaskId) {
     // A durable cancellation mark on a still-pending task.
     let cancelled = driver.cancel_task(pending).await.expect("cancel pending");
     assert!(cancelled.changed);
-    driver
-        .assign_input(admitted, pending)
-        .await
-        .expect("assign input");
 
     (driver, turn.task_id)
 }

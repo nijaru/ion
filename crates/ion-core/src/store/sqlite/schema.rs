@@ -13,7 +13,7 @@ use super::StoreError;
 /// `conversations.turn_cancelled`, the turn's cancellation barrier. Pre-1.0
 /// development databases of an older version are refused rather than migrated,
 /// per the policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
-pub(crate) const SCHEMA_VERSION: i64 = 4;
+pub(crate) const SCHEMA_VERSION: i64 = 5;
 
 const DDL: &str = r"
 CREATE TABLE session_meta (

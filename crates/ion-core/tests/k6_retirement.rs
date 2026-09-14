@@ -430,8 +430,24 @@ async fn retirement_survives_reopen() {
     .await
     .expect("no stall")
     .expect("wait");
+    // Queued input is cancelled by the retirement commit, so it must be durable:
+    // a resident-only cancellation would resurrect the input on reopen and
+    // contradict "reactivation resurrects nothing".
+    let queued = driver
+        .admit_input(queue_only(worker, "queued"))
+        .await
+        .expect("queue input");
     driver.retire_conversation(worker).await.expect("retire");
     let before = driver.snapshot().await;
+    assert_eq!(
+        before
+            .inputs
+            .iter()
+            .find(|input| input.id == queued.input_id)
+            .expect("queued input")
+            .disposition,
+        InputDisposition::Cancelled
+    );
     driver.close(CloseMode::Graceful).await;
     drop(driver);
 

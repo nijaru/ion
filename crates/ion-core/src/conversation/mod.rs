@@ -4,7 +4,8 @@ mod input;
 
 pub use entry::{Entry, EntryKind, EntryKindError};
 pub use input::{
-    Input, InputBody, InputDisposition, InputMode, InputSender, RequestKey, RequestKeyError,
+    EntryPlacement, INPUT_ENTRY, Input, InputBody, InputDisposition, InputMode, InputPlacement,
+    InputSender, RequestKey, RequestKeyError,
 };
 
 use serde::{Deserialize, Serialize};

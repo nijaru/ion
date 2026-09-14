@@ -1,9 +1,17 @@
 use std::fmt;
 
+use ion_ai::{Content, Message, Role};
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::{ConversationId, EntryId, InputId, TaskId};
+use crate::{ConversationId, EntryId, EntryKind, InputId, TaskId};
+
+/// The entry kind an accepted input is placed under.
+///
+/// The session writer places this entry when it binds the input to its turn, so
+/// the kind is owned here rather than by the built-in kinds that read it.
+pub const INPUT_ENTRY: &str = "user";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Input {
@@ -37,12 +45,83 @@ pub enum InputBody {
     Text(String),
 }
 
+impl InputBody {
+    /// How this body appears in the transcript.
+    ///
+    /// Placement belongs to the body, so the writer that appends the entry and
+    /// the projection a model reads cannot disagree about its content.
+    #[must_use]
+    pub fn placement(&self) -> EntryPlacement {
+        match self {
+            Self::Text(text) => EntryPlacement {
+                kind: EntryKind::new(INPUT_ENTRY).expect("the placement kind is valid"),
+                data: json!({"text": text}),
+                projection: vec![Message {
+                    role: Role::User,
+                    content: vec![Content::Text(text.clone())],
+                    provider_replay: None,
+                }],
+            },
+        }
+    }
+}
+
+/// The transcript content an accepted input is placed as.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct EntryPlacement {
+    pub kind: EntryKind,
+    pub data: Value,
+    pub projection: Vec<Message>,
+}
+
+/// Where an accepted input is in the transcript, and what answers it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InputPlacement {
+    /// The entry that carries the input.
+    pub entry: EntryId,
+    /// The turn currently answering it: the turn it was placed with, or the new
+    /// turn an explicit retry started.
+    pub turn: TaskId,
+}
+
+/// How far an accepted input has got.
+///
+/// Placement and answer are separate facts. The entry is committed when the
+/// input is bound to the turn that will answer it, before any invocation runs,
+/// so a cancelled or failed answer leaves the accepted message in the history
+/// instead of stranding it outside. `Placed` therefore does not mean the answer
+/// succeeded, and `Consumed` no longer exists to conflate the two.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InputDisposition {
+    /// Admitted and waiting for the turn that will answer it.
     Queued,
-    Assigned(TaskId),
-    Consumed(EntryId),
+    /// Placed in the transcript and bound to the turn answering it.
+    Placed(InputPlacement),
+    /// Placed, then explicitly given up on: the entry stays, and no further
+    /// attempt will answer it. Abandonment never cancels running work.
+    Abandoned(InputPlacement),
+    /// Withdrawn before it was ever placed, so there is no entry to preserve.
     Cancelled,
+}
+
+impl InputDisposition {
+    /// The turn currently answering this input, if it has one.
+    #[must_use]
+    pub const fn answering_turn(&self) -> Option<TaskId> {
+        match self {
+            Self::Placed(placement) | Self::Abandoned(placement) => Some(placement.turn),
+            Self::Queued | Self::Cancelled => None,
+        }
+    }
+
+    /// Where the input is in the transcript, once it has been placed.
+    #[must_use]
+    pub const fn placement(&self) -> Option<InputPlacement> {
+        match self {
+            Self::Placed(placement) | Self::Abandoned(placement) => Some(*placement),
+            Self::Queued | Self::Cancelled => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
