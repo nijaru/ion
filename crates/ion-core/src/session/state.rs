@@ -1,4 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::btree_set::BTreeSet;
+use std::collections::{BTreeMap, HashMap};
+use std::ops::Bound;
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -117,6 +119,174 @@ impl SessionState {
             .or_default()
             .insert(entry_id);
         Ok(())
+    }
+
+    /// The fork-visible entry ids of one conversation, in order, without
+    /// cloning the entries they identify.
+    ///
+    /// A paging reader needs the order and the membership; only the page it
+    /// returns needs payloads. Ids are eight bytes, so this costs the transcript
+    /// length in ids rather than in records, and the ancestry of the
+    /// conversation rather than the size of the session.
+    pub(crate) fn visible_ids(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Vec<EntryId>, StateError> {
+        let conversation = self
+            .conversations
+            .get(&conversation_id)
+            .ok_or(StateError::UnknownConversation(conversation_id))?;
+        let own = self
+            .entries_by_conversation
+            .get(&conversation_id)
+            .into_iter()
+            .flat_map(|ids| ids.iter().copied());
+        match conversation.parent {
+            None => Ok(own.collect()),
+            Some(parent) => {
+                let cutoff = parent.at;
+                let inherited = self.visible_ids(parent.conversation_id)?;
+                let mut visible = Vec::with_capacity(inherited.len() + 1);
+                let mut found = false;
+                for id in inherited {
+                    visible.push(id);
+                    if id == cutoff {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(StateError::InvisibleParentCutoff(cutoff));
+                }
+                visible.extend(own);
+                Ok(visible)
+            }
+        }
+    }
+
+    /// One entry record, without materializing an index or a transcript.
+    pub(crate) fn entry(&self, entry_id: EntryId) -> Option<&Entry> {
+        self.entries.get(&entry_id).map(|entry| &**entry)
+    }
+
+    /// One page of a conversation's fork-visible entry order.
+    ///
+    /// `after` is exclusive. Returns the page and whether more entries follow.
+    ///
+    /// Cost: for a conversation with no history parent, one ordered range read
+    /// over its own index, so the page costs the page rather than the
+    /// transcript. A fork must also reproduce its inherited prefix, so its page
+    /// costs its ancestry plus the page; resolving a cursor inside that prefix
+    /// is why the prefix is materialized as ids, which is eight bytes per
+    /// inherited entry rather than a cloned record.
+    pub(crate) fn visible_page(
+        &self,
+        conversation_id: ConversationId,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> Result<(Vec<EntryId>, bool), StateError> {
+        let conversation = self
+            .conversations
+            .get(&conversation_id)
+            .ok_or(StateError::UnknownConversation(conversation_id))?;
+        if limit == 0 {
+            // An empty request has no continuation cursor to offer: there is no
+            // entry to hand back as the next page's `after`.
+            return Ok((Vec::new(), false));
+        }
+        let empty = BTreeSet::new();
+        let own = self
+            .entries_by_conversation
+            .get(&conversation_id)
+            .unwrap_or(&empty);
+        let Some(parent) = conversation.parent else {
+            let mut page: Vec<EntryId> = match after {
+                Some(cursor) => {
+                    if !own.contains(&cursor) {
+                        return Err(StateError::InvisibleCursor(cursor));
+                    }
+                    own.range((Bound::Excluded(cursor), Bound::Unbounded))
+                        .take(limit + 1)
+                        .copied()
+                        .collect()
+                }
+                None => own.iter().take(limit + 1).copied().collect(),
+            };
+            let more = page.len() > limit;
+            page.truncate(limit);
+            return Ok((page, more));
+        };
+
+        // Fork: the visible order is the inherited prefix followed by own
+        // entries. Materialize the prefix as ids (see above) and satisfy the
+        // cursor wherever it lands.
+        let inherited = self.visible_ids(parent.conversation_id)?;
+        let mut prefix = Vec::new();
+        let mut found_cutoff = false;
+        for id in inherited {
+            prefix.push(id);
+            if id == parent.at {
+                found_cutoff = true;
+                break;
+            }
+        }
+        if !found_cutoff {
+            return Err(StateError::InvisibleParentCutoff(parent.at));
+        }
+
+        let mut page = Vec::new();
+        let mut more = false;
+        match after {
+            None => {
+                for id in &prefix {
+                    if page.len() == limit {
+                        more = true;
+                        break;
+                    }
+                    page.push(*id);
+                }
+                if !more {
+                    let taken = limit - page.len();
+                    let mut rest: Vec<EntryId> = own.iter().take(taken + 1).copied().collect();
+                    more = rest.len() > taken;
+                    rest.truncate(taken);
+                    page.extend(rest);
+                }
+            }
+            Some(cursor) => {
+                let position = prefix.iter().position(|id| *id == cursor);
+                match position {
+                    Some(position) => {
+                        for id in prefix.iter().skip(position + 1) {
+                            if page.len() == limit {
+                                more = true;
+                                break;
+                            }
+                            page.push(*id);
+                        }
+                        if !more {
+                            let taken = limit - page.len();
+                            let mut rest: Vec<EntryId> =
+                                own.iter().take(taken + 1).copied().collect();
+                            more = rest.len() > taken;
+                            rest.truncate(taken);
+                            page.extend(rest);
+                        }
+                    }
+                    None if own.contains(&cursor) => {
+                        page.extend(
+                            own.range((Bound::Excluded(cursor), Bound::Unbounded))
+                                .take(limit + 1)
+                                .copied(),
+                        );
+                        more = page.len() > limit;
+                        page.truncate(limit);
+                    }
+                    None => return Err(StateError::InvisibleCursor(cursor)),
+                }
+            }
+        }
+        Ok((page, more))
     }
 
     pub(crate) fn visible_entries(
@@ -609,6 +779,8 @@ pub(crate) enum StateError {
     UnknownTask(TaskId),
     #[error("history parent cutoff {0} is not visible")]
     InvisibleParentCutoff(EntryId),
+    #[error("entry {0} is not visible in this conversation")]
+    InvisibleCursor(EntryId),
     #[error("session root already exists")]
     RootAlreadyExists,
     #[error("duplicate conversation id {0}")]

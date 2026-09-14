@@ -7,7 +7,7 @@ use crate::session::command::{
     EntryRequest, InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt,
     TaskRequest, TurnCancellation,
 };
-use crate::session::state::{RunnableTask, SessionState};
+use crate::session::state::{RunnableTask, SessionState, StateError};
 use crate::session::transaction::Transaction;
 use crate::store::{MemoryStore, Persistence};
 use crate::view::{
@@ -447,33 +447,35 @@ impl Session {
     /// Read one bounded page of a conversation's fork-visible transcript.
     /// `after` is exclusive and must be visible; a returned cursor stays valid
     /// while the transcript remains append-only at that range.
+    ///
+    /// A page costs the page plus this conversation's ancestry, not the whole
+    /// session: reading a transcript in pages must not materialize it once per
+    /// page, or a complete read becomes quadratic in transcript length.
     pub fn conversation_entries(
         &self,
         conversation_id: ConversationId,
         after: Option<crate::EntryId>,
         limit: usize,
     ) -> Result<EntryPage, SessionError> {
-        let visible = self
+        let (page, more) = self
             .state
-            .visible_entries(conversation_id)
-            .map_err(|error| SessionError::Invariant(error.to_string()))?;
-        let start = match after {
-            Some(cursor) => visible
-                .iter()
-                .position(|entry| entry.id == cursor)
-                .map(|position| position + 1)
-                .ok_or(SessionError::InvisibleContextReference(cursor))?,
-            None => 0,
-        };
-        if limit == 0 || start >= visible.len() {
-            return Ok(EntryPage {
-                entries: Vec::new(),
-                next: None,
-            });
-        }
-        let end = start.saturating_add(limit).min(visible.len());
-        let entries: Vec<_> = visible[start..end].to_vec();
-        let next = (end < visible.len()).then(|| entries.last().expect("non-empty page").id);
+            .visible_page(conversation_id, after, limit)
+            .map_err(|error| match error {
+                StateError::InvisibleCursor(cursor) => {
+                    SessionError::InvisibleContextReference(cursor)
+                }
+                other => SessionError::Invariant(other.to_string()),
+            })?;
+        // Only the page's payloads are cloned.
+        let entries: Vec<_> = page
+            .into_iter()
+            .map(|id| {
+                self.state.entry(id).cloned().ok_or_else(|| {
+                    SessionError::Invariant(format!("visible entry {id} has no record"))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let next = more.then(|| entries.last().expect("a truncated page is non-empty").id);
         Ok(EntryPage { entries, next })
     }
 
