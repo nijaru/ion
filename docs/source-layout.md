@@ -227,11 +227,14 @@ Do not create one giant `sql.rs` or `queries.rs` file.
 
 Owns built-in task kinds, not kernel special cases.
 
-Initial K5 built-ins:
+K5 built-ins:
 
 - generation;
 - tool execution wrapper;
-- post-tools/join continuation.
+- post-tools/join continuation;
+- `checkpoint.rs`: three-way reading (absent / readable / unreadable) of the
+  durable checkpoint a previous invocation left, shared by generation and tool.
+  Fail-closed recovery depends on the distinction, so it has one owner.
 
 K6 adds `worker.rs`: the trusted adapter that spawns a retained worker conversation. Like the others it is an ordinary registered kind, and it reaches no session state the ordinary plan path does not.
 

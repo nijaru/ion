@@ -240,7 +240,7 @@ Representative states include prepared/not-dispatched, dispatched retry-safe att
 
 Attempt/usage evidence may be a task-scoped ledger. It is not another generic effect lifecycle.
 
-Absent checkpoints and unreadable/unsupported checkpoints are distinct. Recovery must block on unreadable evidence, never decode it as “not dispatched” or rebuild a frozen request. Prepared tool implementation identity and recovery policy must remain identifiable across catalog changes; removal or changed retry safety cannot erase earlier dispatch uncertainty. The built-in adapters still need this fail-closed repair (R3).
+Absent checkpoints and unreadable/unsupported checkpoints are distinct. Recovery settles on unreadable evidence instead of decoding it as “not dispatched” or rebuilding a frozen request: the built-in adapters read a three-way checkpoint (absent / readable / unreadable) and an unreadable one becomes an Indeterminate settlement with no dispatch. Prepared tool identity and recovery policy remain identifiable across catalog changes: the dispatch record freezes the call identity and the retry policy in force at hand-over, a repeat requires both that policy and the current one to allow it, and a removed or replaced implementation cannot erase earlier dispatch uncertainty.
 
 If one logical task would perform several independent repeat-sensitive operations, prefer child tasks. Otherwise its checkpoint must encode every uncertain boundary. Add a first-class effect entity only if a future concrete operation demonstrates an independent identity/lifetime the task model cannot represent cleanly.
 
