@@ -242,6 +242,8 @@ async fn main() {
     // growth with resident size is visible.
     let mut windows: Vec<(usize, Window)> = Vec::new();
     let mut window = Window::default();
+    let mut admit = Window::default();
+    let mut settle = Window::default();
     let mut deadline = tasks / 10;
     let build_start = Instant::now();
     let mut peak_rss = rss_kb();
@@ -256,12 +258,15 @@ async fn main() {
             .await
             .expect("submit");
         let turn = receipt.task_id.expect("turn root");
+        admit.record(started.elapsed());
+        let started = Instant::now();
         match driver.drive_task(turn).await.expect("drive") {
             DriveOutcome::Settled(_) => {}
             DriveOutcome::Interrupted(interruption) => {
                 panic!("unexpected interruption: {interruption:?}")
             }
         }
+        settle.record(started.elapsed());
         window.record(started.elapsed());
         if index % 512 == 0 {
             peak_rss = peak_rss.max(rss_kb());
@@ -280,6 +285,8 @@ async fn main() {
     for (at, window) in &windows {
         println!("  [{} turns] {}", at, window.report("submit+drive"));
     }
+    println!("{}", admit.report("  admission only"));
+    println!("{}", settle.report("  settlement only"));
     println!(
         "resident records: conversations={} entries={} inputs={} tasks={}",
         snapshot.conversations.len(),
@@ -359,10 +366,46 @@ async fn main() {
     let mut cutoff = append_note(&mut fork_session, fork_root, 0);
     let mut parent = fork_root;
     let seeded = env_usize("ION_MEASURE_SEED_ENTRIES", 256);
-    for index in 0..seeded {
-        cutoff = append_note(&mut fork_session, fork_root, index + 1);
+    // Spreading the same total number of appends over K conversations separates
+    // per-conversation history work from whole-resident-set work: if cost per
+    // append drops as K rises, a per-conversation scan dominates.
+    let seed_conversations = env_usize("ION_MEASURE_SEED_CONVERSATIONS", 1).max(1);
+    let mut seed_targets = vec![fork_root];
+    for _ in 1..seed_conversations {
+        seed_targets.push(
+            fork_session
+                .create_conversation(ConversationSpec::independent())
+                .expect("seed conversation")
+                .conversation_id,
+        );
     }
-    println!("seeded {seeded} entries in the root before forking");
+    // A plain append is one commit that clones the resident maps and scans no
+    // tasks, so its growth isolates map-clone cost from task-scan cost.
+    let mut seeding = Vec::new();
+    let mut seed_window = Window::default();
+    let mut seed_deadline = seeded / 4;
+    for index in 0..seeded {
+        if index >= seed_deadline && seed_deadline > 0 {
+            seeding.push((index, std::mem::take(&mut seed_window)));
+            seed_deadline += seeded / 4;
+        }
+        let started = Instant::now();
+        let target = seed_targets[index % seed_targets.len()];
+        let receipt = append_note(&mut fork_session, target, index + 1);
+        if target == fork_root {
+            cutoff = receipt;
+        }
+        seed_window.record(started.elapsed());
+    }
+    seeding.push((seeded, seed_window));
+    println!("seeded {seeded} entries across {seed_conversations} conversation(s) before forking");
+    for (at, window) in &seeding {
+        println!(
+            "  [{} entries] {}",
+            at,
+            window.report("append_entry commit")
+        );
+    }
     let mut fork = Window::default();
     let mut fork_rss = rss_kb();
     for level in 0..fork_depth {
