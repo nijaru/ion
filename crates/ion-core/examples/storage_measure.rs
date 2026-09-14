@@ -309,6 +309,32 @@ async fn main() {
         summary.inputs,
         summary.tasks.pending + summary.tasks.running + summary.tasks.terminal
     );
+    // A complete transcript read in bounded pages. Generation reads this way,
+    // so the total must scale with the transcript, not with its square.
+    {
+        const PAGE: usize = 64;
+        let started = Instant::now();
+        let mut cursor = None;
+        let mut pages = 0usize;
+        let mut read = 0usize;
+        loop {
+            let page = driver
+                .conversation_entries(root, cursor, PAGE)
+                .await
+                .expect("page");
+            pages += 1;
+            read += page.entries.len();
+            match page.next {
+                Some(next) => cursor = Some(next),
+                None => break,
+            }
+        }
+        let elapsed = started.elapsed();
+        println!(
+            "full transcript read in pages of {PAGE}: {read} entries, {pages} pages, {elapsed:?} ({:.1} us/page)",
+            elapsed.as_micros() as f64 / pages as f64
+        );
+    }
     println!("rss after build: {} kB", rss_kb());
     println!(
         "bytes after build: {} (db={})",
