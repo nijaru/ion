@@ -19,7 +19,7 @@ crates/
   ion-terminal/   low-level terminal primitives; independently reviewed later
 ```
 
-The old application crate is intentionally absent. Reintroduce `crates/ion/` only when a genuinely useful shell can be built on the new command/view/store boundaries. Do not restore it as a compatibility bridge to removed runtime APIs.
+The old application crate is excluded from workspace membership, not deleted. Reintroduce `crates/ion/` only when a genuinely useful shell can be built on the new command/view/store boundaries. Do not restore it as a compatibility bridge to removed runtime APIs.
 
 Potential later crates such as a protocol/server package or a separate execution-environment package require an accepted product boundary first. Do not pre-create them for symmetry.
 
@@ -215,7 +215,7 @@ Keep the store interface crate-private and narrow. It is not a promise of interc
 
 `store/sqlite/` owns all SQLite details. No other module imports `rusqlite`, raw SQL, or holds a SQLite connection. The per-session store is implemented; `Session::create`/`Session::open` are the public entry points and `SqliteStore` stays crate-private.
 
-- `schema.rs`: schema/version/DDL only, currently version 4;
+- `schema.rs`: schema/version/DDL only, currently version 5;
 - `connection.rs`: open policy (WAL with `synchronous = FULL`, `busy_timeout`), create-versus-open, session identity and metadata reads;
 - `commit.rs`: application of one atomic semantic mutation batch, including the commit-cursor compare-and-set that fences a stale writer authority;
 - `conversation.rs`, `entry.rs`, `input.rs`, `task.rs`: focused per-record writes plus the reads open-time reconstruction composes;
