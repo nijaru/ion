@@ -125,7 +125,9 @@ Owns durable agent-thread semantics:
 
 - `Conversation` record and history-parent/owner relationships;
 - immutable transcript entry types;
-- admitted input/result records;
+- admitted input/result records, including the placement a body defines
+  (`InputBody::placement`) and the disposition that binds a placed entry to the
+  turn answering it;
 - context controls and pure provider-neutral projection;
 - fork visibility/cutoff logic.
 
