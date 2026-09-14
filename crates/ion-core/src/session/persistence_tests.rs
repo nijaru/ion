@@ -4,6 +4,7 @@ use std::sync::{
 };
 
 use super::*;
+use crate::session::journal::Editor;
 use crate::session::state::apply_mutation;
 use crate::session::transaction::{Mutation, MutationBatch};
 use crate::store::StoreError;
@@ -194,7 +195,9 @@ fn replay(batches: &[MutationBatch], session_id: crate::SessionId) -> SessionSta
     let mut state = SessionState::empty(session_id);
     for batch in batches {
         for write in &batch.writes {
-            apply_mutation(&mut state, write).expect("committed write applies");
+            // Replay applies committed writes the way a live command would,
+            // through an editor that never rolls back: these writes are durable.
+            apply_mutation(&mut Editor::new(&mut state), write).expect("committed write applies");
             if let Mutation::AdmitInput(input) = write {
                 state.input_commits.insert(input.id, batch.commit_seq);
             }

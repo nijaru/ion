@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use thiserror::Error;
 
+use crate::session::journal::Editor;
 use crate::session::transaction::Mutation;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
@@ -99,6 +100,24 @@ impl SessionState {
         matches!(task.status, TaskStatus::Terminal(_))
             || task.cancel_requested
             || self.dependencies_terminal(task)
+    }
+
+    /// Store one input, refusing a duplicate id.
+    pub(crate) fn insert_input(&mut self, input: Input) -> Result<(), StateError> {
+        let id = input.id;
+        if self.inputs.insert(id, Arc::new(input)).is_some() {
+            return Err(StateError::DuplicateInput(id));
+        }
+        Ok(())
+    }
+
+    /// Store one task, refusing a duplicate id.
+    pub(crate) fn insert_task(&mut self, task: TaskRecord) -> Result<(), StateError> {
+        let id = task.id;
+        if self.tasks.insert(id, Arc::new(task)).is_some() {
+            return Err(StateError::DuplicateTask(id));
+        }
+        Ok(())
     }
 
     /// Store one entry and index it under its conversation.
@@ -334,58 +353,36 @@ pub(crate) struct RunnableTask {
     pub(crate) schema_version: u32,
 }
 
-fn conversation_mut(state: &mut SessionState, id: ConversationId) -> Option<&mut Conversation> {
-    state.conversations.get_mut(&id).map(Arc::make_mut)
-}
-
-fn task_mut(state: &mut SessionState, id: TaskId) -> Option<&mut TaskRecord> {
-    state.tasks.get_mut(&id).map(Arc::make_mut)
-}
-
-fn input_mut(state: &mut SessionState, id: InputId) -> Option<&mut Input> {
-    state.inputs.get_mut(&id).map(Arc::make_mut)
-}
-
 pub(crate) fn apply_mutation(
-    state: &mut SessionState,
+    editor: &mut Editor<'_>,
     mutation: &Mutation,
 ) -> Result<(), StateError> {
+    let state = editor.state();
     match mutation {
         Mutation::CreateRoot(conversation) => {
             if state.root_conversation.is_some() {
                 return Err(StateError::RootAlreadyExists);
             }
-            if state
-                .conversations
-                .insert(conversation.id, Arc::new(*conversation))
-                .is_some()
-            {
-                return Err(StateError::DuplicateConversation(conversation.id));
-            }
-            state.root_conversation = Some(conversation.id);
+            editor.put_conversation(*conversation)?;
+            editor.set_root_conversation(conversation.id);
         }
         Mutation::CreateConversation(conversation) => {
-            if state
-                .conversations
-                .insert(conversation.id, Arc::new(*conversation))
-                .is_some()
-            {
-                return Err(StateError::DuplicateConversation(conversation.id));
-            }
+            editor.put_conversation(*conversation)?;
         }
         Mutation::SetConversationRetired {
             conversation_id,
             retired,
-        } => retire_conversation(state, *conversation_id, *retired)?,
+        } => retire_conversation(editor, *conversation_id, *retired)?,
         Mutation::CloseTurn { root, closed_by } => {
-            let closed = state
-                .tasks
-                .get(closed_by)
+            let closed = editor
+                .task(*closed_by)
                 .ok_or(StateError::UnknownTask(*closed_by))?;
             if !matches!(closed.status, TaskStatus::Terminal(_)) || closed.turn != Some(*root) {
                 return Err(StateError::InvalidTurnClosure(*root));
             }
-            let root_task = task_mut(state, *root).ok_or(StateError::UnknownTask(*root))?;
+            let root_task = editor
+                .task_mut(*root)
+                .ok_or(StateError::UnknownTask(*root))?;
             if root_task.turn != Some(*root) || root_task.turn_closed_by.is_some() {
                 return Err(StateError::InvalidTurnClosure(*root));
             }
@@ -393,50 +390,36 @@ pub(crate) fn apply_mutation(
         }
         Mutation::AppendEntry(entry) => {
             ensure_accepts_work(state, entry.conversation_id)?;
-            state.insert_entry(entry.clone())?;
+            editor.put_entry(entry.clone())?;
         }
         Mutation::AdmitInput(input) => {
             ensure_accepts_work(state, input.target)?;
-            if state
-                .inputs
-                .insert(input.id, Arc::new(input.clone()))
-                .is_some()
-            {
-                return Err(StateError::DuplicateInput(input.id));
-            }
-            if let Some(key) = &input.request_key
-                && state.request_keys.insert(key.clone(), input.id).is_some()
-            {
-                return Err(StateError::DuplicateRequestKey(key.clone()));
+            editor.put_input(input.clone())?;
+            if let Some(key) = &input.request_key {
+                editor.put_request_key(key.clone(), input.id)?;
             }
         }
         Mutation::SetInputDisposition {
             input_id,
             disposition,
-        } => apply_input_disposition(state, *input_id, *disposition)?,
+        } => apply_input_disposition(editor, *input_id, *disposition)?,
         Mutation::CreateTask(task) => {
             ensure_accepts_work(state, task.conversation_id)?;
-            if state
-                .tasks
-                .insert(task.id, Arc::new(task.clone()))
-                .is_some()
-            {
-                return Err(StateError::DuplicateTask(task.id));
-            }
+            editor.put_task(task.clone())?;
         }
         Mutation::OpenForegroundTurn {
             conversation_id,
             task_id,
         } => {
             ensure_accepts_work(state, *conversation_id)?;
-            let task = state
-                .tasks
-                .get(task_id)
+            let task = editor
+                .task(*task_id)
                 .ok_or(StateError::UnknownTask(*task_id))?;
             if task.conversation_id != *conversation_id || task.turn != Some(*task_id) {
                 return Err(StateError::InvalidForegroundTurn(*task_id));
             }
-            let conversation = conversation_mut(state, *conversation_id)
+            let conversation = editor
+                .conversation_mut(*conversation_id)
                 .ok_or(StateError::UnknownConversation(*conversation_id))?;
             if conversation.foreground_turn.is_some() {
                 return Err(StateError::ForegroundTurnBusy(*conversation_id));
@@ -447,19 +430,21 @@ pub(crate) fn apply_mutation(
             task_id,
             generation,
             kind,
-        } => reserve_task(state, *task_id, *generation, *kind)?,
+        } => reserve_task(editor, *task_id, *generation, *kind)?,
         Mutation::CheckpointTask {
             task_id,
             generation,
             checkpoint,
             output,
         } => {
-            let task = authorized_task_mut(state, *task_id, *generation)?;
+            let task = authorized_task_mut(editor, *task_id, *generation)?;
             task.checkpoint = checkpoint.clone();
             task.output = output.clone();
         }
         Mutation::MarkTaskCancellation(task_id) => {
-            let task = task_mut(state, *task_id).ok_or(StateError::UnknownTask(*task_id))?;
+            let task = editor
+                .task_mut(*task_id)
+                .ok_or(StateError::UnknownTask(*task_id))?;
             if matches!(task.status, TaskStatus::Terminal(_)) {
                 return Err(StateError::TaskAlreadyTerminal(*task_id));
             }
@@ -469,7 +454,8 @@ pub(crate) fn apply_mutation(
             conversation_id,
             root,
         } => {
-            let conversation = conversation_mut(state, *conversation_id)
+            let conversation = editor
+                .conversation_mut(*conversation_id)
                 .ok_or(StateError::UnknownConversation(*conversation_id))?;
             if conversation.foreground_turn != Some(*root) {
                 return Err(StateError::InvalidForegroundTurn(*root));
@@ -482,7 +468,7 @@ pub(crate) fn apply_mutation(
             outcome,
             output,
         } => {
-            let task = authorized_task_mut(state, *task_id, *generation)?;
+            let task = authorized_task_mut(editor, *task_id, *generation)?;
             task.status = TaskStatus::Terminal(outcome.clone());
             task.invocation = None;
             task.output = output.clone();
@@ -491,7 +477,8 @@ pub(crate) fn apply_mutation(
             conversation_id,
             task_id,
         } => {
-            let conversation = conversation_mut(state, *conversation_id)
+            let conversation = editor
+                .conversation_mut(*conversation_id)
                 .ok_or(StateError::UnknownConversation(*conversation_id))?;
             if conversation.foreground_turn != Some(*task_id) {
                 return Err(StateError::InvalidForegroundTurn(*task_id));
@@ -505,7 +492,9 @@ pub(crate) fn apply_mutation(
             task_id,
             conversation_id,
         } => {
-            let task = task_mut(state, *task_id).ok_or(StateError::UnknownTask(*task_id))?;
+            let task = editor
+                .task_mut(*task_id)
+                .ok_or(StateError::UnknownTask(*task_id))?;
             if task.owned_conversations.contains(conversation_id) {
                 return Err(StateError::DuplicateOwnership {
                     task_id: *task_id,
@@ -597,56 +586,65 @@ pub(crate) fn queued_inputs(state: &SessionState, conversation_id: ConversationI
 /// ownership, terminal outcomes and checkpoints - is preserved, and an inherited
 /// cutoff in another conversation is unaffected.
 fn retire_conversation(
-    state: &mut SessionState,
+    editor: &mut Editor<'_>,
     conversation_id: ConversationId,
     retired: bool,
 ) -> Result<(), StateError> {
-    let conversation = state
-        .conversations
-        .get(&conversation_id)
-        .ok_or(StateError::UnknownConversation(conversation_id))?;
-    if conversation.retired == retired {
+    // Copy the flags out first: this decides from one consistent view and then
+    // writes, rather than holding a read borrow across mutations.
+    let (already, owned, busy) = {
+        let conversation = editor
+            .conversation(conversation_id)
+            .ok_or(StateError::UnknownConversation(conversation_id))?;
+        (
+            conversation.retired,
+            conversation.owner_task.is_some(),
+            conversation.foreground_turn.is_some(),
+        )
+    };
+    if already == retired {
         return Ok(());
     }
     if !retired {
-        conversation_mut(state, conversation_id)
+        editor
+            .conversation_mut(conversation_id)
             .expect("validated conversation remains present")
             .retired = false;
         return Ok(());
     }
-    if conversation.owner_task.is_none() {
+    if !owned {
         return Err(StateError::ConversationNotOwned(conversation_id));
     }
-    if conversation.foreground_turn.is_some()
-        || state.tasks.values().any(|task| {
+    let live = busy
+        || editor.state().tasks.values().any(|task| {
             task.conversation_id == conversation_id
                 && !matches!(task.status, TaskStatus::Terminal(_))
-        })
-    {
+        });
+    if live {
         return Err(StateError::ConversationHasLiveWork(conversation_id));
     }
 
     // The transaction stages these cancellations explicitly so they are durable;
     // applying them here as well keeps the resident invariant true for any caller
     // that applies the mutation without staging them.
-    for input_id in queued_inputs(state, conversation_id) {
-        apply_input_disposition(state, input_id, InputDisposition::Cancelled)?;
+    for input_id in queued_inputs(editor.state(), conversation_id) {
+        apply_input_disposition(editor, input_id, InputDisposition::Cancelled)?;
     }
-    conversation_mut(state, conversation_id)
+    editor
+        .conversation_mut(conversation_id)
         .expect("validated conversation remains present")
         .retired = true;
     Ok(())
 }
 
 fn apply_input_disposition(
-    state: &mut SessionState,
+    editor: &mut Editor<'_>,
     input_id: InputId,
     disposition: InputDisposition,
 ) -> Result<(), StateError> {
     let (target, current) = {
-        let input = state
-            .inputs
-            .get(&input_id)
+        let input = editor
+            .input(input_id)
             .ok_or(StateError::UnknownInput(input_id))?;
         (input.target, input.disposition)
     };
@@ -671,26 +669,26 @@ fn apply_input_disposition(
 
     match disposition {
         InputDisposition::Placed(placement) | InputDisposition::Abandoned(placement) => {
-            validate_placement(state, input_id, target, &current, &placement)?;
+            validate_placement(editor.state(), input_id, target, &current, &placement)?;
         }
         InputDisposition::Queued | InputDisposition::Cancelled => {}
     }
 
-    input_mut(state, input_id)
+    editor
+        .input_mut(input_id)
         .expect("validated input remains present")
         .disposition = disposition;
     Ok(())
 }
 
 fn reserve_task(
-    state: &mut SessionState,
+    editor: &mut Editor<'_>,
     task_id: TaskId,
     generation: u64,
     kind: InvocationKind,
 ) -> Result<(), StateError> {
-    let task = state
-        .tasks
-        .get(&task_id)
+    let task = editor
+        .task(task_id)
         .ok_or(StateError::UnknownTask(task_id))?;
     let expected_generation = task
         .generation
@@ -714,7 +712,7 @@ fn reserve_task(
             }
             if task.dependencies.iter().any(|dependency| {
                 !matches!(
-                    state.tasks.get(dependency).map(|task| &task.status),
+                    editor.task(*dependency).map(|task| &task.status),
                     Some(TaskStatus::Terminal(_))
                 )
             }) {
@@ -733,23 +731,23 @@ fn reserve_task(
         }
     }
 
-    let task = state
-        .tasks
-        .get_mut(&task_id)
+    let task = editor
+        .task_mut(task_id)
         .expect("validated task remains present");
-    let task = Arc::make_mut(task);
     task.generation = generation;
     task.invocation = Some(TaskInvocation { generation, kind });
     task.status = TaskStatus::Running;
     Ok(())
 }
 
-fn authorized_task_mut(
-    state: &mut SessionState,
+fn authorized_task_mut<'a>(
+    editor: &'a mut Editor<'_>,
     task_id: TaskId,
     generation: u64,
-) -> Result<&mut TaskRecord, StateError> {
-    let task = task_mut(state, task_id).ok_or(StateError::UnknownTask(task_id))?;
+) -> Result<&'a mut TaskRecord, StateError> {
+    let task = editor
+        .task_mut(task_id)
+        .ok_or(StateError::UnknownTask(task_id))?;
     if !matches!(task.status, TaskStatus::Running) {
         return Err(StateError::TaskNotRunning(task_id));
     }

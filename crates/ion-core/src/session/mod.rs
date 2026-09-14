@@ -2,6 +2,7 @@ mod capacity;
 mod command;
 pub use capacity::TaskCapacity;
 mod idle;
+pub(crate) mod journal;
 mod lifecycle;
 mod owner;
 mod scheduler;

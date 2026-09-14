@@ -162,13 +162,13 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<SessionState, 
             state.input_commits.insert(stored_input.id, commit_seq);
         }
         state
-            .inputs
-            .insert(stored_input.id, std::sync::Arc::new(stored_input));
+            .insert_input(stored_input)
+            .map_err(|error| StoreError::other(format!("invalid stored input: {error}")))?;
     }
     for stored_task in task::load(connection)? {
         state
-            .tasks
-            .insert(stored_task.id, std::sync::Arc::new(stored_task));
+            .insert_task(stored_task)
+            .map_err(|error| StoreError::other(format!("invalid stored task: {error}")))?;
     }
 
     Ok(state)

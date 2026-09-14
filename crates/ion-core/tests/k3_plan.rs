@@ -241,6 +241,10 @@ async fn failed_finalization_rolls_back_successors_and_leaves_task_recoverable()
     assert!(matches!(record.status, TaskStatus::Running));
     assert_eq!(record.generation, 1);
     assert!(!record.cancel_requested);
+    // The reservation of this task is its own durable commit, so the whole
+    // snapshot legitimately differs; what a rejected plan must not do is leave
+    // anything it prepared behind. `k2_session.rs` pins the single-transaction
+    // case, where the snapshot must be identical.
 }
 
 /// Returns a plan whose dependency handle was minted by a different plan.

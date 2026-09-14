@@ -2,7 +2,8 @@ use ion_ai::{Content, Message, Role};
 use ion_core::conversation::context::{ContextControl, ContextEdit};
 use ion_core::{
     ConversationSpec, EntryId, EntryKind, EntryRequest, HistoryParent, InputBody, InputMode,
-    InputRequest, InputSender, RequestKey, Session, SessionError, TaskKindName, TaskRequest,
+    InputRequest, InputSender, RequestKey, Session, SessionError, TaskId, TaskKindName,
+    TaskRequest,
 };
 
 fn user_message(text: &str) -> Message {
@@ -314,4 +315,61 @@ fn bounded_observations_require_resnapshot_after_overflow() {
     let observations = session.observations_after(Some(current));
     assert!(!observations.reset_required);
     assert!(observations.events.is_empty());
+}
+
+/// A command that writes to resident state as it prepares and is then rejected
+/// must leave no trace: not the queued input it staged, not the id it consumed,
+/// not the commit cursor.
+#[test]
+fn a_rejected_admission_leaves_resident_state_unchanged() {
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let before = session.snapshot();
+    let unknown = TaskId::new(4_242).expect("task id");
+
+    let error = session
+        .admit_input(
+            InputRequest {
+                target: root,
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: Some(RequestKey::new("rejected").expect("request key")),
+                body: InputBody::Text("this must not survive".to_owned()),
+            },
+            Some(TaskRequest {
+                conversation_id: root,
+                kind: ion_core::TaskKindName::new("turn").expect("kind"),
+                schema_version: 1,
+                input: serde_json::json!({}),
+                // The turn is refused after the input has already been staged.
+                dependencies: vec![unknown],
+            }),
+        )
+        .expect_err("an unknown dependency rejects the turn");
+    assert!(matches!(error, SessionError::UnknownTask(id) if id == unknown));
+
+    assert_eq!(
+        session.snapshot(),
+        before,
+        "the staged input and any consumed id are taken back"
+    );
+    // The request key is free again, so the same submission can be retried.
+    session
+        .admit_input(
+            InputRequest {
+                target: root,
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: Some(RequestKey::new("rejected").expect("request key")),
+                body: InputBody::Text("accepted now".to_owned()),
+            },
+            Some(TaskRequest {
+                conversation_id: root,
+                kind: TaskKindName::new("turn").expect("kind"),
+                schema_version: 1,
+                input: serde_json::json!({}),
+                dependencies: Vec::new(),
+            }),
+        )
+        .expect("the rejected request key was not consumed");
 }

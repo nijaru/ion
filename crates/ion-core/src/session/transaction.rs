@@ -9,6 +9,7 @@ use crate::session::command::{
 };
 use crate::session::idle::Admission;
 use crate::session::idle::admission;
+use crate::session::journal::Editor;
 use crate::session::state::{SessionState, apply_mutation, queued_inputs};
 use crate::task::{PlannedTask, PlannedTurn, TaskDependency, TaskPlan};
 use crate::view::Change;
@@ -96,20 +97,45 @@ pub(crate) struct MutationBatch {
     pub(crate) writes: Vec<Mutation>,
 }
 
-pub(crate) struct Transaction {
+/// A validated command that has not been persisted yet.
+///
+/// The write set is what the store applies; the editor is what lets the caller
+/// take the prepared writes back if that application fails, so a command that
+/// never became durable leaves no trace in resident state.
+#[derive(Debug)]
+pub(crate) struct Prepared<'a> {
+    pub(crate) batch: MutationBatch,
+    pub(crate) changes: Vec<Change>,
+    editor: Editor<'a>,
+}
+
+impl Prepared<'_> {
+    /// Undo the prepared writes. The session must not continue serving.
+    pub(crate) fn rollback(self) {
+        self.editor.rollback();
+    }
+}
+
+/// One uncommitted command.
+///
+/// Writes go to resident state through [`Editor`], which can take them back, so
+/// preparing a command costs the records it touches instead of a copy of the
+/// session. A command that fails validation rolls back; a command whose commit
+/// fails fencing the session leaves nothing to roll back.
+pub(crate) struct Transaction<'a> {
     base_commit: Option<CommitSeq>,
-    draft: SessionState,
+    editor: Editor<'a>,
     admitted_inputs: Vec<InputId>,
     writes: Vec<Mutation>,
     changes: Vec<Change>,
     released_turns: Vec<ConversationId>,
 }
 
-impl Transaction {
-    pub(crate) fn new(state: &SessionState) -> Self {
+impl<'a> Transaction<'a> {
+    pub(crate) fn new(state: &'a mut SessionState) -> Self {
         Self {
             base_commit: state.last_commit,
-            draft: state.clone(),
+            editor: Editor::new(state),
             admitted_inputs: Vec::new(),
             writes: Vec::new(),
             changes: Vec::new(),
@@ -118,7 +144,7 @@ impl Transaction {
     }
 
     pub(crate) fn create_root(&mut self) -> Result<ConversationId, SessionError> {
-        if self.draft.root_conversation.is_some() {
+        if self.editor.root_conversation().is_some() {
             return Err(SessionError::Invariant(
                 "root conversation already exists".to_owned(),
             ));
@@ -135,13 +161,14 @@ impl Transaction {
     ) -> Result<ConversationId, SessionError> {
         if let Some(parent) = spec.parent {
             let visible = self
-                .draft
+                .editor
+                .state()
                 .visible_entries(parent.conversation_id)
                 .map_err(map_state)?;
             validate_fork_cutoff(&visible, parent.at)?;
         }
         if let Some(owner_task) = spec.owner_task
-            && !self.draft.tasks.contains_key(&owner_task)
+            && self.editor.task(owner_task).is_none()
         {
             return Err(SessionError::UnknownTask(owner_task));
         }
@@ -175,11 +202,7 @@ impl Transaction {
     }
 
     pub(crate) fn append_entry(&mut self, request: EntryRequest) -> Result<EntryId, SessionError> {
-        if !self
-            .draft
-            .conversations
-            .contains_key(&request.conversation_id)
-        {
+        if self.editor.conversation(request.conversation_id).is_none() {
             return Err(SessionError::UnknownConversation(request.conversation_id));
         }
         // A head or edit claims to establish a usable context boundary: it names
@@ -189,7 +212,8 @@ impl Transaction {
         // more correct, by materializing the history it appends to.
         let history = if request.context.head.is_some() || !request.context.edits.is_empty() {
             let visible = self
-                .draft
+                .editor
+                .state()
                 .visible_entries(request.conversation_id)
                 .map_err(map_state)?;
             let visible_ids: HashSet<_> = visible.iter().map(|entry| entry.id).collect();
@@ -273,18 +297,16 @@ impl Transaction {
         // otherwise: `Own` opens the successor's own conversation slot, and
         // `Background` stays outside cancellation scope.
         let settling_turn = self
-            .draft
-            .tasks
-            .get(&settling_task)
+            .editor
+            .task(settling_task)
             .ok_or(SessionError::UnknownTask(settling_task))?
             .turn;
         // The barrier lives on the turn's conversation, not on the root task, so
         // it still stops cleanup work after the root has settled.
         let turn_cancelled = settling_turn.is_some_and(|root| {
-            self.draft.tasks.get(&root).is_some_and(|task| {
-                self.draft
-                    .conversations
-                    .get(&task.conversation_id)
+            self.editor.task(root).is_some_and(|task| {
+                self.editor
+                    .conversation(task.conversation_id)
                     .is_some_and(|conversation| {
                         conversation.foreground_turn == Some(root) && conversation.turn_cancelled
                     })
@@ -355,7 +377,7 @@ impl Transaction {
         plan_id: u64,
         planned_ids: &[TaskId],
     ) -> Result<(), SessionError> {
-        if !self.draft.conversations.contains_key(&conversation_id) {
+        if self.editor.conversation(conversation_id).is_none() {
             return Err(SessionError::UnknownConversation(conversation_id));
         }
         let mut seen = HashSet::with_capacity(task.dependencies.len());
@@ -380,7 +402,7 @@ impl Transaction {
             if !seen.insert(dependency_id) {
                 return Err(SessionError::DuplicateDependency(dependency_id));
             }
-            if !self.draft.tasks.contains_key(&dependency_id) {
+            if self.editor.task(dependency_id).is_none() {
                 return Err(SessionError::UnknownTask(dependency_id));
             }
             dependencies.push(dependency_id);
@@ -435,12 +457,14 @@ impl Transaction {
     ) -> Result<(InputId, Option<TaskId>), SessionError> {
         let target = request.target;
         let mode = request.mode;
-        let conversation = self
-            .draft
-            .conversations
-            .get(&target)
-            .ok_or(SessionError::UnknownConversation(target))?;
-        let busy = conversation.foreground_turn.is_some();
+        // Retirement is enforced by the staging path; this decides only whether
+        // the conversation is busy.
+        let busy = self
+            .editor
+            .conversation(target)
+            .ok_or(SessionError::UnknownConversation(target))?
+            .foreground_turn
+            .is_some();
 
         match admission(mode, busy) {
             Admission::Reject => Err(SessionError::ForegroundTurnBusy(target)),
@@ -469,9 +493,8 @@ impl Transaction {
         turn: TaskRequest,
     ) -> Result<TaskId, SessionError> {
         let (target, disposition) = self
-            .draft
-            .inputs
-            .get(&input_id)
+            .editor
+            .input(input_id)
             .map(|input| (input.target, input.disposition))
             .ok_or(SessionError::UnknownInput(input_id))?;
         if disposition != InputDisposition::Queued {
@@ -498,7 +521,7 @@ impl Transaction {
     /// re-reads the transcript when it freezes a request and must not see a
     /// later turn's message.
     fn place_input(&mut self, input_id: InputId, turn: TaskId) -> Result<EntryId, SessionError> {
-        let Some(input) = self.draft.inputs.get(&input_id) else {
+        let Some(input) = self.editor.input(input_id) else {
             return Err(SessionError::UnknownInput(input_id));
         };
         if input.disposition != InputDisposition::Queued {
@@ -578,9 +601,8 @@ impl Transaction {
     ) -> Result<InputPlacement, SessionError> {
         let (target, placement) = {
             let input = self
-                .draft
-                .inputs
-                .get(&input_id)
+                .editor
+                .input(input_id)
                 .ok_or(SessionError::UnknownInput(input_id))?;
             let Some(placement) = input.disposition.placement() else {
                 return Err(SessionError::InputNotPlaced(input_id));
@@ -594,18 +616,16 @@ impl Transaction {
                 current: placement.turn,
             });
         }
-        let conversation = self
-            .draft
-            .conversations
-            .get(&target)
-            .ok_or(SessionError::UnknownConversation(target))?;
-        if !conversation.accepts_work() {
+        if self
+            .editor
+            .conversation(target)
+            .is_none_or(|conversation| !conversation.accepts_work())
+        {
             return Err(SessionError::ConversationRetired(target));
         }
         let closed = self
-            .draft
-            .tasks
-            .get(&expected_turn)
+            .editor
+            .task(expected_turn)
             .is_some_and(|task| task.turn_closed_by.is_some());
         if !closed {
             return Err(SessionError::TurnStillOpen(expected_turn));
@@ -614,9 +634,8 @@ impl Transaction {
     }
 
     fn input_target(&self, input_id: InputId) -> Result<ConversationId, SessionError> {
-        self.draft
-            .inputs
-            .get(&input_id)
+        self.editor
+            .input(input_id)
             .map(|input| input.target)
             .ok_or(SessionError::UnknownInput(input_id))
     }
@@ -630,7 +649,7 @@ impl Transaction {
         // Queued input is cancelled in the same commit as the flag: retirement
         // stops future work, so the cancellation has to be durable rather than a
         // resident side effect that a reopen would undo.
-        for input_id in queued_inputs(&self.draft, conversation_id) {
+        for input_id in queued_inputs(self.editor.state(), conversation_id) {
             self.set_input_disposition(input_id, InputDisposition::Cancelled)?;
         }
         self.stage(
@@ -658,7 +677,7 @@ impl Transaction {
     }
 
     pub(crate) fn queue_input(&mut self, request: InputRequest) -> Result<InputId, SessionError> {
-        if !self.draft.conversations.contains_key(&request.target) {
+        if self.editor.conversation(request.target).is_none() {
             return Err(SessionError::UnknownConversation(request.target));
         }
         let id = InputId::new(self.allocate()?.get())?;
@@ -699,9 +718,8 @@ impl Transaction {
     pub(crate) fn create_turn(&mut self, request: TaskRequest) -> Result<TaskId, SessionError> {
         let conversation_id = request.conversation_id;
         if self
-            .draft
-            .conversations
-            .get(&conversation_id)
+            .editor
+            .conversation(conversation_id)
             .and_then(|conversation| conversation.foreground_turn)
             .is_some()
         {
@@ -723,11 +741,7 @@ impl Transaction {
         request: TaskRequest,
         foreground: bool,
     ) -> Result<TaskId, SessionError> {
-        if !self
-            .draft
-            .conversations
-            .contains_key(&request.conversation_id)
-        {
+        if self.editor.conversation(request.conversation_id).is_none() {
             return Err(SessionError::UnknownConversation(request.conversation_id));
         }
         let mut dependencies = HashSet::with_capacity(request.dependencies.len());
@@ -735,7 +749,7 @@ impl Transaction {
             if !dependencies.insert(*dependency) {
                 return Err(SessionError::DuplicateDependency(*dependency));
             }
-            if !self.draft.tasks.contains_key(dependency) {
+            if self.editor.task(*dependency).is_none() {
                 return Err(SessionError::UnknownTask(*dependency));
             }
         }
@@ -765,15 +779,13 @@ impl Transaction {
     /// conversations and background tasks are deliberately outside this scope.
     pub(crate) fn cancel_turn(&mut self, root: TaskId) -> Result<Vec<TaskId>, SessionError> {
         let root_task = self
-            .draft
-            .tasks
-            .get(&root)
+            .editor
+            .task(root)
             .ok_or(SessionError::UnknownTask(root))?;
         let conversation_id = root_task.conversation_id;
         let holds_slot = self
-            .draft
-            .conversations
-            .get(&conversation_id)
+            .editor
+            .conversation(conversation_id)
             .is_some_and(|conversation| conversation.foreground_turn == Some(root));
         if holds_slot {
             self.stage(
@@ -785,7 +797,7 @@ impl Transaction {
             )?;
         }
         let mut cancelled = Vec::new();
-        for task in self.draft.tasks.values() {
+        for task in self.editor.state().tasks.values() {
             if task.turn != Some(root)
                 || matches!(task.status, TaskStatus::Terminal(_))
                 || task.cancel_requested
@@ -809,9 +821,8 @@ impl Transaction {
         kind: InvocationKind,
     ) -> Result<u64, SessionError> {
         let task = self
-            .draft
-            .tasks
-            .get(&task_id)
+            .editor
+            .task(task_id)
             .ok_or(SessionError::UnknownTask(task_id))?;
         let generation = task
             .generation
@@ -867,9 +878,8 @@ impl Transaction {
         generation: u64,
     ) -> Result<(), SessionError> {
         let task = self
-            .draft
-            .tasks
-            .get(&task_id)
+            .editor
+            .task(task_id)
             .ok_or(SessionError::UnknownTask(task_id))?;
         authorize_task_write(task, generation)
     }
@@ -882,7 +892,7 @@ impl Transaction {
         output: Option<TaskOutput>,
     ) -> Result<(), SessionError> {
         self.assert_task_write_authority(task_id, generation)?;
-        let turn = self.draft.tasks.get(&task_id).and_then(|task| task.turn);
+        let turn = self.editor.task(task_id).and_then(|task| task.turn);
         self.stage(
             Mutation::SettleTask {
                 task_id,
@@ -899,7 +909,8 @@ impl Transaction {
             return Ok(());
         };
         let holder = self
-            .draft
+            .editor
+            .state()
             .conversations
             .values()
             .find(|conversation| conversation.foreground_turn == Some(root))
@@ -908,7 +919,7 @@ impl Transaction {
             return Ok(());
         };
         let remaining =
-            self.draft.tasks.values().any(|task| {
+            self.editor.state().tasks.values().any(|task| {
                 task.turn == Some(root) && !matches!(task.status, TaskStatus::Terminal(_))
             });
         if !remaining {
@@ -941,38 +952,60 @@ impl Transaction {
         std::mem::take(&mut self.released_turns)
     }
 
-    pub(crate) fn finish(
-        mut self,
-    ) -> Result<(MutationBatch, Vec<Change>, SessionState), SessionError> {
-        let last_seq = self.allocate()?;
-        let commit_seq = CommitSeq::new(last_seq.get())?;
-        for input_id in &self.admitted_inputs {
-            self.draft.input_commits.insert(*input_id, commit_seq);
+    /// Seal the command into a durable write set.
+    ///
+    /// A sealing failure rolls the prepared writes back, so the caller sees a
+    /// session that is exactly as it was. On success the caller owns a
+    /// [`Prepared`], which can still take the writes back if persistence fails:
+    /// resident state must not keep a command that never became durable.
+    pub(crate) fn finish(mut self) -> Result<Prepared<'a>, SessionError> {
+        let last_seq = match self.allocate() {
+            Ok(seq) => seq,
+            Err(error) => {
+                self.editor.rollback();
+                return Err(error);
+            }
+        };
+        let commit_seq = match CommitSeq::new(last_seq.get()) {
+            Ok(commit_seq) => commit_seq,
+            Err(error) => {
+                self.editor.rollback();
+                return Err(error.into());
+            }
+        };
+        let admitted = std::mem::take(&mut self.admitted_inputs);
+        for input_id in admitted {
+            self.editor.set_input_commit(input_id, commit_seq);
         }
-        self.draft.last_commit = Some(commit_seq);
-        Ok((
-            MutationBatch {
+        self.editor.set_last_commit(commit_seq);
+        Ok(Prepared {
+            batch: MutationBatch {
                 commit_seq,
                 last_seq,
                 base_commit: self.base_commit,
-                writes: self.writes,
+                writes: std::mem::take(&mut self.writes),
             },
-            self.changes,
-            self.draft,
-        ))
+            changes: std::mem::take(&mut self.changes),
+            editor: self.editor,
+        })
+    }
+
+    /// Take back every write this command made.
+    pub(crate) fn rollback(self) {
+        self.editor.rollback();
     }
 
     fn allocate(&mut self) -> Result<LocalSeq, SessionError> {
-        let next = match self.draft.last_seq {
+        let next = match self.editor.last_seq() {
             Some(current) => current.next()?,
             None => LocalSeq::new(1)?,
         };
-        self.draft.last_seq = Some(next);
+        self.editor.set_last_seq(next);
         Ok(next)
     }
 
     fn stage(&mut self, mutation: Mutation, change: Change) -> Result<(), SessionError> {
-        apply_mutation(&mut self.draft, &mutation).map_err(map_state)?;
+        apply_mutation(&mut self.editor, &mutation).map_err(map_state)?;
         self.writes.push(mutation);
         self.changes.push(change);
         Ok(())

@@ -758,22 +758,36 @@ impl Session {
         build: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
     ) -> Result<(T, CommitSeq), SessionError> {
         self.ensure_open()?;
-        let mut transaction = Transaction::new(&self.state);
-        let value = build(&mut transaction)?;
-        let (batch, changes, prepared_state) = transaction.finish()?;
+        let value = {
+            let mut transaction = Transaction::new(&mut self.state);
+            let value = match build(&mut transaction) {
+                Ok(value) => value,
+                Err(error) => {
+                    // A rejected command leaves resident state exactly as it
+                    // found it: nothing it prepared may survive the rejection.
+                    transaction.rollback();
+                    return Err(error);
+                }
+            };
+            (value, transaction)
+        };
+        let (value, transaction) = value;
+        let prepared = transaction.finish()?;
         let event = CommitEvent {
-            commit_seq: batch.commit_seq,
-            changes,
+            commit_seq: prepared.batch.commit_seq,
+            changes: prepared.changes.clone(),
         };
         let commit_seq = event.commit_seq;
-        if let Err(error) = self.store.commit(&batch) {
+        if let Err(error) = self.store.commit(&prepared.batch) {
+            // Persistence failed, so the command never happened: take the
+            // prepared writes back and fence the session. Resident state must not
+            // keep a command that is not durable, even though a fenced session
+            // would serve nothing further.
+            prepared.rollback();
             self.close();
             self.fault.cancel();
             return Err(SessionError::Persistence(error.to_string()));
         }
-        // The fully validated draft is installed only after persistence succeeds.
-        // Installation cannot introduce a fallible semantic step after durability.
-        self.state = prepared_state;
         self.publish(event);
         Ok((value, commit_seq))
     }
