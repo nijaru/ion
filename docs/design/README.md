@@ -63,6 +63,10 @@ architecture document. If it restates `DESIGN.md`, it is too long.
   change, and the change is recorded in `docs/decisions.md` with its reason. A
   design document that silently disagrees with the code is worse than no
   document.
+- A design slice may break or delete an existing interface. Nothing here is
+  published and nothing has users, so the design states the interface the
+  boundary should have, and implementation replaces what came before it rather
+  than adapting to it.
 - Measurements and reproductions stay where they are today: the roadmap's
   evidence log, with commit hashes. A design slice states what must be true; the
   evidence log states what was observed.

@@ -55,6 +55,8 @@ Do not prematurely redesign every peripheral subsystem during the kernel rewrite
 
 For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Review findings are source-derived until reproduced; add the boundary-specific regression before marking a repair closed, and record its commit/evidence in `ROADMAP.md`. Keep current status sections consistent with the evidence log; historical green tests do not prove newly identified gaps closed. Prefer the smallest coherent primitive that preserves the target invariant.
 
+There is no compatibility obligation to preserve. Ion is pre-1.0 with no users, so a wrong API, module or storage shape is replaced or deleted outright: no shims, no deprecation paths, no parallel implementation kept "for now", and no test or helper kept only because it exercises the old shape. Reviewers should recommend deletion over preservation, and a slice that leaves two ways to do the same thing is unfinished. If a public surface exists only to serve itself and has no consumer, delete it rather than documenting it.
+
 A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths. R0 prototype code is deleted once equivalent fresh-core invariants are covered.
 
 When a contract changes, update `DESIGN.md`; when work order/evidence changes, update `ROADMAP.md`; put detailed comparisons/source findings in `docs/research/` rather than turning instructions into a second architecture document.

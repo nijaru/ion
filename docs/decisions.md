@@ -27,7 +27,7 @@ entry that replaced it), **proposed** (recommended, not yet implemented),
 
 | D15 | 2026-09-14 | The first two wire adapters target OpenAI-compatible chat completions and Anthropic messages, chosen because they differ materially in instruction handling, content blocks, streaming and tool-call shape | accepted | Both adapters converge on the same neutral shape for every field, which would mean the neutrality claim is untested |
 | D16 | 2026-09-14 | The `ion-core`/`ion-ai` Rust surface is reviewed as a whole before the provider traits freeze | accepted | — |
-| D17 | 2026-09-14 | The excluded legacy `crates/ion` application stays in the tree until R7 and the terminal pass have mined its provider/auth and TUI behaviour | accepted | The coding loop and terminal surface carry what they need, making a parallel reference installation dead weight |
+| D17 | 2026-09-14 | The excluded legacy `crates/ion` application stays in the tree until R7 and the terminal pass have mined its provider/auth and TUI *behaviour*; it is mining material, not a maintained reference and not a compatibility target | accepted | Those boundaries carry what they need, at which point the crate is deleted rather than kept beside the new one |
 
 ## How to add an entry
 
