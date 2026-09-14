@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
+use super::checkpoint::{Checkpoint, decode};
 use super::{TOOL_RESULT_ENTRY, entry_kind};
 use crate::conversation::context::ContextControl;
 use crate::task::{PlannedEntry, TaskPlan};
@@ -123,19 +124,28 @@ impl ToolKind {
         Self { catalog }
     }
 
-    fn dispatch<'a>(
-        &'a self,
-        task: RunningTask,
-        context: TaskContext,
-        recovering: bool,
-    ) -> TaskFuture<'a> {
+    fn dispatch<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
         Box::pin(async move {
             let call = parse_call(&task.input)?;
-            let previous = dispatch_of(task.checkpoint.as_ref());
+            let evidence = evidence_of(task.checkpoint.as_ref(), &call);
+            let tool = self.catalog.get(&call.name);
 
-            // No external action is possible, so the truthful outcome is a
-            // request error the model can read and correct.
-            let Some(tool) = self.catalog.get(&call.name) else {
+            // What a previous invocation handed over decides the outcome before
+            // the catalogue does: a removed, replaced or newly retry-safe tool
+            // cannot make an uncertain external action known.
+            if evidence.unresolved(tool.as_ref()) {
+                return Ok(recorded(
+                    task.conversation_id,
+                    call,
+                    json!({"error": evidence.reason()}),
+                    TaskOutcomeKind::Indeterminate,
+                    "unreconciled",
+                ));
+            }
+
+            // Only reachable when nothing was handed over, so no external action
+            // is possible and a request error is the truthful outcome.
+            let Some(tool) = tool else {
                 return Ok(recorded(
                     task.conversation_id,
                     call,
@@ -145,20 +155,7 @@ impl ToolKind {
                 ));
             };
 
-            // A recorded dispatch whose invocation disappeared has an unknown
-            // external outcome. Repeating a non-retry-safe call could duplicate
-            // the action, so retain the uncertainty instead.
-            if recovering && previous.is_some() && !tool.retry_safe() {
-                return Ok(recorded(
-                    task.conversation_id,
-                    call,
-                    json!({"error": "the previous attempt was dispatched; its outcome is unknown"}),
-                    TaskOutcomeKind::Indeterminate,
-                    "unreconciled",
-                ));
-            }
-
-            let attempts = previous.as_ref().map_or(0, |dispatch| dispatch.attempts);
+            let attempts = evidence.attempts();
             context
                 .checkpoint(
                     Some(json!({
@@ -166,6 +163,7 @@ impl ToolKind {
                             call_id: call.id.clone(),
                             name: call.name.clone(),
                             attempts: attempts + 1,
+                            retry_safe: tool.retry_safe(),
                         }
                     })),
                     None,
@@ -199,25 +197,22 @@ impl TaskKind for ToolKind {
     }
 
     fn execute<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
-        self.dispatch(task, context, false)
+        self.dispatch(task, context)
     }
 
     fn recover<'a>(&'a self, task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
-        self.dispatch(task, context, true)
+        self.dispatch(task, context)
     }
 
     fn abort<'a>(&'a self, task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
         Box::pin(async move {
             let call = parse_call(&task.input)?;
-            let dispatch = dispatch_of(task.checkpoint.as_ref());
-            let retry_safe = self
-                .catalog
-                .get(&call.name)
-                .is_some_and(|tool| tool.retry_safe());
+            let tool = self.catalog.get(&call.name);
+            let evidence = evidence_of(task.checkpoint.as_ref(), &call);
 
             // A dropped invocation does not cancel an external call that was
             // already handed over, so claiming it stopped would be a guess.
-            if dispatch.is_some() && !retry_safe {
+            if evidence.unresolved(tool.as_ref()) {
                 return Ok(recorded(
                     task.conversation_id,
                     call,
@@ -226,10 +221,9 @@ impl TaskKind for ToolKind {
                     "indeterminate",
                 ));
             }
-            let message = if dispatch.is_some() {
-                "cancelled"
-            } else {
-                "cancelled before dispatch"
+            let message = match evidence {
+                Evidence::Recorded(_) => "cancelled",
+                Evidence::Never | Evidence::Unreadable => "cancelled before dispatch",
             };
             Ok(recorded(
                 task.conversation_id,
@@ -245,15 +239,79 @@ impl TaskKind for ToolKind {
 /// Durable evidence that a call was handed to a tool, written before the call
 /// so a replacement invocation can tell "never dispatched" from "outcome
 /// unknown".
+///
+/// `retry_safe` is the policy that was in force when the call was handed over,
+/// not the current one: whether repeating is justified is a property of the
+/// attempt that may have landed, so a tool that later becomes retry-safe must
+/// not retroactively resolve an older uncertain call.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Dispatch {
     call_id: String,
     name: String,
     attempts: u32,
+    retry_safe: bool,
 }
 
-fn dispatch_of(checkpoint: Option<&Value>) -> Option<Dispatch> {
-    serde_json::from_value(checkpoint?.get("dispatch")?.clone()).ok()
+/// What the checkpoint says about a call that may already have reached a tool.
+enum Evidence {
+    /// No invocation recorded a dispatch, so nothing was handed over.
+    Never,
+    /// A dispatch was recorded; the call may have reached the outside world.
+    Recorded(Dispatch),
+    /// A checkpoint exists but is not a dispatch record for this call, so it
+    /// cannot be read as "never dispatched".
+    Unreadable,
+}
+
+impl Evidence {
+    /// Whether the call's external outcome is unknown.
+    ///
+    /// A recorded dispatch is only repeatable when the policy at dispatch time
+    /// and the current policy both say repeating is safe, and the tool it would
+    /// reach is still available.
+    fn unresolved(&self, tool: Option<&Arc<dyn Tool>>) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Unreadable => true,
+            Self::Recorded(dispatch) => {
+                !(dispatch.retry_safe && tool.is_some_and(|tool| tool.retry_safe()))
+            }
+        }
+    }
+
+    /// Why the outcome is unknown, for the result the model reads.
+    fn reason(&self) -> &'static str {
+        match self {
+            Self::Never => "nothing was dispatched",
+            Self::Unreadable => "the recorded dispatch is unreadable; its outcome is unknown",
+            Self::Recorded(_) => "the previous attempt was dispatched; its outcome is unknown",
+        }
+    }
+
+    /// Attempts already recorded, so the next attempt is accounted for.
+    fn attempts(&self) -> u32 {
+        match self {
+            Self::Recorded(dispatch) => dispatch.attempts,
+            Self::Never | Self::Unreadable => 0,
+        }
+    }
+}
+
+/// Read the checkpoint as evidence about this exact call. A dispatch record that
+/// names another call is not evidence, and is treated as unreadable rather than
+/// as an absence of dispatch.
+fn evidence_of(checkpoint: Option<&Value>, call: &ToolCall) -> Evidence {
+    let Some(value) = checkpoint else {
+        return Evidence::Never;
+    };
+    match decode::<Dispatch>(value.get("dispatch")) {
+        Checkpoint::Valid(dispatch)
+            if dispatch.call_id == call.id && dispatch.name == call.name =>
+        {
+            Evidence::Recorded(dispatch)
+        }
+        Checkpoint::Absent | Checkpoint::Valid(_) | Checkpoint::Unreadable => Evidence::Unreadable,
+    }
 }
 
 fn parse_call(input: &Value) -> Result<ToolCall, TaskRunError> {

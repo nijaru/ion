@@ -4,6 +4,7 @@
 //! plan and registry contract as any other kind, and the scheduler never
 //! branches on their names. A client composes them by registering all three.
 
+mod checkpoint;
 mod generation;
 mod post_tools;
 mod tool;

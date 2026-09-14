@@ -20,6 +20,7 @@ use ion_ai::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
+use super::checkpoint::{Checkpoint, decode};
 use super::tool::ToolCatalog;
 use super::{ASSISTANT_ENTRY, POST_TOOLS, SCHEMA_VERSION, TOOL, USER_ENTRY, entry_kind, task_kind};
 use crate::conversation::context::{ContextControl, project};
@@ -28,7 +29,7 @@ use crate::task::{
 };
 use crate::{
     AbortContext, Entry, EntryId, InputBody, InputId, ResourceDomain, RunningTask, TaskCompletion,
-    TaskContext, TaskFuture, TaskKind, TaskRunError,
+    TaskContext, TaskFuture, TaskKind, TaskOutcomeKind, TaskRunError,
 };
 
 /// Transcript page size. History is read in bounded pages rather than as one
@@ -99,10 +100,22 @@ impl TaskKind for GenerationKind {
         Box::pin(async move {
             let conversation_id = task.conversation_id;
             // Recovery reuses the recorded request verbatim; only a first attempt
-            // derives one from current history and configuration.
-            let mut frozen = match frozen_of(task.checkpoint.as_ref()) {
-                Some(frozen) => frozen,
-                None => self.freeze(&context).await?,
+            // derives one from current history and configuration. A request that
+            // was recorded but cannot be read is not a first attempt, so it is
+            // neither rebuilt from changed state nor dispatched again.
+            let mut frozen = match decode::<FrozenRequest>(task.checkpoint.as_ref()) {
+                Checkpoint::Valid(frozen) => frozen,
+                Checkpoint::Absent => self.freeze(&context).await?,
+                Checkpoint::Unreadable => {
+                    return Ok(TaskCompletion::terminal(
+                        TaskOutcomeKind::Indeterminate,
+                        json!({
+                            "reason": "the recorded model request is unreadable; \
+                                       the attempt is neither rebuilt nor repeated",
+                            "recorded_request": "unreadable",
+                        }),
+                    ));
+                }
             };
             frozen.attempts += 1;
             context.checkpoint(Some(encode(&frozen)?), None).await?;
@@ -236,10 +249,6 @@ struct FrozenRequest {
 struct FrozenInput {
     id: InputId,
     text: String,
-}
-
-fn frozen_of(checkpoint: Option<&Value>) -> Option<FrozenRequest> {
-    serde_json::from_value(checkpoint?.clone()).ok()
 }
 
 fn encode(frozen: &FrozenRequest) -> Result<Value, TaskRunError> {
