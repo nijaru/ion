@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
 use thiserror::Error;
@@ -12,8 +12,14 @@ use crate::{
 
 /// Resident semantic state. Records are held behind `Arc` so a transaction
 /// draft clones map structure without copying record payloads; a mutation only
-/// deep-copies the records it actually touches (copy-on-write). K4 replaces the
-/// remaining per-commit map clone with typed indexed storage reads.
+/// deep-copies the records it actually touches (copy-on-write). R6 replaces the
+/// remaining per-commit map clone and the whole-history scans with indexes and
+/// typed indexed storage reads.
+///
+/// `entries_by_conversation` is a derived index of `entries`: it answers "which
+/// entries belong to this conversation, in order" without scanning every entry
+/// in the session. Derived state is maintained in exactly one place
+/// ([`apply_mutation`]) so it cannot drift from the records it indexes.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct SessionState {
     pub(crate) session_id: SessionId,
@@ -22,6 +28,7 @@ pub(crate) struct SessionState {
     pub(crate) root_conversation: Option<ConversationId>,
     pub(crate) conversations: BTreeMap<ConversationId, Arc<Conversation>>,
     pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
+    pub(crate) entries_by_conversation: BTreeMap<ConversationId, BTreeSet<EntryId>>,
     pub(crate) inputs: BTreeMap<InputId, Arc<Input>>,
     pub(crate) request_keys: HashMap<RequestKey, InputId>,
     pub(crate) input_commits: HashMap<InputId, CommitSeq>,
@@ -37,6 +44,7 @@ impl SessionState {
             root_conversation: None,
             conversations: BTreeMap::new(),
             entries: BTreeMap::new(),
+            entries_by_conversation: BTreeMap::new(),
             inputs: BTreeMap::new(),
             request_keys: HashMap::new(),
             input_commits: HashMap::new(),
@@ -91,6 +99,26 @@ impl SessionState {
             || self.dependencies_terminal(task)
     }
 
+    /// Store one entry and index it under its conversation.
+    ///
+    /// This is the only place the entry index is written, so the index and the
+    /// records it describes cannot disagree. Reconstruction uses it too: loading
+    /// a retired conversation's history is not new work, so it does not go
+    /// through the acceptance check that [`apply_mutation`] applies to a live
+    /// append.
+    pub(crate) fn insert_entry(&mut self, entry: Entry) -> Result<(), StateError> {
+        let conversation_id = entry.conversation_id;
+        let entry_id = entry.id;
+        if self.entries.insert(entry_id, Arc::new(entry)).is_some() {
+            return Err(StateError::DuplicateEntry(entry_id));
+        }
+        self.entries_by_conversation
+            .entry(conversation_id)
+            .or_default()
+            .insert(entry_id);
+        Ok(())
+    }
+
     pub(crate) fn visible_entries(
         &self,
         conversation_id: ConversationId,
@@ -112,12 +140,17 @@ impl SessionState {
             Vec::new()
         };
 
-        visible.extend(
-            self.entries
-                .values()
-                .filter(|entry| entry.conversation_id == conversation_id)
-                .map(|entry| (**entry).clone()),
-        );
+        if let Some(ids) = self.entries_by_conversation.get(&conversation_id) {
+            visible.extend(
+                ids.iter()
+                    .filter_map(|id| self.entries.get(id))
+                    .map(|entry| {
+                        // The index and the record map are written together in
+                        // `apply_mutation`, so a miss here would mean the index drifted.
+                        (**entry).clone()
+                    }),
+            );
+        }
         Ok(visible)
     }
 }
@@ -190,13 +223,7 @@ pub(crate) fn apply_mutation(
         }
         Mutation::AppendEntry(entry) => {
             ensure_accepts_work(state, entry.conversation_id)?;
-            if state
-                .entries
-                .insert(entry.id, Arc::new(entry.clone()))
-                .is_some()
-            {
-                return Err(StateError::DuplicateEntry(entry.id));
-            }
+            state.insert_entry(entry.clone())?;
         }
         Mutation::AdmitInput(input) => {
             ensure_accepts_work(state, input.target)?;

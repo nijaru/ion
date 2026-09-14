@@ -182,21 +182,31 @@ impl Transaction {
         {
             return Err(SessionError::UnknownConversation(request.conversation_id));
         }
-        let visible = self
-            .draft
-            .visible_entries(request.conversation_id)
-            .map_err(map_state)?;
-        let visible_ids: HashSet<_> = visible.iter().map(|entry| entry.id).collect();
-        if let Some(head) = request.context.head
-            && !visible_ids.contains(&head)
-        {
-            return Err(SessionError::InvisibleContextReference(head));
-        }
-        for edit in &request.context.edits {
-            if !visible_ids.contains(&edit.target()) {
-                return Err(SessionError::InvisibleContextReference(edit.target()));
+        // A head or edit claims to establish a usable context boundary: it names
+        // entries that must be visible here, and the resulting context must be
+        // complete. Plain appends claim nothing, so they are validated without
+        // reading the transcript at all, and an append does not get slower, or
+        // more correct, by materializing the history it appends to.
+        let history = if request.context.head.is_some() || !request.context.edits.is_empty() {
+            let visible = self
+                .draft
+                .visible_entries(request.conversation_id)
+                .map_err(map_state)?;
+            let visible_ids: HashSet<_> = visible.iter().map(|entry| entry.id).collect();
+            if let Some(head) = request.context.head
+                && !visible_ids.contains(&head)
+            {
+                return Err(SessionError::InvisibleContextReference(head));
             }
-        }
+            for edit in &request.context.edits {
+                if !visible_ids.contains(&edit.target()) {
+                    return Err(SessionError::InvisibleContextReference(edit.target()));
+                }
+            }
+            Some(visible)
+        } else {
+            None
+        };
 
         let id = EntryId::new(self.allocate()?.get())?;
         let entry = Entry::new(
@@ -207,14 +217,7 @@ impl Transaction {
             request.projection,
             request.context,
         );
-        // A head or edit claims to establish a usable context boundary, so the
-        // resulting provider-neutral context must be complete now. Plain appends
-        // remain unvalidated so in-flight tool exchanges are still durable.
-        if entry.context.head.is_some() || !entry.context.edits.is_empty() {
-            let mut history = self
-                .draft
-                .visible_entries(request.conversation_id)
-                .map_err(map_state)?;
+        if let Some(mut history) = history {
             history.push(entry.clone());
             project(&history).map_err(SessionError::IncompleteContextControl)?;
         }

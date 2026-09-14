@@ -700,3 +700,89 @@ fn committed_writes_survive_process_death() {
     let again = Session::open(db.path()).expect("second reopen");
     assert_eq!(again.snapshot(), snapshot);
 }
+
+/// The per-conversation entry index is derived state: it must agree with the
+/// records it was rebuilt from, including when appends from two conversations
+/// interleave and when a fork inherits a prefix of them.
+#[tokio::test]
+async fn the_entry_index_agrees_with_records_before_and_after_reopen() {
+    let db = TempDb::new("entry-index");
+    let mut session = Session::create(db.path()).expect("create");
+    let root = session.root_conversation();
+    let other = session
+        .create_conversation(ConversationSpec::independent())
+        .expect("second conversation")
+        .conversation_id;
+
+    let mut root_ids = Vec::new();
+    let mut other_ids = Vec::new();
+    for index in 0..4 {
+        root_ids.push(
+            session
+                .append_entry(note(root, &format!("root {index}")))
+                .expect("root append")
+                .entry_id,
+        );
+        other_ids.push(
+            session
+                .append_entry(note(other, &format!("other {index}")))
+                .expect("other append")
+                .entry_id,
+        );
+    }
+
+    let live_root = session
+        .conversation_entries(root, None, 64)
+        .expect("root page")
+        .entries;
+    let live_other = session
+        .conversation_entries(other, None, 64)
+        .expect("other page")
+        .entries;
+    assert_eq!(
+        live_root.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        root_ids,
+        "a conversation's page is exactly its own entries, in append order"
+    );
+    assert_eq!(
+        live_other.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        other_ids
+    );
+
+    // A fork inherits its parent's prefix; the index must not leak the sibling
+    // conversation into it.
+    let fork = session
+        .create_conversation(ConversationSpec::fork(root, root_ids[1]))
+        .expect("fork")
+        .conversation_id;
+    let inherited = session
+        .conversation_entries(fork, None, 64)
+        .expect("fork page")
+        .entries;
+    assert_eq!(
+        inherited.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![root_ids[0], root_ids[1]]
+    );
+    drop(session);
+
+    let reopened = Session::open(db.path()).expect("open");
+    for (conversation, expected) in [(root, root_ids.clone()), (other, other_ids.clone())] {
+        let page = reopened
+            .conversation_entries(conversation, None, 64)
+            .expect("page")
+            .entries;
+        assert_eq!(
+            page.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+            expected,
+            "reconstruction rebuilds the index from the same records"
+        );
+    }
+    let inherited = reopened
+        .conversation_entries(fork, None, 64)
+        .expect("fork page")
+        .entries;
+    assert_eq!(
+        inherited.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        vec![root_ids[0], root_ids[1]]
+    );
+}

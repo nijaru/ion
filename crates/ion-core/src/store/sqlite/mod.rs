@@ -147,8 +147,12 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<SessionState, 
             .conversations
             .insert(conversation.id, std::sync::Arc::new(conversation));
     }
+    // The index is written by the same owner a live append uses, so it cannot
+    // drift from the records it indexes.
     for entry in entry::load(connection)? {
-        state.entries.insert(entry.id, std::sync::Arc::new(entry));
+        state
+            .insert_entry(entry)
+            .map_err(|error| StoreError::other(format!("invalid stored entry: {error}")))?;
     }
     for (stored_input, admitted_at) in input::load(connection)? {
         if let Some(key) = &stored_input.request_key {
