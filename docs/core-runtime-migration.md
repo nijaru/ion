@@ -283,11 +283,11 @@ What that does **not** establish: durability under machine power loss or kernel 
 
 Ownership is exclusive and distinguishable: `Session::open`/`create` take a kernel-held lock before touching SQLite and release it last during close, a second live process fails with `SessionError::SessionInUse` before it reconstructs anything, and reconstruction reads one transaction. A read-only inspection mode would need a shared lock and does not exist.
 
-Still open for this slice: cold-history reads, since the resident store still holds every record after open and the per-commit map-structure clone remains; a `Session::create` path that refuses an occupied file is covered, but backup/repair and orphan-artifact handling are not; and index tuning.
+Still open for this slice: cold-history reads, since the resident store still holds every record after open (the per-commit map clone was removed at `54367ada`); a `Session::create` path that refuses an occupied file is covered, but backup/repair and orphan-artifact handling are not; and index tuning.
 
 The pre-SQL work this section used to gate on is complete: the resident/persistence split, restricted task finalization with same-batch references, typed authoring adaptation, foreground-turn membership, safe context validation, and the bounded/fallible read and observation contract (invariants 7-9 below; invariant 6 lands with the SQLite read path).
 
-The pre-SQL resident/persistence split is implemented. `Session` owns `SessionState`, and the crate-private `Persistence` interface accepts validated batches. The transaction's prepared state is installed only after a successful commit; failed persistence leaves resident records and observations unchanged, fences canonical writes, and signals local fault shutdown. `MemoryStore` retains only volatile commit ordering, not another semantic state copy. The resulting boundary is:
+The pre-SQL resident/persistence split is implemented. `Session` owns `SessionState`, and the crate-private `Persistence` interface accepts validated batches. The transaction prepares changes in place under exclusive mutation authority through a rollback journal. Failed persistence restores resident records before fencing canonical writes and signalling local fault shutdown; observations publish only after success. `MemoryStore` retains only volatile commit ordering, not another semantic state copy. The resulting boundary is:
 
 ```text
 Session owner
@@ -297,19 +297,18 @@ Session owner
   persistence store
 
 commit path
-  validate/build batch against resident state
-  -> store.commit(batch) durably
-  -> apply batch to resident state/indexes
+  journal resident/index changes and validate batch (unobservable)
+  -> store.commit(batch) durably (failure: rollback and fence)
   -> publish observation
 ```
 
-The exact private Rust shape may be a narrow store trait, enum or another simpler representation; do not generalize it into a public pluggable database framework. The important invariant is persistence-before-resident-apply/publish with exactly one semantic writer.
+The exact private Rust shape may be a narrow store trait, enum or another simpler representation; do not generalize it into a public pluggable database framework. The invariant is persistence-before-observability with exactly one semantic writer; prepared resident changes remain hidden and reversible until commit.
 
 #### Residency decision
 
 Semantic ownership is not the same as keeping every record in memory. `Session` owns the semantics, but it must not require full-history residency, and no commit may cost O(history).
 
-Chosen shape: **typed indexed reads plus a small transaction overlay**, extended by a copy-on-write resident representation. Decision records and session state hold records behind `Arc`, so a transaction draft clones map structure without copying record payloads and a mutation deep-copies only the records it touches. This is preferred over a bounded resident working set with ad-hoc loaders because it avoids hand-built cache invalidation and keeps one read path.
+Chosen shape: **typed indexed reads plus a small transaction overlay**, extended by a copy-on-write resident representation. Decision records and session state hold records behind `Arc`, and the in-place journal retains previous values for touched records without cloning map structures. A mutation copies only the records it touches. This is preferred over a bounded resident working set with ad-hoc loaders because it avoids hand-built cache invalidation and keeps one read path.
 
 Required K4 invariants:
 
@@ -317,7 +316,7 @@ Required K4 invariants:
 2. session summaries and observation recovery use bounded views, not full-state snapshots (`SessionSummary`, `Session::conversation_entries`);
 3. context construction at a frozen cutoff can run without holding the mutation line;
 4. a durable commit followed by an unexpected resident-apply failure is a fail-stop/reopen condition, never silent divergence;
-5. the remaining per-commit map-structure clone in `Transaction::new` is removed when reads move to indexed storage; it no longer copies payloads.
+5. per-commit map-structure cloning is absent (implemented at `54367ada`); bounded residency and cold indexed reads remain open independently.
 
 Index tuning, measured thresholds and cold-history paging remain P2 work; these are structural requirements.
 

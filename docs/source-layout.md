@@ -157,7 +157,7 @@ Owns canonical session mutation and task driving.
 
 Current split:
 
-- `owner.rs`: resident session owner, persistence-before-install commit ordering, public mutation methods, snapshots and bounded observations;
+- `owner.rs`: resident session owner, journaled preparation, persistence-before-publication ordering, public mutation methods, snapshots and bounded observations;
 - `state.rs`: resident records/indexes and semantic mutation application; persistence owns no copy of this state;
 - `command.rs`: typed command/receipt/error vocabulary;
 - `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
@@ -193,7 +193,7 @@ TUI-specific focus, drafts, layout and rendering stay outside `ion-core`.
 
 Owns persistence only.
 
-The K4 prerequisite split is implemented. `Session` owns resident `SessionState`; `MemoryStore` is a volatile commit sink with no semantic records. A crate-private `Persistence` contract accepts validated batches. Transaction building prepares the next resident state; the writer installs it only after persistence succeeds, avoiding fallible semantic application after durability. Errors fence the owner and signal fault close to live drives.
+The K4 prerequisite split is implemented. `Session` owns resident `SessionState`; `MemoryStore` is a volatile commit sink with no semantic records. A crate-private `Persistence` contract accepts validated batches. Transaction building prepares resident changes in place through the private rollback journal while readers are excluded. Success publishes after persistence, with no second semantic application; rejection or persistence failure rolls back first. Errors fence the owner and signal fault close to live drives.
 
 Current dependency shape:
 
@@ -205,9 +205,8 @@ Session owner
   persistence store
 
 commit
-  build/validate against resident state
-  -> durable store commit
-  -> resident apply/index update
+  journaled resident/index preparation and validation (unobservable)
+  -> durable store commit (failure: rollback and fence)
   -> observation publish
 ```
 
