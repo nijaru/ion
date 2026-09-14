@@ -222,11 +222,31 @@ impl TaskKind for GenerationKind {
         self.execute(task, context)
     }
 
-    fn abort<'a>(&'a self, _task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
-        Box::pin(async {
-            Ok(TaskCompletion::aborted(
-                json!({"reason": "generation aborted"}),
-            ))
+    fn abort<'a>(&'a self, task: RunningTask, _context: AbortContext) -> TaskFuture<'a> {
+        Box::pin(async move {
+            // Dropping an invocation never recalls a request the provider may
+            // already have received and billed, so abort keeps the prepared
+            // attempt count rather than reporting the attempt as never sent.
+            // Unreadable attempt evidence is not an absence of dispatch, and it
+            // is not a known application failure either.
+            match decode::<FrozenRequest>(task.checkpoint.as_ref()) {
+                Checkpoint::Absent => Ok(TaskCompletion::aborted(json!({
+                    "reason": "generation aborted before dispatch",
+                    "attempts": 0,
+                }))),
+                Checkpoint::Valid(frozen) => Ok(TaskCompletion::aborted(json!({
+                    "reason": "generation aborted",
+                    "attempts": frozen.attempts,
+                }))),
+                Checkpoint::Unreadable => Ok(TaskCompletion::terminal(
+                    TaskOutcomeKind::Indeterminate,
+                    json!({
+                        "reason": "the recorded attempt evidence is unreadable; \
+                                   the provider may have received this attempt",
+                        "attempts": "unreadable",
+                    }),
+                )),
+            }
         })
     }
 }
