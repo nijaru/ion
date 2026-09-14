@@ -255,15 +255,36 @@ impl TaskDriver {
         self.session.lock().await.observations_after(cursor)
     }
 
-    /// Resolve when a change commits after this call starts. This is the
-    /// polling-free companion to [`Self::observations_after`]; it carries no
-    /// payload, so a waiter still reads the tail itself.
+    /// Wait until the committed observations a caller at `cursor` must see differ
+    /// from that cursor, and return them.
     ///
-    /// Each caller subscribes when it waits, so a commit wakes every waiter
-    /// instead of only the first one to observe it.
-    pub async fn changed(&self) {
-        let mut receiver = self.changes.subscribe();
-        let _ = receiver.changed().await;
+    /// This is the polling-free companion to [`Self::observations_after`], and the
+    /// subscription is created *before* coverage is read, so a commit that lands
+    /// between a caller's own read and this wait still wakes it. Notifications are
+    /// coalescible wake signals; the returned batch is the authoritative committed
+    /// state, and a cursor outside retained coverage comes back as
+    /// `reset_required` instead of as an empty delta.
+    ///
+    /// Nothing to deliver yet means the wait stays pending. A session that closes
+    /// with no new commit resolves as [`SessionError::Closed`].
+    pub async fn wait_observations(
+        &self,
+        cursor: Option<CommitSeq>,
+    ) -> Result<ObservationBatch, TaskDriverError> {
+        // Subscribe before reading: the read and the wait are one operation, so a
+        // commit cannot slip between them and be missed.
+        let mut changes = self.changes.subscribe();
+        loop {
+            {
+                let session = self.session.lock().await;
+                session.ensure_open()?;
+                let batch = session.observations_after(cursor);
+                if batch.reset_required || !batch.events.is_empty() {
+                    return Ok(batch);
+                }
+            }
+            changes.changed().await.map_err(|_| SessionError::Closed)?;
+        }
     }
 
     pub async fn drive_task(&self, task_id: TaskId) -> Result<DriveOutcome, TaskDriverError> {

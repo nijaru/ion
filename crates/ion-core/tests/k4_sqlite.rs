@@ -307,10 +307,6 @@ async fn a_reopened_session_streams_commits_after_the_loaded_one() {
 
     let driver = TaskDriver::open(db.path(), TaskRegistry::new()).expect("reopen");
     assert_eq!(driver.summary().await.last_commit, cursor);
-    let waiter = driver.clone();
-    let waiting = tokio::spawn(async move { waiter.changed().await });
-    // Give the waiter a chance to subscribe before the commit.
-    tokio::task::yield_now().await;
     let committed = driver
         .create_turn(TaskRequest {
             conversation_id: conversation,
@@ -322,12 +318,10 @@ async fn a_reopened_session_streams_commits_after_the_loaded_one() {
         .await
         .expect("commit")
         .commit_seq;
-    tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+    let batch = driver
+        .wait_observations(Some(cursor))
         .await
-        .expect("the waiter must wake")
-        .expect("join");
-
-    let batch = driver.observations_after(Some(cursor)).await;
+        .expect("a waiter at the loaded cursor receives the next commit");
     assert!(!batch.reset_required);
     assert!(
         batch

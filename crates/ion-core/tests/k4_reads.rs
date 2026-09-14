@@ -8,9 +8,10 @@ use std::sync::Arc;
 
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    Change, CommitSeq, EntryKind, PlannedEntry, PlannedTask, PlannedTurn, RunningTask, Session,
-    SessionError, TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind,
-    TaskKindName, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
+    Change, CloseMode, CommitSeq, EntryKind, InputBody, InputMode, InputRequest, InputSender,
+    PlannedEntry, PlannedTask, PlannedTurn, RunningTask, Session, SessionError, TaskCompletion,
+    TaskContext, TaskDriver, TaskDriverError, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan,
+    TaskRegistry, TaskRequest, TaskStatus,
 };
 use serde_json::json;
 
@@ -228,42 +229,153 @@ async fn observations_require_a_resnapshot_past_retained_coverage() {
     assert!(evicted.events.is_empty());
 }
 
+/// A cursor outside retained coverage must resolve a wait as `reset_required`
+/// rather than as an empty delta: a client told "nothing new" would drop the
+/// commits it cannot see.
 #[tokio::test]
-async fn changed_wakes_a_waiter_when_a_commit_lands() {
-    let (driver, task_id) = authoring_driver();
-    let waiter = driver.clone();
-    let waiting = tokio::spawn(async move { waiter.changed().await });
-
-    // Give the waiter a chance to subscribe before the commit.
-    tokio::task::yield_now().await;
-    driver.drive_task(task_id).await.expect("drive");
-    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
-        .await
-        .expect("waiter woke")
-        .expect("waiter joined");
+async fn a_wait_past_retained_coverage_requires_a_resnapshot() {
+    let (driver, _) = authoring_driver();
+    let start = driver.summary().await.last_commit;
+    // Commit past the retained observation capacity (128), so `start` is evicted.
+    for _ in 0..200 {
+        driver
+            .admit_input(InputRequest {
+                target: driver.snapshot().await.root_conversation,
+                sender: InputSender::User,
+                mode: InputMode::QueueOnly,
+                request_key: None,
+                body: InputBody::Text("filler".to_owned()),
+            })
+            .await
+            .expect("commit");
+    }
+    let batch = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        driver.wait_observations(Some(start)),
+    )
+    .await
+    .expect("an evicted cursor resolves instead of waiting for a commit")
+    .expect("wait");
+    assert!(
+        batch.reset_required,
+        "a cursor outside coverage must ask for a resnapshot"
+    );
+    assert!(batch.events.is_empty());
 }
 
 #[tokio::test]
-async fn changed_does_not_resolve_on_a_commit_that_predates_the_wait() {
+async fn a_waiter_subscribes_before_it_reads_coverage() {
     let (driver, task_id) = authoring_driver();
-    // Driver construction and task admission already committed, so a waiter
-    // must wait for the next commit rather than reporting stale progress.
-    let (ready, started) = tokio::sync::oneshot::channel();
-    let waiter = driver.clone();
-    let waiting = tokio::spawn(async move {
-        ready.send(()).expect("the test is waiting");
-        waiter.changed().await;
-    });
-    started.await.expect("the waiter started");
-    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    let root = driver.snapshot().await.root_conversation;
+
+    // A commit that already happened is delivered rather than waited past: the
+    // wait reads committed state instead of only future notifications.
+    let before = driver.summary().await.last_commit;
+    driver.drive_task(task_id).await.expect("drive");
+    let settled = driver.summary().await.last_commit;
+    assert!(settled > before, "the drive committed");
+    let batch = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        driver.wait_observations(Some(before)),
+    )
+    .await
+    .expect("a commit that predates the wait must not be waited past")
+    .expect("wait");
+    assert!(!batch.reset_required);
     assert!(
-        !waiting.is_finished(),
-        "changed must not resolve on an earlier commit"
+        batch.events.iter().any(|event| event.commit_seq == settled),
+        "the delta contains the commit that landed before the wait"
     );
 
-    driver.drive_task(task_id).await.expect("drive");
-    tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+    // The reproduced gap: read an empty delta, let a commit land, then wait. The
+    // subscription exists before the read, so the commit is not lost.
+    let current = driver.summary().await.last_commit;
+    let empty = driver.observations_after(Some(current)).await;
+    assert!(empty.events.is_empty() && !empty.reset_required);
+    // A queue-only input commits without opening a turn, so it does not depend
+    // on the foreground slot the authoring plan is still holding.
+    let committed = driver
+        .admit_input(InputRequest {
+            target: root,
+            sender: InputSender::User,
+            mode: InputMode::QueueOnly,
+            request_key: None,
+            body: InputBody::Text("later".to_owned()),
+        })
         .await
-        .expect("waiter woke")
-        .expect("waiter joined");
+        .expect("commit")
+        .commit_seq;
+    let batch = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        driver.wait_observations(Some(current)),
+    )
+    .await
+    .expect("a commit between the read and the wait must not be lost")
+    .expect("wait");
+    assert!(
+        batch
+            .events
+            .iter()
+            .any(|event| event.commit_seq == committed),
+        "the delta contains the commit that landed after the read"
+    );
+
+    // A waiter that has nothing to deliver stays pending until something lands.
+    let waiting = tokio::spawn({
+        let driver = driver.clone();
+        let cursor = committed;
+        async move { driver.wait_observations(Some(cursor)).await }
+    });
+    // One yield registers the waiter: `#[tokio::test]` uses the current-thread
+    // scheduler and every await before the wait is ready, so this is a barrier
+    // rather than a sleep.
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished(), "nothing was committed yet");
+    let committed = driver
+        .admit_input(InputRequest {
+            target: root,
+            sender: InputSender::User,
+            mode: InputMode::QueueOnly,
+            request_key: None,
+            body: InputBody::Text("later still".to_owned()),
+        })
+        .await
+        .expect("commit")
+        .commit_seq;
+    let batch = tokio::time::timeout(std::time::Duration::from_secs(10), waiting)
+        .await
+        .expect("a waiter asleep at its cursor wakes on the next commit")
+        .expect("join")
+        .expect("wait");
+    assert!(
+        batch
+            .events
+            .iter()
+            .any(|event| event.commit_seq == committed),
+        "the wake carries the commit that caused it"
+    );
+}
+
+#[tokio::test]
+async fn closing_resolves_a_wait_that_has_nothing_to_deliver() {
+    let (driver, task_id) = authoring_driver();
+    let cursor = driver.summary().await.last_commit;
+    let waiting = tokio::spawn({
+        let driver = driver.clone();
+        async move { driver.wait_observations(Some(cursor)).await }
+    });
+    tokio::task::yield_now().await;
+    assert!(!waiting.is_finished());
+
+    driver.close(CloseMode::Graceful).await;
+    let error = tokio::time::timeout(std::time::Duration::from_secs(5), waiting)
+        .await
+        .expect("close must resolve the wait rather than leave it pending")
+        .expect("join")
+        .expect_err("a closed session cannot deliver observations");
+    assert!(
+        matches!(error, TaskDriverError::Session(SessionError::Closed)),
+        "expected a typed closed result, got {error:?}"
+    );
+    let _ = task_id;
 }
