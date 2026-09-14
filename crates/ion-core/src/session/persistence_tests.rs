@@ -113,6 +113,315 @@ fn failed_persistence_does_not_install_draft_or_publish_successors() {
     ));
 }
 
+/// One staged mutation under test, named for the failure message.
+type IndexCase = (
+    &'static str,
+    Box<dyn Fn(&mut Session) -> Result<(), SessionError>>,
+);
+
+/// R11: every derived-index writer must be undone by the journal.
+///
+/// A failed commit rolls the prepared writes back before the session is fenced.
+/// The comparison is the whole `SessionState`, so it covers the private indexes
+/// (`entries_by_conversation`, `queued`, `tasks_by_turn`, `dependents`), the
+/// sequence and commit cursors, and the receipt maps. A missing inverse leaves a
+/// phantom index entry no record supports, and the reads built on that index
+/// then answer from state that was never committed.
+#[test]
+fn failed_persistence_restores_every_derived_index() {
+    use crate::conversation::context::ContextControl;
+    use crate::{
+        ConversationSpec, EntryKind, EntryRequest, InputBody, InputMode, InputRequest, InputSender,
+        PlannedEntry, PlannedTask, PlannedTurn, TaskDependency, TaskPlan,
+    };
+
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    // A committed baseline so the mutations below edit existing indexes rather
+    // than only creating them.
+    let turn = session
+        .create_turn(TaskRequest {
+            conversation_id: root,
+            kind: TaskKindName::new("generation").expect("kind"),
+            schema_version: 1,
+            input: serde_json::json!({}),
+            dependencies: Vec::new(),
+        })
+        .expect("turn")
+        .task_id;
+    let generation = session
+        .reserve_task_invocation(turn, InvocationKind::Execute)
+        .expect("reserve the turn")
+        .generation;
+    session
+        .append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: serde_json::json!({"text": "hello"}),
+            projection: Vec::new(),
+            context: ContextControl::none(),
+        })
+        .expect("entry");
+    session
+        .queue_input(InputRequest {
+            target: root,
+            sender: InputSender::User,
+            mode: InputMode::FollowUp,
+            request_key: None,
+            body: InputBody::Text("later".to_owned()),
+        })
+        .expect("queued input");
+    // A second conversation whose foreground slot is free, so a turn can be
+    // opened there under the failing store.
+    let idle = session
+        .create_conversation(ConversationSpec::independent())
+        .expect("idle conversation")
+        .conversation_id;
+
+    // Each mutation kind stages a different derived index. All of them are
+    // prepared before the injected store failure, so each needs its own inverse.
+    let mut plan = TaskPlan::new();
+    plan.append_entry(PlannedEntry {
+        conversation_id: root.into(),
+        kind: EntryKind::new("assistant").expect("entry kind"),
+        data: serde_json::json!({"text": "planned"}),
+        projection: Vec::new(),
+        context: ContextControl::none(),
+    });
+    let successor = plan.create_task(PlannedTask {
+        conversation_id: root.into(),
+        kind: TaskKindName::new("tool").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"call": "a"}),
+        dependencies: Vec::new(),
+        turn: PlannedTurn::Inherit,
+    });
+    plan.create_task(PlannedTask {
+        conversation_id: root.into(),
+        kind: TaskKindName::new("tool").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"call": "b"}),
+        dependencies: vec![TaskDependency::Planned(successor)],
+        turn: PlannedTurn::Background,
+    });
+
+    let cases: Vec<IndexCase> = vec![
+        (
+            "entry index",
+            Box::new(move |session| {
+                session
+                    .append_entry(EntryRequest {
+                        conversation_id: root,
+                        kind: EntryKind::new("note").expect("entry kind"),
+                        data: serde_json::json!({"text": "staged"}),
+                        projection: Vec::new(),
+                        context: ContextControl::none(),
+                    })
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "queued index",
+            Box::new(move |session| {
+                session
+                    .queue_input(InputRequest {
+                        target: root,
+                        sender: InputSender::User,
+                        mode: InputMode::QueueOnly,
+                        request_key: None,
+                        body: InputBody::Text("staged".to_owned()),
+                    })
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "reverse dependency",
+            Box::new(move |session| {
+                session
+                    .create_task(TaskRequest {
+                        conversation_id: root,
+                        kind: TaskKindName::new("join").expect("kind"),
+                        schema_version: 1,
+                        input: serde_json::json!({}),
+                        dependencies: vec![turn],
+                    })
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "turn membership",
+            Box::new(move |session| {
+                session
+                    .create_turn(TaskRequest {
+                        conversation_id: idle,
+                        kind: TaskKindName::new("generation").expect("kind"),
+                        schema_version: 1,
+                        input: serde_json::json!({}),
+                        dependencies: Vec::new(),
+                    })
+                    .map(|_| ())
+            }),
+        ),
+        (
+            "planned entries and successors",
+            Box::new(move |session| {
+                session
+                    .settle_task_with(
+                        turn,
+                        generation,
+                        TaskCompletion::completed(serde_json::json!("done")).outcome,
+                        None,
+                        |transaction| transaction.apply_task_plan(&plan, turn),
+                    )
+                    .map(|_| ())
+            }),
+        ),
+    ];
+
+    for (name, mutation) in cases {
+        let mut candidate = Session::from_state(
+            session.state.clone(),
+            Box::new(FaultStore(Arc::new(AtomicBool::new(true)))),
+        );
+        let before = candidate.state.clone();
+        let error = mutation(&mut candidate).expect_err("persistence must fail");
+        assert!(
+            matches!(error, SessionError::Persistence(_)),
+            "{name}: expected a persistence failure, got {error:?}"
+        );
+        assert_eq!(
+            candidate.state, before,
+            "{name}: a failed commit must restore records and every derived index"
+        );
+    }
+}
+
+/// The same guarantee for a command rejected before persistence: the staged
+/// writes must be invisible to the reads that those indexes answer.
+#[test]
+fn a_rejected_plan_leaves_indexed_reads_unchanged() {
+    use crate::conversation::context::ContextControl;
+    use crate::{
+        EntryKind, EntryRequest, InputBody, InputMode, InputRequest, InputSender,
+        PlannedConversation, PlannedEntry, PlannedTarget, PlannedTask, PlannedTurn, TaskPlan,
+    };
+
+    let mut session = Session::new().expect("session");
+    let root = session.root_conversation();
+    let held = session
+        .create_turn(TaskRequest {
+            conversation_id: root,
+            kind: TaskKindName::new("generation").expect("kind"),
+            schema_version: 1,
+            input: serde_json::json!({}),
+            dependencies: Vec::new(),
+        })
+        .expect("turn")
+        .task_id;
+    let generation = session
+        .reserve_task_invocation(held, InvocationKind::Execute)
+        .expect("reserve the turn")
+        .generation;
+    session
+        .append_entry(EntryRequest {
+            conversation_id: root,
+            kind: EntryKind::new("user").expect("entry kind"),
+            data: serde_json::json!({"text": "hello"}),
+            projection: Vec::new(),
+            context: ContextControl::none(),
+        })
+        .expect("entry");
+    let queued = session
+        .queue_input(InputRequest {
+            target: root,
+            sender: InputSender::User,
+            mode: InputMode::FollowUp,
+            request_key: None,
+            body: InputBody::Text("later".to_owned()),
+        })
+        .expect("queued input")
+        .input_id;
+    let dependent = session
+        .create_task(TaskRequest {
+            conversation_id: root,
+            kind: TaskKindName::new("join").expect("kind"),
+            schema_version: 1,
+            input: serde_json::json!({}),
+            dependencies: vec![held],
+        })
+        .expect("dependent")
+        .task_id;
+
+    let before = session.state.clone();
+    let page_before = session.conversation_entries(root, None, 16).expect("page");
+    let turn_members_before = session.state.tasks_of_turn(held);
+    let dependents_before = session.state.runnable_successors(held, &[]);
+
+    // A plan whose successor tries to open the conversation's already-held turn
+    // is rejected, taking every entry, task and index write with it.
+    let mut plan = TaskPlan::new();
+    plan.append_entry(PlannedEntry {
+        conversation_id: root.into(),
+        kind: EntryKind::new("assistant").expect("entry kind"),
+        data: serde_json::json!({"text": "staged"}),
+        projection: Vec::new(),
+        context: ContextControl::none(),
+    });
+    let worker = plan.create_conversation(PlannedConversation::fresh());
+    plan.create_task(PlannedTask {
+        conversation_id: PlannedTarget::Planned(worker),
+        kind: TaskKindName::new("worker").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"brief": "staged"}),
+        dependencies: Vec::new(),
+        turn: PlannedTurn::Own,
+    });
+    plan.create_task(PlannedTask {
+        conversation_id: root.into(),
+        kind: TaskKindName::new("tool").expect("kind"),
+        schema_version: 1,
+        input: serde_json::json!({"call": "staged"}),
+        dependencies: Vec::new(),
+        turn: PlannedTurn::Own,
+    });
+    let rejected = session.settle_task_with(
+        held,
+        generation,
+        TaskCompletion::completed(serde_json::json!("staged")).outcome,
+        None,
+        |transaction| transaction.apply_task_plan(&plan, held),
+    );
+    assert!(rejected.is_err(), "a plan cannot take a held turn slot");
+
+    assert_eq!(session.state, before, "the rejection changed nothing");
+    assert_eq!(session.state.tasks_of_turn(held), turn_members_before);
+    assert_eq!(
+        session.state.runnable_successors(held, &[]),
+        dependents_before,
+        "a rejected plan must not make unplanned work runnable"
+    );
+    assert_eq!(
+        session.conversation_entries(root, None, 16).expect("page"),
+        page_before,
+        "paging still answers from the committed entry index"
+    );
+    assert_eq!(
+        session.state.queued.len(),
+        before.queued.len(),
+        "queued selection still names only the committed queued input"
+    );
+    assert!(
+        session.state.inputs.contains_key(&queued),
+        "the committed queued input is still addressable"
+    );
+    assert_eq!(
+        session.state.tasks_of_turn(held).len(),
+        before.tasks_of_turn(held).len(),
+        "turn cancellation still reaches exactly the committed members"
+    );
+    assert!(session.state.tasks.contains_key(&dependent));
+}
+
 struct Live {
     entered: Arc<Notify>,
     dropped: Arc<Notify>,
