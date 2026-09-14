@@ -126,17 +126,20 @@ impl TaskKind for GenerationKind {
             frozen.attempts += 1;
             context.checkpoint(Some(encode(&frozen)?), None).await?;
 
-            let stream = self
-                .service
-                .stream(frozen.request.clone())
-                .await
-                .map_err(|error| TaskRunError::new(format!("model request failed: {error}")))?;
+            // Cancellation owns opening as well as collection. The checkpoint
+            // remains dispatch evidence: dropping local ownership does not prove
+            // the provider did not receive or bill this attempt.
             let response = tokio::select! {
-                response = collect_response(stream) => response
-                    .map_err(|error| TaskRunError::new(format!("model stream failed: {error}")))?,
+                biased;
                 () = context.cancelled() => {
                     return Err(TaskRunError::new("generation cancelled"));
                 }
+                response = async {
+                    let stream = self.service.stream(frozen.request.clone()).await
+                        .map_err(|error| TaskRunError::new(format!("model request failed: {error}")))?;
+                    collect_response(stream).await
+                        .map_err(|error| TaskRunError::new(format!("model stream failed: {error}")))
+                } => response?,
             };
 
             // A stream that ended without a complete answer is not a final turn.
