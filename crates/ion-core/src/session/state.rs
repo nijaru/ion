@@ -32,10 +32,21 @@ pub(crate) struct SessionState {
     pub(crate) conversations: BTreeMap<ConversationId, Arc<Conversation>>,
     pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
     pub(crate) entries_by_conversation: BTreeMap<ConversationId, BTreeSet<EntryId>>,
+    /// Inputs whose disposition is `Queued`, in admission order. Scheduling and
+    /// retirement ask for queued work often enough that scanning every input ever
+    /// admitted is not acceptable.
+    pub(crate) queued: BTreeSet<InputId>,
     pub(crate) inputs: BTreeMap<InputId, Arc<Input>>,
     pub(crate) request_keys: HashMap<RequestKey, InputId>,
     pub(crate) input_commits: HashMap<InputId, CommitSeq>,
     pub(crate) tasks: BTreeMap<TaskId, Arc<TaskRecord>>,
+    /// Tasks by the turn they belong to, each root included under its own id.
+    /// `TaskRecord::turn` is fixed when the task is created, so this index only
+    /// changes when a task is inserted.
+    pub(crate) tasks_by_turn: BTreeMap<TaskId, BTreeSet<TaskId>>,
+    /// Reverse dependency edges: which tasks wait on a given task. Fixed when
+    /// the dependent is created, so this index only changes on insertion.
+    pub(crate) dependents: BTreeMap<TaskId, BTreeSet<TaskId>>,
 }
 
 impl SessionState {
@@ -48,6 +59,9 @@ impl SessionState {
             conversations: BTreeMap::new(),
             entries: BTreeMap::new(),
             entries_by_conversation: BTreeMap::new(),
+            queued: BTreeSet::new(),
+            tasks_by_turn: BTreeMap::new(),
+            dependents: BTreeMap::new(),
             inputs: BTreeMap::new(),
             request_keys: HashMap::new(),
             input_commits: HashMap::new(),
@@ -78,20 +92,31 @@ impl SessionState {
         settled: TaskId,
         created: &[TaskId],
     ) -> Vec<RunnableTask> {
-        self.tasks
-            .values()
-            .filter(|task| {
-                matches!(task.status, TaskStatus::Pending)
-                    && !task.cancel_requested
-                    && (created.contains(&task.id) || task.dependencies.contains(&settled))
-                    && self.dependencies_terminal(task)
-            })
-            .map(|task| RunnableTask {
-                id: task.id,
-                kind: task.kind.clone(),
-                schema_version: task.schema_version,
-            })
-            .collect()
+        // Candidates are exactly what this settlement touched: the plan's
+        // successors plus the tasks that depend on it. Scanning every task to
+        // find them would make releasing a slot cost the whole history.
+        let dependents = self.dependents.get(&settled);
+        let candidates = created
+            .iter()
+            .copied()
+            .chain(dependents.into_iter().flat_map(|ids| ids.iter().copied()));
+        let mut runnable = Vec::new();
+        for candidate in candidates {
+            let Some(task) = self.tasks.get(&candidate) else {
+                continue;
+            };
+            if matches!(task.status, TaskStatus::Pending)
+                && !task.cancel_requested
+                && self.dependencies_terminal(task)
+            {
+                runnable.push(RunnableTask {
+                    id: task.id,
+                    kind: task.kind.clone(),
+                    schema_version: task.schema_version,
+                });
+            }
+        }
+        runnable
     }
 
     /// Terminal, or cancelled, or ready to run: the condition a task wait
@@ -102,22 +127,52 @@ impl SessionState {
             || self.dependencies_terminal(task)
     }
 
-    /// Store one input, refusing a duplicate id.
+    /// Store one input, refusing a duplicate id, and index it if it is queued.
     pub(crate) fn insert_input(&mut self, input: Input) -> Result<(), StateError> {
         let id = input.id;
+        let queued = input.disposition == InputDisposition::Queued;
         if self.inputs.insert(id, Arc::new(input)).is_some() {
             return Err(StateError::DuplicateInput(id));
+        }
+        if queued {
+            self.queued.insert(id);
         }
         Ok(())
     }
 
-    /// Store one task, refusing a duplicate id.
+    /// Store one task, refusing a duplicate id, and index its turn and
+    /// dependencies.
     pub(crate) fn insert_task(&mut self, task: TaskRecord) -> Result<(), StateError> {
         let id = task.id;
+        let turn = task.turn;
+        let dependencies = task.dependencies.clone();
         if self.tasks.insert(id, Arc::new(task)).is_some() {
             return Err(StateError::DuplicateTask(id));
         }
+        if let Some(turn) = turn {
+            self.tasks_by_turn.entry(turn).or_default().insert(id);
+        }
+        for dependency in dependencies {
+            self.dependents.entry(dependency).or_default().insert(id);
+        }
         Ok(())
+    }
+
+    /// Record whether an input is queued, keeping the scheduling index in step.
+    pub(crate) fn set_queued(&mut self, input_id: InputId, queued: bool) {
+        if queued {
+            self.queued.insert(input_id);
+        } else {
+            self.queued.remove(&input_id);
+        }
+    }
+
+    /// The tasks of one turn, root included, as ids.
+    pub(crate) fn tasks_of_turn(&self, turn: TaskId) -> Vec<TaskId> {
+        self.tasks_by_turn
+            .get(&turn)
+            .map(|ids| ids.iter().copied().collect())
+            .unwrap_or_default()
     }
 
     /// Store one entry and index it under its conversation.
@@ -569,13 +624,18 @@ fn validate_placement(
 
 /// The conversation's inputs that were admitted and never started.
 pub(crate) fn queued_inputs(state: &SessionState, conversation_id: ConversationId) -> Vec<InputId> {
+    // Only queued inputs are candidates, in admission order; the index already
+    // excludes every input that has been placed, abandoned or cancelled.
     state
-        .inputs
-        .values()
-        .filter(|input| {
-            input.target == conversation_id && input.disposition == InputDisposition::Queued
+        .queued
+        .iter()
+        .filter(|input_id| {
+            state
+                .inputs
+                .get(input_id)
+                .is_some_and(|input| input.target == conversation_id)
         })
-        .map(|input| input.id)
+        .copied()
         .collect()
 }
 
@@ -678,6 +738,7 @@ fn apply_input_disposition(
         .input_mut(input_id)
         .expect("validated input remains present")
         .disposition = disposition;
+    editor.set_queued(input_id, disposition == InputDisposition::Queued);
     Ok(())
 }
 

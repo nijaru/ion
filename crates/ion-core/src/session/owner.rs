@@ -14,8 +14,8 @@ use crate::view::{
     CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
 };
 use crate::{
-    CommitSeq, ConversationId, DependencyOutcome, InputDisposition, InputId, InvocationKind,
-    RequestKey, SessionId, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
+    CommitSeq, ConversationId, DependencyOutcome, InputId, InvocationKind, RequestKey, SessionId,
+    TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
 };
 
 #[cfg(test)]
@@ -234,15 +234,17 @@ impl Session {
         if conversation.foreground_turn.is_some() {
             return None;
         }
+        // Only queued inputs are candidates, and the index keeps them in
+        // admission order, so the earliest one that starts a turn wins.
         self.state
-            .inputs
-            .values()
-            .find(|input| {
-                input.target == conversation_id
-                    && input.disposition == InputDisposition::Queued
-                    && crate::session::idle::starts_turn(input.mode)
+            .queued
+            .iter()
+            .find(|input_id| {
+                self.state.inputs.get(input_id).is_some_and(|input| {
+                    input.target == conversation_id && crate::session::idle::starts_turn(input.mode)
+                })
             })
-            .map(|input| input.id)
+            .copied()
     }
 
     /// Bind an already-queued input to a new turn in one commit, placing its

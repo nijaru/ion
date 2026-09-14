@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use super::state::{SessionState, StateError};
 use crate::{
-    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputId, LocalSeq, RequestKey,
-    TaskId, TaskRecord,
+    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
+    LocalSeq, RequestKey, TaskId, TaskRecord,
 };
 
 /// The previous value of one write, or the exact index change to invert.
@@ -36,6 +36,12 @@ enum Undo {
     LastCommit(Option<CommitSeq>),
     /// Membership added to a conversation's entry index by [`Editor::put_entry`].
     EntryIndex(ConversationId, EntryId),
+    /// Membership of the queued-input index, and whether it held the id.
+    Queued(InputId, bool),
+    /// A turn-membership edge added by [`Editor::put_task`].
+    TaskTurn(TaskId, TaskId),
+    /// A reverse dependency edge added by [`Editor::put_task`].
+    Dependent(TaskId, TaskId),
 }
 
 /// Writes to resident state during one uncommitted command.
@@ -116,9 +122,23 @@ impl<'a> Editor<'a> {
 
     pub(crate) fn put_input(&mut self, input: Input) -> Result<(), StateError> {
         let id = input.id;
+        let queued = input.disposition == InputDisposition::Queued;
         self.state.insert_input(input)?;
+        if queued {
+            self.undo.push(Undo::Queued(id, false));
+        }
         self.undo.push(Undo::Input(id, None));
         Ok(())
+    }
+
+    /// Record whether an input is queued, keeping the index and its undo in step.
+    pub(crate) fn set_queued(&mut self, input_id: InputId, queued: bool) {
+        let previous = self.state.queued.contains(&input_id);
+        if previous == queued {
+            return;
+        }
+        self.undo.push(Undo::Queued(input_id, previous));
+        self.state.set_queued(input_id, queued);
     }
 
     pub(crate) fn input_mut(&mut self, id: InputId) -> Option<&mut Input> {
@@ -131,7 +151,15 @@ impl<'a> Editor<'a> {
 
     pub(crate) fn put_task(&mut self, task: TaskRecord) -> Result<(), StateError> {
         let id = task.id;
+        let turn = task.turn;
+        let dependencies = task.dependencies.clone();
         self.state.insert_task(task)?;
+        if let Some(turn) = turn {
+            self.undo.push(Undo::TaskTurn(turn, id));
+        }
+        for dependency in dependencies {
+            self.undo.push(Undo::Dependent(dependency, id));
+        }
         self.undo.push(Undo::Task(id, None));
         Ok(())
     }
@@ -212,6 +240,23 @@ impl<'a> Editor<'a> {
                         ids.remove(&entry_id);
                         if ids.is_empty() {
                             self.state.entries_by_conversation.remove(&conversation_id);
+                        }
+                    }
+                }
+                Undo::Queued(input_id, previous) => self.state.set_queued(input_id, previous),
+                Undo::TaskTurn(turn, task_id) => {
+                    if let Some(ids) = self.state.tasks_by_turn.get_mut(&turn) {
+                        ids.remove(&task_id);
+                        if ids.is_empty() {
+                            self.state.tasks_by_turn.remove(&turn);
+                        }
+                    }
+                }
+                Undo::Dependent(dependency, task_id) => {
+                    if let Some(ids) = self.state.dependents.get_mut(&dependency) {
+                        ids.remove(&task_id);
+                        if ids.is_empty() {
+                            self.state.dependents.remove(&dependency);
                         }
                     }
                 }

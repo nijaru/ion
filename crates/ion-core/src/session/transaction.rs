@@ -797,11 +797,11 @@ impl<'a> Transaction<'a> {
             )?;
         }
         let mut cancelled = Vec::new();
-        for task in self.editor.state().tasks.values() {
-            if task.turn != Some(root)
-                || matches!(task.status, TaskStatus::Terminal(_))
-                || task.cancel_requested
-            {
+        for task_id in self.editor.state().tasks_of_turn(root) {
+            let Some(task) = self.editor.task(task_id) else {
+                continue;
+            };
+            if matches!(task.status, TaskStatus::Terminal(_)) || task.cancel_requested {
                 continue;
             }
             cancelled.push(task.id);
@@ -918,9 +918,17 @@ impl<'a> Transaction<'a> {
         let Some(conversation_id) = holder else {
             return Ok(());
         };
-        let remaining =
-            self.editor.state().tasks.values().any(|task| {
-                task.turn == Some(root) && !matches!(task.status, TaskStatus::Terminal(_))
+        // Only this turn's members can keep the slot held, so ask the turn
+        // index rather than every task in the session.
+        let remaining = self
+            .editor
+            .state()
+            .tasks_of_turn(root)
+            .iter()
+            .any(|task_id| {
+                self.editor
+                    .task(*task_id)
+                    .is_some_and(|task| !matches!(task.status, TaskStatus::Terminal(_)))
             });
         if !remaining {
             // The turn's completion receipt commits with the settlement that
