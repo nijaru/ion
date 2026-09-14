@@ -43,6 +43,15 @@ pub(crate) enum Mutation {
         output: Option<TaskOutput>,
     },
     MarkTaskCancellation(TaskId),
+    /// Cancel the turn holding a conversation's foreground slot.
+    ///
+    /// Distinct from `MarkTaskCancellation`: a turn outlives its root's
+    /// operation, so the barrier is durable turn state rather than another
+    /// task's cancellation flag.
+    MarkTurnCancelled {
+        conversation_id: ConversationId,
+        root: TaskId,
+    },
     SettleTask {
         task_id: TaskId,
         generation: u64,
@@ -141,6 +150,7 @@ impl Transaction {
             parent: spec.parent,
             owner_task: spec.owner_task,
             foreground_turn: None,
+            turn_cancelled: false,
             retired: false,
         };
         self.stage(
@@ -279,11 +289,17 @@ impl Transaction {
             .get(&settling_task)
             .ok_or(SessionError::UnknownTask(settling_task))?
             .turn;
+        // The barrier lives on the turn's conversation, not on the root task, so
+        // it still stops cleanup work after the root has settled.
         let turn_cancelled = settling_turn.is_some_and(|root| {
-            self.draft
-                .tasks
-                .get(&root)
-                .is_some_and(|task| task.cancel_requested)
+            self.draft.tasks.get(&root).is_some_and(|task| {
+                self.draft
+                    .conversations
+                    .get(&task.conversation_id)
+                    .is_some_and(|conversation| {
+                        conversation.foreground_turn == Some(root) && conversation.turn_cancelled
+                    })
+            })
         });
 
         let mut planned_ids = Vec::with_capacity(plan.tasks().len());
@@ -612,13 +628,33 @@ impl Transaction {
         Ok(id)
     }
 
-    /// Cancel a foreground turn: every non-terminal task scoped to the turn
-    /// root, including the root itself. Terminal tasks are left untouched so
-    /// settled work is never rewritten. Owned conversations and background
-    /// tasks are deliberately outside this scope.
+    /// Cancel a foreground turn: mark the turn itself, then every non-terminal
+    /// task scoped to it.
+    ///
+    /// Terminal tasks are left untouched so settled work is never rewritten, and
+    /// the turn barrier is what stops a still-live member's cleanup from
+    /// creating runnable successors after its root has settled. Owned
+    /// conversations and background tasks are deliberately outside this scope.
     pub(crate) fn cancel_turn(&mut self, root: TaskId) -> Result<Vec<TaskId>, SessionError> {
-        if !self.draft.tasks.contains_key(&root) {
-            return Err(SessionError::UnknownTask(root));
+        let root_task = self
+            .draft
+            .tasks
+            .get(&root)
+            .ok_or(SessionError::UnknownTask(root))?;
+        let conversation_id = root_task.conversation_id;
+        let holds_slot = self
+            .draft
+            .conversations
+            .get(&conversation_id)
+            .is_some_and(|conversation| conversation.foreground_turn == Some(root));
+        if holds_slot {
+            self.stage(
+                Mutation::MarkTurnCancelled {
+                    conversation_id,
+                    root,
+                },
+                Change::ForegroundTurnChanged(conversation_id),
+            )?;
         }
         let mut cancelled = Vec::new();
         for task in self.draft.tasks.values() {

@@ -19,6 +19,15 @@ pub struct Conversation {
     /// The non-terminal foreground turn root, if any. One authoritative slot per
     /// conversation; background work and retained workers never occupy it.
     pub foreground_turn: Option<TaskId>,
+    /// Whether the turn holding that slot has been cancelled.
+    ///
+    /// Turn cancellation is a property of the turn, not of the root operation:
+    /// a root settles as soon as it has planned its children, so a barrier read
+    /// from the root's own cancellation state would let cleanup from a live
+    /// member create runnable work in a stopped turn. The flag is meaningful
+    /// only while `foreground_turn` is set and is cleared when the slot is
+    /// released.
+    pub turn_cancelled: bool,
     /// Retired conversations are read-only archives: history, ownership and
     /// terminal work are preserved, and no writer may add work to them.
     pub retired: bool,
@@ -32,6 +41,7 @@ impl Conversation {
             parent: None,
             owner_task: None,
             foreground_turn: None,
+            turn_cancelled: false,
             retired: false,
         }
     }
@@ -47,6 +57,7 @@ impl Conversation {
             parent,
             owner_task: Some(owner_task),
             foreground_turn: None,
+            turn_cancelled: false,
             retired: false,
         }
     }

@@ -85,6 +85,10 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
             Mutation::MarkTaskCancellation(task_id) => {
                 task::mark_cancellation(&transaction, *task_id)?;
             }
+            Mutation::MarkTurnCancelled {
+                conversation_id,
+                root,
+            } => conversation::set_turn_cancelled(&transaction, *conversation_id, *root)?,
             Mutation::SettleTask {
                 task_id,
                 generation,

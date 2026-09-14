@@ -268,6 +268,17 @@ pub(crate) fn apply_mutation(
             }
             task.cancel_requested = true;
         }
+        Mutation::MarkTurnCancelled {
+            conversation_id,
+            root,
+        } => {
+            let conversation = conversation_mut(state, *conversation_id)
+                .ok_or(StateError::UnknownConversation(*conversation_id))?;
+            if conversation.foreground_turn != Some(*root) {
+                return Err(StateError::InvalidForegroundTurn(*root));
+            }
+            conversation.turn_cancelled = true;
+        }
         Mutation::SettleTask {
             task_id,
             generation,
@@ -289,6 +300,9 @@ pub(crate) fn apply_mutation(
                 return Err(StateError::InvalidForegroundTurn(*task_id));
             }
             conversation.foreground_turn = None;
+            // The turn is over, so its barrier must not reach a later turn in
+            // this conversation.
+            conversation.turn_cancelled = false;
         }
         Mutation::AttachOwnedConversation {
             task_id,

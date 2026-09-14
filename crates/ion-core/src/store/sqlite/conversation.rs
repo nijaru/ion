@@ -12,8 +12,8 @@ pub(crate) fn insert(
 ) -> Result<(), StoreError> {
     connection.execute(
         "INSERT INTO conversations
-           (id, parent_id, parent_at, owner_task, foreground_turn, retired)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+           (id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
         params![
             conversation.id.get(),
             conversation
@@ -22,6 +22,7 @@ pub(crate) fn insert(
             conversation.parent.map(|parent| parent.at.get()),
             conversation.owner_task.map(TaskId::get),
             conversation.foreground_turn.map(TaskId::get),
+            conversation.turn_cancelled,
             conversation.retired,
         ],
     )?;
@@ -32,8 +33,9 @@ pub(crate) fn insert(
 ///
 /// `task_id` is the root that currently holds the slot: it is written when a
 /// turn opens and cleared when the turn has no remaining non-terminal member.
-/// The conditional update is a safety net; semantic validation already happened
-/// against the resident draft.
+/// Clearing the slot also clears the turn's cancellation barrier, because the
+/// turn it belonged to is over. The conditional update is a safety net;
+/// semantic validation already happened against the resident draft.
 pub(crate) fn set_foreground_turn(
     connection: &Connection,
     conversation_id: ConversationId,
@@ -41,7 +43,9 @@ pub(crate) fn set_foreground_turn(
     expected: Option<TaskId>,
 ) -> Result<(), StoreError> {
     let updated = connection.execute(
-        "UPDATE conversations SET foreground_turn = ?2
+        "UPDATE conversations
+         SET foreground_turn = ?2,
+             turn_cancelled = (CASE WHEN ?2 IS NULL THEN 0 ELSE turn_cancelled END)
          WHERE id = ?1 AND foreground_turn IS ?3",
         params![
             conversation_id.get(),
@@ -52,6 +56,25 @@ pub(crate) fn set_foreground_turn(
     if updated != 1 {
         return Err(StoreError::other(format!(
             "conversation {conversation_id} foreground slot did not match the write set"
+        )));
+    }
+    Ok(())
+}
+
+/// Mark the turn holding this conversation's slot as cancelled.
+pub(crate) fn set_turn_cancelled(
+    connection: &Connection,
+    conversation_id: ConversationId,
+    root: TaskId,
+) -> Result<(), StoreError> {
+    let updated = connection.execute(
+        "UPDATE conversations SET turn_cancelled = 1
+         WHERE id = ?1 AND foreground_turn = ?2",
+        params![conversation_id.get(), root.get()],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::other(format!(
+            "conversation {conversation_id} was not holding turn {root}"
         )));
     }
     Ok(())
@@ -76,7 +99,7 @@ pub(crate) fn set_retired(
 
 pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT id, parent_id, parent_at, owner_task, foreground_turn, retired
+        "SELECT id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired
          FROM conversations ORDER BY id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -87,12 +110,13 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreEr
             row.get::<_, Option<i64>>(3)?,
             row.get::<_, Option<i64>>(4)?,
             row.get::<_, bool>(5)?,
+            row.get::<_, bool>(6)?,
         ))
     })?;
 
     let mut conversations = Vec::new();
     for row in rows {
-        let (id, parent_id, parent_at, owner_task, foreground_turn, retired) = row?;
+        let (id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired) = row?;
         let parent = match (parent_id, parent_at) {
             (Some(conversation_id), Some(at)) => Some(HistoryParent {
                 conversation_id: id_from(conversation_id)?,
@@ -110,6 +134,7 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreEr
             parent,
             owner_task: owner_task.map(id_from).transpose()?,
             foreground_turn: foreground_turn.map(id_from).transpose()?,
+            turn_cancelled,
             retired,
         });
     }

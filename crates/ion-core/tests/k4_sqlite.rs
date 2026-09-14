@@ -418,6 +418,51 @@ async fn reopening_leaves_running_tasks_for_explicit_recovery() {
     );
 }
 
+/// R2: the turn cancellation barrier is durable turn state, so it survives a
+/// reopen and keeps fencing the members of a turn whose root had already
+/// settled before the cancellation.
+#[tokio::test]
+async fn a_turn_cancellation_barrier_survives_reopen() {
+    let db = TempDb::new("turn-barrier");
+    let (driver, turn) = build_session(db.path()).await;
+    let conversation = driver
+        .conversation(driver.snapshot().await.root_conversation)
+        .await
+        .expect("root conversation");
+    assert_eq!(
+        conversation.foreground_turn,
+        Some(turn),
+        "the turn under test is the live one"
+    );
+    assert!(!conversation.turn_cancelled);
+
+    driver.cancel_turn(turn).await.expect("cancel the turn");
+    let cancelled_snapshot = driver.snapshot().await;
+    let cancelled = cancelled_snapshot
+        .conversations
+        .iter()
+        .find(|record| record.id == cancelled_snapshot.root_conversation)
+        .expect("root conversation");
+    assert_eq!(cancelled.foreground_turn, Some(turn));
+    assert!(cancelled.turn_cancelled, "the barrier is set");
+    driver.close(CloseMode::Graceful).await;
+    drop(driver);
+
+    let reopened = TaskDriver::open(db.path(), registry()).expect("reopen");
+    let snapshot = reopened.snapshot().await;
+    let conversation = snapshot
+        .conversations
+        .iter()
+        .find(|record| record.id == snapshot.root_conversation)
+        .expect("root conversation");
+    assert_eq!(conversation.foreground_turn, Some(turn));
+    assert!(
+        conversation.turn_cancelled,
+        "the barrier must survive a reopen, or a recovered member's cleanup could run in a stopped turn"
+    );
+    assert_eq!(snapshot, cancelled_snapshot);
+}
+
 /// Exclusive ownership (`k4_ownership.rs`) makes a second live store authority
 /// unreachable through the API, so the commit-cursor compare-and-set is
 /// exercised the way it now earns its keep: a writer that bypassed ownership

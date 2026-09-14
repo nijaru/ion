@@ -38,6 +38,7 @@ impl MemoryStore {
                 | Mutation::MarkTaskCancellation(_)
                 | Mutation::SettleTask { .. }
                 | Mutation::AttachOwnedConversation { .. }
+                | Mutation::MarkTurnCancelled { .. }
                 | Mutation::ReleaseForegroundTurn { .. }
                 | Mutation::SetConversationRetired { .. }
                 | Mutation::CloseTurn { .. } => true,

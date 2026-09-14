@@ -8,11 +8,12 @@ use rusqlite::Connection;
 
 use super::StoreError;
 
-/// Version 2 added `conversations.retired`; version 3 adds
-/// `tasks.turn_closed_by`, the turn-completion receipt. Pre-1.0 development
-/// databases of an older version are refused rather than migrated, per the
-/// policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+/// Version history: 2 added `conversations.retired`; 3 added
+/// `tasks.turn_closed_by`, the turn-completion receipt; 4 added
+/// `conversations.turn_cancelled`, the turn's cancellation barrier. Pre-1.0
+/// development databases of an older version are refused rather than migrated,
+/// per the policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 const DDL: &str = r"
 CREATE TABLE session_meta (
@@ -29,6 +30,7 @@ CREATE TABLE conversations (
     parent_at      INTEGER,
     owner_task     INTEGER,
     foreground_turn INTEGER,
+    turn_cancelled INTEGER NOT NULL DEFAULT 0,
     retired        INTEGER NOT NULL DEFAULT 0
 );
 

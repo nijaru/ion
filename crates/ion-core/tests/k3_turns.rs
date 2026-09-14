@@ -416,3 +416,181 @@ async fn cancelled_turn_admits_no_runnable_successor_from_abort_cleanup() {
         .expect("abort cleanup successor");
     assert_eq!(foreground_turn_from(&driver.snapshot().await, root), None);
 }
+
+/// R2: the turn cancellation barrier must not depend on the root operation's
+/// state. Cancelling a turn whose root has already settled still has to fence
+/// the cleanup work its live members create, or abort cleanup smuggles runnable
+/// work into a stopped turn.
+#[tokio::test]
+async fn cancelling_after_the_root_settled_still_fences_cleanup_successors() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut session = Session::new().expect("session");
+    let turn = session
+        .create_turn(request(&session, "fanout"))
+        .expect("turn");
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(kind("fanout"), 1, Arc::new(FanOut))
+        .expect("fanout");
+    // The root's turn-scoped successor is live work that plans successors when
+    // it is cancelled.
+    registry
+        .register(
+            kind("held"),
+            1,
+            Arc::new(AbortFanOut {
+                started: started.clone(),
+            }),
+        )
+        .expect("held");
+    registry
+        .register(kind("tool"), 1, Arc::new(Plain))
+        .expect("tool");
+    let driver = TaskDriver::new(session, registry);
+
+    let outcome = driver.drive_task(turn.task_id).await.expect("drive root");
+    assert!(matches!(outcome, ion_core::DriveOutcome::Settled(_)));
+    let snapshot = driver.snapshot().await;
+    let root = snapshot
+        .tasks
+        .iter()
+        .find(|record| record.id == turn.task_id)
+        .expect("root")
+        .clone();
+    assert!(
+        matches!(root.status, TaskStatus::Terminal(_)),
+        "the root must have settled before the turn is cancelled"
+    );
+    assert!(
+        !root.cancel_requested,
+        "the settled root is not marked by cancellation"
+    );
+    let child = snapshot
+        .tasks
+        .iter()
+        .find(|record| record.input == json!({"scope": "turn"}))
+        .expect("live successor")
+        .id;
+
+    // Settling the root dispatched its runnable successor, so the live member is
+    // already running when the turn is cancelled.
+    tokio::time::timeout(std::time::Duration::from_secs(10), started.notified())
+        .await
+        .expect("the live member must start");
+    driver.cancel_turn(turn.task_id).await.expect("cancel turn");
+    driver.wait_task(child).await.expect("the member settles");
+
+    let snapshot = driver.snapshot().await;
+    let cleanup = snapshot
+        .tasks
+        .iter()
+        .find(|record| record.input == json!({"scope": "cleanup"}))
+        .expect("the cancelled member must have planned its cleanup successor");
+    assert!(
+        cleanup.cancel_requested,
+        "a successor inheriting a cancelled turn must be born cancelled even when the root already settled"
+    );
+}
+
+/// The barrier belongs to one turn. Once that turn releases the slot, a later
+/// turn in the same conversation must not inherit its cancellation.
+#[tokio::test]
+async fn a_released_turn_does_not_cancel_the_next_turn() {
+    let started = Arc::new(tokio::sync::Notify::new());
+    let mut session = Session::new().expect("session");
+    let first = session
+        .create_turn(request(&session, "abortfan"))
+        .expect("turn");
+    let mut registry = TaskRegistry::new();
+    registry
+        .register(
+            kind("abortfan"),
+            1,
+            Arc::new(AbortFanOut {
+                started: started.clone(),
+            }),
+        )
+        .expect("abortfan");
+    registry
+        .register(kind("fanout"), 1, Arc::new(FanOut))
+        .expect("fanout");
+    registry
+        .register(
+            kind("held"),
+            1,
+            Arc::new(Held {
+                entered: Arc::new(Notify::new()),
+            }),
+        )
+        .expect("held");
+    registry
+        .register(kind("tool"), 1, Arc::new(Plain))
+        .expect("tool");
+    let driver = TaskDriver::new(session, registry);
+
+    let drive = tokio::spawn({
+        let driver = driver.clone();
+        async move { driver.drive_task(first.task_id).await }
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), started.notified())
+        .await
+        .expect("the turn starts");
+    driver
+        .cancel_turn(first.task_id)
+        .await
+        .expect("cancel turn");
+    drive.await.unwrap().expect("the cancelled turn settles");
+
+    // The turn stays open until the cancelled cleanup member it planned settles.
+    let conversation = session_conversation(&driver).await;
+    assert!(conversation.turn_cancelled);
+    let cleanup = driver
+        .snapshot()
+        .await
+        .tasks
+        .iter()
+        .find(|record| record.input == json!({"scope": "cleanup"}))
+        .expect("cleanup successor")
+        .id;
+    driver.drive_task(cleanup).await.expect("cleanup settles");
+
+    let conversation = session_conversation(&driver).await;
+    assert_eq!(conversation.foreground_turn, None, "the turn is over");
+    assert!(
+        !conversation.turn_cancelled,
+        "the released turn's barrier must not outlive it"
+    );
+
+    // A later turn in the same conversation is ordinary work again.
+    let root = driver.snapshot().await.root_conversation;
+    let next = driver
+        .create_turn(TaskRequest {
+            conversation_id: root,
+            kind: kind("fanout"),
+            schema_version: 1,
+            input: json!({}),
+            dependencies: Vec::new(),
+        })
+        .await
+        .expect("next turn");
+    driver.drive_task(next.task_id).await.expect("drive");
+    let snapshot = driver.snapshot().await;
+    let successor = snapshot
+        .tasks
+        .iter()
+        .find(|record| record.turn == Some(next.task_id) && record.id != next.task_id)
+        .expect("successor");
+    assert!(
+        !successor.cancel_requested,
+        "a later turn's work must not inherit an earlier turn's cancellation"
+    );
+}
+
+async fn session_conversation(driver: &TaskDriver) -> ion_core::Conversation {
+    let snapshot = driver.snapshot().await;
+    *snapshot
+        .conversations
+        .iter()
+        .find(|record| record.id == snapshot.root_conversation)
+        .expect("root conversation")
+}
