@@ -169,9 +169,22 @@ fn bytes(path: &Path) -> u64 {
 }
 
 fn total_bytes(db: &Path) -> u64 {
-    let wal = PathBuf::from(format!("{}-wal", db.display()));
-    let shm = PathBuf::from(format!("{}-shm", db.display()));
-    bytes(db) + bytes(&wal) + bytes(&shm)
+    bytes(db) + wal_bytes(db) + bytes(&PathBuf::from(format!("{}-shm", db.display())))
+}
+
+fn wal_bytes(db: &Path) -> u64 {
+    bytes(&PathBuf::from(format!("{}-wal", db.display())))
+}
+
+/// Database, WAL and SHM bytes separately, so a reader never infers the WAL
+/// from a total.
+fn size_report(db: &Path) -> String {
+    format!(
+        "db={} wal={} shm={}",
+        bytes(db),
+        wal_bytes(db),
+        bytes(&PathBuf::from(format!("{}-shm", db.display())))
+    )
 }
 
 /// One latency window: sample count plus p50/p95/max in microseconds.
@@ -252,29 +265,29 @@ async fn main() {
             windows.push((index, std::mem::take(&mut window)));
             deadline += tasks / 10;
         }
-        let started = Instant::now();
+        let turn_started = Instant::now();
         let receipt = driver
             .submit_input(submission(root, format!("turn {index}")), request(root))
             .await
             .expect("submit");
         let turn = receipt.task_id.expect("turn root");
-        admit.record(started.elapsed());
-        let started = Instant::now();
+        admit.record(turn_started.elapsed());
+        let settle_started = Instant::now();
         match driver.drive_task(turn).await.expect("drive") {
             DriveOutcome::Settled(_) => {}
             DriveOutcome::Interrupted(interruption) => {
                 panic!("unexpected interruption: {interruption:?}")
             }
         }
-        settle.record(started.elapsed());
-        window.record(started.elapsed());
+        settle.record(settle_started.elapsed());
+        window.record(turn_started.elapsed());
         if index % 512 == 0 {
             peak_rss = peak_rss.max(rss_kb());
         }
     }
     windows.push((tasks, window));
     let build = build_start.elapsed();
-    let snapshot = driver.snapshot().await;
+    let summary = driver.summary().await;
     println!("--- build ---");
     println!(
         "turns: {} in {:?} ({:.0} turns/sec)",
@@ -287,12 +300,14 @@ async fn main() {
     }
     println!("{}", admit.report("  admission only"));
     println!("{}", settle.report("  settlement only"));
+    // `summary` is the bounded surface: counting with `snapshot` would clone the
+    // whole resident state and inflate the RSS reading below.
     println!(
         "resident records: conversations={} entries={} inputs={} tasks={}",
-        snapshot.conversations.len(),
-        snapshot.entries.len(),
-        snapshot.inputs.len(),
-        snapshot.tasks.len()
+        summary.conversations,
+        summary.entries,
+        summary.inputs,
+        summary.tasks.pending + summary.tasks.running + summary.tasks.terminal
     );
     println!("rss after build: {} kB", rss_kb());
     println!(
@@ -349,7 +364,19 @@ async fn main() {
         // cancellation mark plus the abort invocation's settlement.
         let started = Instant::now();
         reopened.cancel_turn(turn).await.expect("cancel");
-        let _ = tokio::time::timeout(Duration::from_secs(30), reopened.wait_task(turn)).await;
+        let settled = tokio::time::timeout(Duration::from_secs(30), reopened.wait_task(turn))
+            .await
+            .unwrap_or_else(|_| panic!("cancelled turn {turn:?} never settled"));
+        assert!(
+            settled.is_ok_and(|record| matches!(
+                record.status,
+                ion_core::TaskStatus::Terminal(ion_core::TaskOutcome {
+                    kind: ion_core::TaskOutcomeKind::Aborted,
+                    ..
+                })
+            )),
+            "a cancelled turn settles aborted"
+        );
         cancel.record(started.elapsed());
     }
     println!("{}", cancel.report("cancel_turn (pending)"));
@@ -380,7 +407,7 @@ async fn main() {
         );
     }
     // A plain append is one commit that clones the resident maps and scans no
-    // tasks, so its growth isolates map-clone cost from task-scan cost.
+    // tasks and no history, so what remains is map-clone cost and storage.
     let mut seeding = Vec::new();
     let mut seed_window = Window::default();
     let mut seed_deadline = seeded / 4;
@@ -407,13 +434,22 @@ async fn main() {
         );
     }
     let mut fork = Window::default();
+    let mut fork_windows: Vec<(usize, Window)> = Vec::new();
+    let mut fork_window = Window::default();
+    let mut fork_deadline = (fork_depth / 8).max(1);
     let mut fork_rss = rss_kb();
     for level in 0..fork_depth {
+        if level >= fork_deadline {
+            fork_windows.push((level, std::mem::take(&mut fork_window)));
+            fork_deadline += fork_deadline.max(1);
+        }
         let started = Instant::now();
         let receipt = fork_session
             .create_conversation(ConversationSpec::fork(parent, cutoff))
             .expect("fork");
-        fork.record(started.elapsed());
+        let elapsed = started.elapsed();
+        fork.record(elapsed);
+        fork_window.record(elapsed);
         cutoff = append_note(&mut fork_session, receipt.conversation_id, level);
         parent = receipt.conversation_id;
         fork_rss = fork_rss.max(rss_kb());
@@ -425,6 +461,10 @@ async fn main() {
                 total_bytes(&fork_db)
             );
         }
+    }
+    fork_windows.push((fork_depth, fork_window));
+    for (at, window) in &fork_windows {
+        println!("  [depth <={at}] {}", window.report("fork"));
     }
     println!(
         "{}",
@@ -466,12 +506,15 @@ async fn main() {
         ),
         DriveOutcome::Interrupted(interruption) => panic!("interrupted: {interruption:?}"),
     }
-    let before = Instant::now();
     reopened.close(CloseMode::Graceful).await;
     drop(reopened);
+    let open_started = Instant::now();
     let reopened_again = reopen(&db, output_bytes);
-    println!("reopen with the large payload: {:?}", before.elapsed());
-    println!("bytes at end: {} (db={})", total_bytes(&db), bytes(&db));
+    println!(
+        "open alone with the large payload: {:?}",
+        open_started.elapsed()
+    );
+    println!("bytes at end: {} ({})", total_bytes(&db), size_report(&db));
     println!("rss at end: {} kB", rss_kb());
     reopened_again.close(CloseMode::Graceful).await;
 }
