@@ -13,7 +13,7 @@ Long-term/project memory, knowledge stores, shared task boards, vector stores an
 | Task execution/recovery | K2 lifecycle boundary plus K3 driver implemented, including waits, capacity, close, interruption/uncertainty, finalization, turns and readiness dispatch | R0.1/R0.3; `crates/ion-core/src/task/`; `crates/ion-core/src/session/scheduler.rs`; `crates/ion-core/tests/k5_chain.rs` |
 | IDs/order | Session-local typed sequence implemented, including SQLite representation | R0.4; K1/K2/K4 |
 | AI boundary | Independent provider-neutral `ion-ai` contract crate implemented | R0.5; `crates/ion-ai/` |
-| Storage topology/engine | Per-session SQLite schema v3 with exclusive ownership implemented; bounded residency remains open; process-death evidence is limited to acknowledged entry commits | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
+| Storage topology/engine | Per-session SQLite schema v4 with exclusive ownership implemented; bounded residency remains open; process-death evidence is limited to acknowledged entry commits | `crates/ion-core/src/store/sqlite/`; `crates/ion-core/tests/k4_sqlite.rs` |
 | Fresh production core | Legacy runtime removed; scripted generation/tool chain works; no real-provider coding loop yet | cleanup commit `2d273f78`; evidence log below |
 | TUI/group target | Interaction requirements drafted; fresh application/TUI not yet rebuilt | TERMINAL.md |
 
@@ -27,12 +27,12 @@ The 2026-09-13 source review at `888d103c` preserves the core architecture but s
 
 ### Repair and delivery order
 
-**R1 is closed at `5bf3ea87`**; R2–R8 are open. This table is the work-order authority; the K/P sections retain subsystem scope, not a competing execution sequence.
+**R1 is closed at `5bf3ea87` and R2 at `b4730bc8`**; R3–R8 are open. This table is the work-order authority; the K/P sections retain subsystem scope, not a competing execution sequence.
 
 | Order | Observable behavior / semantic owner | Failure boundary and acceptance evidence |
 |---|---|---|
 | R1 — exclusive writable ownership | **Closed `5bf3ea87`.** The store holds a kernel-held lock before any SQLite open, schema check or reconstruction, and releases it last in close; cursor CAS remains defense-in-depth; load reads one transaction | Refusal is `SessionError::SessionInUse` and happens before reconstruction, so a refused process observes and changes nothing. A child process is refused while the parent lives and commits after the parent releases. Graceful and fault close both release ownership. `k4_ownership.rs` also asserts, against a concurrent raw writer, that no visible entry is newer than the committed cursor. |
-| R2 — durable turn control | Turn cancellation barrier is independent of the root task's terminal outcome; `turn_closed_by` denotes closure provenance, not the answer | Settle the generation root, keep a child live, cancel, then let child abort cleanup plan successors. None escapes cancellation, including across reopen. Test settlement/mark ordering. Preserve terminal operation outcomes. |
+| R2 — durable turn control | **Closed `b4730bc8`.** The turn's cancellation barrier is durable turn state on the conversation holding the slot, set with the member marks and cleared with the slot release, so it no longer depends on the root operation's terminal state; `turn_closed_by` denotes closure provenance, not the answer | `k3_turns.rs` settles the root, keeps a member live, cancels, and asserts the cleanup successor the member plans is born cancelled; it also pins that a released turn's barrier does not reach a later turn. `k4_sqlite.rs` pins that the barrier survives close and reopen. Terminal operation outcomes are still never rewritten. |
 | R3 — fail-closed recovery | Built-in generation/tool adapters distinguish absent checkpoints from corrupt/unsupported checkpoints; prepared tool identity and recovery policy survive catalog changes | Malformed generation/tool checkpoint, removed tool and changed retry policy across reopen must neither repeat an uncertain action nor fabricate a known result. Use an external witness for dispatch-window crash tests. |
 | R4 — input placement and answer attempts | Input/transcript writer commits the user entry once before provider dispatch; generation answer attempts and their outcomes are separate | Cancel before first token, end incomplete, close/reopen and explicitly retry: one accepted input, one user entry, a new answer attempt, no permanently stranded request. Preserve truthful assistant failure/uncertainty. |
 | R5 — restart-safe observations | Session observation owner tracks coverage across restart; an old cursor cannot silently receive an empty successful delta | Commit, retain a client cursor, commit again, reopen and request changes from the old cursor: require resnapshot. Test future/unknown cursors and atomic watch attachment. |
@@ -113,7 +113,7 @@ K2's lifecycle paths are exercised through the K3 production driver so they are 
 
 ### K3 — task driver
 
-**Status: core driver implemented; reviewed turn-control gap remains open (R2).**
+**Status: core driver implemented; reviewed turn-control repair closed at `b4730bc8`.**
 
 Implemented now:
 
@@ -129,9 +129,7 @@ Implemented now:
 - a known application failure settles durable `Failed`; handler errors and panics interrupt and leave the task running and recoverable;
 - cancellation/settlement ordering is serialized under the writer: settlement wins if it commits first, otherwise abort owns cleanup.
 
-Still open before K3 is considered complete:
-
-- durable turn cancellation independent of a terminal root operation (R2).
+No structural K3 gap remains open: R1 ownership and R2 turn control are implemented, and the remaining work is the R3–R8 order in §1.
 
 The typed authoring adapter is implemented in `task/typed.rs`: `TaskRegistry::register_typed` erases a `TypedHandler` into the ordinary registry entry shape, input/checkpoint decode and result encode go through the durable JSON shapes, and terminal/failed/aborted/indeterminate stay distinct. An undecodable checkpoint or un-encodable result interrupts an already-dispatched task instead of terminalizing it; only never-dispatched work settles a structured `Failed`.
 
@@ -141,13 +139,13 @@ K4 now supplies persisted reopen, exclusive-ownership and explicit-drive evidenc
 
 ### K4 — fresh SQLite session store
 
-**Status: SQLite schema v3 with exclusive ownership implemented; restart coverage and bounded storage repairs remain open (R5/R6).**
+**Status: SQLite schema v4 with exclusive ownership implemented; restart coverage and bounded storage repairs remain open (R5/R6).**
 
 The session owns resident semantic state; a private persistence sink accepts validated batches before prepared state is installed and observations publish. Persistence errors fence the session and fault-stop live async invocations. Fault tests cover atomic rejection of terminal/successor writes, unchanged resident state/observations, and live invocation shutdown. This is in-memory fault evidence, not crash durability evidence.
 
 Bounded residency and the persistence interface are accepted targets, but bounded residency remains unimplemented (R6). Resident records are copy-on-write behind `Arc`, so a commit does not deep-copy unrelated durable records and a checkpoint touches only its own record; transcript projection still materializes visible history. The remaining per-commit map-structure clone is removed when reads move to indexed storage. The decision and its invariants are recorded in `docs/core-runtime-migration.md`. The durable write set in `MutationBatch` is what a backend persists and can reconstruct from, covered by `committed_write_set_reconstructs_resident_state`. Restricted task finalization, foreground-turn membership and the typed task authoring adapter are implemented. Planned owned-conversation/scratch finalization is K6 work and does not block basic SQLite.
 
-The fresh per-session schema is implemented at version 3. Do not migrate old lane/operation tables into the new core.
+The fresh per-session schema is implemented at version 4. Do not migrate old lane/operation tables into the new core.
 
 Development-era old databases may be archived/refused under the pre-1.0 policy. A later migration is written only if preserving old sessions is actually worth the complexity.
 
@@ -349,9 +347,11 @@ Agent-effectiveness optimization starts from a stable M1/M2 baseline. More conte
 
 ## Evidence log
 
+2026-09-13: R2 durable turn control at `b4730bc8`. Reproduced the defect the review predicted: settling a turn root and then cancelling the turn left the root unmarked (`cancel_turn` skips terminal tasks), so the abort cleanup of a member that was still live planned a successor that was born runnable \u2014 work escaping a stopped turn. Turn cancellation is now durable turn state: `Conversation.turn_cancelled`, staged with the member marks in one commit and cleared in the commit that releases the foreground slot; successor inheritance reads that barrier together with slot ownership, so a settled root no longer weakens it. Terminal task outcomes are never rewritten. SQLite schema 3 -> 4 adds the column and refuses older development databases. `tests/k3_turns.rs` reproduces the defect and pins that a released turn's barrier does not reach a later turn in the same conversation; `tests/k4_sqlite.rs` pins that the barrier survives a graceful close and reopen. Format, strict workspace Clippy and the full workspace test suite (170 tests) pass, and the three touched suites were run three times consecutively without a failure. Not established: the review's suggestion to constrain background tasks from appending model-visible exchanges into a busy conversation is still only a design note, and joined-run result selection remains R6-later work.
+
 2026-09-13: R1 exclusive writable session ownership at `5bf3ea87`. A session now holds a kernel-held advisory lock on a file beside its database from before any SQLite open, schema check or reconstruction until close has fenced writes and joined local invocations; the commit-cursor compare-and-set remains as the fence against a writer that bypassed ownership. The refusal is now a distinct `SessionError::SessionInUse` rather than a generic persistence failure, reconstruction reads one transaction, opening a missing database leaves no lock file, and a database that is already in WAL no longer takes an exclusive lock just to restate its journal mode. Acquisition waits up to ~100ms for a lock that may be mid-handover: the kernel releases the lock at process exit or exec, and a process that has just forked shares its open file descriptions with the child until that child execs, so without the wait an unrelated fork in the same process makes a free lock look held. The wait was measured against a reproducer that forked ~3900 children while four threads acquired and released locks continuously: with one attempt the threads panicked within milliseconds, and with the bounded wait 4027 acquisitions were delayed with a worst case of 9ms and none failed. `tests/k4_ownership.rs` covers the in-process refusal, that a refused open observes and changes nothing, release after graceful and fault close, a child process refused while the parent lives that commits after the parent releases, and 150 reconstructions against a concurrent raw writer asserting no visible entry is newer than the committed cursor. `k4_sqlite.rs` keeps reopen coverage and now exercises the cursor fence with a foreign writer. Format, strict workspace Clippy and the full workspace test suite (167 tests) pass. Not established: a torn-read race was never observed, which is not proof that none is possible, and read-only inspection by a second process is unimplemented — today every open is a writable owner.
 
-Entries below are chronological evidence at their named revisions, not a second current-status list. The 2026-09-13 review at `888d103c` supersedes earlier general claims of a complete cancelled-turn admission barrier and observation-gap handling: R2 covers cancellation after root settlement, and R5 covers restart coverage. Existing tests remain useful but do not cover those scenarios.
+Entries below are chronological evidence at their named revisions, not a second current-status list. The 2026-09-13 review at `888d103c` superseded earlier general claims of a complete cancelled-turn admission barrier and observation-gap handling; R2 closed the first at `b4730bc8`, and R5 still covers restart coverage. Existing tests remain useful but do not cover those scenarios.
 
 2026-09-13: source design review at `888d103c`, including an independent Astra pass, preserved the architecture and identified R1–R8 above. User accepted the repair-first roadmap and long-term continuity update. No reproductions, Rust gates, live-provider runs or performance/effectiveness measurements were run in this documentation pass. Revision 7 of DESIGN records accepted repair contracts; implementation is open. Future joined-worker expansion is deferred behind the repairs and measured single-agent baseline.
 

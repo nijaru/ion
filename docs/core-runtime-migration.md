@@ -235,7 +235,7 @@ K2 lifecycle primitives are exercised by K3 production code instead of being tes
 
 ### K3 — task driver
 
-**Core driver implemented; R2 turn-control repair remains open.**
+**Core driver, turn control and exclusive ownership implemented.**
 
 Implemented:
 
@@ -259,7 +259,6 @@ Implemented:
 
 Still open:
 
-- independent durable turn cancellation control (R2), including cancellation after root settlement;
 - reclamation beyond archival retirement (later K6); planned owned-conversation creation is implemented.
 
 The typed authoring adapter is implemented in `task/typed.rs` and erases into the ordinary registry. Decode failures are terminal only for never-dispatched work; for an already-dispatched task they interrupt and stay recoverable, and an un-encodable result interrupts rather than discarding its reconciliation opportunity.
@@ -274,7 +273,7 @@ Do not add a second scheduler to solve these. Extend the same session/task drive
 
 **Per-session SQLite store, exclusive ownership and process-death evidence implemented.**
 
-`Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 3 (version 2 added the `retired` conversation flag and version 3 the turn-completion receipt; older development databases are refused rather than migrated): session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
+`Session::create(path)` and `Session::open(path)` are live. One database holds one session at schema version 4 (version 3 added the turn-completion receipt and version 4 the turn cancellation barrier; older development databases are refused rather than migrated): session metadata and cursors, conversations, entries, inputs with their durable request-key and admission-commit mappings, and tasks with dependency and ownership child tables. A commit is applied in one SQLite transaction that also advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a stale live authority is fenced instead of interleaved. The durability floor is WAL with `synchronous = FULL`.
 
 Evidence is in-process plus one real process-death test (`tests/k4_sqlite.rs`). In-process: a representative write set — history-parented conversation, entries, input admission and disposition, a pending task, a dependent task, a task-owned conversation, two turns with different foreground-slot outcomes, a checkpoint, a finalization plan and a durable cancellation mark — reconstructs an identical snapshot after close and reopen; duplicate-input replay survives reopen; a stale second authority is fenced and left closed; and an interrupted task reopens as running with nothing implicitly started. Process death: a child process commits three entries and then dies on `SIGABRT` without unwinding, closing or checkpointing; the parent finds all three commits durable and recovery idempotent.
 
@@ -378,7 +377,7 @@ The production entry point is `builtin::worker`: a `worker` task's immutable inp
 
 Retirement is implemented as a read-only archive: `Conversation.retired` (schema version 2), `Session::retire_conversation` / `reactivate_conversation` and the same pair on the driver. Retirement requires an owned conversation with no foreground turn and no non-terminal task; input that was queued but never started is cancelled in the same commit. Every writer path rejects a retired conversation — transcript entries, task creation, input admission, opening a turn, and settlement plans — while reads, history, ownership, terminal outcomes and checkpoints are preserved, and inheriting a cutoff from a retired ancestor stays allowed. `tests/k6_retirement.rs` covers quiescence, the rejection paths including a rolled-back plan, cancellation of unstarted input, ownership, reactivation, reopen and the schema refusal.
 
-A planned successor now names its turn: `PlannedTurn::{Inherit, Own, Background}` replaced the old `background` flag. `Own` opens the target conversation's foreground slot in the same commit as the successor that roots it, so the one-turn-per-conversation rule is validated on the plan path too; a plan that opens a slot already held is rejected and rolls back. The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: a follow-up admitted to a busy worker queues and drains into its own successor turn once the first chain finishes, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle again as soon as the spawn settles. Successor cancellation inheritance exists, but the post-root-settlement case is defective and remains R2 work; do not claim the aggregate admission barrier complete. `Background` stays outside cancellation scope.
+A planned successor now names its turn: `PlannedTurn::{Inherit, Own, Background}` replaced the old `background` flag. `Own` opens the target conversation's foreground slot in the same commit as the successor that roots it, so the one-turn-per-conversation rule is validated on the plan path too; a plan that opens a slot already held is rejected and rolls back. The spawned worker's initial task uses `Own`, so a worker's run occupies its own conversation's turn: a follow-up admitted to a busy worker queues and drains into its own successor turn once the first chain finishes, `cancel_turn` on the worker's root stops exactly that run, and the creator's conversation is idle again as soon as the spawn settles. Successor cancellation inheritance reads the turn's durable barrier on the conversation holding the slot, so it also holds when the root has already settled. `Background` stays outside cancellation scope.
 
 A turn's completion is durable: the turn root records the member whose settlement closed the turn (`turn_closed_by`), written with that settlement and the slot release, and `TaskDriver::{turn_closed_by, wait_turn}` expose it. `wait_turn` observes whole-chain closure, not necessarily an answer or success. It is deliberately distinct from waiting for a worker's initial generation, because a generation settles as soon as it has planned its children. `tests/k6_turn_completion.rs` covers the receipt naming the closing member, a later turn not reopening an earlier receipt, one wait not blocking another worker's chain, cancellation still recording a closure, the non-root refusal, and reopen.
 
