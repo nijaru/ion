@@ -11,6 +11,8 @@ Ion's target is a provider-neutral Rust coding agent: one primary conversation b
 - `ROADMAP.md` owns work order, validation status and later subsystem passes.
 - `TERMINAL.md` owns interaction/control/presentation requirements.
 - `docs/research/` and `docs/research.md` record exact source findings and rationale.
+- `docs/decisions.md` is the lookup table for consequential choices and what reopens them.
+- `docs/design/` holds a concrete design for a boundary that does not exist yet; write and review it before implementing that boundary, and align the implementation to it. Repairs and performance work inside an accepted boundary stay implement-and-measure.
 - Current legacy source/tests establish what the old binary implemented and provide regression evidence; they do not override the target.
 
 Check recent commits/status before editing because the rewrite is active. Proposed, implemented and validated are distinct states.

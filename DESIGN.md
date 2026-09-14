@@ -12,6 +12,8 @@ Current Pico/Pi 2 remains a useful minimal-harness reference and Codex a useful 
 
 The core scope is deliberately narrow: **sessions, conversations, immutable history/context controls, durable tasks, inputs, workers, external execution/recovery, authority, persistence and clients**. Long-term memory/knowledge stores, shared task boards, vector stores, planner layers and similar higher-level systems are outside the core.
 
+Concrete designs for boundaries that do not exist yet live in `docs/design/`, and consequential choices with their status live in `docs/decisions.md`; `DESIGN.md` states the accepted architecture and invariants those documents must remain consistent with.
+
 ## 1. Product contract
 
 Ion is a provider-neutral Rust coding agent with a first-class terminal interface. It runs one primary conversation by default. Optional multi-agent mode lets the user or model create, observe, steer and control cooperating worker conversations through the same runtime.
