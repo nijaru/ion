@@ -1,26 +1,19 @@
-mod capacity;
-mod command;
-pub use capacity::TaskCapacity;
-mod idle;
-pub(crate) mod journal;
-mod lifecycle;
-mod owner;
-mod scheduler;
-pub(crate) mod state;
-pub(crate) mod transaction;
-mod wait;
+//! One session: a supervised, durably owned group of conversations.
 
-pub use command::{
-    AdmissionReceipt, ConversationReceipt, ConversationSpec, EntryReceipt, EntryRequest,
-    InputReceipt, InputRequest, SessionError, TaskReceipt, TaskRequest, TurnCancellation,
-};
-pub use idle::TurnTemplate;
-pub use lifecycle::CloseMode;
-pub use owner::Session;
-pub use scheduler::{
-    DriveOutcome, Interruption, InterruptionReason, Settlement, TaskCancellation, TaskDriver,
-    TaskDriverError,
-};
+mod command;
+mod handle;
+mod owner;
+mod supervisor;
 
 #[cfg(test)]
 mod tests;
+
+pub use command::{
+    AdmissionReceipt, CancelReceipt, ConfigureRequest, EntryQuery, ResolveRequest, SessionEvent,
+    SubmitRequest,
+};
+pub use handle::{SessionHandle, SessionWatch, WatchError};
+pub use owner::{Session, SessionSpec};
+pub use supervisor::Services;
+
+pub(crate) use command::Request;

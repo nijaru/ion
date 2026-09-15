@@ -7,24 +7,29 @@ compatibility targets.
 
 ## Current status
 
-The workspace currently builds three libraries:
+The workspace builds three libraries:
 
-- `ion-core`: durable sessions, conversations, immutable entries, inputs and
-  recoverable tasks, backed by per-session SQLite storage.
+- `ion-core`: the durable turn engine. A session owns conversations, immutable
+  entries, accepted inputs and the turns that answer them, backed by per-session
+  SQLite storage on a dedicated database thread.
 - `ion-ai`: provider-neutral model contracts and a scripted model service.
 - `ion-terminal`: low-level terminal components.
 
-The core supports a scripted generation/tool chain, cancellation and recovery,
-request cutoffs, and durable conversation configuration. A real-provider coding
-loop, bounded storage residency, and the rebuilt application/TUI remain unfinished.
-These libraries still use the preceding task-based architecture. The accepted
-[turn-engine design](ARCHITECTURE.md) is the replacement target, not an implemented
-feature set.
+The engine implements the accepted [turn contracts](ARCHITECTURE.md): durable
+admission with request-key replay, frozen request bases, response-ready evidence
+that survives a crash without a second provider call, sequential tool execution,
+cancellation whose only winner is a committed turn success, truthful results for
+uncertain actions, exclusive session ownership, and bounded pages and content
+budgets. A scripted model/tool exchange runs end to end through the headless API.
+
+Still missing: real provider adapters, a runnable `ion` binary, workspace tools
+(read/edit/exec), context compaction and forking, the terminal UI, and workers.
+No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
-`crates/ion/` application source remains as reference material outside the
-workspace; its CLI, provider configuration and usage instructions do not describe
-the new core. `cargo run -p ion` is not supported at this revision.
+`crates/ion/` application source is reference material outside the workspace; its
+CLI, provider configuration and usage instructions do not describe the new core.
+`cargo run -p ion` is not supported at this revision.
 
 ## Development
 
@@ -36,16 +41,17 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-For a focused executable example of the current core's behavior, run its scripted
-integration tests:
+The turn-engine regressions are grouped by boundary:
 
 ```sh
-cargo test --locked -p ion-core --test k5_generation
-cargo test --locked -p ion-core --test k7_config
+cargo test --locked -p ion-core --test c1_turn          # admission, steps, tools, queues
+cargo test --locked -p ion-core --test c1_cancellation  # cancellation precedence, uncertainty
+cargo test --locked -p ion-core --test c1_storage       # ownership, schema, corruption, pages
+cargo test --locked -p ion-core --lib                   # commit faults, recovery boundaries
 ```
 
-These exercise the libraries; they are not evidence of live-provider effectiveness
-or a usable terminal application.
+These exercise the libraries against scripted services; they are not evidence of
+live-provider effectiveness or a usable terminal application.
 
 ## Project documentation
 

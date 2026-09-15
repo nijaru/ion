@@ -1,9 +1,16 @@
 # Ion architecture
 
-Accepted target, 2026-09-15. This replaces the earlier task-runtime design; it is
-not a claim that the current source implements these contracts. [README.md](README.md)
-describes the available software. Ion is unreleased: obsolete abstractions are
-replaced, not supported through compatibility layers.
+Accepted contract, 2026-09-15, replacing the earlier task-runtime design.
+[README.md](README.md) states what the current source implements; this file states the
+contracts the maintained engine must satisfy. Ion is unreleased: obsolete abstractions
+are replaced, not supported through compatibility layers.
+
+The durable turn engine, its storage boundaries and its cancellation/recovery rules are
+implemented and covered by regressions. Not yet implemented: context compaction, reset
+and history forks, approval records, workspace binding and confinement, artifact
+publication, providers other than the scripted service, a client binary and workers.
+Where this document describes those, it describes the required shape rather than
+shipping behavior.
 
 ## Product and boundaries
 

@@ -18,5 +18,9 @@ tokio.workspace = true
 tokio-util.workspace = true
 uuid = { version = "1.24.1", features = ["v7", "serde"] }
 
+[dev-dependencies]
+rusqlite = { version = "0.40.2", features = ["bundled"] }
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+
 [lints]
 workspace = true

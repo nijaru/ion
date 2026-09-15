@@ -1,25 +1,26 @@
 //! Cross-process writable ownership of one session database.
 //!
-//! One loaded session has one authoritative writer. The commit-cursor
+//! One loaded session has one authoritative writer. A commit-cursor
 //! compare-and-set is not that: it fences a stale canonical *write*, but two
-//! processes can still both reconstruct state, both reserve recovery and both
-//! perform an external action before either discovers its cursor is stale.
+//! processes can still both reserve work and both perform an external action
+//! before either discovers its cursor is stale.
 //!
 //! The owner therefore holds an OS advisory lock on a lock file beside the
 //! database for the whole time it can write: acquired before any SQLite open,
-//! schema check or reconstruction, and released after local invocations have
-//! joined and writes are fenced. The lock is kernel-held, so process death
-//! releases it; a PID/heartbeat/timestamp file could not distinguish a live
-//! owner from a dead one and is deliberately not used.
+//! schema check or read, and released when the connection drops after local
+//! work has been joined. The lock is kernel-held, so process death releases it;
+//! a PID/heartbeat/timestamp file could not distinguish a live owner from a
+//! dead one and is deliberately not used.
 //!
-//! A future read-only inspection mode would take a *shared* lock on the same
-//! file instead of a second exclusive one; today every open is a writable
-//! owner, so the exclusive lock is the whole contract.
+//! This lock governs Ion processes. It says nothing about work a previous owner
+//! may have left running outside Ion, which is why a turn closure never claims
+//! its workspace is quiescent.
 
 use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 
 use super::StoreError;
+use crate::error::Error;
 
 /// Held for as long as this process may write to the session database.
 #[derive(Debug)]
@@ -52,7 +53,7 @@ impl Ownership {
             .truncate(false)
             .open(&path)
             .map_err(|error| {
-                StoreError::other(format!(
+                StoreError::Failed(format!(
                     "cannot open session ownership lock {}: {error}",
                     path.display()
                 ))
@@ -66,14 +67,16 @@ impl Ownership {
                     }
                 }
                 Err(TryLockError::Error(error)) => {
-                    return Err(StoreError::other(format!(
+                    return Err(StoreError::Failed(format!(
                         "cannot lock session ownership file {}: {error}",
                         path.display()
                     )));
                 }
             }
         }
-        Err(StoreError::ownership_conflict(database.to_path_buf()))
+        Err(StoreError::Rejected(Error::SessionInUse(
+            database.to_path_buf(),
+        )))
     }
 }
 
@@ -99,12 +102,10 @@ mod tests {
 
         let first = Ownership::acquire(&database).expect("first owner");
         let refused = Ownership::acquire(&database).expect_err("second owner must be refused");
-        assert!(
-            refused
-                .to_string()
-                .contains("owned by another live process"),
-            "unexpected error: {refused}"
-        );
+        assert!(matches!(
+            refused,
+            StoreError::Rejected(Error::SessionInUse(_))
+        ));
         drop(first);
 
         Ownership::acquire(&database).expect("released ownership is available again");

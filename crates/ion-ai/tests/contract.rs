@@ -1,9 +1,20 @@
 use futures_util::StreamExt;
 use ion_ai::{
-    Content, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse, ModelService,
-    ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, ResponseTermination, Role,
-    Script, ScriptedModelService, ToolCall, ToolSpec, Usage,
+    Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
+    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
+    ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolChoice, ToolSpec, Usage,
 };
+
+fn controls() -> GenerationControls {
+    GenerationControls {
+        max_output_tokens: 1024,
+        temperature: None,
+        top_p: None,
+        reasoning: Reasoning::ProviderDefault,
+        tool_choice: ToolChoice::Auto,
+        parallel_tool_calls: false,
+    }
+}
 
 fn request() -> ModelRequest {
     ModelRequest {
@@ -11,6 +22,7 @@ fn request() -> ModelRequest {
             provider: "scripted".to_owned(),
             model: "test-model".to_owned(),
         },
+        instructions: Some("be careful".to_owned()),
         messages: vec![Message {
             role: Role::User,
             content: vec![Content::Text("inspect the file".to_owned())],
@@ -25,6 +37,7 @@ fn request() -> ModelRequest {
                 "required": ["path"]
             }),
         }],
+        controls: controls(),
     }
 }
 

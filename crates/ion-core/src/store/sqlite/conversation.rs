@@ -1,202 +1,432 @@
-//! Conversation rows. Conversations are small and fully normalized, so they are
-//! reconstructed from columns rather than a payload blob.
+//! Conversation rows: creation, installation and history validation.
+//!
+//! A branch may only point at a conversation that already exists and at an
+//! entry that is visible inside it. Both rules are enforced here rather than in
+//! a Rust type, because a durable store can be corrupted or written by an older
+//! build; validation must be able to refuse it at open.
 
-use rusqlite::{Connection, params};
+use std::collections::{BTreeMap, BTreeSet};
 
-use super::{StoreError, id_from, json_from, json_to};
-use crate::conversation::InstalledConfig;
-use crate::{CommitSeq, Conversation, ConversationConfig, ConversationId, HistoryParent, TaskId};
+use rusqlite::{Connection, OptionalExtension, params};
 
-pub(crate) fn insert(
-    connection: &Connection,
-    conversation: &Conversation,
-) -> Result<(), StoreError> {
-    connection.execute(
-        "INSERT INTO conversations
-           (id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-        params![
-            conversation.id.get(),
-            conversation
-                .parent
-                .map(|parent| parent.conversation_id.get()),
-            conversation.parent.map(|parent| parent.at.get()),
-            conversation.owner_task.map(TaskId::get),
-            conversation.foreground_turn.map(TaskId::get),
-            conversation.turn_cancelled,
-            conversation.retired,
-        ],
-    )?;
-    Ok(())
-}
+use super::codec::{decode_optional, encode, id_optional};
+use super::sequence::{charge, reserve};
+use super::{SqliteStore, StoreError, id_from};
+use crate::config::{ConversationConfig, InstalledConfig};
+use crate::conversation::{Conversation, HistoryParent};
+use crate::error::Error;
+use crate::store::{Command, SessionInfo};
+use crate::{CommitSeq, ConversationId, EntryId, SessionId};
 
-/// Set or clear the conversation's foreground slot.
+/// The bounded depth an ancestry walk may take before it is refused.
 ///
-/// `task_id` is the root that currently holds the slot: it is written when a
-/// turn opens and cleared when the turn has no remaining non-terminal member.
-/// Clearing the slot also clears the turn's cancellation barrier, because the
-/// turn it belonged to is over. The conditional update is a safety net;
-/// semantic validation already happened against the resident draft.
-pub(crate) fn set_foreground_turn(
-    connection: &Connection,
-    conversation_id: ConversationId,
-    task_id: Option<TaskId>,
-    expected: Option<TaskId>,
-) -> Result<(), StoreError> {
-    let updated = connection.execute(
-        "UPDATE conversations
-         SET foreground_turn = ?2,
-             turn_cancelled = (CASE WHEN ?2 IS NULL THEN 0 ELSE turn_cancelled END)
-         WHERE id = ?1 AND foreground_turn IS ?3",
-        params![
-            conversation_id.get(),
-            task_id.map(TaskId::get),
-            expected.map(TaskId::get),
-        ],
-    )?;
-    if updated != 1 {
-        return Err(StoreError::other(format!(
-            "conversation {conversation_id} foreground slot did not match the write set"
-        )));
-    }
-    Ok(())
+/// A cycle is refused explicitly; this bound also refuses a pathologically deep
+/// but acyclic graph, so a corrupted store cannot make open cost unbounded.
+const MAX_HISTORY_DEPTH: usize = 4_096;
+
+/// Create the session metadata row and the root conversation.
+pub(crate) struct CreateSession {
+    pub(crate) session_id: SessionId,
+    pub(crate) config: ConversationConfig,
 }
 
-/// Mark the turn holding this conversation's slot as cancelled.
-pub(crate) fn set_turn_cancelled(
-    connection: &Connection,
-    conversation_id: ConversationId,
-    root: TaskId,
-) -> Result<(), StoreError> {
-    let updated = connection.execute(
-        "UPDATE conversations SET turn_cancelled = 1
-         WHERE id = ?1 AND foreground_turn = ?2",
-        params![conversation_id.get(), root.get()],
-    )?;
-    if updated != 1 {
-        return Err(StoreError::other(format!(
-            "conversation {conversation_id} was not holding turn {root}"
-        )));
+impl Command for CreateSession {
+    type Output = SessionInfo;
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        self.config
+            .validate()
+            .map_err(|error| StoreError::Rejected(error.into()))?;
+        let connection = &mut store.connection;
+        let transaction = connection.transaction()?;
+        let existing: Option<i64> = transaction
+            .query_row("SELECT id FROM session_meta WHERE id = 1", [], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        if existing.is_some() {
+            return Err(StoreError::Rejected(Error::Invalid(
+                "this database already holds a session".to_owned(),
+            )));
+        }
+        transaction.execute(
+            "INSERT INTO session_meta (id, session_id, used_bytes) VALUES (1, ?1, 0)",
+            [self.session_id.as_uuid().to_string()],
+        )?;
+        let mut reserved = reserve(&transaction, 1, true)?;
+        let root: ConversationId = reserved.next()?;
+        let revision = reserved.commit()?;
+        transaction.execute(
+            "INSERT INTO conversations (id, parent_id, parent_at, config, config_revision) \
+             VALUES (?1, NULL, NULL, ?2, ?3)",
+            params![root.get(), encode(&self.config)?, revision.get()],
+        )?;
+        transaction.execute(
+            "UPDATE session_meta SET root_conversation = ?1 WHERE id = 1",
+            [root.get()],
+        )?;
+        #[cfg(test)]
+        super::check_fault(&store.fault)?;
+        transaction.commit()?;
+        Ok(SessionInfo {
+            session_id: self.session_id,
+            root,
+            last_commit: Some(revision),
+        })
     }
-    Ok(())
 }
 
-pub(crate) fn set_retired(
-    connection: &Connection,
-    conversation_id: ConversationId,
-    retired: bool,
-) -> Result<(), StoreError> {
-    let updated = connection.execute(
-        "UPDATE conversations SET retired = ?2 WHERE id = ?1",
-        params![conversation_id.get(), retired],
-    )?;
-    if updated != 1 {
-        return Err(StoreError::other(format!(
-            "conversation {conversation_id} retirement did not match the write set"
-        )));
+/// Read the durable session identity and root conversation.
+pub(crate) struct ReadSessionInfo;
+
+impl Command for ReadSessionInfo {
+    type Output = SessionInfo;
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        store.check_readable()
     }
-    Ok(())
 }
 
-/// Install a conversation's configuration and the commit that installed it.
-///
-/// Both columns move together: a configuration without its revision could not be
-/// fenced by a replacement, and a revision without its configuration would claim
-/// a change nobody can read. The revision is the batch's own commit sequence, so
-/// the durable value cannot disagree with the commit that wrote it.
-pub(crate) fn set_config(
-    connection: &Connection,
-    conversation_id: ConversationId,
-    config: &ConversationConfig,
-    revision: CommitSeq,
-) -> Result<(), StoreError> {
-    let updated = connection.execute(
-        "UPDATE conversations SET config = ?2, config_revision = ?3 WHERE id = ?1",
-        params![conversation_id.get(), json_to(config)?, revision.get()],
-    )?;
-    if updated != 1 {
-        return Err(StoreError::other(format!(
-            "conversation {conversation_id} configuration did not match the write set"
-        )));
+/// Read the current commit cursor, used to address published observations.
+pub(crate) struct ReadCommit;
+
+impl Command for ReadCommit {
+    type Output = Option<CommitSeq>;
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        Ok(store.check_readable()?.last_commit)
     }
-    Ok(())
 }
 
-/// Every conversation with its installed configuration, if it has one.
-///
-/// The two configuration columns are read together and must agree: a row that
-/// carries only one of them was not written by a valid commit, so it is refused
-/// rather than read as a half-configured conversation.
-pub(crate) fn load(
-    connection: &Connection,
-) -> Result<Vec<(Conversation, Option<InstalledConfig>)>, StoreError> {
-    let mut statement = connection.prepare(
-        "SELECT id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired,
-                config, config_revision
-         FROM conversations ORDER BY id",
-    )?;
-    let rows = statement.query_map([], |row| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, Option<i64>>(1)?,
-            row.get::<_, Option<i64>>(2)?,
-            row.get::<_, Option<i64>>(3)?,
-            row.get::<_, Option<i64>>(4)?,
-            row.get::<_, bool>(5)?,
-            row.get::<_, bool>(6)?,
-            row.get::<_, Option<String>>(7)?,
-            row.get::<_, Option<i64>>(8)?,
-        ))
-    })?;
+/// Replace a conversation's configuration as one complete record.
+pub(crate) struct ConfigureConversation {
+    pub(crate) conversation: ConversationId,
+    pub(crate) expected: Option<CommitSeq>,
+    pub(crate) config: ConversationConfig,
+}
 
-    let mut conversations = Vec::new();
-    for row in rows {
-        let (
-            id,
-            parent_id,
-            parent_at,
-            owner_task,
-            foreground_turn,
-            turn_cancelled,
-            retired,
+impl Command for ConfigureConversation {
+    type Output = CommitSeq;
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        self.config
+            .validate()
+            .map_err(|error| StoreError::Rejected(error.into()))?;
+        let connection = &mut store.connection;
+        let transaction = connection.transaction()?;
+        let current: Option<Option<i64>> = transaction
+            .query_row(
+                "SELECT config_revision FROM conversations WHERE id = ?1",
+                [self.conversation.get()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(current) = current else {
+            return Err(StoreError::Rejected(Error::Invalid(format!(
+                "conversation {} does not exist",
+                self.conversation
+            ))));
+        };
+        let current = id_optional::<CommitSeq>(current)?;
+        if let Some(expected) = self.expected
+            && current != Some(expected)
+        {
+            return Err(StoreError::Rejected(Error::StaleConfig {
+                expected,
+                actual: current,
+            }));
+        }
+        let reserved = reserve(&transaction, 0, true)?;
+        let revision = reserved.commit()?;
+        transaction.execute(
+            "UPDATE conversations SET config = ?2, config_revision = ?3 WHERE id = ?1",
+            params![
+                self.conversation.get(),
+                encode(&self.config)?,
+                revision.get()
+            ],
+        )?;
+        #[cfg(test)]
+        super::check_fault(&store.fault)?;
+        transaction.commit()?;
+        Ok(revision)
+    }
+}
+
+/// Read one conversation, refusing a record this build cannot decode.
+pub(crate) struct ReadConversation {
+    pub(crate) conversation: ConversationId,
+}
+
+impl Command for ReadConversation {
+    type Output = Option<Conversation>;
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        let connection = &store.connection;
+        let row = connection
+            .query_row(
+                "SELECT parent_id, parent_at, config, config_revision \
+                 FROM conversations WHERE id = ?1",
+                [self.conversation.get()],
+                |row| {
+                    Ok((
+                        row.get::<_, Option<i64>>(0)?,
+                        row.get::<_, Option<i64>>(1)?,
+                        row.get::<_, Option<String>>(2)?,
+                        row.get::<_, Option<i64>>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((parent_id, parent_at, config, revision)) = row else {
+            return Ok(None);
+        };
+        let parent_id = id_optional::<ConversationId>(parent_id)?;
+        let parent_at = id_optional::<EntryId>(parent_at)?;
+        let parent = parent_id
+            .map(|conversation_id| {
+                let at = parent_at.ok_or_else(|| {
+                    Error::Corrupt(format!(
+                        "conversation {} has a history parent without a cutoff",
+                        self.conversation
+                    ))
+                })?;
+                Ok::<_, Error>(HistoryParent {
+                    conversation_id,
+                    at,
+                })
+            })
+            .transpose()
+            .map_err(StoreError::Rejected)?;
+        let config = match decode_optional::<ConversationConfig>(config)? {
+            Some(config) => {
+                let raw = revision.ok_or_else(|| {
+                    StoreError::Rejected(Error::Corrupt(format!(
+                        "conversation {} stores a configuration without a revision",
+                        self.conversation
+                    )))
+                })?;
+                Some(InstalledConfig::new(id_from::<CommitSeq>(raw)?, config))
+            }
+            None => None,
+        };
+        Ok(Some(Conversation {
+            id: self.conversation,
+            parent,
             config,
-            config_revision,
-        ) = row?;
-        let config = match (config, config_revision) {
-            (Some(config), Some(revision)) => Some(InstalledConfig::new(
-                id_from(revision)?,
-                json_from::<ConversationConfig>(&config)?,
-            )),
-            (None, None) => None,
-            _ => {
-                return Err(StoreError::other(format!(
-                    "conversation {id} has a partial configuration"
-                )));
-            }
-        };
-        let parent = match (parent_id, parent_at) {
-            (Some(conversation_id), Some(at)) => Some(HistoryParent {
-                conversation_id: id_from(conversation_id)?,
-                at: id_from(at)?,
-            }),
-            (None, None) => None,
-            _ => {
-                return Err(StoreError::other(format!(
-                    "conversation {id} has a partial history parent"
-                )));
-            }
-        };
-        conversations.push((
-            Conversation {
-                id: id_from(id)?,
-                parent,
-                owner_task: owner_task.map(id_from).transpose()?,
-                foreground_turn: foreground_turn.map(id_from).transpose()?,
-                turn_cancelled,
-                retired,
+        }))
+    }
+}
+
+/// Validate every history edge in the store.
+///
+/// Open runs this before the session can be used: a store with a cycle, a
+/// missing parent or a cutoff that is not visible in its source is refused
+/// rather than traversed.
+pub(crate) struct ValidateAncestry;
+
+impl Command for ValidateAncestry {
+    type Output = ();
+
+    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError> {
+        validate_ancestry(&store.connection)
+    }
+}
+
+/// The remaining content budget after a charge, or a quota refusal.
+pub(crate) fn charge_or_refuse(
+    connection: &Connection,
+    limits: crate::limits::SessionLimits,
+    size: u64,
+    settlement: bool,
+) -> Result<u64, StoreError> {
+    let used = super::sequence::used_bytes(connection)?;
+    let admits = if settlement {
+        limits.admits_settlement(used, size)
+    } else {
+        limits.admits(used, size)
+    };
+    if !admits {
+        return Err(StoreError::Rejected(Error::QuotaExhausted {
+            used,
+            quota: if settlement {
+                limits.quota_bytes
+            } else {
+                limits.admission_ceiling()
             },
-            config,
-        ));
+        }));
     }
-    Ok(conversations)
+    charge(connection, size)
+}
+
+/// Validate one stored history edge.
+///
+/// Every failure here is corruption, not a client mistake: no command writes
+/// these rows, so an edge that cannot be satisfied means the store itself is
+/// not usable and must be refused rather than traversed.
+fn validate_parent(connection: &Connection, parent: HistoryParent) -> Result<(), StoreError> {
+    let exists: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM conversations WHERE id = ?1",
+            [parent.conversation_id.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if exists.is_none() {
+        return Err(StoreError::Rejected(Error::Corrupt(format!(
+            "conversation {} has missing history parent {}",
+            parent.at, parent.conversation_id
+        ))));
+    }
+    let owner: Option<Option<i64>> = connection
+        .query_row(
+            "SELECT conversation_id FROM entries WHERE id = ?1",
+            [parent.at.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    match owner {
+        Some(Some(owner)) if owner == parent.conversation_id.get() => Ok(()),
+        Some(Some(_)) => Err(StoreError::Rejected(Error::Corrupt(format!(
+            "cutoff {} is not visible in conversation {}",
+            parent.at, parent.conversation_id
+        )))),
+        _ => Err(StoreError::Rejected(Error::Corrupt(format!(
+            "cutoff {} does not exist",
+            parent.at
+        )))),
+    }
+}
+
+fn validate_ancestry(connection: &Connection) -> Result<(), StoreError> {
+    let mut statement = connection.prepare("SELECT id, parent_id, parent_at FROM conversations")?;
+    let mut rows = statement.query([])?;
+    let mut edges: BTreeMap<i64, Option<(i64, Option<i64>)>> = BTreeMap::new();
+    while let Some(row) = rows.next()? {
+        let id: i64 = row.get(0)?;
+        let parent: Option<i64> = row.get(1)?;
+        let at: Option<i64> = row.get(2)?;
+        edges.insert(id, parent.map(|parent| (parent, at)));
+    }
+    for id in edges.keys() {
+        let mut seen = BTreeSet::new();
+        let mut current = Some(*id);
+        let mut depth = 0usize;
+        while let Some(node) = current {
+            if !seen.insert(node) {
+                return Err(StoreError::Rejected(Error::Corrupt(format!(
+                    "conversation {node} is its own ancestor"
+                ))));
+            }
+            depth += 1;
+            if depth > MAX_HISTORY_DEPTH {
+                return Err(StoreError::Rejected(Error::Corrupt(
+                    "conversation history is nested more deeply than this build supports"
+                        .to_owned(),
+                )));
+            }
+            current = match edges.get(&node) {
+                Some(Some((parent, at))) => {
+                    let Some(at) = at else {
+                        return Err(StoreError::Rejected(Error::Corrupt(format!(
+                            "conversation {node} has a history parent without a cutoff"
+                        ))));
+                    };
+                    validate_parent(
+                        connection,
+                        HistoryParent {
+                            conversation_id: ConversationId::try_from(*parent).map_err(
+                                |error| {
+                                    StoreError::Rejected(Error::Corrupt(format!(
+                                        "invalid history parent {parent}: {error}"
+                                    )))
+                                },
+                            )?,
+                            at: EntryId::try_from(*at).map_err(|error| {
+                                StoreError::Rejected(Error::Corrupt(format!(
+                                    "invalid cutoff {at}: {error}"
+                                )))
+                            })?,
+                        },
+                    )?;
+                    Some(*parent)
+                }
+                Some(None) => None,
+                None => {
+                    return Err(StoreError::Rejected(Error::Corrupt(format!(
+                        "conversation {node} does not exist"
+                    ))));
+                }
+            };
+        }
+    }
+    Ok(())
+}
+
+/// Read and decode an installed configuration, if any.
+pub(crate) fn read_config(
+    connection: &Connection,
+    conversation: ConversationId,
+) -> Result<Option<InstalledConfig>, StoreError> {
+    let row: Option<(Option<String>, Option<i64>)> = connection
+        .query_row(
+            "SELECT config, config_revision FROM conversations WHERE id = ?1",
+            [conversation.get()],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((config, revision)) = row else {
+        return Ok(None);
+    };
+    match decode_optional::<ConversationConfig>(config)? {
+        Some(config) => {
+            let raw = revision.ok_or_else(|| {
+                StoreError::Rejected(Error::Corrupt(
+                    "stored configuration has no revision".to_owned(),
+                ))
+            })?;
+            Ok(Some(InstalledConfig::new(
+                id_from::<CommitSeq>(raw)?,
+                config,
+            )))
+        }
+        None => Ok(None),
+    }
+}
+
+/// One entry about to be appended.
+pub(crate) struct NewEntry<'a> {
+    pub(crate) id: crate::EntryId,
+    pub(crate) conversation: ConversationId,
+    pub(crate) kind: &'a crate::EntryKind,
+    pub(crate) data: &'a serde_json::Value,
+    pub(crate) projection: &'a [ion_ai::Message],
+}
+
+/// Append one transcript entry and charge its content budget.
+///
+/// `settlement` selects the reserved allowance: an outcome that has already
+/// happened must be recordable even when ordinary admission growth is refused.
+pub(crate) fn insert_entry(
+    connection: &Connection,
+    entry: NewEntry<'_>,
+    limits: crate::limits::SessionLimits,
+    settlement: bool,
+) -> Result<(), StoreError> {
+    let encoded = encode(entry.data)?;
+    let projected = encode(&entry.projection.to_vec())?;
+    let size = (encoded.len() + projected.len()) as u64;
+    charge_or_refuse(connection, limits, size, settlement)?;
+    connection.execute(
+        "INSERT INTO entries (id, conversation_id, kind, data, projection) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            entry.id.get(),
+            entry.conversation.get(),
+            entry.kind.as_str(),
+            encoded,
+            projected
+        ],
+    )?;
+    Ok(())
 }

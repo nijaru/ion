@@ -1,4 +1,4 @@
-//! Open policy, pragmas and session identity for the per-session database.
+//! Open policy, pragmas and session identity.
 //!
 //! Durability floor: WAL journalling with `synchronous = FULL`. A committed
 //! transaction is therefore durable across process death and OS failure to the
@@ -7,10 +7,13 @@
 
 use std::path::Path;
 
-use rusqlite::{Connection, OpenFlags};
+use rusqlite::{Connection, OpenFlags, OptionalExtension};
 
 use super::StoreError;
-use crate::SessionId;
+use crate::error::Error;
+use crate::id::IdError;
+use crate::store::SessionInfo;
+use crate::{CommitSeq, ConversationId, SessionId};
 
 fn configure(connection: &Connection) -> Result<(), StoreError> {
     // The journal mode is a persistent property of the database file, and
@@ -45,52 +48,71 @@ pub(crate) fn open(path: &Path) -> Result<Connection, StoreError> {
     Ok(connection)
 }
 
-/// Record the owning session identity on a freshly created database.
-pub(crate) fn record_session_id(
-    connection: &Connection,
-    session_id: SessionId,
-) -> Result<(), StoreError> {
-    let inserted = connection.execute(
-        "INSERT INTO session_meta (id, session_id) VALUES (1, ?1)",
-        [session_id.as_uuid().to_string()],
-    )?;
-    if inserted != 1 {
-        return Err(StoreError::other(
-            "session metadata was not created".to_owned(),
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn read_session_id(connection: &Connection) -> Result<SessionId, StoreError> {
-    let raw: String = connection.query_row(
-        "SELECT session_id FROM session_meta WHERE id = 1",
-        [],
-        |row| row.get(0),
-    )?;
-    raw.parse()
-        .map_err(|error| StoreError::other(format!("invalid session id in database: {error}")))
-}
-
-/// Metadata read during reconstruction.
+/// Session metadata as stored on the single `session_meta` row.
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct Meta {
-    pub(crate) last_seq: Option<i64>,
+    pub(crate) session_id: SessionId,
     pub(crate) last_commit: Option<i64>,
-    pub(crate) root_conversation: Option<i64>,
+    pub(crate) root: Option<i64>,
 }
 
 pub(crate) fn read_meta(connection: &Connection) -> Result<Meta, StoreError> {
-    let meta = connection.query_row(
-        "SELECT last_seq, last_commit, root_conversation FROM session_meta WHERE id = 1",
-        [],
-        |row| {
-            Ok(Meta {
-                last_seq: row.get(0)?,
-                last_commit: row.get(1)?,
-                root_conversation: row.get(2)?,
+    let row = connection
+        .query_row(
+            "SELECT session_id, last_commit, root_conversation \
+             FROM session_meta WHERE id = 1",
+            [],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, Option<i64>>(1)?,
+                    row.get::<_, Option<i64>>(2)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((session_id, last_commit, root)) = row else {
+        return Err(StoreError::Rejected(Error::Corrupt(
+            "session metadata is missing; the database was never initialized".to_owned(),
+        )));
+    };
+    let session_id = session_id.parse::<SessionId>().map_err(|error| {
+        StoreError::Rejected(Error::Corrupt(format!("invalid session id: {error}")))
+    })?;
+    Ok(Meta {
+        session_id,
+        last_commit,
+        root,
+    })
+}
+
+pub(crate) fn read_info(connection: &Connection) -> Result<SessionInfo, StoreError> {
+    let meta = read_meta(connection)?;
+    let root = meta
+        .root
+        .ok_or_else(|| {
+            StoreError::Rejected(Error::Corrupt(
+                "session has no root conversation".to_owned(),
+            ))
+        })
+        .and_then(|raw| {
+            ConversationId::try_from(raw).map_err(|error: IdError| {
+                StoreError::Rejected(Error::Corrupt(format!(
+                    "invalid root conversation: {error}"
+                )))
             })
-        },
-    )?;
-    Ok(meta)
+        })?;
+    let last_commit = meta
+        .last_commit
+        .map(|raw| {
+            CommitSeq::try_from(raw).map_err(|error: IdError| {
+                StoreError::Rejected(Error::Corrupt(format!("invalid commit cursor: {error}")))
+            })
+        })
+        .transpose()?;
+    Ok(SessionInfo {
+        session_id: meta.session_id,
+        root,
+        last_commit,
+    })
 }

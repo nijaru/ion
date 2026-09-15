@@ -1,913 +1,166 @@
-use std::collections::VecDeque;
+//! The session owner.
+//!
+//! Creating or opening a session establishes durable ownership and starts the
+//! command service. It starts no model or tool work: opening is passive, and a
+//! turn advances only when a client submits or resumes one.
 
-use serde_json::Value;
+use std::path::Path;
+use std::sync::Arc;
 
-use crate::session::command::{
-    AdmissionReceipt, CancellationReceipt, ConversationReceipt, ConversationSpec, EntryReceipt,
-    EntryRequest, InputReceipt, InputRequest, InvocationReceipt, SessionError, TaskReceipt,
-    TaskRequest, TurnCancellation,
-};
-use crate::session::state::{RunnableTask, SessionState, StateError};
-use crate::session::transaction::Transaction;
-use crate::store::{MemoryStore, Persistence};
-use crate::view::{
-    CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
-};
-use crate::{
-    CommitSeq, ConversationId, DependencyOutcome, InputId, InvocationKind, PlacedInput,
-    RequestBasis, RequestKey, SessionId, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
-};
+use tokio::sync::{broadcast, mpsc, oneshot};
 
-#[cfg(test)]
-#[path = "persistence_tests.rs"]
-mod persistence_tests;
+use super::command::Request;
+use super::handle::SessionHandle;
+use super::supervisor::{Services, Shared, Supervisor};
+use crate::config::ConversationConfig;
+use crate::error::{Error, Result};
+use crate::limits::SessionLimits;
+use crate::store::sqlite::SqliteStore;
+use crate::store::sqlite::conversation::{CreateSession, ReadSessionInfo, ValidateAncestry};
+use crate::store::{Db, SessionInfo, StoreError};
+use crate::{ConversationId, SessionId};
 
-const OBSERVATION_CAPACITY: usize = 128;
+/// How far behind an observer may fall before it is told to resnapshot.
+const EVENT_CAPACITY: usize = 1_024;
 
-/// The durable result of settling one task.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TaskSettlement<T> {
-    pub(crate) value: T,
-    pub(crate) commit_seq: CommitSeq,
-    /// Conversations whose foreground slot this settlement released. Idle
-    /// scheduling is scoped to exactly these, so a settlement that released
-    /// nothing cannot start unrelated queued work.
-    pub(crate) released_turns: Vec<ConversationId>,
+/// The parameters a new session is created with.
+#[derive(Debug, Clone)]
+pub struct SessionSpec {
+    pub limits: SessionLimits,
+    /// The primary conversation's initial configuration.
+    pub config: ConversationConfig,
 }
 
-#[derive(Debug)]
+impl SessionSpec {
+    pub fn validate(&self) -> Result<()> {
+        self.limits
+            .validate()
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        self.config.validate()?;
+        Ok(())
+    }
+}
+
+/// One durable session and its supervisor.
 pub struct Session {
-    state: SessionState,
-    store: Box<dyn Persistence>,
-    closed: bool,
-    fault: tokio_util::sync::CancellationToken,
-    observations: VecDeque<CommitEvent>,
-    dropped_through: Option<CommitSeq>,
-    /// The earliest commit this session can serve a delta for.
-    ///
-    /// A live session observes every commit it makes, so it can answer any cursor
-    /// it ever issued. A reopened session instead learned its history from the
-    /// store: commits up to the loaded one happened before this process existed
-    /// and their events were never published here, so a cursor that predates that
-    /// boundary must resnapshot rather than receive an empty delta.
-    coverage_start: Option<CommitSeq>,
-    changes: tokio::sync::watch::Sender<()>,
+    shared: Arc<Shared>,
+    requests: mpsc::Sender<Request>,
+    supervisor: Option<tokio::task::JoinHandle<()>>,
+    info: SessionInfo,
+}
+
+impl std::fmt::Debug for Session {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("Session")
+            .field("session_id", &self.info.session_id)
+            .field("root", &self.info.root)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Session {
-    pub fn new() -> Result<Self, SessionError> {
-        Self::with_id(SessionId::new())
-    }
-
-    /// Create a new on-disk session at `path`.
-    ///
-    /// The file gets a fresh schema; an existing database is refused rather
-    /// than overwritten. Commits from this point survive process death.
-    pub fn create(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
-        let session_id = SessionId::new();
-        let store = crate::store::sqlite::SqliteStore::create(path.as_ref(), session_id)
-            .map_err(crate::store::StoreError::into_session_error)?;
-        Self::with_store(session_id, Box::new(store))
-    }
-
-    /// Open an existing on-disk session.
-    ///
-    /// This reads durable records only. A task that was running when the
-    /// process died stays `Running` and requires an explicit recovery drive, so
-    /// opening a session never starts work.
-    pub fn open(path: impl AsRef<std::path::Path>) -> Result<Self, SessionError> {
-        let (store, state) = crate::store::sqlite::SqliteStore::open(path.as_ref())
-            .map_err(crate::store::StoreError::into_session_error)?;
-        let mut session = Self::from_state(state, Box::new(store));
-        // Coverage begins at the commit this process loaded: everything before it
-        // was reconstructed, not observed, so a cursor pointing into that history
-        // cannot be answered from here.
-        session.coverage_start = session.state.last_commit;
-        Ok(session)
-    }
-
-    pub fn with_id(session_id: SessionId) -> Result<Self, SessionError> {
-        Self::with_store(session_id, Box::new(MemoryStore::new()))
-    }
-
-    /// Build a session over an explicit persistence sink. Tests use it to
-    /// verify that a committed write set reconstructs resident semantics; K4
-    /// reopen uses the same seam to install a reconstructed store.
-    pub(crate) fn with_store(
-        session_id: SessionId,
-        store: Box<dyn Persistence>,
-    ) -> Result<Self, SessionError> {
-        let mut session = Self::from_state(SessionState::empty(session_id), store);
-        session.transact(|transaction| transaction.create_root())?;
-        Ok(session)
-    }
-
-    /// Build a session over already-reconstructed resident state.
-    fn from_state(state: SessionState, store: Box<dyn Persistence>) -> Self {
-        Self {
-            state,
-            store,
-            closed: false,
-            fault: tokio_util::sync::CancellationToken::new(),
-            observations: VecDeque::new(),
-            dropped_through: None,
-            coverage_start: None,
-            changes: tokio::sync::watch::channel(()).0,
-        }
-    }
-
-    #[must_use]
-    pub fn session_id(&self) -> SessionId {
-        self.state.session_id
-    }
-
-    #[must_use]
-    pub fn root_conversation(&self) -> ConversationId {
-        self.state
-            .root_conversation
-            .expect("initialized session has root conversation")
-    }
-
-    pub fn create_conversation(
-        &mut self,
-        spec: ConversationSpec,
-    ) -> Result<ConversationReceipt, SessionError> {
-        let (conversation_id, commit_seq) =
-            self.transact(|transaction| transaction.create_conversation(spec))?;
-        Ok(ConversationReceipt {
-            conversation_id,
-            commit_seq,
-        })
-    }
-
-    pub fn append_entry(&mut self, request: EntryRequest) -> Result<EntryReceipt, SessionError> {
-        let (entry_id, commit_seq) =
-            self.transact(|transaction| transaction.append_entry(request))?;
-        Ok(EntryReceipt {
-            entry_id,
-            commit_seq,
-        })
-    }
-
-    pub fn create_task(&mut self, request: TaskRequest) -> Result<TaskReceipt, SessionError> {
-        let (task_id, commit_seq) =
-            self.transact(|transaction| transaction.create_task(request))?;
-        Ok(TaskReceipt {
-            task_id,
-            commit_seq,
-        })
-    }
-
-    /// Start a new foreground turn on `request.conversation_id`. The created
-    /// task is the turn root; successors created by its finalization plan
-    /// inherit the turn. Rejects if the conversation already has a live turn.
-    pub fn create_turn(&mut self, request: TaskRequest) -> Result<TaskReceipt, SessionError> {
-        let (task_id, commit_seq) =
-            self.transact(|transaction| transaction.create_turn(request))?;
-        Ok(TaskReceipt {
-            task_id,
-            commit_seq,
-        })
-    }
-
-    /// Cancel every non-terminal task scoped to the foreground turn rooted at
-    /// `root`. Returns the affected task ids so the driver can signal local
-    /// invocations. Durable cancellation is committed before any signal.
-    pub(crate) fn cancel_turn(&mut self, root: TaskId) -> Result<TurnCancellation, SessionError> {
-        self.ensure_open()?;
-        let (cancelled, commit_seq) = self.transact(|transaction| transaction.cancel_turn(root))?;
-        Ok(TurnCancellation {
-            commit_seq,
-            cancelled,
-        })
-    }
-
-    pub fn queue_input(&mut self, request: InputRequest) -> Result<InputReceipt, SessionError> {
-        self.ensure_open()?;
-        if let Some(key) = request.request_key.as_ref()
-            && let Some(receipt) = self.replay_input(key, &request)?
-        {
-            return Ok(receipt);
-        }
-
-        let (input_id, commit_seq) =
-            self.transact(|transaction| transaction.queue_input(request))?;
-        Ok(InputReceipt {
-            input_id,
-            commit_seq,
-            replayed: false,
-        })
-    }
-
-    /// Install a conversation's complete generation configuration, in one
-    /// commit.
-    ///
-    /// `expected` is the revision the caller read; `None` asserts the
-    /// conversation is unconfigured. The returned commit is the revision to
-    /// present on the next replacement, so two callers cannot silently overwrite
-    /// each other. A configuration is validated before anything is written, and
-    /// a retired conversation refuses one.
-    pub fn configure_conversation(
-        &mut self,
-        conversation_id: ConversationId,
-        expected: Option<CommitSeq>,
-        config: crate::ConversationConfig,
-    ) -> Result<CommitSeq, SessionError> {
-        self.transact(|transaction| {
-            transaction.configure_conversation(conversation_id, expected, config)
-        })
-        .map(|(_, commit_seq)| commit_seq)
-    }
-
-    /// The configuration installed on a conversation, with its revision.
-    ///
-    /// `None` means the conversation has never been configured, which is a
-    /// distinct answer from "configured with empty instructions": configuration
-    /// is optional, and generation refuses an unconfigured conversation rather
-    /// than choosing a model for it.
-    #[must_use]
-    pub fn conversation_config(
-        &self,
-        conversation_id: ConversationId,
-    ) -> Option<crate::InstalledConfig> {
-        self.state.installed_config(conversation_id)
-    }
-
-    /// Retire an owned conversation into a read-only archive, in one commit.
-    ///
-    /// Retirement requires quiescence: the conversation must be an owned worker
-    /// with no foreground turn and no non-terminal task. Input that was queued
-    /// but never started is cancelled in the same commit, because retirement
-    /// stops future work; history, ownership, terminal outcomes and checkpoints
-    /// are preserved, and it is idempotent.
-    pub fn retire_conversation(
-        &mut self,
-        conversation_id: ConversationId,
-    ) -> Result<CommitSeq, SessionError> {
-        self.transact(|transaction| transaction.retire_conversation(conversation_id))
-            .map(|(_, commit_seq)| commit_seq)
-    }
-
-    /// Reactivate a retired conversation. It starts no work and resurrects no
-    /// input; the caller drives anything it wants to happen next.
-    pub fn reactivate_conversation(
-        &mut self,
-        conversation_id: ConversationId,
-    ) -> Result<CommitSeq, SessionError> {
-        self.transact(|transaction| transaction.reactivate_conversation(conversation_id))
-            .map(|(_, commit_seq)| commit_seq)
-    }
-
-    /// The earliest queued input of `conversation_id` whose mode starts a turn,
-    /// if the conversation currently holds no foreground turn.
-    pub(crate) fn next_schedulable_input(
-        &self,
-        conversation_id: ConversationId,
-    ) -> Option<InputId> {
-        let conversation = self.state.conversations.get(&conversation_id)?;
-        if conversation.foreground_turn.is_some() {
-            return None;
-        }
-        // Only queued inputs are candidates, and the index keeps them in
-        // admission order, so the earliest one that starts a turn wins.
-        self.state
-            .queued
-            .iter()
-            .find(|input_id| {
-                self.state.inputs.get(input_id).is_some_and(|input| {
-                    input.target == conversation_id && crate::session::idle::starts_turn(input.mode)
-                })
+    /// Create a new session database and its primary conversation.
+    pub async fn create(path: &Path, spec: SessionSpec, services: Services) -> Result<Self> {
+        spec.validate()?;
+        let store = SqliteStore::create(path).map_err(StoreError::into_error)?;
+        let db = Db::start(store, spec.limits).map_err(|error| error.into_error())?;
+        let info = db
+            .run(CreateSession {
+                session_id: SessionId::new(),
+                config: spec.config,
             })
-            .copied()
+            .await
+            .map_err(StoreError::into_error)?;
+        db.run(ValidateAncestry)
+            .await
+            .map_err(StoreError::into_error)?;
+        Ok(Self::start(db, info, spec.limits, services))
     }
 
-    /// Bind an already-queued input to a new turn in one commit, placing its
-    /// entry in the same commit.
-    pub(crate) fn bind_turn_for_input(
-        &mut self,
-        input_id: InputId,
-        turn: TaskRequest,
-    ) -> Result<TaskId, SessionError> {
-        self.transact(|transaction| transaction.bind_turn_for_input(input_id, turn))
-            .map(|(task_id, _)| task_id)
+    /// Open an existing session. Nothing is resumed and nothing is started.
+    pub async fn open(path: &Path, limits: SessionLimits, services: Services) -> Result<Self> {
+        limits
+            .validate()
+            .map_err(|error| Error::Invalid(error.to_string()))?;
+        let store = SqliteStore::open(path).map_err(StoreError::into_error)?;
+        let db = Db::start(store, limits).map_err(|error| error.into_error())?;
+        let info = db
+            .run(ReadSessionInfo)
+            .await
+            .map_err(StoreError::into_error)?;
+        // A store with a cycle, a missing parent or an invisible cutoff is
+        // refused before any client can traverse it.
+        db.run(ValidateAncestry)
+            .await
+            .map_err(StoreError::into_error)?;
+        Ok(Self::start(db, info, limits, services))
     }
 
-    /// Start a new answer attempt for a placed input, in one commit.
-    pub fn retry_input(
-        &mut self,
-        input_id: InputId,
-        expected_turn: TaskId,
-        turn: TaskRequest,
-    ) -> Result<TaskId, SessionError> {
-        self.transact(|transaction| transaction.retry_input(input_id, expected_turn, turn))
-            .map(|(task_id, _)| task_id)
-    }
-
-    /// Record that a placed input will not be answered again.
-    pub fn abandon_input(
-        &mut self,
-        input_id: InputId,
-        expected_turn: TaskId,
-    ) -> Result<CommitSeq, SessionError> {
-        self.transact(|transaction| transaction.abandon_input(input_id, expected_turn))
-            .map(|(_, commit_seq)| commit_seq)
-    }
-
-    /// Admit an input and apply the mode/state admission policy for its
-    /// conversation, in one commit.
-    ///
-    /// `turn` supplies the turn to start when the policy starts one; a mode that
-    /// only queues does not need it, and an idle conversation that must answer a
-    /// turn-starting mode without one is refused. A duplicate request key replays
-    /// the original admission without a new commit. Nothing is driven here:
-    /// admitting work never starts it.
-    pub fn admit_input(
-        &mut self,
-        input: InputRequest,
-        turn: Option<TaskRequest>,
-    ) -> Result<AdmissionReceipt, SessionError> {
-        self.ensure_open()?;
-        if let Some(turn) = turn.as_ref()
-            && turn.conversation_id != input.target
-        {
-            return Err(SessionError::InputTargetMismatch {
-                input: input.target,
-                task: turn.conversation_id,
-            });
-        }
-        if let Some(key) = input.request_key.as_ref()
-            && let Some(receipt) = self.replay_admission(key, &input)?
-        {
-            return Ok(receipt);
-        }
-
-        let ((input_id, task_id), commit_seq) =
-            self.transact(|transaction| transaction.admit_input(input, turn))?;
-        Ok(AdmissionReceipt {
-            input_id,
-            task_id,
-            commit_seq,
-            replayed: false,
-        })
-    }
-
-    /// Whether a task wait should resolve: terminal, cancelled, or fully
-    /// unblocked. Kept on the state owner so the wait and dispatch paths cannot
-    /// drift apart.
-    pub(crate) fn ready_to_run(&self, task: &TaskRecord) -> bool {
-        self.state.ready(task)
-    }
-
-    /// Pending work that `settled` just made runnable. Readiness only; the
-    /// driver decides whether a candidate has an implementation to run.
-    pub(crate) fn runnable_successors(
-        &self,
-        settled: TaskId,
-        created: &[TaskId],
-    ) -> Vec<RunnableTask> {
-        self.state.runnable_successors(settled, created)
-    }
-
-    /// The committed outcomes of a task's fixed dependencies, in dependency
-    /// order. A dependency that is not terminal is a broken invariant rather
-    /// than an absence: reservation already required terminal dependencies.
-    pub(crate) fn dependency_outcomes(
-        &self,
-        task_id: TaskId,
-    ) -> Result<Vec<DependencyOutcome>, SessionError> {
-        let task = self
-            .state
-            .tasks
-            .get(&task_id)
-            .ok_or(SessionError::UnknownTask(task_id))?;
-        let mut outcomes = Vec::with_capacity(task.dependencies.len());
-        for dependency in &task.dependencies {
-            let record = self
-                .state
-                .tasks
-                .get(dependency)
-                .ok_or(SessionError::UnknownTask(*dependency))?;
-            let TaskStatus::Terminal(outcome) = &record.status else {
-                return Err(SessionError::Invariant(format!(
-                    "dependency {dependency} of task {task_id} is not terminal"
-                )));
-            };
-            outcomes.push(DependencyOutcome {
-                task_id: record.id,
-                kind: record.kind.clone(),
-                outcome: outcome.clone(),
-                output: record.output.clone(),
-            });
-        }
-        Ok(outcomes)
-    }
-
-    /// The placed inputs whose turn is `turn`, in admission order.
-    ///
-    /// The placement is the binding, so a task can only see inputs admitted for
-    /// its own turn. This is the provenance read the generation kind uses instead
-    /// of receiving a session handle or an input id it could widen: the entry is
-    /// the content authority, and this says which accepted input a request
-    /// included.
-    pub(crate) fn placed_inputs(&self, turn: TaskId) -> Vec<crate::Input> {
-        self.state
-            .inputs
-            .values()
-            .filter(|input| {
-                input
-                    .disposition
-                    .placement()
-                    .is_some_and(|placement| placement.turn == turn)
-            })
-            .map(|input| (**input).clone())
-            .collect()
-    }
-
-    /// The member that closed `root`'s turn, if that turn has completed.
-    #[must_use]
-    pub fn turn_closed_by(&self, root: TaskId) -> Option<TaskId> {
-        self.state.tasks.get(&root)?.turn_closed_by
-    }
-
-    /// One conversation record, without materializing the rest of the session.
-    #[must_use]
-    pub fn conversation_record(
-        &self,
-        conversation_id: ConversationId,
-    ) -> Option<crate::Conversation> {
-        self.state
-            .conversations
-            .get(&conversation_id)
-            .map(|conversation| **conversation)
-    }
-
-    /// The conversations `task_id` owns, in creation order.
-    ///
-    /// This is how a client finds the worker a spawn created: planned
-    /// conversation IDs only exist after the commit that created them.
-    #[must_use]
-    pub fn owned_conversations(&self, task_id: TaskId) -> Option<Vec<ConversationId>> {
-        self.state
-            .tasks
-            .get(&task_id)
-            .map(|task| task.owned_conversations.clone())
-    }
-
-    /// Bounded overview: counts only, no transcript or task payloads.
-    #[must_use]
-    pub fn summary(&self) -> SessionSummary {
-        let state = &self.state;
-        let mut tasks = TaskCounts::default();
-        for task in state.tasks.values() {
-            match task.status {
-                TaskStatus::Pending => tasks.pending += 1,
-                TaskStatus::Running => tasks.running += 1,
-                TaskStatus::Terminal(_) => tasks.terminal += 1,
-            }
-        }
-        SessionSummary {
-            session_id: state.session_id,
-            root_conversation: state
-                .root_conversation
-                .expect("initialized session has root conversation"),
-            last_commit: state
-                .last_commit
-                .expect("initialized session has first commit"),
-            conversations: state.conversations.len(),
-            entries: state.entries.len(),
-            inputs: state.inputs.len(),
-            tasks,
-        }
-    }
-
-    /// Read one bounded page of a conversation's fork-visible transcript.
-    /// `after` is exclusive and must be visible; a returned cursor stays valid
-    /// while the transcript remains append-only at that range.
-    ///
-    /// A page costs the page plus this conversation's ancestry, not the whole
-    /// session: reading a transcript in pages must not materialize it once per
-    /// page, or a complete read becomes quadratic in transcript length.
-    pub fn conversation_entries(
-        &self,
-        conversation_id: ConversationId,
-        after: Option<crate::EntryId>,
-        limit: usize,
-    ) -> Result<EntryPage, SessionError> {
-        let (page, more) = self
-            .state
-            .visible_page(conversation_id, after, limit)
-            .map_err(|error| match error {
-                StateError::InvisibleCursor(cursor) => {
-                    SessionError::InvisibleContextReference(cursor)
-                }
-                other => SessionError::Invariant(other.to_string()),
-            })?;
-        // Only the page's payloads are cloned.
-        let entries: Vec<_> = page
-            .into_iter()
-            .map(|id| {
-                self.state.entry(id).cloned().ok_or_else(|| {
-                    SessionError::Invariant(format!("visible entry {id} has no record"))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let next = more.then(|| entries.last().expect("a truncated page is non-empty").id);
-        Ok(EntryPage { entries, next })
-    }
-
-    /// Capture the transcript boundary and placed inputs one invocation reads
-    /// at, in a single read of committed state.
-    ///
-    /// A request basis exists so that paging happens *inside* a boundary: the
-    /// cutoff is decided before the first page, not derived from the last page
-    /// read. An append that lands after this returns is not part of the request.
-    pub(crate) fn request_basis(&self, task_id: TaskId) -> Result<RequestBasis, SessionError> {
-        let task = self
-            .task_record(task_id)
-            .ok_or(SessionError::UnknownTask(task_id))?;
-        let cut = self
-            .state
-            .last_visible_id(task.conversation_id)
-            .map_err(|error| SessionError::Invariant(error.to_string()))?;
-        let placed = task.turn.map_or_else(Vec::new, |turn| {
-            self.placed_inputs(turn)
-                .into_iter()
-                .filter_map(|input| {
-                    input.disposition.placement().map(|placement| PlacedInput {
-                        input: input.id,
-                        entry: placement.entry,
-                    })
-                })
-                .collect()
-        });
-        Ok(RequestBasis {
-            conversation_id: task.conversation_id,
-            cut,
-            placed,
-        })
-    }
-
-    /// One page inside a captured request basis.
-    ///
-    /// The basis is revalidated against the invocation's own conversation so a
-    /// caller cannot page another conversation's history through it.
-    pub(crate) fn request_entries(
-        &self,
-        task_id: TaskId,
-        basis: &RequestBasis,
-        after: Option<crate::EntryId>,
-        limit: usize,
-    ) -> Result<EntryPage, SessionError> {
-        let task = self
-            .task_record(task_id)
-            .ok_or(SessionError::UnknownTask(task_id))?;
-        if basis.conversation_id != task.conversation_id {
-            return Err(SessionError::Invariant(
-                "request basis belongs to another conversation".to_owned(),
-            ));
-        }
-        let (page, more) = self
-            .state
-            .request_page(task.conversation_id, basis.cut, after, limit)
-            .map_err(|error| match error {
-                StateError::InvisibleCursor(cursor) => {
-                    SessionError::InvisibleContextReference(cursor)
-                }
-                other => SessionError::Invariant(other.to_string()),
-            })?;
-        // Only the page's payloads are cloned.
-        let entries: Vec<_> = page
-            .into_iter()
-            .map(|id| {
-                self.state.entry(id).cloned().ok_or_else(|| {
-                    SessionError::Invariant(format!("visible entry {id} has no record"))
-                })
-            })
-            .collect::<Result<_, _>>()?;
-        let next = more.then(|| entries.last().expect("a truncated page is non-empty").id);
-        Ok(EntryPage { entries, next })
-    }
-
-    #[must_use]
-    pub fn snapshot(&self) -> SessionSnapshot {
-        let state = &self.state;
-        SessionSnapshot {
-            session_id: state.session_id,
-            root_conversation: state
-                .root_conversation
-                .expect("initialized session has root conversation"),
-            last_commit: state
-                .last_commit
-                .expect("initialized session has first commit"),
-            conversations: state.conversations.values().map(|value| **value).collect(),
-            entries: state
-                .entries
-                .values()
-                .map(|value| (**value).clone())
-                .collect(),
-            inputs: state
-                .inputs
-                .values()
-                .map(|value| (**value).clone())
-                .collect(),
-            tasks: state
-                .tasks
-                .values()
-                .map(|value| (**value).clone())
-                .collect(),
-        }
-    }
-
-    /// Committed observation tail after `cursor`.
-    ///
-    /// `cursor = None` means "everything still retained" and never asks for a
-    /// reset. A cursor older than retained coverage, or one ahead of this
-    /// session's last commit (another session, or a reopened store), returns
-    /// `reset_required` with no events so the caller resnapshots instead of
-    /// silently believing it is current. Coverage is a property of this session's
-    /// own observations, so a cursor from before a restart, from a future
-    /// authority, or from evicted history all ask for a resnapshot; a cursor at or
-    /// after the loaded commit is answered normally.
-    #[must_use]
-    pub fn observations_after(&self, cursor: Option<CommitSeq>) -> ObservationBatch {
-        let last_commit = self
-            .state
-            .last_commit
-            .expect("initialized session has first commit");
-        let reset_required = match cursor {
-            None => false,
-            Some(cursor) => {
-                cursor > last_commit
-                    || self.coverage_start.is_some_and(|start| cursor < start)
-                    || self
-                        .dropped_through
-                        .is_some_and(|dropped| cursor <= dropped)
-            }
-        };
-        if reset_required {
-            return ObservationBatch {
-                reset_required: true,
-                events: Vec::new(),
-            };
-        }
-
-        let events = self
-            .observations
-            .iter()
-            .filter(|event| cursor.is_none_or(|cursor| event.commit_seq > cursor))
-            .cloned()
-            .collect();
-        ObservationBatch {
-            reset_required: false,
+    fn start(db: Db, info: SessionInfo, limits: SessionLimits, services: Services) -> Self {
+        let (requests, receive) = mpsc::channel(limits.command_capacity);
+        let (events, _) = broadcast::channel(EVENT_CAPACITY);
+        let handle = SessionHandle::new(requests.clone(), events.clone(), info.root);
+        let shared = Arc::new(Shared {
+            // A client clone: drives and reads may use the queue, never close it.
+            db: db.clone(),
+            services,
+            limits,
             events,
+            requests: requests.clone(),
+        });
+        let supervisor =
+            tokio::spawn(Supervisor::new(Arc::clone(&shared), db, receive, handle).run());
+        Self {
+            shared,
+            requests,
+            supervisor: Some(supervisor),
+            info,
         }
     }
 
-    pub(crate) fn fault_signal(&self) -> tokio_util::sync::CancellationToken {
-        self.fault.clone()
+    /// The session's durable identity.
+    #[must_use]
+    pub const fn session_id(&self) -> SessionId {
+        self.info.session_id
     }
 
-    pub(crate) fn ensure_open(&self) -> Result<(), SessionError> {
-        if self.closed {
-            Err(SessionError::Closed)
-        } else {
-            Ok(())
+    /// The session's primary conversation.
+    #[must_use]
+    pub const fn root(&self) -> ConversationId {
+        self.info.root
+    }
+
+    /// A client handle. Cloning or dropping it never changes session state.
+    #[must_use]
+    pub fn handle(&self) -> SessionHandle {
+        SessionHandle::new(
+            self.requests.clone(),
+            self.shared.events.clone(),
+            self.info.root,
+        )
+    }
+
+    /// Stop accepting work, join running turns and release storage ownership.
+    pub async fn close(mut self) -> Result<()> {
+        let (reply, receive) = oneshot::channel();
+        if self.requests.send(Request::Close { reply }).await.is_err() {
+            return Ok(());
         }
-    }
-
-    pub(crate) fn close(&mut self) {
-        self.closed = true;
-        self.changes.send_replace(());
-    }
-
-    /// Give up cross-process writable ownership of the session database.
-    ///
-    /// Called by the driver once closes have fenced canonical writes and joined
-    /// local invocations, so a later process can take the session over. The lock
-    /// is released by dropping it, which also happens when the session itself is
-    /// dropped or the process exits.
-    pub(crate) fn release_ownership(&mut self) {
-        self.store.release_ownership();
-    }
-
-    /// Turn members that are already durably cancelled but were never
-    /// dispatched. Only an explicit abort drive can settle them, so the driver
-    /// drives them as cleanup; without that they hold the foreground slot and
-    /// leave their exchange unfinished.
-    pub(crate) fn pending_cancelled_members(&self, root: TaskId) -> Vec<TaskId> {
-        self.state
-            .tasks
-            .values()
-            .filter(|task| {
-                task.turn == Some(root)
-                    && task.cancel_requested
-                    && matches!(task.status, TaskStatus::Pending)
-            })
-            .map(|task| task.id)
-            .collect()
-    }
-
-    pub(crate) fn subscribe(&self) -> tokio::sync::watch::Receiver<()> {
-        self.changes.subscribe()
-    }
-
-    /// A notification sender for the driver. Each waiter subscribes when it
-    /// waits, so a commit wakes every waiter rather than only the first.
-    pub(crate) fn changes(&self) -> tokio::sync::watch::Sender<()> {
-        self.changes.clone()
-    }
-
-    pub(crate) fn task_record(&self, task_id: TaskId) -> Option<TaskRecord> {
-        self.state.tasks.get(&task_id).map(|task| (**task).clone())
-    }
-
-    /// Test-only pointer to a task's resident allocation, used to prove that a
-    /// commit does not deep-copy unrelated task payloads.
-    #[cfg(test)]
-    pub(crate) fn task_record_ptr(&self, task_id: TaskId) -> Option<usize> {
-        self.state
-            .tasks
-            .get(&task_id)
-            .map(|task| std::sync::Arc::as_ptr(task) as usize)
-    }
-
-    pub(crate) fn reserve_task_invocation(
-        &mut self,
-        task_id: TaskId,
-        kind: InvocationKind,
-    ) -> Result<InvocationReceipt, SessionError> {
-        let (generation, commit_seq) =
-            self.transact(|transaction| transaction.reserve_task(task_id, kind))?;
-        Ok(InvocationReceipt {
-            generation,
-            kind,
-            commit_seq,
-        })
-    }
-
-    pub(crate) fn checkpoint_task(
-        &mut self,
-        task_id: TaskId,
-        generation: u64,
-        checkpoint: Option<Value>,
-        output: Option<TaskOutput>,
-    ) -> Result<CommitSeq, SessionError> {
-        let (_, commit_seq) = self.transact(|transaction| {
-            transaction.checkpoint_task(task_id, generation, checkpoint, output)
-        })?;
-        Ok(commit_seq)
-    }
-
-    pub(crate) fn mark_task_cancellation(
-        &mut self,
-        task_id: TaskId,
-    ) -> Result<CancellationReceipt, SessionError> {
-        self.ensure_open()?;
-        let state = &self.state;
-        let task = state
-            .tasks
-            .get(&task_id)
-            .ok_or(SessionError::UnknownTask(task_id))?;
-        if task.cancel_requested || matches!(task.status, TaskStatus::Terminal(_)) {
-            return Ok(CancellationReceipt {
-                changed: false,
-                commit_seq: state.last_commit.expect("initialized session has a commit"),
-            });
+        let _ = receive.await;
+        if let Some(supervisor) = self.supervisor.take() {
+            let _ = supervisor.await;
         }
-
-        let (_, commit_seq) =
-            self.transact(|transaction| transaction.mark_task_cancellation(task_id))?;
-        Ok(CancellationReceipt {
-            changed: true,
-            commit_seq,
-        })
+        Ok(())
     }
+}
 
-    pub(crate) fn settle_task_with<T>(
-        &mut self,
-        task_id: TaskId,
-        generation: u64,
-        outcome: TaskOutcome,
-        output: Option<TaskOutput>,
-        plan: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
-    ) -> Result<TaskSettlement<T>, SessionError> {
-        let ((value, released_turns), commit_seq) = self.transact(|transaction| {
-            transaction.assert_task_write_authority(task_id, generation)?;
-            let value = plan(transaction)?;
-            transaction.settle_task(task_id, generation, outcome, output)?;
-            Ok((value, transaction.take_released_turns()))
-        })?;
-        Ok(TaskSettlement {
-            value,
-            commit_seq,
-            released_turns,
-        })
-    }
-
-    /// Replay an already-admitted submission: the same input without a new
-    /// commit. The turn root is recovered from the binding when one exists, so a
-    /// retried admission cannot open a second turn for the same input. A queued
-    /// input replays as queued rather than as an error, because queueing is a
-    /// legitimate outcome of admission.
-    fn replay_admission(
-        &self,
-        key: &RequestKey,
-        request: &InputRequest,
-    ) -> Result<Option<AdmissionReceipt>, SessionError> {
-        let Some(receipt) = self.replay_input(key, request)? else {
-            return Ok(None);
-        };
-        // A replay reports the turn that answers the input now: placement made the
-        // binding durable, so a client replaying its request after a failure sees
-        // the attempt it must retry rather than a task it must invent.
-        let task_id = self
-            .state
-            .inputs
-            .get(&receipt.input_id)
-            .and_then(|input| input.disposition.answering_turn());
-        Ok(Some(AdmissionReceipt {
-            input_id: receipt.input_id,
-            task_id,
-            commit_seq: receipt.commit_seq,
-            replayed: true,
-        }))
-    }
-
-    fn replay_input(
-        &self,
-        key: &RequestKey,
-        request: &InputRequest,
-    ) -> Result<Option<InputReceipt>, SessionError> {
-        let state = &self.state;
-        let Some(input_id) = state.request_keys.get(key).copied() else {
-            return Ok(None);
-        };
-        let existing = state.inputs.get(&input_id).ok_or_else(|| {
-            SessionError::Invariant("request key points to missing input".to_owned())
-        })?;
-        if existing.target != request.target
-            || existing.sender != request.sender
-            || existing.mode != request.mode
-            || existing.body != request.body
-        {
-            return Err(SessionError::IdempotencyConflict(key.clone()));
-        }
-        let commit_seq = state.input_commits.get(&input_id).copied().ok_or_else(|| {
-            SessionError::Invariant("admitted input is missing its commit sequence".to_owned())
-        })?;
-        Ok(Some(InputReceipt {
-            input_id,
-            commit_seq,
-            replayed: true,
-        }))
-    }
-
-    fn transact<T>(
-        &mut self,
-        build: impl FnOnce(&mut Transaction) -> Result<T, SessionError>,
-    ) -> Result<(T, CommitSeq), SessionError> {
-        self.ensure_open()?;
-        let value = {
-            let mut transaction = Transaction::new(&mut self.state);
-            let value = match build(&mut transaction) {
-                Ok(value) => value,
-                Err(error) => {
-                    // A rejected command leaves resident state exactly as it
-                    // found it: nothing it prepared may survive the rejection.
-                    transaction.rollback();
-                    return Err(error);
-                }
-            };
-            (value, transaction)
-        };
-        let (value, transaction) = value;
-        let prepared = transaction.finish()?;
-        let event = CommitEvent {
-            commit_seq: prepared.batch.commit_seq,
-            changes: prepared.changes.clone(),
-        };
-        let commit_seq = event.commit_seq;
-        if let Err(error) = self.store.commit(&prepared.batch) {
-            // Persistence failed, so the command never happened: take the
-            // prepared writes back and fence the session. Resident state must not
-            // keep a command that is not durable, even though a fenced session
-            // would serve nothing further.
-            prepared.rollback();
-            self.close();
-            self.fault.cancel();
-            return Err(SessionError::Persistence(error.to_string()));
-        }
-        self.publish(event);
-        Ok((value, commit_seq))
-    }
-
-    fn publish(&mut self, event: CommitEvent) {
-        if self.observations.len() == OBSERVATION_CAPACITY
-            && let Some(dropped) = self.observations.pop_front()
-        {
-            self.dropped_through = Some(dropped.commit_seq);
-        }
-        self.observations.push_back(event);
-        self.changes.send_replace(());
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Best effort: a dropped owner must not leave the session running
+        // unattended, but closing is asynchronous and callers that need the
+        // guarantee await `close`.
+        let (reply, _) = oneshot::channel();
+        let _ = self.requests.try_send(Request::Close { reply });
     }
 }

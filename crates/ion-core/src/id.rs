@@ -1,3 +1,10 @@
+//! Identity types.
+//!
+//! A session id is globally unique. Every other identity is a session-local
+//! number drawn from one private monotonic sequence, so two records of
+//! different kinds can never share a durable number, and a caller that holds a
+//! number cannot reach the allocator.
+
 use std::fmt;
 use std::num::NonZeroI64;
 use std::str::FromStr;
@@ -58,6 +65,7 @@ impl LocalSeq {
         self.0.get()
     }
 
+    #[cfg(test)]
     pub(crate) fn next(self) -> Result<Self, IdError> {
         let next = self.get().checked_add(1).ok_or(IdError::Exhausted)?;
         Self::new(next)
@@ -106,8 +114,8 @@ macro_rules! local_id {
 
             /// The numeric transport value of this session-local identifier.
             ///
-            /// The backing sequence namespace stays crate-private:
-            /// callers may move the number, not the allocator.
+            /// The backing sequence namespace stays crate-private: callers may
+            /// move the number, not the allocator.
             #[must_use]
             pub const fn get(self) -> i64 {
                 self.0.get()
@@ -128,6 +136,12 @@ macro_rules! local_id {
             }
         }
 
+        impl From<LocalSeq> for $name {
+            fn from(value: LocalSeq) -> Self {
+                Self(value)
+            }
+        }
+
         impl fmt::Display for $name {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
                 self.get().fmt(formatter)
@@ -139,8 +153,10 @@ macro_rules! local_id {
 local_id!(ConversationId);
 local_id!(EntryId);
 local_id!(InputId);
-local_id!(TaskId);
-local_id!(ArtifactId);
+local_id!(TurnId);
+local_id!(StepId);
+local_id!(AttemptId);
+local_id!(InvocationId);
 local_id!(CommitSeq);
 
 #[cfg(test)]
@@ -151,12 +167,12 @@ mod tests {
     fn local_ids_share_ordered_storage_without_sharing_rust_types() {
         let sequence = LocalSeq::new(41).expect("valid local sequence");
         let entry = EntryId::new(sequence.get()).expect("entry id");
-        let task = TaskId::new(sequence.next().expect("next sequence").get()).expect("task id");
+        let turn = TurnId::new(sequence.next().expect("next sequence").get()).expect("turn id");
 
         assert_eq!(entry.get(), 41);
-        assert_eq!(task.get(), 42);
+        assert_eq!(turn.get(), 42);
         assert!(EntryId::new(0).is_err());
-        assert!(TaskId::new(-1).is_err());
+        assert!(TurnId::new(-1).is_err());
     }
 
     #[test]

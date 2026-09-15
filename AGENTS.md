@@ -4,9 +4,10 @@
 
 - `ARCHITECTURE.md` owns the accepted turn-engine contracts. `README.md` describes
   what currently works. Target, implemented and validated are different states.
-- The 2026-09-15 design replaces the former generic task runtime. Current source is
-  evidence, not a compatibility constraint. Do not deepen TaskPlan, task graphs or
-  the resident state/undo-journal design, or add Turn as a second authority over them.
+- The 2026-09-15 design replaced the former generic task runtime; that replacement
+  has landed in `ion-core`. There is one runtime: session-owned turns, model steps,
+  attempts and tool invocations over a private SQLite store. Do not reintroduce a
+  task/plan graph, a resident semantic mirror or an undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
   shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
   Git preserves old code and documents; retain useful failure scenarios as new tests.
@@ -46,5 +47,7 @@ need deterministic fault tests; overflow-sensitive changes also need release che
 Terminal changes need reducer/PTY checks and real-terminal smoke, not only golden frames.
 The current `scripts/smoke.sh` targets the excluded legacy application and is not a
 working fresh-workspace gate; replace it when the executable returns, not with a shim.
+Turn-engine regressions live in `crates/ion-core/tests/c1_*.rs` and in the crate's own
+`#[cfg(test)]` modules where a durable pre-state or a storage fault is required.
 For documentation-only work, verify links, authority/status consistency and preservation;
 do not claim runtime or live-model validation that was not performed.

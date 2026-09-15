@@ -1,481 +1,373 @@
-use serde_json::json;
+//! Session-level invariants that need durable pre-state or a storage fault.
+//!
+//! These live inside the crate because they are about the transaction
+//! boundaries themselves: one arms a failing commit, the other starts a
+//! process from a store that stopped between a provider answer and its
+//! settlement. Neither is reachable from a client through the public API.
 
-use super::state::{SessionState, StateError};
-use super::*;
-use crate::{
-    CommitSeq, Conversation, ConversationId, InputBody, InputDisposition, InputMode, InputSender,
-    InvocationKind, TaskId, TaskKindName, TaskOutcome, TaskOutcomeKind, TaskRecord, TaskStatus,
+use std::path::PathBuf;
+use std::sync::Arc;
+
+use ion_ai::{
+    Content, GenerationControls, Message, ModelRef, Reasoning, ResponseTermination, Role,
+    ScriptedModelService, ToolChoice, Usage,
 };
 
-fn task_request(root: ConversationId, dependencies: Vec<crate::TaskId>) -> TaskRequest {
-    TaskRequest {
-        conversation_id: root,
-        kind: TaskKindName::new("test").expect("task kind"),
-        schema_version: 1,
-        input: json!({"work": true}),
-        dependencies,
+use super::{Services, Session};
+use crate::SessionId;
+use crate::attempt::AttemptState;
+use crate::config::{ContextPolicy, ConversationConfig, RunLimits};
+use crate::input::{InputBody, InputMode, InputSender};
+use crate::limits::SessionLimits;
+use crate::store::sqlite::InjectFault;
+use crate::store::sqlite::conversation::CreateSession;
+use crate::store::sqlite::input::{AdmitInput, Admitted};
+use crate::store::sqlite::turn::{
+    AttemptStart, BeginStep, CommitDispatch, CommitResponse, PrepareAttempt, StepStart,
+};
+use crate::store::{Db, SqliteStore};
+use crate::tool::ToolRegistry;
+
+fn limits() -> SessionLimits {
+    SessionLimits {
+        command_capacity: 16,
+        ..SessionLimits::default()
     }
 }
 
-fn completed(value: &str) -> TaskOutcome {
-    TaskOutcome {
-        kind: TaskOutcomeKind::Completed,
-        value: json!(value),
+fn config() -> ConversationConfig {
+    ConversationConfig {
+        model: ModelRef {
+            provider: "scripted".to_owned(),
+            model: "test-model".to_owned(),
+        },
+        instructions: "be careful".to_owned(),
+        controls: GenerationControls {
+            max_output_tokens: 1024,
+            temperature: None,
+            top_p: None,
+            reasoning: Reasoning::ProviderDefault,
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: false,
+        },
+        project_context: Vec::new(),
+        tool_names: Vec::new(),
+        context: ContextPolicy {
+            max_request_bytes: 64 * 1024,
+            max_input_tokens: 1_000,
+        },
+        limits: RunLimits {
+            max_model_steps: 4,
+            max_attempts_per_step: 2,
+            max_cost_microusd: None,
+            deadline_ms: 30_000,
+            max_response_bytes: 64 * 1024,
+            max_tool_output_bytes: 4 * 1024,
+        },
     }
 }
 
-fn input_request(target: ConversationId, mode: InputMode) -> InputRequest {
-    InputRequest {
-        target,
-        sender: InputSender::User,
-        mode,
-        request_key: None,
-        body: InputBody::Text("hello".to_owned()),
+fn database(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("ion-c1-unit-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    dir.join("session.sqlite")
+}
+
+fn answer(text: &str) -> ion_ai::ModelResponse {
+    ion_ai::ModelResponse {
+        message: Message {
+            role: Role::Assistant,
+            content: vec![Content::Text(text.to_owned())],
+            provider_replay: None,
+        },
+        usage: Usage::known(1, 1),
+        termination: ResponseTermination::Completed,
     }
 }
 
-#[test]
-fn a_duplicate_insert_leaves_records_and_indexes_unchanged() {
-    // The insertion owners are the only writers of the entry/task/input indexes,
-    // so a rejected duplicate must not have written the record it rejected. A
-    // resident-state comparison covers the private indexes as well as the
-    // records, which a public snapshot does not.
-    let mut state = SessionState::empty(crate::SessionId::new());
-    let conversation = ConversationId::new(1).expect("id");
-    state.conversations.insert(
-        conversation,
-        std::sync::Arc::new(Conversation::root(conversation)),
-    );
-    state.root_conversation = Some(conversation);
-    state.last_seq = Some(crate::LocalSeq::new(9).expect("sequence"));
-    state.last_commit = Some(CommitSeq::new(9).expect("commit"));
-
-    let entry_id = crate::EntryId::new(3).expect("id");
-    let entry = crate::Entry {
-        id: entry_id,
-        conversation_id: conversation,
-        kind: crate::EntryKind::new("user").expect("kind"),
-        data: json!({"text": "first"}),
-        projection: Vec::new(),
-        context: crate::conversation::context::ContextControl::none(),
-    };
-    state.insert_entry(entry.clone()).expect("first entry");
-    let task_id = TaskId::new(4).expect("id");
-    let task = TaskRecord::pending(
-        task_id,
-        conversation,
-        TaskKindName::new("test").expect("kind"),
-        1,
-        json!({"work": true}),
-        Vec::new(),
-    );
-    state.insert_task(task.clone()).expect("first task");
-    let input_id = crate::InputId::new(5).expect("id");
-    let input = crate::Input {
-        id: input_id,
-        target: conversation,
-        sender: InputSender::User,
-        mode: InputMode::QueueOnly,
-        request_key: None,
-        body: InputBody::Text("first".to_owned()),
-        disposition: InputDisposition::Queued,
-    };
-    state.insert_input(input.clone()).expect("first input");
-    let before = state.clone();
-
-    let mut replaced_entry = entry;
-    replaced_entry.data = json!({"text": "second"});
-    assert!(matches!(
-        state.insert_entry(replaced_entry),
-        Err(StateError::DuplicateEntry(id)) if id == entry_id
-    ));
-    let mut replaced_task = task;
-    replaced_task.input = json!({"work": false});
-    assert!(matches!(
-        state.insert_task(replaced_task),
-        Err(StateError::DuplicateTask(id)) if id == task_id
-    ));
-    let mut replaced_input = input;
-    replaced_input.body = InputBody::Text("second".to_owned());
-    assert!(matches!(
-        state.insert_input(replaced_input),
-        Err(StateError::DuplicateInput(id)) if id == input_id
-    ));
-
-    assert_eq!(state, before, "a rejected duplicate must change nothing");
-}
-
-#[test]
-fn reconstruction_refuses_a_store_that_no_commit_could_have_produced() {
-    let mut state = SessionState::empty(crate::SessionId::new());
-    let conversation = ConversationId::new(1).expect("id");
-    state.conversations.insert(
-        conversation,
-        std::sync::Arc::new(Conversation::root(conversation)),
-    );
-    state.root_conversation = Some(conversation);
-    state.last_seq = Some(crate::LocalSeq::new(4).expect("sequence"));
-    state.last_commit = Some(CommitSeq::new(1).expect("commit"));
-    state.validate_reconstruction().expect("a consistent store");
-
-    // A record beyond the recorded sequence is the state a lowered `last_seq`
-    // produces; it is refused rather than repaired.
-    state.conversations.insert(
-        ConversationId::new(9).expect("id"),
-        std::sync::Arc::new(Conversation::root(ConversationId::new(9).expect("id"))),
-    );
-    let beyond = state
-        .validate_reconstruction()
-        .expect_err("a record beyond the sequence must be refused");
-    assert!(matches!(
-        beyond,
-        StateError::InconsistentReconstruction { rule, .. } if rule == "sequence bound"
-    ));
-    state
-        .conversations
-        .remove(&ConversationId::new(9).expect("id"));
-    state.validate_reconstruction().expect("consistent again");
-
-    // An entry naming a conversation that was never stored.
-    state
-        .insert_entry(crate::Entry {
-            id: crate::EntryId::new(2).expect("id"),
-            conversation_id: ConversationId::new(3).expect("id"),
-            kind: crate::EntryKind::new("user").expect("kind"),
-            data: json!({"text": "orphan"}),
-            projection: Vec::new(),
-            context: crate::conversation::context::ContextControl::none(),
+#[tokio::test]
+async fn a_commit_failure_publishes_nothing_and_fences_the_session() {
+    let path = database("fault");
+    let store = SqliteStore::create(&path).expect("create store");
+    let db = Db::start(store, limits()).expect("start database thread");
+    let info = db
+        .run(CreateSession {
+            session_id: SessionId::new(),
+            config: config(),
         })
-        .expect("entry");
-    let orphan = state
-        .validate_reconstruction()
-        .expect_err("an orphaned entry must be refused");
-    assert!(matches!(
-        orphan,
-        StateError::InconsistentReconstruction { rule, .. } if rule == "entry conversation"
-    ));
-}
+        .await
+        .expect("create session");
+    let after_create = sqlite_i64(&path, "SELECT last_seq FROM session_meta WHERE id = 1");
 
-#[test]
-fn admission_policy_follows_mode_and_conversation_state() {
-    // Idle: a turn-starting mode opens the turn; queue-only and notice do not.
-    for (mode, starts) in [
-        (InputMode::Submit, true),
-        (InputMode::Steer, true),
-        (InputMode::FollowUp, true),
-        (InputMode::QueueOnly, false),
-        (InputMode::Notice, false),
-    ] {
-        let mut session = Session::new().expect("session");
-        let root = session.root_conversation();
-        let receipt = session
-            .admit_input(
-                input_request(root, mode),
-                Some(task_request(root, Vec::new())),
-            )
-            .expect("idle admission");
-        assert_eq!(receipt.started_turn(), starts, "idle {mode:?}");
-        let snapshot = session.snapshot();
-        let disposition = &snapshot.inputs[0].disposition;
-        if starts {
-            // The turn-starting admission places the input in the same commit.
-            assert_eq!(
-                disposition.placement().expect("placed").turn,
-                receipt.task_id.expect("turn root")
-            );
-            assert!(
-                matches!(disposition, InputDisposition::Placed(_)),
-                "idle {mode:?}"
-            );
-        } else {
-            assert_eq!(disposition, &InputDisposition::Queued, "idle {mode:?}");
-        }
-    }
-
-    // Busy: only submit is refused; every other mode queues.
-    for (mode, refused) in [
-        (InputMode::Submit, true),
-        (InputMode::Steer, false),
-        (InputMode::FollowUp, false),
-        (InputMode::QueueOnly, false),
-        (InputMode::Notice, false),
-    ] {
-        let mut session = Session::new().expect("session");
-        let root = session.root_conversation();
-        session
-            .create_turn(task_request(root, Vec::new()))
-            .expect("live turn");
-        let before = session.snapshot();
-        let receipt = session.admit_input(
-            input_request(root, mode),
-            Some(task_request(root, Vec::new())),
-        );
-        if refused {
-            let error = receipt.expect_err("a busy submit is refused");
-            assert!(matches!(error, SessionError::ForegroundTurnBusy(id) if id == root));
-            assert_eq!(session.snapshot(), before, "a refusal admits nothing");
-        } else {
-            let receipt = receipt.expect("busy admission queues");
-            assert!(!receipt.started_turn(), "busy {mode:?}");
-            assert_eq!(
-                session.snapshot().inputs[0].disposition,
-                InputDisposition::Queued
-            );
-        }
-    }
-}
-
-#[test]
-fn reservation_checkpoint_and_recovery_are_generation_fenced() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let task = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("task");
-    let execute = session
-        .reserve_task_invocation(task.task_id, InvocationKind::Execute)
-        .expect("execute reservation");
-    assert_eq!(execute.generation, 1);
-    assert_eq!(execute.kind, InvocationKind::Execute);
-
-    session
-        .checkpoint_task(
-            task.task_id,
-            execute.generation,
-            Some(json!({"phase": 1})),
-            None,
-        )
-        .expect("checkpoint");
-    let recover = session
-        .reserve_task_invocation(task.task_id, InvocationKind::Recover)
-        .expect("recovery reservation");
-    assert_eq!(recover.generation, 2);
-
-    let stale = session
-        .checkpoint_task(
-            task.task_id,
-            execute.generation,
-            Some(json!({"phase": 2})),
-            None,
-        )
-        .expect_err("old generation must be fenced");
-    assert!(matches!(stale, SessionError::StaleInvocation { .. }));
-
-    let settlement = session
-        .settle_task_with(
-            task.task_id,
-            recover.generation,
-            completed("done"),
-            None,
-            |transaction| transaction.create_task(task_request(root, Vec::new())),
-        )
-        .expect("terminal plan");
-    let successor = settlement.value;
-    let snapshot = session.snapshot();
-    let settled = snapshot
-        .tasks
-        .iter()
-        .find(|record| record.id == task.task_id)
-        .expect("settled task");
-    assert!(matches!(settled.status, TaskStatus::Terminal(_)));
-    assert!(snapshot.tasks.iter().any(|record| record.id == successor));
-}
-
-#[test]
-fn cancellation_fences_normal_invocation_and_abort_gets_fresh_generation() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let task = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("task");
-    let execute = session
-        .reserve_task_invocation(task.task_id, InvocationKind::Execute)
-        .expect("execute reservation");
-    let cancellation = session
-        .mark_task_cancellation(task.task_id)
-        .expect("cancellation mark");
-    assert!(cancellation.changed);
-
-    let fenced = session
-        .checkpoint_task(task.task_id, execute.generation, Some(json!("late")), None)
-        .expect_err("normal invocation must be fenced");
-    assert!(matches!(fenced, SessionError::CancellationFence(_)));
-
-    let abort = session
-        .reserve_task_invocation(task.task_id, InvocationKind::Abort)
-        .expect("abort reservation");
-    assert_eq!(abort.generation, execute.generation + 1);
-    session
-        .settle_task_with(
-            task.task_id,
-            abort.generation,
-            TaskOutcome {
-                kind: TaskOutcomeKind::Aborted,
-                value: json!("cancelled"),
-            },
-            None,
-            |_| Ok(()),
-        )
-        .expect("abort settlement");
-
-    let no_change = session
-        .mark_task_cancellation(task.task_id)
-        .expect("terminal cancellation is no-op");
-    assert!(!no_change.changed);
-}
-
-#[test]
-fn dependency_readiness_requires_terminal_predecessors() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let first = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("first");
-    let second = session
-        .create_task(task_request(root, vec![first.task_id]))
-        .expect("second");
-
-    let blocked = session
-        .reserve_task_invocation(second.task_id, InvocationKind::Execute)
-        .expect_err("dependency must block");
-    assert!(matches!(blocked, SessionError::DependenciesNotReady(_)));
-
-    let first_run = session
-        .reserve_task_invocation(first.task_id, InvocationKind::Execute)
-        .expect("first reservation");
-    session
-        .settle_task_with(
-            first.task_id,
-            first_run.generation,
-            completed("first"),
-            None,
-            |_| Ok(()),
-        )
-        .expect("first settlement");
-    session
-        .reserve_task_invocation(second.task_id, InvocationKind::Execute)
-        .expect("second reservation");
-}
-
-#[test]
-fn placement_is_committed_with_the_turn_that_answers() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let receipt = session
-        .admit_input(
-            input_request(root, InputMode::Submit),
-            Some(task_request(root, Vec::new())),
-        )
-        .expect("admission");
-    let (input, turn) = (
-        receipt.input_id,
-        receipt
-            .task_id
-            .expect("a submitting admission starts a turn"),
+    // The next committing transaction fails after doing its work but before
+    // publishing, which is the only interesting kind of failure.
+    db.run(InjectFault).await.expect("arm the fault");
+    let admitted = db
+        .run(AdmitInput {
+            conversation: info.root,
+            sender: InputSender::User,
+            mode: InputMode::Submit,
+            request_key: None,
+            body: InputBody::Text("hello".to_owned()),
+            limits: limits(),
+            now_unix_ms: now(),
+        })
+        .await;
+    assert!(admitted.is_err(), "the transaction must fail: {admitted:?}");
+    assert!(
+        db.is_fenced(),
+        "an unclear storage outcome fences the session"
     );
+    db.close().await;
 
-    // Placement is part of the admission commit, not of the answer: the entry
-    // exists and the input names it before any invocation ran.
-    let snapshot = session.snapshot();
-    let entry = snapshot
-        .entries
-        .iter()
-        .find(|entry| entry.id == placement_of(&snapshot, input).entry)
-        .expect("placed entry");
-    assert_eq!(entry.kind.as_str(), ion_core_entry_kind());
-    assert_eq!(entry.data, json!({"text": "hello"}));
-    assert_eq!(placement_of(&snapshot, input).turn, turn);
-
-    // A retry must name the attempt it replaces, and the replaced attempt must
-    // have closed its turn, so two answer attempts cannot overlap.
-    let stale = session
-        .retry_input(
-            input,
-            turn,
-            task_request(session.root_conversation(), Vec::new()),
-        )
-        .expect_err("an open turn cannot be retried");
-    assert!(matches!(stale, SessionError::TurnStillOpen(root) if root == turn));
-    let other = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("unrelated task");
-    let mismatch = session
-        .retry_input(input, other.task_id, task_request(root, Vec::new()))
-        .expect_err("a retry names the attempt it replaces");
-    assert!(matches!(mismatch, SessionError::StaleInputBinding { .. }));
-    assert!(matches!(
-        session
-            .abandon_input(input, other.task_id)
-            .expect_err("abandonment names the attempt it ends"),
-        SessionError::StaleInputBinding { .. }
-    ));
+    // Nothing from the failed transaction is visible, and the identity space
+    // did not move: an aborted commit consumes nothing.
+    assert_eq!(sqlite_i64(&path, "SELECT COUNT(*) FROM inputs"), 0);
+    assert_eq!(sqlite_i64(&path, "SELECT COUNT(*) FROM turns"), 0);
+    assert_eq!(sqlite_i64(&path, "SELECT COUNT(*) FROM entries"), 0);
+    assert_eq!(
+        sqlite_i64(&path, "SELECT last_seq FROM session_meta WHERE id = 1"),
+        after_create
+    );
+    std::fs::remove_dir_all(path.parent().expect("dir")).ok();
 }
 
-fn placement_of(snapshot: &crate::SessionSnapshot, input: crate::InputId) -> crate::InputPlacement {
-    snapshot
-        .inputs
-        .iter()
-        .find(|candidate| candidate.id == input)
-        .expect("admitted input")
-        .disposition
-        .placement()
-        .expect("a placed input")
-}
-
-fn ion_core_entry_kind() -> &'static str {
-    crate::conversation::INPUT_ENTRY
-}
-
-#[test]
-fn submission_rejects_an_input_aimed_at_another_conversation() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let other = session
-        .create_conversation(ConversationSpec::independent())
-        .expect("conversation")
-        .conversation_id;
-    let before = session.snapshot();
-
-    let error = session
-        .admit_input(
-            InputRequest {
-                target: other,
+#[tokio::test]
+async fn response_ready_evidence_is_settled_without_another_provider_call() {
+    let path = database("response-ready");
+    let conversation;
+    let turn;
+    {
+        let store = SqliteStore::create(&path).expect("create store");
+        let db = Db::start(store, limits()).expect("start database thread");
+        let info = db
+            .run(CreateSession {
+                session_id: SessionId::new(),
+                config: config(),
+            })
+            .await
+            .expect("create session");
+        let revision = info.last_commit.expect("create commit");
+        conversation = info.root;
+        let admitted = db
+            .run(AdmitInput {
+                conversation,
                 sender: InputSender::User,
                 mode: InputMode::Submit,
                 request_key: None,
-                body: InputBody::Text("elsewhere".to_owned()),
-            },
-            Some(task_request(root, Vec::new())),
-        )
-        .expect_err("a mismatched target must be rejected");
-    assert!(matches!(error, SessionError::InputTargetMismatch { .. }));
-    assert_eq!(session.snapshot(), before, "nothing was admitted");
+                body: InputBody::Text("hello".to_owned()),
+                limits: limits(),
+                now_unix_ms: now(),
+            })
+            .await
+            .expect("admit");
+        turn = match admitted {
+            Admitted::Started { turn, .. } => turn,
+            other => panic!("expected a started turn, got {other:?}"),
+        };
+        let step = match db
+            .run(BeginStep {
+                turn,
+                config_revision: revision,
+                model: config().model,
+                instructions: config().instructions,
+                context: Vec::new(),
+                controls: config().controls,
+                tools: Vec::new(),
+                max_request_bytes: config().context.max_request_bytes,
+                limits: limits(),
+            })
+            .await
+            .expect("begin step")
+        {
+            StepStart::Started(step) => step,
+            StepStart::Limit { setting } => panic!("unexpected limit {setting}"),
+        };
+        let attempt = match db
+            .run(PrepareAttempt { step })
+            .await
+            .expect("prepare attempt")
+        {
+            AttemptStart::Started(attempt) => attempt,
+            AttemptStart::Limit { setting } => panic!("unexpected limit {setting}"),
+        };
+        db.run(CommitDispatch {
+            attempt,
+            generation: 0,
+        })
+        .await
+        .expect("dispatch");
+        // The provider answered and the answer is durable. The process stops
+        // here: exactly the window that must not cost a second request.
+        db.run(CommitResponse {
+            attempt,
+            generation: 0,
+            response: answer("recovered answer"),
+        })
+        .await
+        .expect("record the response");
+        db.close().await;
+    }
+
+    // Any provider call from here would panic, because the service has no
+    // script left; that is what makes the assertion below meaningful.
+    let model = Arc::new(ScriptedModelService::new([]));
+    let session = Session::open(
+        &path,
+        limits(),
+        Services::new(
+            Arc::clone(&model) as Arc<dyn ion_ai::ModelService>,
+            Arc::new(ToolRegistry::new()),
+        ),
+    )
+    .await
+    .expect("reopen");
+    let handle = session.handle();
+    assert_eq!(
+        handle.resume(conversation).await.expect("resume"),
+        Some(turn),
+        "the unfinished turn is resumed"
+    );
+    let outcome = handle.wait(turn).await.expect("wait");
+    assert!(
+        outcome.is_completed(),
+        "the stored answer settles the turn: {outcome:?}"
+    );
+    assert!(
+        model.requests().is_empty(),
+        "a durable response is never requested twice"
+    );
+
+    let view = handle.turn(turn).await.expect("view").expect("turn");
+    assert_eq!(view.attempts[0].state, AttemptState::Settled);
+    let page = handle
+        .entries(crate::EntryQuery {
+            conversation,
+            after: None,
+            limit: 8,
+        })
+        .await
+        .expect("entries");
+    assert_eq!(page.entries.len(), 2, "input and recovered answer");
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(path.parent().expect("dir")).ok();
 }
 
-#[test]
-fn failed_terminal_plan_rolls_back_successors_and_sequence_values() {
-    let mut session = Session::new().expect("session");
-    let root = session.root_conversation();
-    let task = session
-        .create_task(task_request(root, Vec::new()))
-        .expect("task");
-    let run = session
-        .reserve_task_invocation(task.task_id, InvocationKind::Execute)
-        .expect("reservation");
-    let before = session.snapshot();
+#[tokio::test]
+async fn a_dispatched_attempt_without_a_response_is_never_silently_repeated() {
+    let path = database("dispatched");
+    let conversation;
+    let turn;
+    {
+        let store = SqliteStore::create(&path).expect("create store");
+        let db = Db::start(store, limits()).expect("start database thread");
+        let info = db
+            .run(CreateSession {
+                session_id: SessionId::new(),
+                config: config(),
+            })
+            .await
+            .expect("create session");
+        let revision = info.last_commit.expect("create commit");
+        conversation = info.root;
+        let admitted = db
+            .run(AdmitInput {
+                conversation,
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: None,
+                body: InputBody::Text("hello".to_owned()),
+                limits: limits(),
+                now_unix_ms: now(),
+            })
+            .await
+            .expect("admit");
+        turn = match admitted {
+            Admitted::Started { turn, .. } => turn,
+            other => panic!("expected a started turn, got {other:?}"),
+        };
+        let step = match db
+            .run(BeginStep {
+                turn,
+                config_revision: revision,
+                model: config().model,
+                instructions: config().instructions,
+                context: Vec::new(),
+                controls: config().controls,
+                tools: Vec::new(),
+                max_request_bytes: config().context.max_request_bytes,
+                limits: limits(),
+            })
+            .await
+            .expect("begin step")
+        {
+            StepStart::Started(step) => step,
+            StepStart::Limit { setting } => panic!("unexpected limit {setting}"),
+        };
+        let attempt = match db
+            .run(PrepareAttempt { step })
+            .await
+            .expect("prepare attempt")
+        {
+            AttemptStart::Started(attempt) => attempt,
+            AttemptStart::Limit { setting } => panic!("unexpected limit {setting}"),
+        };
+        db.run(CommitDispatch {
+            attempt,
+            generation: 0,
+        })
+        .await
+        .expect("dispatch");
+        db.close().await;
+    }
 
-    let error = session
-        .settle_task_with(
-            task.task_id,
-            run.generation,
-            completed("unused"),
-            None,
-            |transaction| {
-                let _ = transaction.create_task(task_request(root, Vec::new()))?;
-                Err::<(), _>(SessionError::Invariant("reject terminal plan".to_owned()))
-            },
-        )
-        .expect_err("terminal plan must roll back");
-    assert!(matches!(error, SessionError::Invariant(_)));
-    assert_eq!(session.snapshot(), before);
+    let model = Arc::new(ScriptedModelService::new([ion_ai::Script::Stream(vec![
+        ion_ai::ModelStreamEvent::Completed(answer("after recovery")),
+    ])]));
+    let session = Session::open(
+        &path,
+        limits(),
+        Services::new(
+            Arc::clone(&model) as Arc<dyn ion_ai::ModelService>,
+            Arc::new(ToolRegistry::new()),
+        ),
+    )
+    .await
+    .expect("reopen");
+    let handle = session.handle();
+    let resumed = handle.resume(conversation).await.expect("resume");
+    assert_eq!(resumed, Some(turn));
+    let outcome = handle.wait(turn).await.expect("wait");
+    assert!(outcome.is_completed(), "got {outcome:?}");
+
+    // One new physical attempt was made, and the unknown earlier one is
+    // preserved as evidence rather than erased or reinterpreted.
+    let view = handle.turn(turn).await.expect("view").expect("turn");
+    let states: Vec<_> = view.attempts.iter().map(|attempt| attempt.state).collect();
+    assert!(
+        states.contains(&AttemptState::Indeterminate),
+        "the unresolved attempt stays visible: {states:?}"
+    );
+    assert_eq!(model.requests().len(), 1, "exactly one retry");
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(path.parent().expect("dir")).ok();
+}
+
+fn sqlite_i64(path: &std::path::Path, sql: &str) -> i64 {
+    let connection = rusqlite::Connection::open(path).expect("open raw");
+    connection
+        .query_row(sql, [], |row| row.get(0))
+        .expect("query")
+}
+
+/// The seed helpers write real durable state, so they stamp a real clock: a
+/// turn admitted at epoch zero is legitimately past its deadline.
+fn now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            i64::try_from(elapsed.as_millis()).unwrap_or(i64::MAX)
+        })
 }

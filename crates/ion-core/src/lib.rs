@@ -1,42 +1,53 @@
-//! Durable core domain and session kernel for Ion.
+//! Ion durable session kernel: a provider-neutral coding turn engine.
 //!
-//! The fresh kernel is built around sessions, conversations, immutable entries,
-//! admitted inputs and recoverable tasks. Legacy lane/agent/operation/effect
-//! runtime APIs are intentionally not preserved during the pre-1.0 clean rewrite.
+//! The durable nouns are a session, its conversations, immutable entries,
+//! accepted inputs and the turns that answer them. A turn owns model-step
+//! continuation, tool invocation, resource accounting, cancellation and its
+//! terminal outcome. There is no generic task graph, no resident state mirror
+//! and no second runtime.
 
-pub mod builtin;
-pub mod conversation;
+mod attempt;
+mod config;
+mod conversation;
+mod entry;
+mod error;
 mod id;
-pub mod session;
+mod input;
+mod invocation;
+mod limits;
+mod request;
+mod session;
 mod store;
-pub mod task;
-pub mod view;
+mod tool;
+mod turn;
+mod view;
 
-pub use conversation::{
-    ConfigError, ContextPolicy, Conversation, ConversationConfig, Entry, EntryKind, EntryKindError,
-    HistoryParent, Input, InputBody, InputDisposition, InputMode, InputPlacement, InputSender,
-    InstalledConfig, RequestKey, RequestKeyError, RunLimits,
+pub use attempt::{AttemptState, ModelAttempt, ModelStep};
+pub use config::{
+    ConfigError, ContextPolicy, ConversationConfig, InstalledConfig, MAX_ATTEMPTS_PER_STEP,
+    RunLimits,
 };
-pub use id::{ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, SessionId, TaskId};
-// Crate-internal only: the backing sequence namespace is not part of the client
-// surface.
-pub(crate) use id::LocalSeq;
+pub use conversation::{Conversation, HistoryParent};
+pub use entry::{ASSISTANT_ENTRY, Entry, EntryKind, EntryKindError, INPUT_ENTRY, TOOL_ENTRY};
+pub use error::{Error, Result};
+pub use id::{
+    AttemptId, CommitSeq, ConversationId, EntryId, IdError, InputId, InvocationId, SessionId,
+    StepId, TurnId,
+};
+pub use input::{
+    EntryPlacement, Input, InputBody, InputDisposition, InputMode, InputPlacement, InputSender,
+    RequestKey, RequestKeyError,
+};
+pub use invocation::{InvocationOutcome, InvocationState, Resolution, ToolInvocation};
+pub use limits::{LimitsError, SessionLimits};
+pub use request::{AssembledRequest, RequestError};
 pub use session::{
-    AdmissionReceipt, CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt,
-    EntryRequest, InputReceipt, InputRequest, Interruption, InterruptionReason, Session,
-    SessionError, Settlement, TaskCancellation, TaskCapacity, TaskDriver, TaskDriverError,
-    TaskReceipt, TaskRequest, TurnCancellation, TurnTemplate,
+    AdmissionReceipt, CancelReceipt, ConfigureRequest, EntryQuery, ResolveRequest, Services,
+    Session, SessionEvent, SessionHandle, SessionSpec, SessionWatch, SubmitRequest, WatchError,
 };
-pub use task::{
-    AbortContext, ContextCut, DependencyOutcome, InvocationKind, MAX_PLAN_CONVERSATIONS,
-    MAX_PLAN_ENTRIES, MAX_PLAN_TASKS, PlacedInput, PlannedConversation, PlannedConversationRef,
-    PlannedEntry, PlannedTarget, PlannedTask, PlannedTaskRef, PlannedTurn, RequestBasis,
-    ResourceDomain, RunningTask, TaskCompletion, TaskContext, TaskContextError, TaskDependency,
-    TaskFuture, TaskInvocation, TaskKind, TaskKindName, TaskKindNameError, TaskOutcome,
-    TaskOutcomeKind, TaskOutput, TaskPlan, TaskRecord, TaskRegistry, TaskRegistryError,
-    TaskRunError, TaskStatus, TypedAbortContext, TypedContext, TypedFuture, TypedHandler,
-    TypedOutcome, TypedReport, TypedTask,
-};
-pub use view::{
-    Change, CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
-};
+pub use tool::{ScriptedTool, Tool, ToolOutcome, ToolRegistry};
+pub use turn::{Cancellation, PendingOutcome, Turn, TurnFailure, TurnOutcome, TurnPhase};
+pub use view::{EntryPage, TurnView};
+
+/// The oldest page size this build will serve. Larger requests are clamped.
+pub const MAX_ENTRY_PAGE: u32 = store::sqlite::entry::MAX_ENTRY_PAGE;
