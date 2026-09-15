@@ -110,9 +110,9 @@ crates/ion-core/
 ```
 
 This is not a request to create empty files. Four files are at or past the ~1,000-line split
-threshold and carry no recorded cohesive exception: `session/state.rs`, `session/transaction.rs`,
-`session/scheduler.rs` and (at review level) `session/owner.rs`. `session/state.rs` already
-split once, into `state/mod.rs` (records, indexes, mutation application) and
+threshold and carry no recorded cohesive exception: `session/transaction.rs`,
+`session/scheduler.rs` and (at review level) `session/owner.rs`. `session/state/` was already split
+out of one 1288-line file into `state/mod.rs` (records, indexes, mutation application) and
 `state/reconstruction.rs` (whole-state validation of a loaded session). The remaining splits are
 tracked as the R13 debt sweep in `ROADMAP.md` §1; do not grow a new catch-all module in the
 meantime.

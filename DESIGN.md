@@ -37,7 +37,7 @@ The canonical nouns are:
 | Entry | Immutable semantic transcript record with optional provider-neutral model projection/context controls. |
 | Input | Admitted user/agent/host input with target, sender, mode, request identity and disposition. |
 | Task | One recoverable async operation with immutable input, typed checkpoint, dependencies, ownership edges, invocation generation and terminal outcome. |
-| Task output | Durable bounded task result/scratch/progress state; large opaque data may reference an artifact. |
+| Task output | Durable bounded task result/scratch/progress state. An artifact reference for large opaque data is a target, not implemented (D18). |
 | Artifact | Retained externalized content/evidence with integrity metadata. Target noun only: no artifact type, table or publisher is implemented, and an unbacked reference field was deleted rather than left permanently empty (D18). |
 
 There is **no separate durable Agent object**. A worker is an owned `Conversation`. Public APIs may use `WorkerHandle`/`AgentHandle` terminology, but durable identity is the conversation ID.
