@@ -214,7 +214,7 @@ Trusted task code receives an invocation-scoped `TaskContext`. Its durable commi
 
 An invocation also reads through `TaskContext`, and only through it:
 
-- its own conversation's transcript, one bounded page at a time, at a request cutoff once R7 adds a finite request-basis read (the current paging API has only an exclusive lower cursor);
+- its own conversation's transcript, one bounded page at a time, through a request basis captured before paging; the basis fixes the context cutoff and placed-input provenance (`TaskContext::request_basis` / `request_entries`);
 - the resolved outcomes of its own fixed dependencies, in dependency order;
 - the admitted inputs durably bound to this task, in admission order.
 

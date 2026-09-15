@@ -415,7 +415,8 @@ Each line: **adopt / test / reject / unknown**, the affected boundary, and the l
    feed failures back; R8 already schedules a test-feedback coding regression. Keep it separate from a
    tool's own retry-safety class (D11).
 10. **Adopt: explicit step/cost/deadline limits and the stop rule "model requested no tools".** Already
-    required by R8 and implemented as `TurnTemplate` limits; the survey confirms it is the common
+    required by R8; configuration stores limits but the generation loop does not yet enforce them.
+    `TurnTemplate` selects task kind/schema/input, not budget enforcement. The survey confirms it is the common
     contract, nothing more.
 11. **Adopt: per-segment command evaluation and explicit prefix/approval rules for shell.** Codex
     splits at `|`, `&&`, `||`, `;`, subshells and bans broad prefixes; Claude persists rules per repo;

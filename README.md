@@ -1,156 +1,32 @@
 # Ion
 
-Ion is a Rust terminal coding agent. Its target is a provider-neutral,
-user-owned agent that works alone by default and can supervise cooperating
-workers when multi-agent operation is enabled.
+Ion is building a provider-neutral Rust coding agent with a first-class terminal
+interface. It runs one primary conversation by default, with optional cooperating
+worker conversations. Pi/Pico and Codex are engineering references, not
+compatibility targets.
 
-## Design and current implementation
+## Current status
 
-The project is realigning its architecture around that target, using Pi/Pico
-as the primary reference alongside other inspected agents. It is not aiming
-for exact Pi compatibility, and no existing Ion component is mandatory.
+The workspace currently builds three libraries:
 
-- [DESIGN.md](DESIGN.md): proposed architecture, ownership, durable state,
-  execution, context, agent groups, and decision gates.
-- [TERMINAL.md](TERMINAL.md): single-agent and group interaction, approvals,
-  changes, and frontend behavior.
-- [ROADMAP.md](ROADMAP.md): the next work item, prototype gates, milestones,
-  and evidence of progress.
-- [Research](docs/research.md): cited sources, revisions, and trade-offs.
+- `ion-core`: durable sessions, conversations, immutable entries, inputs and
+  recoverable tasks, backed by per-session SQLite storage.
+- `ion-ai`: provider-neutral model contracts and a scripted model service.
+- `ion-terminal`: low-level terminal components.
 
-The new design is not fully implemented or benchmarked. The usage below
-covers the existing binary. Previous design and terminal acceptance records
-are preserved in [history](docs/history/README.md). The last Go implementation
-is tagged `last-go`; it is historical recovery material, not a migration target.
+The core supports a scripted generation/tool chain, cancellation and recovery,
+request cutoffs, and durable conversation configuration. A real-provider coding
+loop, bounded storage residency, and the rebuilt application/TUI remain unfinished.
+See [ROADMAP.md](ROADMAP.md) for implemented behavior and acceptance evidence.
 
-## Quickstart
-
-Requires Rust 1.98.0. The repository toolchain configuration pins the
-supported compiler and components.
-
-```sh
-cargo run -p ion
-```
-
-This uses the compiled-in local default, `desktop/qwen3.8:27b`, through
-`http://desktop:8080/v1`. Override the endpoint with `ION_DESKTOP_BASE_URL`
-and an optional bearer key with `ION_DESKTOP_API_KEY`, or configure
-`desktopBaseUrl`/`desktopApiKey` in settings. To use OpenAI Codex or
-OpenRouter instead, pass a provider/model reference:
-
-```sh
-cargo run -p ion -- --model openrouter/z-ai/glm-5.3-flash
-cargo run -p ion -- --model openai-codex/gpt-5.6-luna
-```
-
-For an explicit Codex credential, set `OPENAI_CODEX_ACCESS_TOKEN` and
-`OPENAI_CODEX_ACCOUNT_ID`. Ion stores login credentials in its configuration
-directory at `ion/auth.json` (`ION_AUTH_FILE` overrides the path). To reuse
-Pi credentials read-only, explicitly set `ION_PI_AUTH` to its auth file.
-Ion never refreshes or rewrites that file. `/logout` removes only Ion-stored
-credentials; explicit environment credentials and read-only Pi reuse remain
-configured until their environment variables are unset.
-
-## Usage
-
-| Command | Behavior |
-| :--- | :--- |
-| `ion` | Interactive TUI (new session) |
-| `ion --resume` / `ion -c` | Reopen the most recent persisted session |
-| `ion --session <id>` | Open a session by id (exact or unique prefix) |
-| `ion --fork <id>` | Clone a session into a new one and open the fork |
-| `ion --name <name>` | Title a new session (fresh, fork, or ephemeral) |
-| `ion --no-session` | Ephemeral TUI run: nothing persisted |
-| `ion -p "prompt"` | Run one prompt in print mode and exit |
-| `ion --acp` | Serve Agent Client Protocol v1 on stdio |
-| `ion --allow bash,write` | Print mode: tools that may run without approval |
-| `ion --trust-project` | Load project-local `.ion/extensions.toml` for this run |
-
-In print mode everything else terminates the operation with an
-approval requirement instead of executing. In the TUI, `/help` lists
-the slash commands (`/compact`, `/model`); `/model` opens a filtered model
-picker, while `/model <number>` switches a catalog entry directly. Selection
-is durable at the next step boundary and survives restart. `ctrl+j` inserts a
-newline; Tab completes known slash commands and catalog models. `ctrl+l` opens
-the picker, and `ctrl+p`/`shift+ctrl+p` cycle models.
-
-Session switching: `/new` starts fresh, `/resume` reopens a past session,
-`/clone` copies the current one whole. `/fork` picks a past user message and
-opens a new session ending right before it (the message returns to the
-composer for editing). When saved tracked changes are available, Ion offers
-`y` to apply them or `n` to keep the current files. Application can conflict;
-it is not an exact restore and does not include untracked files.
-
-Persistent interactive sessions capture tracked changes before the turn's
-model work and retain the Git object so the offer survives restart and Git
-GC. Application runs through the durable shell path: it is cancellable,
-bounded to 30 seconds, and never automatically replayed after interruption.
-Print mode and `--no-session` do not capture retained checkpoints.
-
-`/tree` navigates the retained session history, including sibling branches and
-previous descendants. It changes the conversation branch, not workspace files.
-`/settings` saves typed TOML values; thinking changes also save the future
-default. The startup view setting takes effect on the next launch.
-
-`/reload` validates configuration and reconciles peer definitions under a host
-configuration guard. Removal or replacement invalidates earlier revision-bound
-peer grants; reusing a scope name does not resurrect them. The active main lane
-adopts the reconciled configured scopes. A failed application is reported and
-leaves conflicting admission fenced until successful reconciliation. This does
-not undo external effects that already ran.
-
-Sessions persist to SQLite under `$XDG_DATA_HOME/ion/` (or the
-platform default) and are replayed on resume; compaction, steering,
-cancellation, and model selection survive restarts.
-
-For opt-in terminal diagnosis, set `ION_TERMINAL_CAPTURE` to a file
-path before launching the TUI. The capture contains emitted terminal
-bytes, including rendered prompt text, so do not enable it for
-untrusted or sensitive sessions.
-
-## Configuration
-
-Settings live at `~/.config/ion/settings.toml`. Minimal example:
-
-```toml
-theme = "dark"
-defaultProvider = "desktop"
-defaultModel = "qwen3.8:27b"
-desktopBaseUrl = "http://desktop:8080/v1"
-# Optional; omit when the local endpoint does not authenticate.
-# desktopApiKey = "local-only"
-# Optional finite list for the TUI's `/model` selector. Entries may be
-# provider-qualified (for example, "openrouter/z-ai/glm-5.3-flash").
-modelCatalog = ["qwen3.8:27b"]
-defaultThinkingLevel = "xhigh"
-sandbox = "auto" # auto, unconfined, seatbelt, or bubblewrap
-# Where native file tools may resolve paths. "off" (default)
-# resolves any absolute path — protecting sensitive paths is the policy
-# layer's job. "workspace" confines mutations to the project root.
-workspaceSandbox = "off"
-# Optional; model-facing subagent controls are disabled by default.
-# enableAgents = true
-
-# Keep the model-facing MCP set explicit and small.
-activeMcpServers = ["docs"]
-
-[[mcpServers]]
-name = "docs"
-command = "npx"
-args = ["-y", "@some/mcp-docs-server"]
-```
-
-Malformed settings are a hard error, never silently ignored.
-`auto` selects Seatbelt on macOS or Bubblewrap on Linux when available;
-explicit sandbox modes fail closed if their backend is unavailable.
-By default the native file tools resolve any absolute path
-(`write ~/notes.txt` and `/etc/hosts` reads both work; OS
-permissions are the enforcement). Set `workspaceSandbox = "workspace"`
-to confine write/edit/search to the project root with `.git`
-protected. Project-local extensions load only behind explicit
-`--trust-project`.
+**There is no runnable `ion` binary in the current workspace.** The legacy
+`crates/ion/` application source remains as reference material outside the
+workspace; its CLI, provider configuration and usage instructions do not describe
+the new core. `cargo run -p ion` is not supported at this revision.
 
 ## Development
+
+The checked-in toolchain pins Rust 1.98.0 and the required components.
 
 ```sh
 cargo fmt --all -- --check
@@ -158,10 +34,29 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-CI runs these required formatting, lint, and test gates on pushes and pull
-requests. A separate scheduled job performs the dependency advisory audit.
-Current design work and validation status live in [ROADMAP.md](ROADMAP.md);
-[AGENTS.md](AGENTS.md) describes how to work on the repository.
+For a focused executable example of the current core's behavior, run its scripted
+integration tests:
+
+```sh
+cargo test --locked -p ion-core --test k5_generation
+cargo test --locked -p ion-core --test k7_config
+```
+
+These exercise the libraries; they are not evidence of live-provider effectiveness
+or a usable terminal application.
+
+## Project documentation
+
+- [DESIGN.md](DESIGN.md): accepted target architecture and invariants.
+- [ROADMAP.md](ROADMAP.md): work order, implementation status and evidence.
+- [TERMINAL.md](TERMINAL.md): target interaction and frontend requirements.
+- [Source layout](docs/source-layout.md): crate and module ownership.
+- [Research](docs/research.md): source comparisons and trade-offs.
+- [AGENTS.md](AGENTS.md): repository working instructions.
+
+Previous design and terminal acceptance records are preserved in
+[history](docs/history/README.md). The `last-go` tag is historical recovery material,
+not a migration target.
 
 ## License
 

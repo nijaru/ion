@@ -4,7 +4,18 @@ Scope: the current `earendil-works/pi` `pico` branch and `pi-ai`, used as eviden
 
 This review is intentionally not a parity plan. Pico is a strong minimal-harness reference; Ion should copy only ideas that survive its Rust, durability, local-first, multi-conversation session, and recovery requirements.
 
-## Current Pico authority
+## Historical revision and refresh
+
+This review describes the pinned September 12 revision, not current upstream.
+A subsequent source check at `b02eef418672317f30247093a8e68797b8cfe144`
+found the original `harness/pico/` removed, a retained `harness/pico3/`
+implementation, and a normative but explicitly unimplemented Pico5 design.
+See upstream [`pico-v5-handoff.md`](https://github.com/earendil-works/pi/blob/b02eef418672317f30247093a8e68797b8cfe144/packages/agent/docs/pico-v5-handoff.md)
+for that distinction. The findings below remain historical rationale; recheck
+current implementation before using them to describe Pico's capabilities.
+Upstream redesigns do not reopen Ion's accepted kernel contracts by themselves.
+
+## Pico authority at the reviewed revision
 
 At `earendil-works/pi` `pico` branch head `7a2647f32a11864d0c2f98bd2278d18fdf524f9a`, `packages/agent/docs/pico/pico-simple-handoff.md` declares itself the sole normative implementation specification for the clean-room Pico harness. Older Pico/Pico-v3 documents are historical inputs.
 

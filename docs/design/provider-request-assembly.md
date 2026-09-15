@@ -362,7 +362,14 @@ Use thiserror for ProviderError/AssemblyError and source annotations; implement 
 Borrow ModelRequest/tool specs during prepare, serialize once, move PreparedRequest into stream. Move final blocks into the durable response/plan; use Arc only for genuinely shared provider/tool implementations or immutable bytes. Do not deep-clone all messages just to satisfy the stream lifetime; current generation clones the frozen request (`crates/ion-core/src/builtin/generation.rs:129-132`), which this ownership split removes.
 Justified dependencies: optional reqwest with Rustls/stream and only required features, existing futures/serde/thiserror, SHA-256 for integrity, and a small bounded SSE decoder (an audited parser crate is acceptable if it exposes limits and never reconnects). Refuse vendor SDKs with opaque retry loops, general event-source reconnect clients, catalog frameworks, OAuth/keyring persistence and a second HTTP stack. Pin resolved versions in Cargo.lock and fixture-test cancellation/framing before choosing parser reuse.
 
-## 10. Resolved review gates
+## 10. Review-gate decisions
+
+D19/D20 retain the ownership direction below. The 2026-09-15 source review found
+implementation-contract gaps, tracked in `ROADMAP.md` §1: reservation identity and
+step accounting, live authority revocation, pre-reservation blocked recovery, and
+terminal-stream validation. The sketches below are not a freeze-ready interface
+until those questions are resolved; no replacement contract is accepted by this
+review alone.
 
 Source/design audit at `1d370462` (2026-09-14) kept the ownership direction and refused a trait freeze until four gaps had concrete contracts. They are decided here; implementation is still staged (§10.5). Wire mappings remain PV hypotheses until their fixtures exist.
 

@@ -205,8 +205,10 @@ Entry
 Input
 Task
 TaskOutput
-Artifact
 ```
+
+`LocalSeq` is private; `ArtifactId` reserves identity only. Artifact publication
+and its durable record are not implemented (D18).
 
 Conversations have independent history-parent/cutoff and owner-task edges. Entries are immutable and carry provider-neutral projections/context controls. Tasks contain kind/schema, immutable input, checkpoint/output, dependency, ownership, cancellation, generation/invocation and terminal state.
 
