@@ -43,10 +43,10 @@ impl FromStr for SessionId {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(try_from = "i64", into = "i64")]
-pub struct LocalSeq(NonZeroI64);
+pub(crate) struct LocalSeq(NonZeroI64);
 
 impl LocalSeq {
-    pub fn new(value: i64) -> Result<Self, IdError> {
+    pub(crate) fn new(value: i64) -> Result<Self, IdError> {
         NonZeroI64::new(value)
             .filter(|value| value.get() > 0)
             .map(Self)
@@ -58,7 +58,7 @@ impl LocalSeq {
         self.0.get()
     }
 
-    pub fn next(self) -> Result<Self, IdError> {
+    pub(crate) fn next(self) -> Result<Self, IdError> {
         let next = self.get().checked_add(1).ok_or(IdError::Exhausted)?;
         Self::new(next)
     }
@@ -104,11 +104,10 @@ macro_rules! local_id {
                 LocalSeq::new(value).map(Self)
             }
 
-            #[must_use]
-            pub const fn local_seq(self) -> LocalSeq {
-                self.0
-            }
-
+            /// The numeric transport value of this session-local identifier.
+            ///
+            /// The backing sequence namespace stays crate-private
+            /// (`DESIGN.md` §6): callers may move the number, not the allocator.
             #[must_use]
             pub const fn get(self) -> i64 {
                 self.0.get()

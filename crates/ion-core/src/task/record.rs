@@ -35,8 +35,11 @@ pub struct TaskRecord {
 }
 
 impl TaskRecord {
+    /// Construct a pending record. Crate-private: task creation is the writer's
+    /// job, and an external `TaskRecord` is a read DTO, not a buildable
+    /// capability.
     #[must_use]
-    pub fn pending(
+    pub(crate) fn pending(
         id: TaskId,
         conversation_id: ConversationId,
         kind: TaskKindName,
@@ -65,7 +68,7 @@ impl TaskRecord {
 
     /// Scope this task to an existing foreground turn (including a new root's own id).
     #[must_use]
-    pub fn in_turn(mut self, turn: TaskId) -> Self {
+    pub(crate) fn in_turn(mut self, turn: TaskId) -> Self {
         self.turn = Some(turn);
         self
     }

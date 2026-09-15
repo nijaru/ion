@@ -16,9 +16,10 @@ pub use conversation::{
     Conversation, Entry, EntryKind, EntryKindError, HistoryParent, Input, InputBody,
     InputDisposition, InputMode, InputPlacement, InputSender, RequestKey, RequestKeyError,
 };
-pub use id::{
-    ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, LocalSeq, SessionId, TaskId,
-};
+pub use id::{ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, SessionId, TaskId};
+// Crate-internal only: the backing sequence namespace is not part of the client
+// surface (`DESIGN.md` §6).
+pub(crate) use id::LocalSeq;
 pub use session::{
     AdmissionReceipt, CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt,
     EntryRequest, InputReceipt, InputRequest, Interruption, InterruptionReason, Session,

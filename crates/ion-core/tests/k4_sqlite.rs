@@ -842,7 +842,7 @@ fn committed_writes_survive_process_death() {
         CRASH_PAYLOADS.map(|payload| json!(payload)).to_vec(),
         "every commit acknowledged before the crash must be durable"
     );
-    assert!(reopened.summary().last_commit.local_seq().get() > 0);
+    assert!(reopened.summary().last_commit.get() > 0);
 
     // Recovery is idempotent: after the first reopen releases ownership, the
     // next one sees exactly the same history.

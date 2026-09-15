@@ -55,7 +55,7 @@ impl MemoryStore {
 
 impl Persistence for MemoryStore {
     fn commit(&mut self, batch: &MutationBatch) -> Result<(), StoreError> {
-        if batch.commit_seq.local_seq() != batch.last_seq
+        if LocalSeq::from(batch.commit_seq) != batch.last_seq
             || self
                 .last_seq
                 .is_some_and(|current| batch.last_seq <= current)

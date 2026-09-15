@@ -137,8 +137,8 @@ fn self_and_forward_dependencies_are_rejected_without_committing() {
     let mut session = Session::new().unwrap();
     let before = session.snapshot();
     // The next allocated identity would be the first task's own identity.
-    let own_id = TaskId::new(before.last_commit.local_seq().get() + 1).unwrap();
-    for dependency in [own_id, TaskId::new(own_id.local_seq().get() + 1).unwrap()] {
+    let own_id = TaskId::new(before.last_commit.get() + 1).unwrap();
+    for dependency in [own_id, TaskId::new(own_id.get() + 1).unwrap()] {
         assert!(
             session
                 .create_task(TaskRequest {
