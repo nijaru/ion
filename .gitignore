@@ -2,17 +2,15 @@
 /target/
 **/*.rs.bk
 
-# Local data
+# Editor / OS
 .DS_Store
-*.log
-
-# Worktrees
-.worktrees/
-
-# IDE
 .idea/
 .vscode/
 *.swp
-.hhg/
-.ion/
+
+# Local logs and worktrees
+*.log
+.worktrees/
+
+# Local agent harness state
 .pi/
