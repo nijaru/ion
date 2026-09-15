@@ -135,7 +135,7 @@ impl ProviderRegistry {
 }
 ```
 
-`prepare` is pure: validate model, instructions, every explicit control, tool schema, ordering and replay; serialize the complete semantic request with no credential reads or networking. Unsupported capabilities are typed failures here, not a list of optimistic booleans. Reject duplicate/empty registry IDs; unknown provider/model is Unsupported. No registration replacement while invocations use that registry. Provider/model profiles are a finite host-supplied table; no discovery request runs during assembly.
+`prepare` is pure: validate model, instructions, every explicit control, tool schema, ordering and replay; serialize the complete semantic request with no credential reads or networking. `ProviderRegistry` wraps every stream with the shared validator (§10.4) before core can observe it, so an implementation cannot admit an out-of-order or incomplete response even if it validates nothing itself. Unsupported capabilities are typed failures here, not a list of optimistic booleans. Reject duplicate/empty registry IDs; unknown provider/model is Unsupported. No registration replacement while invocations use that registry. Provider/model profiles are a finite host-supplied table; no discovery request runs during assembly.
 PreparedRequest::new validates byte caps and an allowlist of nonsecret semantic headers, computes the digest, and exposes no mutation. Method is POST; route is fixed by the endpoint-profile revision. Prepared bytes are immutable and movable, tied to their originating provider stamp. `stream` verifies ownership, resolves host credentials, and makes **at most one generation HTTP request**. No redirects, reconnects, provider fallback or hidden SDK retries. Neither a request nor a stamp contains Ion session/task IDs.
 Host instances live in optional `crates/ion-ai/src/provider/{openrouter,anthropic}.rs`; shared wire leaves in `crates/ion-ai/src/api/{chat,anthropic}/{request,stream,error}.rs` and `api/sse.rs`. Enable HTTP behind one feature, leaving contract/scripted builds HTTP-free. Do not pre-create auth/catalog abstractions.
 
@@ -299,12 +299,13 @@ pub enum ProviderErrorKind {
     Protocol, LimitExceeded, Unknown,
 }
 pub enum DispatchKnowledge { NotSent, Rejected, MayHaveRun }
-pub enum RetryClass { Never, Transient }
+/// Facts only. Retry eligibility is generation policy (§10.3): the adapter reports
+/// what happened and an advisory delay, never whether another attempt is allowed.
 pub struct ProviderFailure {
     pub kind: ProviderErrorKind, pub message: String,
     pub status: Option<u16>, pub code: Option<String>, pub request_id: Option<String>,
     pub unsupported: Option<UnsupportedCapability>, pub dispatch: DispatchKnowledge,
-    pub retry: RetryClass, pub retry_after_ms: Option<u64>, pub usage: Usage,
+    pub retry_after_ms: Option<u64>, pub usage: Usage,
 }
 pub enum UnsupportedCapability { Model, Instructions, Control(String), Tools, Content, Replay }
 pub struct ProviderError {
@@ -361,16 +362,92 @@ Use thiserror for ProviderError/AssemblyError and source annotations; implement 
 Borrow ModelRequest/tool specs during prepare, serialize once, move PreparedRequest into stream. Move final blocks into the durable response/plan; use Arc only for genuinely shared provider/tool implementations or immutable bytes. Do not deep-clone all messages just to satisfy the stream lifetime; current generation clones the frozen request (`crates/ion-core/src/builtin/generation.rs:129-132`), which this ownership split removes.
 Justified dependencies: optional reqwest with Rustls/stream and only required features, existing futures/serde/thiserror, SHA-256 for integrity, and a small bounded SSE decoder (an audited parser crate is acceptable if it exposes limits and never reconnects). Refuse vendor SDKs with opaque retry loops, general event-source reconnect clients, catalog frameworks, OAuth/keyring persistence and a second HTTP stack. Pin resolved versions in Cargo.lock and fixture-test cancellation/framing before choosing parser reuse.
 
-## 10. Review gates before implementation
+## 10. Resolved review gates
 
-Source/design audit at `1d370462` (2026-09-14): the ownership direction is sound, but this proposal is **not approved for trait freeze**. Keep pure preparation, one owned transport attempt, ordered content, frozen resolved inputs and fail-closed replay. Resolve these gaps within this slice, not with a second runtime:
+Source/design audit at `1d370462` (2026-09-14) kept the ownership direction and refused a trait freeze until four gaps had concrete contracts. They are decided here; implementation is still staged (§10.5). Wire mappings remain PV hypotheses until their fixtures exist.
 
-- **Turn budget owner:** §4 freezes limits at admission while §5 stores limits in each generation checkpoint. Specify one authoritative turn-root budget record and writer commands for reservation/reconciliation, inherited by continuation and compaction tasks. Per-generation copies are evidence, not independently spendable balances. Acceptance must race two reservations and cover crash-after-reserve, unknown usage, config tightening and compaction charges. No mutating live run precedes enforcement.
-- **Blocked recovery:** §5 requires missing historical revisions/profiles to block recovery, but `AssemblyError` has no unavailable-implementation case and today's generation bridge returns string interruptions. Define a typed blocked result, retaining the checkpoint and permitting explicit re-drive after restoration; distinguish it from corrupt evidence that settles Indeterminate. Test missing-profile restore/re-drive without an intervening send or irreversible terminalization.
-- **Retry ownership:** `ProviderFailure.retry` and §6's kind-based retry list can disagree. The provider reports transport facts and advisory retry timing; generation owns the sole eligibility rule. Remove the redundant retry classification or define it strictly as an adapter fact that cannot authorize a retry. Pin contradictory-input handling and unknown failures in policy tests.
-- **Neutral stream validation:** §2 requires final blocks to agree with provisional deltas, but the proposed trait alone cannot enforce this for scripted/custom providers. Name one shared validator used on every provider stream before core can admit tool children; wire parsers additionally validate their own framing. Exercise malformed final responses through the actual driver, not only adapter unit tests.
+### 10.1 One authoritative turn budget (`D19`)
 
-These are proposed contract refinements, not implemented guarantees. Wire mappings remain PV hypotheses until their fixtures exist. Deliver the provider work in bounded stages: neutral types/validation and atomic request basis; two wire fixtures and one bounded live path; enforced execution/run budgets before live mutation. Do not turn the complete R7/R8 acceptance matrix into a prerequisite for the first offline fixture.
+The budget is **durable state on the turn root task record**, not a new entity and not a copy per generation:
+
+```rust
+// tasks row, schema v6; present only on a turn root
+pub struct TurnBudget {
+    pub limits: RunLimits,               // frozen at turn admission
+    pub deadline_at_ms: u64,             // absolute, from admission
+    pub reserved: BudgetCharge,          // worst case for attempts in flight
+    pub settled: BudgetCharge,           // reconciled, reported usage
+    pub unknown_attempts: u32,           // dispatched attempts with no usable usage
+}
+pub struct BudgetCharge {
+    pub input_tokens: u64, pub output_tokens: u64,
+    pub cost_microusd: Option<u64>,      // None only when no monetary cap is configured
+}
+```
+
+Writer commands, both validated against the live generation-fencing rules:
+
+```text
+reserve_turn_budget(turn: TaskId, generation: u64, charge: BudgetCharge) -> BudgetReservation
+reconcile_turn_budget(turn: TaskId, reservation: BudgetReservation, usage: Usage) -> BudgetCharge
+```
+
+The turn root stays the addressing key because every member already carries `task.turn`, so a continuation, a compaction task and a tool task all reach the same balance without a second index. Rules:
+
+- Limits and the absolute deadline are frozen when the turn opens. Config changes and authority narrowing affect the next turn, never the live one; nothing may raise a live budget.
+- A generation, compaction or any future budgeted kind reserves **before** its dispatch-intent commit, so a crash after reservation leaves a conservative charge. Reuse of the reservation across a retry is an explicit choice, not a default.
+- Reconciliation converts a reservation into `settled`, or into `unknown_attempts` plus an unresolved charge when usage is unknown. `Usage`'s unknown-vs-zero distinction is preserved end to end: an unknown attempt never reconciles to zero.
+- With a monetary cap configured, an unknown unresolved amount blocks further admission rather than being assumed free; token/attempt/time limits are enforced regardless.
+- A per-generation checkpoint keeps its own reservation record as *evidence* of what that attempt claimed. Only the turn budget authorizes spend.
+
+Acceptance (`ion-core generation_limits.rs`): two concurrent reservations cannot both fit a cap; crash after reserve still charges the attempt; unknown usage with a cost cap blocks the next step; a tightened configuration does not change the live turn; a compaction attempt charges the same budget; reserving after the deadline fails without dispatch.
+
+### 10.2 Recoverably blocked replay (`D20`)
+
+A missing historical revision, provider, profile or tool implementation is **host state that can be restored**, not corrupt evidence, so it must not terminalize work:
+
+```rust
+// ion-ai: exchanged between assembly and the provider boundary
+pub enum Unavailable { Provider(String), Profile(String), Model(ModelRef), ToolImplementation(String), Revision(String) }
+
+// ion-core: a drive that cannot proceed
+pub enum DriveOutcome { Settled(..), Interrupted(..), Blocked { task_id: TaskId, reason: Unavailable } }
+```
+
+`Blocked` consumes no invocation generation, writes no outcome, leaves the task `Running` with its checkpoint intact, and performs no provider or tool I/O. An explicit re-drive after the host registers the missing item proceeds exactly once; a still-missing item blocks again. This is the provider-side analogue of the already-accepted rule that a running task whose `(kind, schema_version)` implementation is unavailable blocks recovery.
+
+Contrast, and the reason both exist: a checkpoint that exists but cannot be read stays terminal `Indeterminate` with no dispatch (`crates/ion-core/src/builtin/checkpoint.rs`). Unreadable evidence is never "blocked", and blocked work is never settled.
+
+Acceptance (`ion-core generation_replay.rs`): close with a missing profile, reopen, drive → `Blocked`, generation unchanged, no send; register the profile, drive → sends once; the same sequence with a damaged checkpoint settles `Indeterminate` instead.
+
+### 10.3 Provider reports facts; generation owns retry policy (`D20`)
+
+`ProviderFailure` carries `kind`, `message`, `status`, `code`, `request_id`, `unsupported`, `dispatch`, `retry_after_ms` and `usage`. **`RetryClass` is removed**: it duplicated the eligibility rule and could disagree with §6's kind-based table. The adapter may classify what happened (`dispatch`, advisory timing, structural code); only the generation task decides whether another attempt is allowed, from the typed facts plus attempts/steps/deadline/budget. `retry_after_ms` is timing input for a backoff the generation chooses, never permission to retry. Contradictory input (a structural retry hint on a non-retryable kind) resolves to the kind, and unknown failures never retry automatically.
+
+Acceptance (`ion-core generation_limits.rs`, `ion-ai provider_contract.rs`): authentication and invalid-request failures do not retry despite retry hints; a rate-limited failure retries with the advisory delay; an unknown kind does not; policy decisions are asserted from enum facts, not message text.
+
+### 10.4 One shared stream validator at the trait boundary (`D20`)
+
+Provisional-block ordering cannot be enforced by convention, so every stream reaching core passes one validator:
+
+```rust
+// ion-ai: applied by the registry wrapper, not trusted to each implementation
+pub fn validate_stream(stream: ModelStream) -> ModelStream;
+```
+
+It enforces: unique `BlockStart` per index, deltas only for an open block, one `BlockEnd` per started index, exactly one terminal `Finished`, `Finished`/`BlockEnd` blocks agreeing with accumulated deltas, indices and buffers within bounds, and no event after termination. A violation terminates the stream with `ProviderErrorKind::Protocol` and `DispatchKnowledge::MayHaveRun`. Wire parsers additionally validate their own framing (§3); a scripted or third-party provider gets the same treatment because the wrapper is applied by `ProviderRegistry`/`ModelService`, not by the adapter.
+
+Acceptance (`ion-ai provider_contract.rs`, `ion-core generation_replay.rs`): malformed final blocks, duplicate indices, deltas without a start, a second `Finished` and post-terminal events each fail as `Protocol` through the real driver, with no assistant entry and no tool child.
+
+### 10.5 Delivery stages
+
+Resolved contracts do not authorize a big-bang replacement. Deliver in bounded stages, each with its own gates and evidence:
+
+1. **Neutral types, validator and atomic request basis** — no networking; scripted provider only. The first code slice is the request basis (§4: capture cut/config/placed inputs atomically, with an upper cutoff), because it is independent of the wire work and closes the "cutoff captured after paging" finding.
+2. **Two wire fixtures and one bounded live path** (`ION_LIVE_PROVIDER=1`, one explicitly selected provider/model).
+3. **Enforced budgets and the execution environment** before any mutating live run.
+
+Do not turn the complete R7/R8 acceptance matrix into a prerequisite for the first offline fixture.
 
 ## 11. Open questions
 

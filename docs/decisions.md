@@ -31,6 +31,9 @@ entry that replaced it), **proposed** (recommended, not yet implemented),
 
 | D18 | 2026-09-14 | Artifact publication has no owner yet, so the unused `Artifact` record type and the always-`None` `TaskOutput.artifact` reference were deleted instead of kept as an API that implies spilling support. `DESIGN.md` §2/§17 keep the noun and the publish-before-reference requirement as targets; `ArtifactId` stays in the identity namespace per §6 | accepted | A boundary owns artifact publication, lookup and integrity checks, with crash-before-reference and missing/corrupt-content tests |
 
+| D19 | 2026-09-14 | A turn's run budget is one durable record on the turn root task (`TurnBudget`: frozen limits, absolute deadline, reserved, settled, unknown attempts), spent through writer reservation/reconciliation commands rather than by per-generation copies. Per-generation checkpoints keep their reservation as evidence only; unknown usage never reconciles to zero and blocks a configured monetary cap | accepted | A budgeted kind cannot address the turn root, or contention shows the single record cannot serve concurrent members |
+| D20 | 2026-09-14 | At the provider boundary the adapter reports facts (kind, status, code, dispatch knowledge, advisory delay, usage) and never retry eligibility, which generation policy owns alone; every provider stream passes one shared validator before core can observe it; and missing host state (provider/profile/model/tool revision) blocks a drive recoverably as `DriveOutcome::Blocked` instead of settling, while unreadable evidence stays terminal `Indeterminate` | accepted | A provider supplies positive evidence that makes an adapter-side retry decision safe, or a custom provider legitimately needs to bypass shared validation |
+
 ## How to add an entry
 
 Add a row when a choice would be expensive to reverse or would be surprising to
