@@ -7,7 +7,10 @@ mod record;
 mod registry;
 mod typed;
 
-pub use context::{AbortContext, DependencyOutcome, TaskContext, TaskContextError};
+pub use context::{
+    AbortContext, ContextCut, DependencyOutcome, PlacedInput, RequestBasis, TaskContext,
+    TaskContextError,
+};
 pub(crate) use context::{ContextFuture, TaskRuntime};
 pub use invocation::{InvocationKind, TaskInvocation};
 pub use kind::{ResourceDomain, RunningTask, TaskCompletion, TaskFuture, TaskKind, TaskRunError};

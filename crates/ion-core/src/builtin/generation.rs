@@ -30,8 +30,8 @@ use crate::task::{
     PlannedEntry, PlannedTask, PlannedTaskRef, PlannedTurn, TaskDependency, TaskPlan,
 };
 use crate::{
-    AbortContext, Entry, EntryId, InputId, ResourceDomain, RunningTask, TaskCompletion,
-    TaskContext, TaskFuture, TaskKind, TaskOutcomeKind, TaskRunError,
+    AbortContext, ContextCut, Entry, InputId, RequestBasis, ResourceDomain, RunningTask,
+    TaskCompletion, TaskContext, TaskFuture, TaskKind, TaskOutcomeKind, TaskRunError,
 };
 
 /// Transcript page size. History is read in bounded pages rather than as one
@@ -57,8 +57,12 @@ impl GenerationKind {
     /// Build the request this invocation will send, freezing the transcript
     /// cutoff, the bound inputs and the tool specifications with it.
     async fn freeze(&self, context: &TaskContext) -> Result<FrozenRequest, TaskRunError> {
-        let entries = read_transcript(context).await?;
-        let context_cutoff = entries.last().map(|entry| entry.id);
+        // Capture the boundary before reading anything: the cutoff is decided
+        // once, so an append that lands while the pages are being read is not
+        // part of this request. Deriving the cutoff from the last page read
+        // would silently widen the request under concurrent writes.
+        let basis = context.request_basis().await?;
+        let entries = read_transcript(context, &basis).await?;
         let projection = project(&entries).map_err(|error| {
             TaskRunError::new(format!(
                 "conversation context is not provider-safe: {error}"
@@ -71,17 +75,11 @@ impl GenerationKind {
         // this request actually included, taken from the projection that built the
         // request: presence in the transcript, or an id below the cutoff, does not
         // establish that an edit did not remove the content.
-        let inputs = context
-            .placed_inputs()
-            .await?
-            .into_iter()
-            .filter(|input| {
-                input
-                    .disposition
-                    .placement()
-                    .is_some_and(|placement| projection.contributing.contains(&placement.entry))
-            })
-            .map(|input| input.id)
+        let inputs = basis
+            .placed
+            .iter()
+            .filter(|placed| projection.contributing.contains(&placed.entry))
+            .map(|placed| placed.input)
             .collect();
 
         Ok(FrozenRequest {
@@ -90,7 +88,7 @@ impl GenerationKind {
                 messages: projection.messages,
                 tools: self.tools.specs(),
             },
-            context_cutoff,
+            cut: basis.cut,
             inputs,
             attempts: 0,
         })
@@ -176,7 +174,7 @@ impl TaskKind for GenerationKind {
                 data: json!({
                     "text": text,
                     "tool_calls": calls.len(),
-                    "context_cutoff": frozen.context_cutoff.map(|entry| entry.get()),
+                    "context_cutoff": frozen.cut.entry().map(|entry| entry.get()),
                     "attempts": frozen.attempts,
                     "usage": response.usage,
                     "termination": response.termination,
@@ -258,7 +256,9 @@ impl TaskKind for GenerationKind {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct FrozenRequest {
     request: ModelRequest,
-    context_cutoff: Option<EntryId>,
+    /// The transcript boundary this request froze. `Empty` is a real boundary:
+    /// the request saw no history, and replay must not widen it.
+    cut: ContextCut,
     /// The accepted inputs whose placed entries this request's transcript
     /// included, for provenance only. The entry is the content authority, so the
     /// text is not duplicated here.
@@ -271,11 +271,16 @@ fn encode(frozen: &FrozenRequest) -> Result<Value, TaskRunError> {
         .map_err(|error| TaskRunError::new(format!("frozen request is not encodable: {error}")))
 }
 
-async fn read_transcript(context: &TaskContext) -> Result<Vec<Entry>, TaskRunError> {
+async fn read_transcript(
+    context: &TaskContext,
+    basis: &RequestBasis,
+) -> Result<Vec<Entry>, TaskRunError> {
     let mut entries = Vec::new();
     let mut after = None;
     loop {
-        let page = context.conversation_entries(after, TRANSCRIPT_PAGE).await?;
+        let page = context
+            .request_entries(basis, after, TRANSCRIPT_PAGE)
+            .await?;
         after = page.next;
         entries.extend(page.entries);
         if after.is_none() {

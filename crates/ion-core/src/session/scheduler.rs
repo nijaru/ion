@@ -715,21 +715,29 @@ impl TaskRuntime for SessionTaskRuntime {
         })
     }
 
-    fn conversation_entries<'a>(
+    fn request_basis<'a>(
         &'a self,
         task_id: TaskId,
+    ) -> ContextFuture<'a, Result<crate::RequestBasis, TaskContextError>> {
+        Box::pin(async move {
+            let session = self.session.lock().await;
+            session.ensure_open().map_err(context_error)?;
+            session.request_basis(task_id).map_err(context_error)
+        })
+    }
+
+    fn request_entries<'a>(
+        &'a self,
+        task_id: TaskId,
+        basis: crate::RequestBasis,
         after: Option<EntryId>,
         limit: usize,
     ) -> ContextFuture<'a, Result<crate::EntryPage, TaskContextError>> {
         Box::pin(async move {
             let session = self.session.lock().await;
             session.ensure_open().map_err(context_error)?;
-            let conversation_id = session
-                .task_record(task_id)
-                .ok_or_else(|| TaskContextError::Runtime(format!("unknown task {task_id}")))?
-                .conversation_id;
             session
-                .conversation_entries(conversation_id, after, limit)
+                .request_entries(task_id, &basis, after, limit)
                 .map_err(context_error)
         })
     }
@@ -742,18 +750,6 @@ impl TaskRuntime for SessionTaskRuntime {
             let session = self.session.lock().await;
             session.ensure_open().map_err(context_error)?;
             session.dependency_outcomes(task_id).map_err(context_error)
-        })
-    }
-
-    fn placed_inputs<'a>(
-        &'a self,
-        task_id: TaskId,
-    ) -> ContextFuture<'a, Result<Vec<crate::Input>, TaskContextError>> {
-        Box::pin(async move {
-            let session = self.session.lock().await;
-            session.ensure_open().map_err(context_error)?;
-            let turn = session.task_record(task_id).and_then(|task| task.turn);
-            Ok(turn.map_or_else(Vec::new, |turn| session.placed_inputs(turn)))
         })
     }
 }

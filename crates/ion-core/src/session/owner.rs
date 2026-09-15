@@ -14,8 +14,8 @@ use crate::view::{
     CommitEvent, EntryPage, ObservationBatch, SessionSnapshot, SessionSummary, TaskCounts,
 };
 use crate::{
-    CommitSeq, ConversationId, DependencyOutcome, InputId, InvocationKind, RequestKey, SessionId,
-    TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
+    CommitSeq, ConversationId, DependencyOutcome, InputId, InvocationKind, PlacedInput,
+    RequestBasis, RequestKey, SessionId, TaskId, TaskOutcome, TaskOutput, TaskRecord, TaskStatus,
 };
 
 #[cfg(test)]
@@ -462,6 +462,79 @@ impl Session {
         let (page, more) = self
             .state
             .visible_page(conversation_id, after, limit)
+            .map_err(|error| match error {
+                StateError::InvisibleCursor(cursor) => {
+                    SessionError::InvisibleContextReference(cursor)
+                }
+                other => SessionError::Invariant(other.to_string()),
+            })?;
+        // Only the page's payloads are cloned.
+        let entries: Vec<_> = page
+            .into_iter()
+            .map(|id| {
+                self.state.entry(id).cloned().ok_or_else(|| {
+                    SessionError::Invariant(format!("visible entry {id} has no record"))
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        let next = more.then(|| entries.last().expect("a truncated page is non-empty").id);
+        Ok(EntryPage { entries, next })
+    }
+
+    /// Capture the transcript boundary and placed inputs one invocation reads
+    /// at, in a single read of committed state.
+    ///
+    /// A request basis exists so that paging happens *inside* a boundary: the
+    /// cutoff is decided before the first page, not derived from the last page
+    /// read. An append that lands after this returns is not part of the request.
+    pub(crate) fn request_basis(&self, task_id: TaskId) -> Result<RequestBasis, SessionError> {
+        let task = self
+            .task_record(task_id)
+            .ok_or(SessionError::UnknownTask(task_id))?;
+        let cut = self
+            .state
+            .last_visible_id(task.conversation_id)
+            .map_err(|error| SessionError::Invariant(error.to_string()))?;
+        let placed = task.turn.map_or_else(Vec::new, |turn| {
+            self.placed_inputs(turn)
+                .into_iter()
+                .filter_map(|input| {
+                    input.disposition.placement().map(|placement| PlacedInput {
+                        input: input.id,
+                        entry: placement.entry,
+                    })
+                })
+                .collect()
+        });
+        Ok(RequestBasis {
+            conversation_id: task.conversation_id,
+            cut,
+            placed,
+        })
+    }
+
+    /// One page inside a captured request basis.
+    ///
+    /// The basis is revalidated against the invocation's own conversation so a
+    /// caller cannot page another conversation's history through it.
+    pub(crate) fn request_entries(
+        &self,
+        task_id: TaskId,
+        basis: &RequestBasis,
+        after: Option<crate::EntryId>,
+        limit: usize,
+    ) -> Result<EntryPage, SessionError> {
+        let task = self
+            .task_record(task_id)
+            .ok_or(SessionError::UnknownTask(task_id))?;
+        if basis.conversation_id != task.conversation_id {
+            return Err(SessionError::Invariant(
+                "request basis belongs to another conversation".to_owned(),
+            ));
+        }
+        let (page, more) = self
+            .state
+            .request_page(task.conversation_id, basis.cut, after, limit)
             .map_err(|error| match error {
                 StateError::InvisibleCursor(cursor) => {
                     SessionError::InvisibleContextReference(cursor)

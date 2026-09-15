@@ -9,6 +9,7 @@ use thiserror::Error;
 
 use crate::session::journal::Editor;
 use crate::session::transaction::Mutation;
+use crate::task::ContextCut;
 use crate::{
     CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
     InputPlacement, InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation,
@@ -258,6 +259,150 @@ impl SessionState {
         self.conversations
             .get(&conversation_id)
             .map(|conversation| &**conversation)
+    }
+
+    /// The last entry a request over this conversation can see, or `Empty` when
+    /// the conversation has no visible history yet.
+    ///
+    /// This is what a request freezes as its transcript cutoff. A conversation
+    /// with no entries of its own starts at `Empty`, and a fork whose parent
+    /// supplied nothing still ends at the parent's cutoff rather than at whatever
+    /// the parent appended later.
+    pub(crate) fn last_visible_id(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<ContextCut, StateError> {
+        let conversation = self
+            .conversations
+            .get(&conversation_id)
+            .ok_or(StateError::UnknownConversation(conversation_id))?;
+        if let Some(last) = self
+            .entries_by_conversation
+            .get(&conversation_id)
+            .and_then(|ids| ids.iter().next_back())
+        {
+            return Ok(ContextCut::Through(*last));
+        }
+        match conversation.parent {
+            None => Ok(ContextCut::Empty),
+            Some(parent) => Ok(ContextCut::Through(parent.at)),
+        }
+    }
+
+    /// One page of a request's bounded view of a conversation.
+    ///
+    /// `cut` is the boundary the request froze: `Empty` saw no history at all and
+    /// `Through(id)` includes `id` and nothing appended after it, so a later
+    /// append cannot leak into a request that already captured its basis. `after`
+    /// is exclusive and must lie inside the same bounded view.
+    ///
+    /// Cost matches [`Self::visible_page`]: the page, plus a fork's ancestry.
+    pub(crate) fn request_page(
+        &self,
+        conversation_id: ConversationId,
+        cut: ContextCut,
+        after: Option<EntryId>,
+        limit: usize,
+    ) -> Result<(Vec<EntryId>, bool), StateError> {
+        let ContextCut::Through(end) = cut else {
+            return Ok((Vec::new(), false));
+        };
+        if limit == 0 || after == Some(end) {
+            // Either nothing was asked for, or the caller already reached the cut.
+            return Ok((Vec::new(), false));
+        }
+        let conversation = self
+            .conversations
+            .get(&conversation_id)
+            .ok_or(StateError::UnknownConversation(conversation_id))?;
+        let empty = BTreeSet::new();
+        let own = self
+            .entries_by_conversation
+            .get(&conversation_id)
+            .unwrap_or(&empty);
+
+        // The inherited prefix is the parent's visible order up to this fork's
+        // cutoff, materialized as ids: eight bytes each rather than records.
+        let prefix: Vec<EntryId> = match conversation.parent {
+            None => Vec::new(),
+            Some(parent) => {
+                let mut prefix = Vec::new();
+                let mut found = false;
+                for id in self.visible_ids(parent.conversation_id)? {
+                    prefix.push(id);
+                    if id == parent.at {
+                        found = true;
+                        break;
+                    }
+                }
+                if !found {
+                    return Err(StateError::InvisibleParentCutoff(parent.at));
+                }
+                prefix
+            }
+        };
+        // Where the cut sits decides which segments this view can contain: a cut
+        // inherited from the prefix excludes every own entry, because those come
+        // after it in the visible order.
+        let cut_in_prefix = prefix.iter().position(|id| *id == end);
+        if cut_in_prefix.is_none() && !own.contains(&end) {
+            return Err(StateError::InvisibleCursor(end));
+        }
+        let prefix_view_end = cut_in_prefix.map_or(prefix.len(), |position| position + 1);
+
+        let mut page: Vec<EntryId> = Vec::new();
+
+        // Validate the cursor against this bounded view *before* any range is
+        // built: a cursor past the cut is outside the request, and a range with
+        // its start beyond its end is a panic rather than an error.
+        if let Some(cursor) = after {
+            let in_prefix = prefix.iter().position(|id| *id == cursor);
+            let valid = match in_prefix {
+                Some(position) => cut_in_prefix.is_none_or(|cut| position <= cut),
+                None => cut_in_prefix.is_none() && own.contains(&cursor) && cursor < end,
+            };
+            if !valid {
+                return Err(StateError::InvisibleCursor(cursor));
+            }
+        }
+        let resume = match after {
+            None => 0,
+            Some(cursor) => prefix
+                .iter()
+                .position(|id| *id == cursor)
+                .map_or(prefix_view_end, |position| position + 1),
+        };
+
+        for id in prefix.iter().take(prefix_view_end).skip(resume) {
+            page.push(*id);
+            if *id == end || page.len() > limit {
+                break;
+            }
+        }
+        if cut_in_prefix.is_none() && page.last() != Some(&end) && page.len() <= limit {
+            let range = match after {
+                Some(cursor) if own.contains(&cursor) => {
+                    (Bound::Excluded(cursor), Bound::Included(end))
+                }
+                Some(_) => (Bound::Unbounded, Bound::Included(end)),
+                None => (Bound::Unbounded, Bound::Included(end)),
+            };
+            for id in own.range(range) {
+                page.push(*id);
+                if *id == end || page.len() > limit {
+                    break;
+                }
+            }
+        }
+
+        let more = page.len() > limit;
+        if more {
+            page.truncate(limit);
+        } else if page.last() != Some(&end) {
+            // A bounded view that does not reach its own cut is inconsistent.
+            return Err(StateError::InvisibleCursor(end));
+        }
+        Ok((page, more))
     }
 
     /// One page of a conversation's fork-visible entry order.
@@ -917,4 +1062,161 @@ pub(crate) enum StateError {
     ConversationNotOwned(ConversationId),
     #[error("turn {0} cannot be closed by that settlement")]
     InvalidTurnClosure(TaskId),
+}
+
+#[cfg(test)]
+mod request_page_tests {
+    use super::*;
+    use crate::conversation::context::ContextControl;
+    use crate::{Conversation, Entry, EntryKind, HistoryParent, SessionId};
+
+    /// Root with three entries, a fork of it at the second entry, and one entry
+    /// the fork appended itself.
+    fn fixture() -> (SessionState, ConversationId, ConversationId, Vec<EntryId>) {
+        let mut state = SessionState::empty(SessionId::new());
+        let root = ConversationId::new(1).expect("id");
+        let fork = ConversationId::new(2).expect("id");
+        state.root_conversation = Some(root);
+        state.last_seq = Some(LocalSeq::new(9).expect("sequence"));
+        state.last_commit = Some(CommitSeq::new(9).expect("commit"));
+        state
+            .conversations
+            .insert(root, Arc::new(Conversation::root(root)));
+
+        let mut ids = Vec::new();
+        for (index, conversation) in [root, root, root, fork].into_iter().enumerate() {
+            let id = EntryId::new(index as i64 + 1).expect("id");
+            ids.push(id);
+            state
+                .insert_entry(Entry {
+                    id,
+                    conversation_id: conversation,
+                    kind: EntryKind::new("note").expect("kind"),
+                    data: serde_json::json!({"index": index}),
+                    projection: Vec::new(),
+                    context: ContextControl::none(),
+                })
+                .expect("entry");
+        }
+        state.conversations.insert(
+            fork,
+            Arc::new(Conversation {
+                id: fork,
+                parent: Some(HistoryParent {
+                    conversation_id: root,
+                    at: ids[1],
+                }),
+                owner_task: None,
+                foreground_turn: None,
+                turn_cancelled: false,
+                retired: false,
+            }),
+        );
+        (state, root, fork, ids)
+    }
+
+    #[test]
+    fn a_request_page_never_crosses_its_cut() {
+        let (state, root, fork, ids) = fixture();
+        let [first, second, third, forked] = [ids[0], ids[1], ids[2], ids[3]];
+
+        // The cut is the last visible entry, and paging stops there.
+        assert_eq!(
+            state.last_visible_id(root).expect("cut"),
+            ContextCut::Through(third)
+        );
+        let (page, more) = state
+            .request_page(root, ContextCut::Through(second), None, 8)
+            .expect("page");
+        assert_eq!(page, vec![first, second]);
+        assert!(!more);
+
+        // A cursor at the cut has nothing after it inside the same request.
+        assert_eq!(
+            state
+                .request_page(root, ContextCut::Through(second), Some(second), 8)
+                .expect("page"),
+            (Vec::new(), false)
+        );
+
+        // A cursor beyond the cut is not part of this view.
+        assert!(matches!(
+            state.request_page(root, ContextCut::Through(second), Some(third), 8),
+            Err(StateError::InvisibleCursor(cursor)) if cursor == third
+        ));
+
+        // `Empty` is a boundary of its own, and an unknown cut is refused rather
+        // than silently widened to the whole transcript.
+        assert_eq!(
+            state
+                .request_page(root, ContextCut::Empty, None, 8)
+                .expect("page"),
+            (Vec::new(), false)
+        );
+        let unknown = EntryId::new(8).expect("id");
+        assert!(matches!(
+            state.request_page(root, ContextCut::Through(unknown), None, 8),
+            Err(StateError::InvisibleCursor(cursor)) if cursor == unknown
+        ));
+
+        // The fork sees its inherited prefix plus its own entry, and a cut inside
+        // the prefix excludes everything it appended afterwards.
+        assert_eq!(
+            state.last_visible_id(fork).expect("cut"),
+            ContextCut::Through(forked)
+        );
+        assert_eq!(
+            state
+                .request_page(fork, ContextCut::Through(second), None, 8)
+                .expect("page")
+                .0,
+            vec![first, second],
+            "a cut inside the inherited prefix excludes own entries"
+        );
+        assert_eq!(
+            state
+                .request_page(fork, ContextCut::Through(forked), None, 8)
+                .expect("page")
+                .0,
+            vec![first, second, forked]
+        );
+        assert_eq!(
+            state
+                .request_page(fork, ContextCut::Through(forked), Some(second), 8)
+                .expect("page")
+                .0,
+            vec![forked]
+        );
+        assert!(matches!(
+            state.request_page(fork, ContextCut::Through(second), Some(forked), 8),
+            Err(StateError::InvisibleCursor(cursor)) if cursor == forked
+        ));
+    }
+
+    #[test]
+    fn a_request_page_costs_the_page_not_the_transcript() {
+        let (mut state, root, _, _) = fixture();
+        for index in 10..200 {
+            let id = EntryId::new(index).expect("id");
+            state
+                .insert_entry(Entry {
+                    id,
+                    conversation_id: root,
+                    kind: EntryKind::new("note").expect("kind"),
+                    data: serde_json::json!({"index": index}),
+                    projection: Vec::new(),
+                    context: ContextControl::none(),
+                })
+                .expect("entry");
+        }
+        let cut = state.last_visible_id(root).expect("cut");
+        let (page, more) = state.request_page(root, cut, None, 4).expect("page");
+        assert_eq!(page.len(), 4);
+        assert!(more, "a truncated page reports that more follows");
+        let (rest, more) = state
+            .request_page(root, cut, Some(page[3]), 4)
+            .expect("page");
+        assert_eq!(rest.len(), 4);
+        assert!(more);
+    }
 }

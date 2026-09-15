@@ -58,11 +58,13 @@ impl TaskKind for Generation {
                 .unwrap_or("first")
                 .to_owned();
 
-            // Every invocation reads its transcript through bounded pages.
+            // Every invocation reads its transcript through bounded pages inside
+            // the boundary it froze first.
+            let basis = context.request_basis().await?;
             let mut transcript = Vec::new();
             let mut after = None;
             loop {
-                let page = context.conversation_entries(after, 1).await?;
+                let page = context.request_entries(&basis, after, 1).await?;
                 if page.entries.is_empty() {
                     break;
                 }

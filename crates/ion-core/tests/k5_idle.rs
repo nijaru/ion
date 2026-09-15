@@ -37,8 +37,10 @@ struct Answer;
 impl TaskKind for Answer {
     fn execute<'a>(&'a self, _task: RunningTask, context: TaskContext) -> TaskFuture<'a> {
         Box::pin(async move {
-            let inputs = context.placed_inputs().await?;
-            Ok(TaskCompletion::completed(json!({"answered": inputs.len()})))
+            let basis = context.request_basis().await?;
+            Ok(TaskCompletion::completed(
+                json!({"answered": basis.placed.len()}),
+            ))
         })
     }
 
