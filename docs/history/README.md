@@ -4,6 +4,8 @@ The files in [2026-09-11](2026-09-11/) are byte-for-byte snapshots from Ion comm
 
 They describe the preceding implementation/design and preserve its decisions and recorded acceptance evidence. Their statements that they are normative or authoritative apply to that historical revision only. They are not parallel targets for new work.
 
+They are byte-for-byte and are deliberately not rewritten, so their text can still point at our private working store, which is a local directory outside this repository, or at files that no longer exist. Those paths are not part of this repository; current owners are listed in `AGENTS.md` and `docs/source-layout.md`.
+
 | Snapshot | Original blob SHA |
 |---|---|
 | [DESIGN.md](2026-09-11/DESIGN.md) | `542f8df8900bfc1f68d8ab4777a373016ed120e0` |
