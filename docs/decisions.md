@@ -29,6 +29,8 @@ entry that replaced it), **proposed** (recommended, not yet implemented),
 | D16 | 2026-09-14 | The `ion-core`/`ion-ai` Rust surface is reviewed as a whole before the provider traits freeze | accepted | — |
 | D17 | 2026-09-14 | The excluded legacy `crates/ion` application stays in the tree until R7 and the terminal pass have mined its provider/auth and TUI *behaviour*; it is mining material, not a maintained reference and not a compatibility target | accepted | Those boundaries carry what they need, at which point the crate is deleted rather than kept beside the new one |
 
+| D18 | 2026-09-14 | Artifact publication has no owner yet, so the unused `Artifact` record type and the always-`None` `TaskOutput.artifact` reference were deleted instead of kept as an API that implies spilling support. `DESIGN.md` §2/§17 keep the noun and the publish-before-reference requirement as targets; `ArtifactId` stays in the identity namespace per §6 | accepted | A boundary owns artifact publication, lookup and integrity checks, with crash-before-reference and missing/corrupt-content tests |
+
 ## How to add an entry
 
 Add a row when a choice would be expensive to reverse or would be surprising to

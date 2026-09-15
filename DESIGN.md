@@ -38,7 +38,7 @@ The canonical nouns are:
 | Input | Admitted user/agent/host input with target, sender, mode, request identity and disposition. |
 | Task | One recoverable async operation with immutable input, typed checkpoint, dependencies, ownership edges, invocation generation and terminal outcome. |
 | Task output | Durable bounded task result/scratch/progress state; large opaque data may reference an artifact. |
-| Artifact | Retained externalized content/evidence with integrity metadata. |
+| Artifact | Retained externalized content/evidence with integrity metadata. Target noun only: no artifact type, table or publisher is implemented, and an unbacked reference field was deleted rather than left permanently empty (D18). |
 
 There is **no separate durable Agent object**. A worker is an owned `Conversation`. Public APIs may use `WorkerHandle`/`AgentHandle` terminology, but durable identity is the conversation ID.
 
@@ -456,13 +456,13 @@ One `session.sqlite` contains every fact required for one session transaction: l
 
 Do not split one session transaction across category-specific WAL databases. Independent sessions may have independent owners/connections/WAL files.
 
-SQLite is the baseline. P2 validates physical topology, indexes, WAL/checkpoint behavior, history scale, backup/repair and artifact publication before making performance claims. A second engine such as Turso must earn inclusion through measurements or a concrete sync requirement; do not build a generic multi-backend framework preemptively.
+SQLite is the baseline. P2 validates physical topology, indexes, WAL/checkpoint behavior, history scale and backup/repair before making performance claims; artifact publication joins that list only once it has an owner (D18). A second engine such as Turso must earn inclusion through measurements or a concrete sync requirement; do not build a generic multi-backend framework preemptively.
 
 The durability floor is WAL journalling with `synchronous = FULL`: a committed transaction survives process death. `NORMAL` trades that for fewer syncs and is deliberately not used. Machine power loss is a filesystem property rather than a store guarantee, so it is not claimed from a single-machine test. The store writes only committed write sets, and it advances the commit cursor with a compare-and-set on the cursor the batch was built against, so a second live authority is fenced instead of silently interleaving with the first.
 
 Opening a session reads durable records only. A task that was running when the process died is reconstructed as running and is entered through an explicit recovery drive; opening never starts work.
 
-Large opaque output may spill to files. Publish required content safely before committing its durable reference; crashes may leave reclaimable orphan files, never committed references to missing required data.
+Large opaque output may spill to files. Publish required content safely before committing its durable reference; crashes may leave reclaimable orphan files, never committed references to missing required data. No artifact publication or reference is implemented yet: the durable task output carries a bounded value only, and reintroducing an artifact reference requires the boundary that enforces publish-before-reference (D18).
 
 ## 18. Source/module architecture
 
@@ -479,8 +479,9 @@ ion-core
   view
   store
   builtin
-  artifact
 ```
+
+`artifact` is not present: the module returns with the boundary that owns publication and integrity (D18).
 
 The session module owns writer/scheduler/lifecycle, not everything asynchronous. SQLite is contained under `store/sqlite/`. Context projection is pure under `conversation/context/`. Built-in generation/tool/join behavior uses the ordinary task contract.
 

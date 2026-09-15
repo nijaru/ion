@@ -32,7 +32,6 @@ crates/ion-core/
   src/
     lib.rs
     id.rs
-    artifact.rs
 
     conversation/
       mod.rs
@@ -58,7 +57,9 @@ crates/ion-core/
     session/
       mod.rs
       owner.rs
-      state.rs
+      state/
+        mod.rs            # records, indexes, mutation application
+        reconstruction.rs # whole-state validation before a writable owner
       command.rs
       transaction.rs
       scheduler.rs
@@ -80,7 +81,7 @@ crates/ion-core/
     store/
       mod.rs
       memory.rs
-      # per-session SQLite store (implemented); artifact.rs is still future
+      # per-session SQLite store (implemented)
       sqlite/
         mod.rs
         connection.rs
@@ -90,7 +91,6 @@ crates/ion-core/
         entry.rs
         input.rs
         task.rs
-        artifact.rs
 
     # K5 built-ins (implemented): generation, the one-call tool kind and the
     # post-tools join
@@ -109,7 +109,13 @@ crates/ion-core/
       # only when reusable deterministic fakes/fault injection are needed
 ```
 
-This is not a request to create empty files. The current `session/owner.rs`, `session/transaction.rs`, and `session/scheduler.rs` are still within reviewable size, but should split by semantic owner as K4/K5 behavior lands rather than growing into new catch-all modules.
+This is not a request to create empty files. Four files are at or past the ~1,000-line split
+threshold and carry no recorded cohesive exception: `session/state.rs`, `session/transaction.rs`,
+`session/scheduler.rs` and (at review level) `session/owner.rs`. `session/state.rs` already
+split once, into `state/mod.rs` (records, indexes, mutation application) and
+`state/reconstruction.rs` (whole-state validation of a loaded session). The remaining splits are
+tracked as the R13 debt sweep in `ROADMAP.md` §1; do not grow a new catch-all module in the
+meantime.
 
 ## 3. Module ownership
 
@@ -157,11 +163,12 @@ Owns canonical session mutation and task driving.
 
 Current split:
 
-- `owner.rs`: resident session owner, journaled preparation, persistence-before-publication ordering, public mutation methods, snapshots and bounded observations;
-- `state.rs`: resident records/indexes and semantic mutation application; persistence owns no copy of this state;
+- `owner.rs`: resident session owner, journaled preparation, persistence-before-publication ordering, public mutation methods, snapshots and bounded observations (at review level; extraction tracked in R13);
+- `state/mod.rs`: resident records/indexes and semantic mutation application; persistence owns no copy of this state;
+- `state/reconstruction.rs`: the whole-state validation a loaded session must pass before any writable owner exists;
 - `command.rs`: typed command/receipt/error vocabulary;
-- `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation;
-- `scheduler.rs`: task driver, registry dispatch, local invocation ownership, settlement dispatch and cancellation signaling;
+- `transaction.rs`: semantic mutation batches, read-your-writes draft state and invariant validation (over the split threshold; extraction tracked in R13);
+- `scheduler.rs`: task driver, registry dispatch, local invocation ownership, settlement dispatch and cancellation signaling (over the split threshold; extraction tracked in R13);
 - `lifecycle.rs`: graceful/fault close that fences writes before joining, and the separate bounded admission abort cleanup uses;
 - `idle.rs`: the mode/state admission policy and the turn a conversation starts for queued input, including the `TurnTemplate` configuration. It owns when queued input becomes work, not how a turn is created (`owner.rs`/`transaction.rs`) or how it is driven (`scheduler.rs`);
 - `wait.rs`: client task/dependency waits over committed-state wake signals;
@@ -218,7 +225,6 @@ Keep the store interface crate-private and narrow. It is not a promise of interc
 - `connection.rs`: open policy (WAL with `synchronous = FULL`, `busy_timeout`), create-versus-open, session identity and metadata reads;
 - `commit.rs`: application of one atomic semantic mutation batch, including the commit-cursor compare-and-set that fences a stale writer authority;
 - `conversation.rs`, `entry.rs`, `input.rs`, `task.rs`: focused per-record writes plus the reads open-time reconstruction composes;
-- `artifact.rs`: publication/reference metadata integration, not arbitrary filesystem tools.
 
 Reconstruction composes those per-record reads and never needs another record's payload. Entries keep `data`/`projection`/`context` as JSON columns. Tasks keep `input`/`checkpoint`/`invocation`/`outcome`/`output` as JSON columns and normalize identity, lifecycle state, dependencies and ownership into columns and child tables. Nothing stores a second copy of a value its columns already carry.
 
@@ -245,9 +251,11 @@ Implemented as `builtin::{generation, tool, post_tools}`. `Builtins` registers a
 
 Worker creation is primarily conversation ownership/admission mediated by a trusted task/tool capability, not a separate swarm runtime.
 
-### `artifact.rs`
-
-Owns core artifact identity/reference/integrity semantics. Large-output file mechanics may later move behind a more specific store/environment boundary if evidence warrants it.
+Artifact publication has no module yet. `DESIGN.md` §6 reserves `ArtifactId` in the identity
+namespace and §17 requires publishing content before committing its durable reference, but no
+boundary owns publication, lookup or integrity checks, so the previous `artifact.rs` record type
+and its unbacked `TaskOutput` reference were deleted rather than left as an API that could only
+ever be empty (`docs/decisions.md`, D18). The module returns with that boundary, not before.
 
 ## 4. Dependency direction
 

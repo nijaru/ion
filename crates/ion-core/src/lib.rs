@@ -4,7 +4,6 @@
 //! admitted inputs and recoverable tasks. Legacy lane/agent/operation/effect
 //! runtime APIs are intentionally not preserved during the pre-1.0 clean rewrite.
 
-mod artifact;
 pub mod builtin;
 pub mod conversation;
 mod id;
@@ -13,7 +12,6 @@ mod store;
 pub mod task;
 pub mod view;
 
-pub use artifact::Artifact;
 pub use conversation::{
     Conversation, Entry, EntryKind, EntryKindError, HistoryParent, Input, InputBody,
     InputDisposition, InputMode, InputPlacement, InputSender, RequestKey, RequestKeyError,
