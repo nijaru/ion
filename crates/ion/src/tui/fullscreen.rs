@@ -1,5 +1,5 @@
 //! Fullscreen transcript view (pi parity: `--tui-mode fullscreen`,
-//! the `tui.altScreen.*` bindings). TERMINAL.md architecture: the
+//! the `tui.altScreen.*` bindings). The
 //! inline frontend commits finished turns to native scrollback and
 //! keeps only the live band in the diffed window. Fullscreen inverts
 //! that ownership for as long as it is open: the whole terminal is a

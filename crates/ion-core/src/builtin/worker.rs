@@ -11,8 +11,8 @@
 //! worker's turn stops exactly that run. This is intentionally only the
 //! retained spawn. The brief is seeded as a
 //! transcript entry with a user projection rather than an admitted input, so
-//! there is no admission receipt to replay and no input to consume; DESIGN §11
-//! already allows a task with no assigned input to read its transcript, and
+//! there is no admission receipt to replay and no input to consume. A task
+//! with no assigned input reads its transcript, and
 //! later inter-worker messages use the ordinary input substrate. Joined runs,
 //! worker-local turn scope, follow-up and retirement are separate work.
 

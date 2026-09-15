@@ -1,4 +1,4 @@
-//! Print frontend: projects session events to a writer (DESIGN.md §21.1).
+//! Print frontend: projects session events to a writer.
 //! One frontend over the runtime contract; it owns no agent truth.
 
 use std::io::Write;

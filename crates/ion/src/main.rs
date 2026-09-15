@@ -67,7 +67,7 @@ struct Cli {
     trust_project: bool,
     /// Tools this non-interactive run may execute without approval,
     /// comma-separated (e.g. --allow bash,write). Everything else
-    /// terminates the operation with ApprovalRequired (DESIGN.md §17).
+    /// terminates the operation with ApprovalRequired.
     #[arg(long = "allow", value_name = "TOOLS", value_delimiter = ',')]
     allow: Vec<String>,
     /// Interactive TUI mode: `regular` (default, inline scrollback) or
@@ -141,7 +141,7 @@ async fn main() -> ExitCode {
 }
 
 /// The host's approval policy: default (approval-gated) unless the
-/// caller grants explicit actions (DESIGN.md §17). Protected-path
+/// caller grants explicit actions. Protected-path
 /// denials layer over any grant, exactly pi's protected-paths
 /// extension: writes and edits to `.env` and friends deny wherever
 /// they appear.
@@ -314,7 +314,7 @@ async fn run_acp(cli: &Cli, settings: &Settings) -> ExitCode {
 
 /// Compose the tool surface: core tools plus explicitly active MCP server
 /// tools. A failing server logs and is skipped - one broken server never
-/// blocks startup (DESIGN.md §19.1). The workspace directory is the tool
+/// blocks startup. The workspace directory is the tool
 /// path boundary, so it must resolve or startup fails. Also returns the
 /// persistent MCP service handle: /reload reuses the same service so its
 /// registry diffs the live server set instead of starting fresh
@@ -649,7 +649,7 @@ async fn run_tui(cli: &Cli, settings: &Settings) -> ExitCode {
         }
     };
     let policy = policy_for(&cli.allow, settings);
-    // The TUI can grant approvals interactively (DESIGN.md §17.4);
+    // The TUI can grant approvals interactively;
     // print/ACP hosts stay fail-closed. The session manager owns the
     // runtime stack for the attached session; the factory below is the
     // single composition point for every runtime this process opens

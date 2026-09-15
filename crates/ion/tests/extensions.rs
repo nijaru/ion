@@ -1,4 +1,4 @@
-//! Subprocess extension tests (DESIGN.md §24): language-neutral
+//! Subprocess extension tests: language-neutral
 //! stdio transport, ordinary tool contract, typed crash failures, and
 //! the project trust gate for executable configuration.
 

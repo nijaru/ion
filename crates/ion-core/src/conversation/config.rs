@@ -10,11 +10,11 @@
 //! later: the host does discovery and file reading outside mutation authority,
 //! then commits the exact text it selected plus the revision of the algorithm
 //! that selected it. Recovery reuses that text and never rereads a file, which
-//! is what makes a frozen request reproducible (`docs/decisions.md` D13).
+//! is what makes a frozen request reproducible.
 //!
 //! Configuration is not authority. Selecting a tool here does not grant
 //! permission to run it, and instruction text is never execution authority;
-//! call-time checks are separate and re-evaluated (`DESIGN.md` §10).
+//! call-time checks are separate and re-evaluated.
 
 use ion_ai::{GenerationControls, Message, ModelRef, ProviderError, Role};
 use thiserror::Error;

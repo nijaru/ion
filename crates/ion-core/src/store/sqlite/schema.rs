@@ -1,20 +1,14 @@
 //! Schema and version handling for the per-session database.
 //!
 //! One database holds exactly one session. The schema is deliberately fresh:
-//! pre-rewrite development databases are refused rather than migrated, per the
-//! pre-1.0 policy in `docs/core-runtime-migration.md`.
+//! older development databases are refused rather than migrated.
 
 use rusqlite::Connection;
 
 use super::StoreError;
 
-/// Version history: 2 added `conversations.retired`; 3 added
-/// `tasks.turn_closed_by`, the turn-completion receipt; 4 added
-/// `conversations.turn_cancelled`, the turn's cancellation barrier; 5 added
-/// `conversations.config`/`config_revision`, the installed generation
-/// configuration and the commit that installed it. Pre-1.0 development
-/// databases of an older version are refused rather than migrated, per the
-/// policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
+/// Version 6 stores installed conversation configuration and its commit revision.
+/// Older unreleased development databases are refused by `verify`.
 pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 const DDL: &str = r"

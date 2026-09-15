@@ -106,8 +106,8 @@ macro_rules! local_id {
 
             /// The numeric transport value of this session-local identifier.
             ///
-            /// The backing sequence namespace stays crate-private
-            /// (`DESIGN.md` §6): callers may move the number, not the allocator.
+            /// The backing sequence namespace stays crate-private:
+            /// callers may move the number, not the allocator.
             #[must_use]
             pub const fn get(self) -> i64 {
                 self.0.get()

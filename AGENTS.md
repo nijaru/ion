@@ -1,71 +1,39 @@
 # Working on Ion
 
-Ion's target is a provider-neutral Rust coding agent: one primary conversation by default, with optional cooperating worker conversations and a first-class TUI. Current Pico/Pi 2 is a leading minimal-harness reference; Codex is a production-engineering reference. Neither is a compatibility target. Existing Ion code is evidence and source material, not an architectural constraint.
+## Direction and ownership
 
-## Read and choose work
-
-- `DESIGN.md` owns the accepted core architecture and vocabulary.
-- `docs/core-runtime-migration.md` is the active clean rewrite plan.
-- `docs/source-layout.md` owns source/module organization.
-- `docs/r0-kernel-gates-2026-09-12.md` records the accepted pre-rewrite evidence.
-- `ROADMAP.md` owns work order, validation status and later subsystem passes.
-- `TERMINAL.md` owns interaction/control/presentation requirements.
-- `docs/research/` and `docs/research.md` record exact source findings and rationale.
-- `docs/decisions.md` is the lookup table for consequential choices and what reopens them.
-- `docs/design/` holds a concrete design for a boundary that does not exist yet; write and review it before implementing that boundary, and align the implementation to it. Repairs and performance work inside an accepted boundary stay implement-and-measure.
-- Current legacy source/tests establish what the old binary implemented and provide regression evidence; they do not override the target.
-
-Check recent commits/status before editing because the rewrite is active. Proposed, implemented and validated are distinct states.
-
-## Current rewrite rule
-
-R0.1–R0.5 are closed. Do **not** deepen or gradually translate the legacy lane/agent/operation/effect runtime and do not reopen the gates merely because old code has a different shape.
-
-The target core is:
-
-```text
-Session
-  Conversation
-    Entry
-    Input
-    Task
-```
-
-Workers are owned conversations. History parentage, task ownership/dependencies, workspace binding and communication are separate relationships. There is no separate durable Agent object or generic Effect object.
-
-Accepted kernel contracts:
-
-1. async typed `execute/recover/abort` tasks with complete durable checkpoints, invocation-generation fencing, durable cancellation mark + local signal, and a fresh abort invocation;
-2. immutable transcript entries with derived heads/edits and stable safe fork cutoffs;
-3. task-level external recovery without a generic Effect lifecycle;
-4. one private session-local monotonic sequence backing distinct typed local IDs and commit cursors;
-5. a small independent provider-neutral `ion-ai` contract crate with scripted model service.
-
-Follow `ROADMAP.md` §1 for current work order: the 2026-09-13 review prioritizes correctness repairs, bounded storage and a measurable single-agent coding loop before further joined-worker/control expansion. K/P numbers are subsystem labels, not permission to bypass that gate. Preserve the core architecture; do not reopen R0 or build another runtime to address local defects. Replace `ion-core` directly rather than maintaining old/new production runtimes. Git history is the archive. Preserve invariants/failure cases from old tests; port leaf algorithms only after their new boundary exists.
-
-Follow `docs/source-layout.md`. Do not recreate broad `runtime.rs`, `manager.rs`, `common.rs`, `utils.rs`, or giant SQL/TUI buckets. A module should have one semantic owner and few reasons to change; file size is a review signal, not something to game by moving code into generic helper files.
-
-## Scope discipline
-
-The core roadmap excludes long-term/project knowledge, memory systems, shared task boards, vector stores and planner layers. Do not shape the core around them. They require separate effectiveness evidence after the baseline agent works.
-
-Do not prematurely redesign every peripheral subsystem during the kernel rewrite. The roadmap schedules first-principles passes for execution/tools, production AI/providers/auth, TUI, extensions/MCP, external protocols and the application shell after the relevant core boundary exists.
+- `ARCHITECTURE.md` owns the accepted turn-engine contracts. `README.md` describes
+  what currently works. Target, implemented and validated are different states.
+- The 2026-09-15 design replaces the former generic task runtime. Current source is
+  evidence, not a compatibility constraint. Do not deepen TaskPlan, task graphs or
+  the resident state/undo-journal design, or add Turn as a second authority over them.
+- Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
+  shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
+  Git preserves old code and documents; retain useful failure scenarios as new tests.
+- Keep the product a Pi-like terminal coding agent with the same headless/library
+  path. Workers are optional and follow a measured single-agent baseline. Memory,
+  gateways, schedules and general workflow authoring are outside current scope.
+- Keep provider contracts independent of sessions/storage/TUI. Give each module one
+  semantic owner; avoid generic manager/helper buckets and crate-per-noun scaffolding.
 
 ## Changes
 
-For each slice, name the observable behavior, semantic owner, failure/recovery boundary and acceptance test. Review findings are source-derived until reproduced; add the boundary-specific regression before marking a repair closed, and record its commit/evidence in `ROADMAP.md`. Keep current status sections consistent with the evidence log; historical green tests do not prove newly identified gaps closed. Prefer the smallest coherent primitive that preserves the target invariant.
-
-There is no compatibility obligation to preserve. Ion is pre-1.0 with no users, so a wrong API, module or storage shape is replaced or deleted outright: no shims, no deprecation paths, no parallel implementation kept "for now", and no test or helper kept only because it exercises the old shape. Reviewers should recommend deletion over preservation, and a slice that leaves two ways to do the same thing is unfinished. If a public surface exists only to serve itself and has no consumer, delete it rather than documenting it.
-
-A temporary prototype needs an explicit promotion/deletion rule. Do not create permanent duplicate task frameworks, transcript authorities, storage backends or runtime paths. R0 prototype code is deleted once equivalent fresh-core invariants are covered.
-
-When a contract changes, update `DESIGN.md`; when work order/evidence changes, update `ROADMAP.md`; put detailed comparisons/source findings in `docs/research/` rather than turning instructions into a second architecture document.
-
-The `last-go` tag and `docs/history/` are historical recovery/reference material, not acceptance targets.
+- Before a slice, identify observable behavior, semantic owner, failure/recovery
+  boundary and acceptance test. Read affected code and current Git status first.
+- Decide consequential boundaries before implementing them. Update the architecture
+  when evidence changes a contract; do not conceal a disagreement with an adapter.
+  Keep research, working rationale and cutover tracking with their knowledge owner.
+- Add the boundary regression before marking a defect repaired. Preserve uncertainty,
+  cancellation fencing, durable admission and bounded resources when deleting APIs.
+- Do not equate declared capabilities with confinement, future cancellation with stopped
+  external effects, or green scripted tests with a working live coding agent.
+- Keep this as the only repository agent-instruction file. Add a project skill only
+  for a demonstrated recurring workflow; do not recreate design/research directories
+  as agent context. Public documentation must remain self-contained.
 
 ## Validation
 
-For Rust changes use the checked-in toolchain and run:
+Use the checked-in Rust 1.98.0 toolchain and run:
 
 ```sh
 cargo fmt --all -- --check
@@ -73,8 +41,10 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-Run smaller targeted tests during iteration, but do not claim a Rust slice validated until the required repository gates pass.
-
-Crash/cancellation/storage/provider work needs deterministic fault tests appropriate to the boundary. Terminal changes additionally require relevant reducer/PTY checks and `scripts/smoke.sh`; human terminal behavior is not established by unit tests alone.
-
-For documentation-only changes, validate authority/status consistency and do not claim compiler/runtime/live-model checks that were not run. Performance/effectiveness claims require measurements.
+Run targeted tests during iteration. Crash, cancellation, storage and provider changes
+need deterministic fault tests; overflow-sensitive changes also need release checks.
+Terminal changes need reducer/PTY checks and real-terminal smoke, not only golden frames.
+The current `scripts/smoke.sh` targets the excluded legacy application and is not a
+working fresh-workspace gate; replace it when the executable returns, not with a shim.
+For documentation-only work, verify links, authority/status consistency and preservation;
+do not claim runtime or live-model validation that was not performed.

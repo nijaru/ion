@@ -1,5 +1,4 @@
-//! Ratatui TUI frontend. Shared runtime contract: DESIGN.md §21;
-//! TUI architecture: TERMINAL.md.
+//! Legacy Ratatui TUI frontend.
 //!
 //! One runtime contract: this frontend consumes `SessionHandle`
 //! semantics only — snapshot plus bounded live events — and never
@@ -167,7 +166,7 @@ pub struct HostConfig {
 }
 
 /// What the reducer wants the event loop to do. Effects are the only
-/// path back into the runtime (TERMINAL.md, runtime interaction).
+/// path back into the runtime.
 /// No `Eq`: dialog answers carry arbitrary JSON values.
 #[derive(Debug, Clone, PartialEq)]
 pub enum UiEffect {
@@ -365,9 +364,8 @@ pub enum UiEffect {
     Quit,
 }
 
-/// A parked tool invocation awaiting the user's approval decision
-/// (DESIGN.md §17.4). While set, the composer is inert and only the
-/// decision keys are live.
+/// A parked tool invocation awaiting the user's approval decision.
+/// While set, the composer is inert and only the decision keys are live.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApprovalPrompt {
     pub tool: String,
@@ -1275,7 +1273,7 @@ struct LoginProgress {
     verification_uri: Option<String>,
 }
 
-/// One UI state owner (TERMINAL.md). Plain data; no handles, no hidden state.
+/// One UI state owner. Plain data; no handles, no hidden state.
 #[derive(Debug, Clone, Default)]
 pub struct UiState {
     /// Composer buffer.
@@ -6190,7 +6188,7 @@ async fn share_gist(
 
 /// The TUI event loop: runtime events and terminal keys into the
 /// reducer; effects dispatch straight back into the session. Never
-/// blocks rendering on provider/tool I/O (TERMINAL.md, runtime interaction).
+/// blocks rendering on provider/tool I/O.
 /// Session-lifecycle attachment for the run loop: the manager owns
 /// runtime switching; `attached` is the current stack, consumed by the
 /// loop's close path. `None` marks a host without session switching
@@ -6287,7 +6285,7 @@ pub async fn run(
     let mut screen = Screen::with_live_height(term_w, origin, term_h, render::LIVE_REGION_MAX_ROWS);
 
     // Committed transcript: restored entries, flushed turns. Committed
-    // lines never change once appended (line-diff model, TERMINAL.md).
+    // lines never change once appended (line-diff model).
     let mut transcript = Transcript::new(term_w);
 
     // The EventStream is the sole terminal reader, so crossterm parses
@@ -6384,7 +6382,7 @@ pub async fn run(
     // Extension UI bridge (Phase G): the loop owns the hub
     // subscription and the dialog responder registry. Dialog events are
     // split — the responder stays here, the reducer gets the id — so
-    // the reducer never holds an I/O handle (TERMINAL.md). A missing
+    // the reducer never holds an I/O handle. A missing
     // id on answer (lag, restart) answers Decline through the shared
     // responder's drop path in ion-core, never silently.
     let mut ext_events = host.extension_service.as_ref().map(|service| {
@@ -6436,7 +6434,7 @@ pub async fn run(
     let mut stream_recreations = 0u32;
     const MAX_STREAM_RECREATIONS: u32 = 64;
 
-    // Job control (TERMINAL.md): SIGTSTP must leave the shell a cooked,
+    // Job control: SIGTSTP must leave the shell a cooked,
     // capability-clean terminal while ion is stopped; SIGCONT re-arms
     // the negotiated modes and repaints. In orphaned process groups a
     // re-raised SIGTSTP is discarded by the kernel, so the raise may
@@ -6465,7 +6463,7 @@ pub async fn run(
         transcript.rewrap_if_needed(screen.size().0);
         // Flush completed turns into the committed transcript, then
         // draw committed history + live band as one line-diff frame
-        // (line-diff model, TERMINAL.md).
+        // (line-diff model).
         if !state.pending_scrollback.is_empty() {
             let flushed = std::mem::take(&mut state.pending_scrollback);
             transcript.extend(flushed);

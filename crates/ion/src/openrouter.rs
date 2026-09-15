@@ -1,4 +1,4 @@
-//! OpenRouter provider adapter (DESIGN.md §13.3, §15).
+//! OpenRouter provider adapter.
 //!
 //! One model step per [`Provider::run`] call: the projected input plus
 //! the frozen tool snapshot in, one validated provider generation out.

@@ -1,4 +1,4 @@
-//! ACP frontend (DESIGN.md Step 8): exposes the session runtime over
+//! ACP frontend: exposes the session runtime over
 //! the Agent Client Protocol v1 - newline-delimited JSON-RPC 2.0 on
 //! stdio. This is an adapter, not a second runtime: every prompt turn
 //! is a normal `submit` on the same `SessionHandle` the TUI and print

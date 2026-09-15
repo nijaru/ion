@@ -17,7 +17,9 @@ The workspace currently builds three libraries:
 The core supports a scripted generation/tool chain, cancellation and recovery,
 request cutoffs, and durable conversation configuration. A real-provider coding
 loop, bounded storage residency, and the rebuilt application/TUI remain unfinished.
-See [ROADMAP.md](ROADMAP.md) for implemented behavior and acceptance evidence.
+These libraries still use the preceding task-based architecture. The accepted
+[turn-engine design](ARCHITECTURE.md) is the replacement target, not an implemented
+feature set.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
 `crates/ion/` application source remains as reference material outside the
@@ -47,16 +49,12 @@ or a usable terminal application.
 
 ## Project documentation
 
-- [DESIGN.md](DESIGN.md): accepted target architecture and invariants.
-- [ROADMAP.md](ROADMAP.md): work order, implementation status and evidence.
-- [TERMINAL.md](TERMINAL.md): target interaction and frontend requirements.
-- [Source layout](docs/source-layout.md): crate and module ownership.
-- [Research](docs/research.md): source comparisons and trade-offs.
+- [ARCHITECTURE.md](ARCHITECTURE.md): target contracts, ownership and failure semantics.
 - [AGENTS.md](AGENTS.md): repository working instructions.
 
-Previous design and terminal acceptance records are preserved in
-[history](docs/history/README.md). The `last-go` tag is historical recovery material,
-not a migration target.
+Earlier architectures and implementation history remain in Git. They are not
+compatibility targets. Research notes and development planning are not public
+architecture contracts.
 
 ## License
 

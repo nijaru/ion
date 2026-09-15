@@ -1,4 +1,4 @@
-//! Line-diff screen renderer (TERMINAL.md): committed scrollback and
+//! Line-diff screen renderer: committed scrollback and
 //! the live composer/footer region form one growing line array; each
 //! frame diffs against the previous visible window and rewrites only
 //! changed rows. Physical scrolling happens only when committed

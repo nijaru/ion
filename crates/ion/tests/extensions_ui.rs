@@ -1,4 +1,4 @@
-//! Extension UI contributions (DESIGN.md §24 + Phase G): typed push
+//! Extension UI contributions: typed push
 //! events over custom notifications, dialogs over elicitation,
 //! registered commands over custom requests, and peer-death state
 //! clearing. All presentation-only; the store and lane stay untouched.

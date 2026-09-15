@@ -19,7 +19,7 @@ pub use conversation::{
 };
 pub use id::{ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, SessionId, TaskId};
 // Crate-internal only: the backing sequence namespace is not part of the client
-// surface (`DESIGN.md` §6).
+// surface.
 pub(crate) use id::LocalSeq;
 pub use session::{
     AdmissionReceipt, CloseMode, ConversationReceipt, ConversationSpec, DriveOutcome, EntryReceipt,

@@ -239,7 +239,7 @@ mod tests {
                 .starts_with("context:")
         );
         // A partially applied reload leaves the host fenced closed until a
-        // successful reconciliation reports it (DESIGN.md §19).
+        // successful reconciliation reports it.
         assert!(matches!(
             catalog.configuration().try_enter(),
             Err(ion_core::CommandError::ConfigurationFailed)

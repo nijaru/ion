@@ -1,4 +1,4 @@
-//! Host-owned session lifecycle for the interactive TUI (DESIGN.md §12).
+//! Host-owned session lifecycle for the interactive TUI.
 //!
 //! Pi-parity session surface: `/new`, `/resume`, `/clone`, `/name`, and
 //! the session picker. The manager is the single owner of runtime

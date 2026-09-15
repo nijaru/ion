@@ -2,7 +2,7 @@
 //!
 //! Whether an admitted input starts a turn is one durable decision that depends
 //! on the input's mode and on whether the conversation already has a live
-//! foreground turn (`DESIGN.md` §11). Inputs admitted while the conversation is
+//! foreground turn. Inputs admitted while the conversation is
 //! busy are queued and drained when a settlement releases the slot, one input
 //! per successor turn, without a coordinator task or a durable turn entity.
 //!

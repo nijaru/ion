@@ -230,9 +230,8 @@ pub struct ModelSelection {
     pub model: String,
 }
 
-/// One `[[extensions]]` entry: a subprocess extension publishing tools
-/// (DESIGN.md §24). User-level configuration is trusted by being
-/// user-authored.
+/// One `[[extensions]]` entry: a subprocess extension publishing tools.
+/// User-level configuration is trusted by being user-authored.
 #[derive(Debug, Clone, Deserialize)]
 pub struct ExtensionConfig {
     pub name: String,
@@ -242,7 +241,7 @@ pub struct ExtensionConfig {
 }
 
 /// One `[[mcp_servers]]` entry: a stdio MCP server launched at
-/// startup (DESIGN.md §19).
+/// startup.
 #[derive(Debug, Clone, Deserialize)]
 pub struct McpServerConfig {
     pub name: String,

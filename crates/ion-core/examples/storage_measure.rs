@@ -1,4 +1,4 @@
-//! R6 measurement harness: bounded storage and output.
+//! Measurement harness for the current task-based store.
 //!
 //! Run it against the real writer, store and open path:
 //!
@@ -6,8 +6,7 @@
 //! ION_MEASURE_TASKS=100000 cargo run --release -p ion-core --example storage_measure
 //! ```
 //!
-//! It reports what the acceptance gate in `ROADMAP.md` asks for rather than
-//! asserting it: resident memory, commit latency as the resident set grows,
+//! It reports rather than asserts: resident memory, commit latency as the resident set grows,
 //! database and WAL bytes, restart latency, cancellation latency on a tiny
 //! active set, the cost of deep history inheritance and the cost of one large
 //! output payload. Latency windows are reported at fractions of the run so
