@@ -1,7 +1,12 @@
+pub mod config;
 pub mod context;
 mod entry;
 mod input;
 
+pub use config::{
+    ConfigError, ContextPolicy, ConversationConfig, InstalledConfig, MAX_ATTEMPTS_PER_STEP,
+    RunLimits,
+};
 pub use entry::{Entry, EntryKind, EntryKindError};
 pub use input::{
     EntryPlacement, INPUT_ENTRY, Input, InputBody, InputDisposition, InputMode, InputPlacement,

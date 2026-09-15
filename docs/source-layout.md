@@ -135,6 +135,8 @@ Owns durable agent-thread semantics:
   (`InputBody::placement`) and the disposition that binds a placed entry to the
   turn answering it;
 - context controls and pure provider-neutral projection;
+- the conversation's durable generation configuration and the rules that decide
+  whether a replacement is accepted (`config.rs`);
 - fork visibility/cutoff logic.
 
 It does **not** schedule tasks, execute models/tools, access SQLite directly, or own UI state.

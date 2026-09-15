@@ -105,6 +105,12 @@ pub(crate) fn apply(connection: &mut Connection, batch: &MutationBatch) -> Resul
                 task_id,
                 conversation_id,
             } => task::attach_owned_conversation(&transaction, *task_id, *conversation_id)?,
+            Mutation::SetConversationConfig {
+                conversation_id,
+                config,
+            } => {
+                conversation::set_config(&transaction, *conversation_id, config, batch.commit_seq)?
+            }
             Mutation::SetConversationRetired {
                 conversation_id,
                 retired,

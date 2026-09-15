@@ -26,9 +26,54 @@ impl SessionState {
     pub(crate) fn validate_reconstruction(&self) -> Result<(), StateError> {
         self.validate_sequence_bounds()?;
         self.validate_conversations()?;
+        self.validate_configs()?;
         self.validate_entries()?;
         self.validate_inputs()?;
         self.validate_tasks()
+    }
+
+    /// A configuration belongs to a conversation that exists, always carries the
+    /// commit that installed it, and is still valid under this build's rules.
+    ///
+    /// The last check matters because configuration decides what a generation is
+    /// allowed to spend and send: a stored record this build would refuse is not
+    /// repaired, it makes the session untrustworthy, so opening it is refused.
+    fn validate_configs(&self) -> Result<(), StateError> {
+        for (conversation_id, config) in &self.configs {
+            if self.conversation(*conversation_id).is_none() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "configuration",
+                    detail: format!("conversation {conversation_id} does not exist"),
+                });
+            }
+            if !self.config_revisions.contains_key(conversation_id) {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "configuration",
+                    detail: format!(
+                        "conversation {conversation_id} has a configuration with no recorded commit"
+                    ),
+                });
+            }
+            if let Err(error) = config.validate() {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "configuration",
+                    detail: format!(
+                        "conversation {conversation_id} has an invalid configuration: {error}"
+                    ),
+                });
+            }
+        }
+        for conversation_id in self.config_revisions.keys() {
+            if !self.configs.contains_key(conversation_id) {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "configuration",
+                    detail: format!(
+                        "conversation {conversation_id} records a configuration commit with no configuration"
+                    ),
+                });
+            }
+        }
+        Ok(())
     }
 
     /// Every durable id comes from one monotonic sequence and every commit from
@@ -71,6 +116,17 @@ impl SessionState {
             });
         }
         let commit_bound = self.last_commit.map(CommitSeq::get).unwrap_or_default();
+        for (conversation, commit) in &self.config_revisions {
+            if commit.get() > commit_bound {
+                return Err(StateError::InconsistentReconstruction {
+                    rule: "commit bound",
+                    detail: format!(
+                        "conversation {conversation} was configured at commit {} beyond the recorded cursor {commit_bound}",
+                        commit.get()
+                    ),
+                });
+            }
+        }
         for (input, commit) in &self.input_commits {
             if commit.get() > commit_bound {
                 return Err(StateError::InconsistentReconstruction {

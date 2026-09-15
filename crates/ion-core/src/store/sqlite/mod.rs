@@ -142,7 +142,14 @@ fn load(connection: &Connection, session_id: SessionId) -> Result<SessionState, 
         ));
     }
 
-    for conversation in conversation::load(connection)? {
+    for (conversation, config) in conversation::load(connection)? {
+        if let Some(installed) = config {
+            let crate::InstalledConfig { revision, config } = installed;
+            state
+                .configs
+                .insert(conversation.id, std::sync::Arc::new(config));
+            state.config_revisions.insert(conversation.id, revision);
+        }
         state
             .conversations
             .insert(conversation.id, std::sync::Arc::new(conversation));

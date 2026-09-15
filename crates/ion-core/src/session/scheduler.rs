@@ -206,6 +206,33 @@ impl TaskDriver {
             .conversation_record(conversation_id)
     }
 
+    /// Install a conversation's complete generation configuration.
+    ///
+    /// Reconfiguring is a full replacement fenced by the revision the caller
+    /// read, so a change committed by another client is refused rather than
+    /// overwritten. The returned commit is the next revision to present.
+    pub async fn configure_conversation(
+        &self,
+        conversation_id: crate::ConversationId,
+        expected: Option<CommitSeq>,
+        config: crate::ConversationConfig,
+    ) -> Result<CommitSeq, TaskDriverError> {
+        let mut session = self.session.lock().await;
+        Ok(session.configure_conversation(conversation_id, expected, config)?)
+    }
+
+    /// The configuration installed on a conversation, if it has ever been
+    /// configured.
+    pub async fn conversation_config(
+        &self,
+        conversation_id: crate::ConversationId,
+    ) -> Option<crate::InstalledConfig> {
+        self.session
+            .lock()
+            .await
+            .conversation_config(conversation_id)
+    }
+
     /// Retire an owned conversation into a read-only archive.
     ///
     /// Rejected unless the conversation is an owned worker with no live work, so

@@ -13,8 +13,9 @@ pub mod task;
 pub mod view;
 
 pub use conversation::{
-    Conversation, Entry, EntryKind, EntryKindError, HistoryParent, Input, InputBody,
-    InputDisposition, InputMode, InputPlacement, InputSender, RequestKey, RequestKeyError,
+    ConfigError, ContextPolicy, Conversation, ConversationConfig, Entry, EntryKind, EntryKindError,
+    HistoryParent, Input, InputBody, InputDisposition, InputMode, InputPlacement, InputSender,
+    InstalledConfig, RequestKey, RequestKeyError, RunLimits,
 };
 pub use id::{ArtifactId, CommitSeq, ConversationId, EntryId, IdError, InputId, SessionId, TaskId};
 // Crate-internal only: the backing sequence namespace is not part of the client

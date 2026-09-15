@@ -11,9 +11,9 @@ use crate::session::journal::Editor;
 use crate::session::transaction::Mutation;
 use crate::task::ContextCut;
 use crate::{
-    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InputPlacement, InvocationKind, LocalSeq, RequestKey, SessionId, TaskId, TaskInvocation,
-    TaskKindName, TaskRecord, TaskStatus,
+    CommitSeq, Conversation, ConversationConfig, ConversationId, Entry, EntryId, Input,
+    InputDisposition, InputId, InputPlacement, InstalledConfig, InvocationKind, LocalSeq,
+    RequestKey, SessionId, TaskId, TaskInvocation, TaskKindName, TaskRecord, TaskStatus,
 };
 
 /// Resident semantic state. Records are held behind `Arc` so a command writes in
@@ -33,6 +33,16 @@ pub(crate) struct SessionState {
     pub(crate) last_commit: Option<CommitSeq>,
     pub(crate) root_conversation: Option<ConversationId>,
     pub(crate) conversations: BTreeMap<ConversationId, Arc<Conversation>>,
+    /// Each conversation's installed generation configuration. It lives beside
+    /// the conversation record instead of inside it: the record stays a small
+    /// copyable value, and a snapshot does not carry every instruction payload.
+    pub(crate) configs: BTreeMap<ConversationId, Arc<ConversationConfig>>,
+    /// The commit that installed each configuration, and the basis a
+    /// reconfiguration compares against. A command's commit sequence is known
+    /// only when the command is sealed, so - like an admitted input's commit
+    /// binding - it is written then. A configuration always has a revision and a
+    /// revision always names a configuration; reconstruction enforces both.
+    pub(crate) config_revisions: BTreeMap<ConversationId, CommitSeq>,
     pub(crate) entries: BTreeMap<EntryId, Arc<Entry>>,
     pub(crate) entries_by_conversation: BTreeMap<ConversationId, BTreeSet<EntryId>>,
     /// Inputs whose disposition is `Queued`, in admission order. Scheduling and
@@ -60,6 +70,8 @@ impl SessionState {
             last_commit: None,
             root_conversation: None,
             conversations: BTreeMap::new(),
+            configs: BTreeMap::new(),
+            config_revisions: BTreeMap::new(),
             entries: BTreeMap::new(),
             entries_by_conversation: BTreeMap::new(),
             queued: BTreeSet::new(),
@@ -70,6 +82,17 @@ impl SessionState {
             input_commits: HashMap::new(),
             tasks: BTreeMap::new(),
         }
+    }
+
+    /// The configuration installed on one conversation, with its revision.
+    ///
+    /// Absence is a real answer: an unconfigured conversation is inspectable,
+    /// and generation refuses it rather than falling back to a default model.
+    #[must_use]
+    pub(crate) fn installed_config(&self, id: ConversationId) -> Option<InstalledConfig> {
+        let revision = self.config_revisions.get(&id).copied()?;
+        let config = self.configs.get(&id)?;
+        Some(InstalledConfig::new(revision, (**config).clone()))
     }
 
     /// Whether every fixed dependency of `task` is durably terminal.
@@ -585,6 +608,16 @@ pub(crate) fn apply_mutation(
         }
         Mutation::CreateConversation(conversation) => {
             editor.put_conversation(*conversation)?;
+        }
+        Mutation::SetConversationConfig {
+            conversation_id,
+            config,
+        } => {
+            // Configuring a retired conversation is refused: a retired
+            // conversation accepts no new work, so a configuration no
+            // generation may read would only be a misleading durable record.
+            ensure_accepts_work(state, *conversation_id)?;
+            editor.set_config(*conversation_id, config.clone());
         }
         Mutation::SetConversationRetired {
             conversation_id,

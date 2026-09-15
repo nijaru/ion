@@ -199,6 +199,40 @@ impl Session {
         })
     }
 
+    /// Install a conversation's complete generation configuration, in one
+    /// commit.
+    ///
+    /// `expected` is the revision the caller read; `None` asserts the
+    /// conversation is unconfigured. The returned commit is the revision to
+    /// present on the next replacement, so two callers cannot silently overwrite
+    /// each other. A configuration is validated before anything is written, and
+    /// a retired conversation refuses one.
+    pub fn configure_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+        expected: Option<CommitSeq>,
+        config: crate::ConversationConfig,
+    ) -> Result<CommitSeq, SessionError> {
+        self.transact(|transaction| {
+            transaction.configure_conversation(conversation_id, expected, config)
+        })
+        .map(|(_, commit_seq)| commit_seq)
+    }
+
+    /// The configuration installed on a conversation, with its revision.
+    ///
+    /// `None` means the conversation has never been configured, which is a
+    /// distinct answer from "configured with empty instructions": configuration
+    /// is optional, and generation refuses an unconfigured conversation rather
+    /// than choosing a model for it.
+    #[must_use]
+    pub fn conversation_config(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Option<crate::InstalledConfig> {
+        self.state.installed_config(conversation_id)
+    }
+
     /// Retire an owned conversation into a read-only archive, in one commit.
     ///
     /// Retirement requires quiescence: the conversation must be an owned worker

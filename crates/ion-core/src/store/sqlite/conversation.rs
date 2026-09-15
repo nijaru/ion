@@ -3,8 +3,9 @@
 
 use rusqlite::{Connection, params};
 
-use super::{StoreError, id_from};
-use crate::{Conversation, ConversationId, HistoryParent, TaskId};
+use super::{StoreError, id_from, json_from, json_to};
+use crate::conversation::InstalledConfig;
+use crate::{CommitSeq, Conversation, ConversationConfig, ConversationId, HistoryParent, TaskId};
 
 pub(crate) fn insert(
     connection: &Connection,
@@ -97,9 +98,41 @@ pub(crate) fn set_retired(
     Ok(())
 }
 
-pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreError> {
+/// Install a conversation's configuration and the commit that installed it.
+///
+/// Both columns move together: a configuration without its revision could not be
+/// fenced by a replacement, and a revision without its configuration would claim
+/// a change nobody can read. The revision is the batch's own commit sequence, so
+/// the durable value cannot disagree with the commit that wrote it.
+pub(crate) fn set_config(
+    connection: &Connection,
+    conversation_id: ConversationId,
+    config: &ConversationConfig,
+    revision: CommitSeq,
+) -> Result<(), StoreError> {
+    let updated = connection.execute(
+        "UPDATE conversations SET config = ?2, config_revision = ?3 WHERE id = ?1",
+        params![conversation_id.get(), json_to(config)?, revision.get()],
+    )?;
+    if updated != 1 {
+        return Err(StoreError::other(format!(
+            "conversation {conversation_id} configuration did not match the write set"
+        )));
+    }
+    Ok(())
+}
+
+/// Every conversation with its installed configuration, if it has one.
+///
+/// The two configuration columns are read together and must agree: a row that
+/// carries only one of them was not written by a valid commit, so it is refused
+/// rather than read as a half-configured conversation.
+pub(crate) fn load(
+    connection: &Connection,
+) -> Result<Vec<(Conversation, Option<InstalledConfig>)>, StoreError> {
     let mut statement = connection.prepare(
-        "SELECT id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired
+        "SELECT id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired,
+                config, config_revision
          FROM conversations ORDER BY id",
     )?;
     let rows = statement.query_map([], |row| {
@@ -111,12 +144,36 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreEr
             row.get::<_, Option<i64>>(4)?,
             row.get::<_, bool>(5)?,
             row.get::<_, bool>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<i64>>(8)?,
         ))
     })?;
 
     let mut conversations = Vec::new();
     for row in rows {
-        let (id, parent_id, parent_at, owner_task, foreground_turn, turn_cancelled, retired) = row?;
+        let (
+            id,
+            parent_id,
+            parent_at,
+            owner_task,
+            foreground_turn,
+            turn_cancelled,
+            retired,
+            config,
+            config_revision,
+        ) = row?;
+        let config = match (config, config_revision) {
+            (Some(config), Some(revision)) => Some(InstalledConfig::new(
+                id_from(revision)?,
+                json_from::<ConversationConfig>(&config)?,
+            )),
+            (None, None) => None,
+            _ => {
+                return Err(StoreError::other(format!(
+                    "conversation {id} has a partial configuration"
+                )));
+            }
+        };
         let parent = match (parent_id, parent_at) {
             (Some(conversation_id), Some(at)) => Some(HistoryParent {
                 conversation_id: id_from(conversation_id)?,
@@ -129,14 +186,17 @@ pub(crate) fn load(connection: &Connection) -> Result<Vec<Conversation>, StoreEr
                 )));
             }
         };
-        conversations.push(Conversation {
-            id: id_from(id)?,
-            parent,
-            owner_task: owner_task.map(id_from).transpose()?,
-            foreground_turn: foreground_turn.map(id_from).transpose()?,
-            turn_cancelled,
-            retired,
-        });
+        conversations.push((
+            Conversation {
+                id: id_from(id)?,
+                parent,
+                owner_task: owner_task.map(id_from).transpose()?,
+                foreground_turn: foreground_turn.map(id_from).transpose()?,
+                turn_cancelled,
+                retired,
+            },
+            config,
+        ));
     }
     Ok(conversations)
 }

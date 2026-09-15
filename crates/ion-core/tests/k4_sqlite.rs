@@ -6,12 +6,14 @@
 use std::path::Path;
 use std::sync::Arc;
 
+use ion_ai::{Content, GenerationControls, Message, ModelRef, Reasoning, ToolChoice};
 use ion_core::conversation::context::ContextControl;
 use ion_core::{
-    CloseMode, ConversationSpec, EntryKind, EntryRequest, InputBody, InputMode, InputRequest,
-    InputSender, PlannedEntry, PlannedTask, PlannedTurn, RequestKey, RunningTask, Session,
-    SessionError, TaskCompletion, TaskContext, TaskDriver, TaskFuture, TaskId, TaskKind,
-    TaskKindName, TaskPlan, TaskRegistry, TaskRequest, TaskStatus,
+    CloseMode, ContextPolicy, ConversationConfig, ConversationSpec, EntryKind, EntryRequest,
+    InputBody, InputMode, InputRequest, InputSender, PlannedEntry, PlannedTask, PlannedTurn,
+    RequestKey, RunLimits, RunningTask, Session, SessionError, TaskCompletion, TaskContext,
+    TaskDriver, TaskFuture, TaskId, TaskKind, TaskKindName, TaskPlan, TaskRegistry, TaskRequest,
+    TaskStatus,
 };
 use serde_json::json;
 
@@ -531,6 +533,24 @@ async fn an_inconsistent_store_is_refused_rather_than_repaired() {
             format!("UPDATE entries SET conversation_id = 900 WHERE id = {entry}"),
             "entry conversation",
         ),
+        (
+            "configuration-without-a-commit",
+            "UPDATE conversations SET config_revision = NULL WHERE config IS NOT NULL".to_owned(),
+            "configuration",
+        ),
+        (
+            "configuration-commit-beyond-the-cursor",
+            "UPDATE conversations SET config_revision = 900 WHERE config IS NOT NULL".to_owned(),
+            "commit bound",
+        ),
+        (
+            "configuration-this-build-refuses",
+            "UPDATE conversations \
+             SET config = replace(config, '\"max_attempts_per_step\":3', '\"max_attempts_per_step\":99') \
+             WHERE config IS NOT NULL"
+                .to_owned(),
+            "configuration",
+        ),
     ];
 
     for (name, damage, rule) in fixtures {
@@ -555,6 +575,46 @@ async fn an_inconsistent_store_is_refused_rather_than_repaired() {
     // The undamaged store still opens: the fixtures above are the only
     // difference, so a refusal is not a blanket rejection of stored sessions.
     Session::open(&path).expect("the undamaged store still opens");
+}
+
+/// A complete configuration, so the fixtures can damage a realistic record.
+fn stored_config() -> ConversationConfig {
+    ConversationConfig {
+        model: ModelRef {
+            provider: "scripted".to_owned(),
+            model: "test-model".to_owned(),
+        },
+        instructions: "be careful".to_owned(),
+        controls: GenerationControls {
+            max_output_tokens: 4096,
+            temperature: None,
+            top_p: None,
+            reasoning: Reasoning::ProviderDefault,
+            tool_choice: ToolChoice::Auto,
+            parallel_tool_calls: false,
+        },
+        project_context: vec![Message {
+            role: ion_ai::Role::User,
+            content: vec![Content::Text("project rule".to_owned())],
+            provider_replay: None,
+        }],
+        instruction_revision: "ion-instructions-v1".to_owned(),
+        tool_names: vec!["read".to_owned()],
+        context: ContextPolicy {
+            max_request_bytes: 4 * 1024 * 1024,
+            max_input_tokens: 100_000,
+            compact_at_tokens: 80_000,
+            summary_max_tokens: 2048,
+        },
+        limits: RunLimits {
+            max_model_steps: 20,
+            max_attempts_per_step: 3,
+            max_cost_microusd: None,
+            deadline_ms: 600_000,
+            max_response_bytes: 1024 * 1024,
+            max_tool_output_bytes: 64 * 1024,
+        },
+    }
 }
 
 /// Store a small but representative session: a root, an unowned conversation, an
@@ -606,6 +666,10 @@ async fn record_a_representative_store(path: &Path) -> StoredIds {
         })
         .expect("owned conversation")
         .conversation_id;
+    // A stored configuration, so the fixtures below can damage one.
+    session
+        .configure_conversation(root, None, stored_config())
+        .expect("configure");
     drop(session);
     StoredIds {
         _root: root.get(),

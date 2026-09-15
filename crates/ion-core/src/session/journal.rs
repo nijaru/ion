@@ -18,8 +18,8 @@ use std::sync::Arc;
 
 use super::state::{SessionState, StateError};
 use crate::{
-    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    LocalSeq, RequestKey, TaskId, TaskRecord,
+    CommitSeq, Conversation, ConversationConfig, ConversationId, Entry, EntryId, Input,
+    InputDisposition, InputId, LocalSeq, RequestKey, TaskId, TaskRecord,
 };
 
 /// The previous value of one write, or the exact index change to invert.
@@ -29,6 +29,8 @@ enum Undo {
     Entry(EntryId, Option<Arc<Entry>>),
     Input(InputId, Option<Arc<Input>>),
     Task(TaskId, Option<Arc<TaskRecord>>),
+    Config(ConversationId, Option<Arc<ConversationConfig>>),
+    ConfigRevision(ConversationId, Option<CommitSeq>),
     RequestKey(RequestKey, Option<InputId>),
     InputCommit(InputId, Option<CommitSeq>),
     RootConversation(Option<ConversationId>),
@@ -74,6 +76,10 @@ impl<'a> Editor<'a> {
 
     pub(crate) fn input(&self, id: InputId) -> Option<&Input> {
         self.state.inputs.get(&id).map(|value| &**value)
+    }
+
+    pub(crate) fn config_revision(&self, id: ConversationId) -> Option<CommitSeq> {
+        self.state.config_revisions.get(&id).copied()
     }
 
     pub(crate) fn root_conversation(&self) -> Option<ConversationId> {
@@ -172,6 +178,19 @@ impl<'a> Editor<'a> {
         self.state.tasks.get_mut(&id).map(Arc::make_mut)
     }
 
+    /// Install a conversation's configuration. The revision is written
+    /// separately, when the command's commit sequence is known.
+    pub(crate) fn set_config(&mut self, id: ConversationId, config: ConversationConfig) {
+        let previous = self.state.configs.insert(id, Arc::new(config));
+        self.undo.push(Undo::Config(id, previous));
+    }
+
+    /// Bind an installed configuration to the commit that installed it.
+    pub(crate) fn set_config_revision(&mut self, id: ConversationId, revision: CommitSeq) {
+        let previous = self.state.config_revisions.insert(id, revision);
+        self.undo.push(Undo::ConfigRevision(id, previous));
+    }
+
     pub(crate) fn put_request_key(
         &mut self,
         key: RequestKey,
@@ -215,6 +234,10 @@ impl<'a> Editor<'a> {
                 Undo::Entry(id, previous) => restore(&mut self.state.entries, id, previous),
                 Undo::Input(id, previous) => restore(&mut self.state.inputs, id, previous),
                 Undo::Task(id, previous) => restore(&mut self.state.tasks, id, previous),
+                Undo::Config(id, previous) => restore(&mut self.state.configs, id, previous),
+                Undo::ConfigRevision(id, previous) => {
+                    restore_revision(&mut self.state.config_revisions, id, previous);
+                }
                 Undo::RequestKey(key, previous) => match previous {
                     Some(input_id) => {
                         self.state.request_keys.insert(key, input_id);
@@ -261,6 +284,17 @@ impl<'a> Editor<'a> {
                     }
                 }
             }
+        }
+    }
+}
+
+fn restore_revision<K: Ord, V>(map: &mut BTreeMap<K, V>, key: K, previous: Option<V>) {
+    match previous {
+        Some(value) => {
+            map.insert(key, value);
+        }
+        None => {
+            map.remove(&key);
         }
     }
 }

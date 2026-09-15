@@ -223,6 +223,18 @@ pub enum SessionError {
     MissingTurnRequest { mode: InputMode },
     #[error("conversation {0} is retired and accepts no new work")]
     ConversationRetired(ConversationId),
+    #[error("invalid conversation configuration: {0}")]
+    InvalidConfiguration(String),
+    /// The configuration changed since the caller read it, so the replacement it
+    /// prepared would have discarded a change it never saw.
+    #[error(
+        "conversation {conversation} configuration changed: expected {expected:?}, found {current:?}"
+    )]
+    StaleConfiguration {
+        conversation: ConversationId,
+        expected: Option<CommitSeq>,
+        current: Option<CommitSeq>,
+    },
     #[error("conversation {0} is not an owned worker and cannot be retired")]
     ConversationNotOwned(ConversationId),
     #[error("conversation {0} has live work and cannot be retired")]

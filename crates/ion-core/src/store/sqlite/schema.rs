@@ -10,10 +10,12 @@ use super::StoreError;
 
 /// Version history: 2 added `conversations.retired`; 3 added
 /// `tasks.turn_closed_by`, the turn-completion receipt; 4 added
-/// `conversations.turn_cancelled`, the turn's cancellation barrier. Pre-1.0
-/// development databases of an older version are refused rather than migrated,
-/// per the policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+/// `conversations.turn_cancelled`, the turn's cancellation barrier; 5 added
+/// `conversations.config`/`config_revision`, the installed generation
+/// configuration and the commit that installed it. Pre-1.0 development
+/// databases of an older version are refused rather than migrated, per the
+/// policy in `docs/core-runtime-migration.md`; `verify` is the refusal.
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 const DDL: &str = r"
 CREATE TABLE session_meta (
@@ -31,7 +33,9 @@ CREATE TABLE conversations (
     owner_task     INTEGER,
     foreground_turn INTEGER,
     turn_cancelled INTEGER NOT NULL DEFAULT 0,
-    retired        INTEGER NOT NULL DEFAULT 0
+    retired        INTEGER NOT NULL DEFAULT 0,
+    config         TEXT,
+    config_revision INTEGER
 );
 
 CREATE TABLE entries (

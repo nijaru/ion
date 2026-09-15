@@ -14,9 +14,9 @@ use crate::session::state::{SessionState, apply_mutation, queued_inputs};
 use crate::task::{PlannedTask, PlannedTurn, TaskDependency, TaskPlan};
 use crate::view::Change;
 use crate::{
-    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InputDisposition, InputId,
-    InputPlacement, InvocationKind, LocalSeq, TaskId, TaskOutcome, TaskOutput, TaskRecord,
-    TaskStatus,
+    CommitSeq, Conversation, ConversationConfig, ConversationId, Entry, EntryId, Input,
+    InputDisposition, InputId, InputPlacement, InvocationKind, LocalSeq, TaskId, TaskOutcome,
+    TaskOutput, TaskRecord, TaskStatus,
 };
 
 #[derive(Debug, Clone)]
@@ -70,6 +70,15 @@ pub(crate) enum Mutation {
     ReleaseForegroundTurn {
         conversation_id: ConversationId,
         task_id: TaskId,
+    },
+    /// Install a conversation's complete generation configuration.
+    ///
+    /// The commit that installed it is derived by the store and by the sealing
+    /// path from the batch's own commit sequence, so the payload carries the
+    /// content only and the revision cannot disagree with the commit.
+    SetConversationConfig {
+        conversation_id: ConversationId,
+        config: ConversationConfig,
     },
     /// Retire a conversation into a read-only archive, or reactivate it.
     SetConversationRetired {
@@ -126,6 +135,7 @@ pub(crate) struct Transaction<'a> {
     base_commit: Option<CommitSeq>,
     editor: Editor<'a>,
     admitted_inputs: Vec<InputId>,
+    configured: Vec<ConversationId>,
     writes: Vec<Mutation>,
     changes: Vec<Change>,
     released_turns: Vec<ConversationId>,
@@ -137,6 +147,7 @@ impl<'a> Transaction<'a> {
             base_commit: state.last_commit,
             editor: Editor::new(state),
             admitted_inputs: Vec::new(),
+            configured: Vec::new(),
             writes: Vec::new(),
             changes: Vec::new(),
             released_turns: Vec::new(),
@@ -640,6 +651,52 @@ impl<'a> Transaction<'a> {
             .ok_or(SessionError::UnknownInput(input_id))
     }
 
+    /// Install a conversation's complete generation configuration.
+    ///
+    /// Full replacement with a compare-and-set fence: `expected` is the revision
+    /// the caller believes is installed, so a lost update is refused instead of
+    /// silently overwriting a configuration committed by someone else. `None`
+    /// means "this conversation must still be unconfigured", which is how a
+    /// first launch refuses to clobber a configuration it did not see.
+    ///
+    /// Nothing is partially applied: an invalid configuration is refused before
+    /// any write, so the durable record is either the old configuration or the
+    /// new one.
+    pub(crate) fn configure_conversation(
+        &mut self,
+        conversation_id: ConversationId,
+        expected: Option<CommitSeq>,
+        config: ConversationConfig,
+    ) -> Result<(), SessionError> {
+        let conversation = self
+            .editor
+            .conversation(conversation_id)
+            .ok_or(SessionError::UnknownConversation(conversation_id))?;
+        if !conversation.accepts_work() {
+            return Err(SessionError::ConversationRetired(conversation_id));
+        }
+        let current = self.editor.config_revision(conversation_id);
+        if current != expected {
+            return Err(SessionError::StaleConfiguration {
+                conversation: conversation_id,
+                expected,
+                current,
+            });
+        }
+        config
+            .validate()
+            .map_err(|error| SessionError::InvalidConfiguration(error.to_string()))?;
+        self.stage(
+            Mutation::SetConversationConfig {
+                conversation_id,
+                config,
+            },
+            Change::ConversationConfigured(conversation_id),
+        )?;
+        self.configured.push(conversation_id);
+        Ok(())
+    }
+
     /// Retire a conversation into a read-only archive. See
     /// `retire_conversation` in `state.rs` for the preconditions.
     pub(crate) fn retire_conversation(
@@ -984,6 +1041,13 @@ impl<'a> Transaction<'a> {
         let admitted = std::mem::take(&mut self.admitted_inputs);
         for input_id in admitted {
             self.editor.set_input_commit(input_id, commit_seq);
+        }
+        // A configuration's revision is the commit that installed it, which only
+        // exists once the sequence is allocated. Binding it here keeps the
+        // compare-and-set basis exactly the value the caller was handed.
+        let configured = std::mem::take(&mut self.configured);
+        for conversation_id in configured {
+            self.editor.set_config_revision(conversation_id, commit_seq);
         }
         self.editor.set_last_commit(commit_seq);
         Ok(Prepared {
