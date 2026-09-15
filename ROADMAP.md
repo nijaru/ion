@@ -352,7 +352,7 @@ No milestone is “Pi parity.” Pico supplies minimal-harness design evidence; 
 
 Use fake model/environment implementations, controllable clocks and storage barriers for deterministic races. Run both orderings of every important race. Crash-inject before/after admission, external dispatch, checkpoint, result, terminal settlement, successor creation and artifact publication.
 
-Keep runtime performance separate from model effectiveness. Record source revision, exact workload/configuration, memory, storage bytes, query counts, lock/checkpoint behavior, restart time and externally verified task outcomes.
+Keep runtime performance separate from model effectiveness. Record source revision, exact workload/configuration, memory, storage bytes, query counts, lock/checkpoint behavior, restart time and externally verified task outcomes. Read single runs against the observed spread, not against the previous mean: every storage number here comes from one developer machine with visible tail noise (see the three-run ranges in `docs/research/rust-surface-review-2026-09-14.md`), so a one-run difference well inside that spread is not evidence, and a change to the resident/commit path is re-measured with the harness in `crates/ion-core/examples/storage_measure.rs` before and after.
 
 Agent-effectiveness optimization starts from a stable M1/M2 baseline. More context, more agents, memory systems and richer coordination surfaces must demonstrate benefit rather than receive architectural preference.
 
