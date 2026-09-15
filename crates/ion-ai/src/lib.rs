@@ -1,4 +1,5 @@
 mod content;
+mod controls;
 mod error;
 mod message;
 mod model;
@@ -10,6 +11,7 @@ mod tool;
 mod usage;
 
 pub use content::{Content, ToolCall, ToolResult};
+pub use controls::{GenerationControls, Reasoning, ToolChoice};
 pub use error::{ProviderError, ProviderErrorKind};
 pub use message::{Message, ProviderReplay, Role};
 pub use model::ModelRef;
