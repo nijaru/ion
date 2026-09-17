@@ -25,7 +25,7 @@ async fn a_single_submission_runs_to_a_selected_final_answer() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "done",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -93,7 +93,7 @@ async fn tool_calls_run_in_order_and_the_next_request_carries_their_results() {
     let mut spec = spec();
     spec.config.tool_names = vec!["read".to_owned()];
 
-    let session = Session::create(&path, spec, services(model.clone(), tools))
+    let mut session = Session::create(&path, spec, services(model.clone(), tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -147,7 +147,7 @@ async fn a_busy_conversation_queues_follow_ups_and_drains_one_successor() {
     let mut spec = spec();
     spec.config.tool_names = vec!["slow".to_owned()];
 
-    let session = Session::create(&path, spec, services(model.clone(), tools))
+    let mut session = Session::create(&path, spec, services(model.clone(), tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -233,7 +233,7 @@ async fn an_exact_replay_returns_the_original_receipt_and_a_conflict_is_refused(
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "ok",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -280,7 +280,7 @@ async fn a_dropped_waiter_does_not_stop_the_turn() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "still here",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -323,7 +323,7 @@ async fn withdrawing_an_unplaced_input_keeps_the_transcript_untouched() {
     let mut spec = spec();
     spec.config.tool_names = vec!["slow".to_owned()];
 
-    let session = Session::create(&path, spec, services(model, tools))
+    let mut session = Session::create(&path, spec, services(model, tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -396,7 +396,7 @@ async fn a_step_budget_limit_fails_the_turn_instead_of_looping() {
         ..config().limits
     };
 
-    let session = Session::create(&path, spec, services(model.clone(), tools))
+    let mut session = Session::create(&path, spec, services(model.clone(), tools))
         .await
         .expect("create session");
     let handle = session.handle();

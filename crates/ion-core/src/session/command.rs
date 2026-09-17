@@ -7,9 +7,11 @@
 
 use tokio::sync::oneshot;
 
+use super::supervisor::CloseOutcome;
 use crate::config::ConversationConfig;
 use crate::input::{InputMode, InputSender, RequestKey};
 use crate::invocation::Resolution;
+use crate::tool::ToolOutcome;
 use crate::turn::{TurnOutcome, TurnPhase};
 use crate::view::TurnView;
 use crate::{
@@ -147,6 +149,16 @@ pub enum SessionEvent {
         outcome: TurnOutcome,
         commit: Option<CommitSeq>,
     },
+    /// An action a turn stopped waiting for reported an outcome afterwards.
+    ///
+    /// This is evidence, not a committed revision: the invocation's durable
+    /// state is unchanged, the turn is not revived, and nothing follows from it
+    /// except what a client chooses to do about a possibly live action.
+    InvocationEvidence {
+        turn: TurnId,
+        invocation: InvocationId,
+        outcome: ToolOutcome,
+    },
     Fenced {
         message: String,
     },
@@ -196,6 +208,6 @@ pub(crate) enum Request {
         reply: oneshot::Sender<Result<(), Error>>,
     },
     Close {
-        reply: oneshot::Sender<()>,
+        reply: oneshot::Sender<CloseOutcome>,
     },
 }

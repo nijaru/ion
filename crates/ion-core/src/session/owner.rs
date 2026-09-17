@@ -11,7 +11,7 @@ use tokio::sync::{broadcast, mpsc, oneshot};
 
 use super::command::Request;
 use super::handle::SessionHandle;
-use super::supervisor::{Services, Shared, Supervisor};
+use super::supervisor::{CloseOutcome, Services, Shared, Supervisor};
 use crate::config::ConversationConfig;
 use crate::error::{Error, Result};
 use crate::limits::SessionLimits;
@@ -99,6 +99,9 @@ impl Session {
 
     fn start(db: Db, info: SessionInfo, limits: SessionLimits, services: Services) -> Self {
         let (requests, receive) = mpsc::channel(limits.command_capacity);
+        // Actions are handed to the supervisor rather than awaited by the turn
+        // that asked for them, so a cancelled turn cannot drop one it started.
+        let (spawns, spawned) = mpsc::channel(limits.command_capacity);
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let handle = SessionHandle::new(requests.clone(), events.clone(), info.root);
         let shared = Arc::new(Shared {
@@ -108,9 +111,10 @@ impl Session {
             limits,
             events,
             requests: requests.clone(),
+            spawns,
         });
         let supervisor =
-            tokio::spawn(Supervisor::new(Arc::clone(&shared), db, receive, handle).run());
+            tokio::spawn(Supervisor::new(Arc::clone(&shared), db, receive, spawned, handle).run());
         Self {
             shared,
             requests,
@@ -141,17 +145,29 @@ impl Session {
         )
     }
 
-    /// Stop accepting work, join running turns and release storage ownership.
-    pub async fn close(mut self) -> Result<()> {
+    /// Stop accepting work, join running turns and actions, and release storage
+    /// ownership.
+    ///
+    /// Ownership is released only once nothing this session started is still
+    /// running. Work that outlasts the join grace keeps the session open: the
+    /// outcome says so, and calling this again retries the join.
+    pub async fn close(&mut self) -> Result<CloseOutcome> {
         let (reply, receive) = oneshot::channel();
-        if self.requests.send(Request::Close { reply }).await.is_err() {
-            return Ok(());
+        let outcome = if self.requests.send(Request::Close { reply }).await.is_ok() {
+            receive.await.ok()
+        } else {
+            None
+        };
+        if outcome.is_none_or(|outcome| outcome.is_closed()) {
+            if let Some(supervisor) = self.supervisor.as_mut() {
+                supervisor.await.map_err(|error| {
+                    Error::Invalid(format!("session supervisor failed during close: {error}"))
+                })?;
+                self.supervisor.take();
+            }
+            return Ok(CloseOutcome::Closed);
         }
-        let _ = receive.await;
-        if let Some(supervisor) = self.supervisor.take() {
-            let _ = supervisor.await;
-        }
-        Ok(())
+        Ok(outcome.expect("a still-closing outcome was received"))
     }
 }
 

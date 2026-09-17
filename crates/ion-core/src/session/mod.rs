@@ -14,6 +14,6 @@ pub use command::{
 };
 pub use handle::{SessionHandle, SessionWatch, WatchError};
 pub use owner::{Session, SessionSpec};
-pub use supervisor::Services;
+pub use supervisor::{CloseOutcome, Services};
 
 pub(crate) use command::Request;

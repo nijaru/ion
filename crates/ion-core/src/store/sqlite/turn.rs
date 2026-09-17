@@ -582,16 +582,44 @@ impl Command for CommitInvocationResult {
                 self.invocation
             )))
         })?;
-        if invocation.state != InvocationState::Dispatched {
+        // Before dispatch only a known refusal can be recorded; success or
+        // uncertainty requires dispatch intent. Settled calls cannot be revised.
+        if !(invocation.state == InvocationState::Dispatched
+            || (invocation.state == InvocationState::Prepared
+                && matches!(self.outcome, InvocationOutcome::Failed { .. })))
+        {
             return Err(StoreError::Rejected(Error::Invalid(format!(
-                "invocation {} is not dispatched",
-                self.invocation
+                "invocation {} in state {} cannot accept this result",
+                self.invocation,
+                invocation.state.as_str(),
             ))));
         }
         if invocation.generation != self.generation {
             return Err(StoreError::Rejected(Error::Invalid(format!(
                 "invocation {} belongs to generation {}, not {}",
                 self.invocation, invocation.generation, self.generation
+            ))));
+        }
+        // An invocation's stored generation is the turn's cancellation
+        // generation at dispatch time. A cancellation that committed since then
+        // supersedes this action's right to settle itself: a joined action's
+        // truthful report is recorded by the turn's terminal settlement, which
+        // preserves the fact without authorizing another step.
+        let current: i64 = transaction.query_row(
+            "SELECT t.generation FROM turns t JOIN steps s ON s.turn_id = t.id WHERE s.id = ?1",
+            [invocation.step.get()],
+            |row| row.get(0),
+        )?;
+        let current = u64::try_from(current).map_err(|_| {
+            StoreError::Rejected(Error::Corrupt(format!(
+                "the turn owning invocation {} has a negative generation",
+                self.invocation
+            )))
+        })?;
+        if current != self.generation {
+            return Err(StoreError::Rejected(Error::Invalid(format!(
+                "invocation {} was dispatched under generation {} and its turn has moved to {current}",
+                self.invocation, self.generation
             ))));
         }
         settle_invocation(&transaction, &invocation, self.outcome, self.limits)?;
@@ -737,6 +765,12 @@ impl Command for CancelTurn {
 pub(crate) struct FinishTurn {
     pub(crate) turn: TurnId,
     pub(crate) outcome: PendingOutcome,
+    /// Truthful outcomes a joined action reported after cancellation committed.
+    ///
+    /// The generation fence keeps a superseded action from settling itself, so
+    /// this evidence reaches durable state here instead: it is a fact about an
+    /// action, and recording it does not resume the cancelled continuation.
+    pub(crate) evidence: Vec<(InvocationId, InvocationOutcome)>,
     pub(crate) limits: SessionLimits,
 }
 
@@ -751,6 +785,18 @@ impl Command for FinishTurn {
         })?;
         if let Some(outcome) = &turn.outcome {
             return Ok(outcome.clone());
+        }
+        // A joined action's report is applied only to an invocation that is
+        // still waiting for one. A settled or never-dispatched invocation is
+        // never rewritten, and this turn is guaranteed non-terminal above.
+        for (invocation, reported) in self.evidence {
+            let Some(dispatched) = read_invocation(&transaction, invocation)? else {
+                continue;
+            };
+            if dispatched.state != InvocationState::Dispatched {
+                continue;
+            }
+            settle_invocation(&transaction, &dispatched, reported, self.limits)?;
         }
         let invocations = read_invocations_for_turn(&transaction, self.turn)?;
         let mut unresolved = Vec::new();

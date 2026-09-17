@@ -9,7 +9,7 @@ use ion_core::{
     EntryQuery, Error, InputDisposition, Session, SessionLimits, SessionSpec, SubmitRequest,
     ToolRegistry, TurnOutcome,
 };
-use support::{answer, database, services, spec, stream};
+use support::{answer, database, limits, services, spec, stream};
 
 #[tokio::test]
 async fn a_second_owner_is_refused_and_close_releases_the_session() {
@@ -17,7 +17,7 @@ async fn a_second_owner_is_refused_and_close_releases_the_session() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "ok",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
 
@@ -33,7 +33,7 @@ async fn a_second_owner_is_refused_and_close_releases_the_session() {
     }
 
     session.close().await.expect("close");
-    let reopened = Session::open(
+    let mut reopened = Session::open(
         &path,
         SessionLimits::default(),
         services(model, ToolRegistry::new()),
@@ -63,7 +63,7 @@ async fn an_older_schema_is_refused_rather_than_reinterpreted() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "ok",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     session.close().await.expect("close");
@@ -98,7 +98,7 @@ async fn a_self_parented_conversation_is_refused_at_open() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "ok",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let root = session.root();
@@ -131,7 +131,7 @@ async fn a_cutoff_outside_its_source_conversation_is_refused_at_open() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "ok",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     session.close().await.expect("close");
@@ -172,7 +172,7 @@ async fn pages_are_clamped_and_never_overflow() {
         Arc::new(ScriptedModelService::new((0..3).map(|index| {
             Script::Stream(stream(answer(&format!("answer {index}"))))
         })));
-    let session = Session::create(&path, spec(), services(model, ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model, ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -250,8 +250,9 @@ async fn the_reserve_keeps_settlement_possible_when_admission_is_full() {
         reserved_bytes: 20_000,
         max_queued_inputs: 8,
         command_capacity: 16,
+        ..limits()
     };
-    let session = Session::create(&path, spec, services(model, ToolRegistry::new()))
+    let mut session = Session::create(&path, spec, services(model, ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -288,7 +289,7 @@ async fn an_open_session_starts_no_work_and_keeps_the_history() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "remembered",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -301,7 +302,7 @@ async fn an_open_session_starts_no_work_and_keeps_the_history() {
     let first = handle.wait(turn).await.expect("wait");
     session.close().await.expect("close");
 
-    let reopened = Session::open(
+    let mut reopened = Session::open(
         &path,
         SessionLimits::default(),
         services(model.clone(), ToolRegistry::new()),
@@ -357,7 +358,7 @@ async fn withdrawing_survives_a_reopen_as_a_terminal_disposition() {
     ));
     let mut spec: SessionSpec = spec();
     spec.config.tool_names = vec!["slow".to_owned()];
-    let session = Session::create(&path, spec, services(model, tools))
+    let mut session = Session::create(&path, spec, services(model, tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -375,7 +376,7 @@ async fn withdrawing_survives_a_reopen_as_a_terminal_disposition() {
     handle.wait(turn).await.expect("wait");
     session.close().await.expect("close");
 
-    let reopened = Session::open(
+    let mut reopened = Session::open(
         &path,
         SessionLimits::default(),
         services(Arc::new(ScriptedModelService::new([])), ToolRegistry::new()),

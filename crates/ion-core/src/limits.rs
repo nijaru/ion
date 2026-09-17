@@ -21,6 +21,13 @@ pub struct SessionLimits {
     pub max_queued_inputs: u32,
     /// Bounded command queue between clients and the database thread.
     pub command_capacity: usize,
+    /// How long core waits for a stopped action to report before the supervisor
+    /// keeps owning it.
+    ///
+    /// The grace bounds a cancelled turn's join and a close, and an action that
+    /// outlasts it is not dropped: ownership and its unresolved outcome are
+    /// retained, and close reports that it is still closing.
+    pub execution_join_grace_ms: u64,
 }
 
 impl Default for SessionLimits {
@@ -30,6 +37,7 @@ impl Default for SessionLimits {
             reserved_bytes: 8 * 1024 * 1024,
             max_queued_inputs: 1_024,
             command_capacity: 256,
+            execution_join_grace_ms: 2_000,
         }
     }
 }
@@ -57,7 +65,20 @@ impl SessionLimits {
                 setting: "command_capacity",
             });
         }
+        if self.execution_join_grace_ms == 0 {
+            // A zero grace would make every stop unconfirmable, which reads as
+            // "never join" rather than as a limit; that is not a bound.
+            return Err(LimitsError::NonPositive {
+                setting: "execution_join_grace_ms",
+            });
+        }
         Ok(())
+    }
+
+    /// The bounded wait for a stopped action to report.
+    #[must_use]
+    pub const fn execution_join_grace(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(self.execution_join_grace_ms)
     }
 
     /// How much ordinary growth may occupy before admission stops.
@@ -104,6 +125,7 @@ mod tests {
             reserved_bytes: 200,
             max_queued_inputs: 1,
             command_capacity: 1,
+            ..SessionLimits::default()
         };
         assert!(limits.admits(799, 1));
         assert!(!limits.admits(800, 1));

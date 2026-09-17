@@ -26,7 +26,7 @@ async fn only_a_committed_turn_success_beats_cancellation() {
     let model = Arc::new(ScriptedModelService::new([Script::Stream(stream(answer(
         "already done",
     )))]));
-    let session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
+    let mut session = Session::create(&path, spec(), services(model.clone(), ToolRegistry::new()))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -63,7 +63,7 @@ async fn cancelling_an_in_flight_tool_settles_truthfully_and_repeats_nothing() {
     let mut spec = spec();
     spec.config.tool_names = vec!["slow".to_owned()];
 
-    let session = Session::create(&path, spec, services(model.clone(), tools))
+    let mut session = Session::create(&path, spec, services(model.clone(), tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -90,16 +90,27 @@ async fn cancelling_an_in_flight_tool_settles_truthfully_and_repeats_nothing() {
     let outcome = handle.wait(turn).await.expect("wait");
     match &outcome {
         TurnOutcome::Cancelled { unresolved } => {
-            assert_eq!(unresolved.len(), 1, "the unknown action stays identified");
+            assert!(
+                unresolved.is_empty(),
+                "an action that confirmed its stop is not unresolved: {unresolved:?}"
+            );
         }
         other => panic!("expected cancellation, got {other:?}"),
     }
 
-    // The exchange records what happened without inventing success, and the
-    // unestablished action is preserved rather than repeated.
+    // The exchange records what happened. The action was stopped before it took
+    // effect, which is a known outcome: calling it unknown would be less
+    // truthful than the report the action gave.
     let view = handle.turn(turn).await.expect("view").expect("turn");
     assert_eq!(view.invocations.len(), 1);
-    assert_eq!(view.invocations[0].state, InvocationState::Indeterminate);
+    assert!(
+        matches!(
+            &view.invocations[0].state,
+            InvocationState::Failed { message } if message.contains("stopped before it took effect")
+        ),
+        "got {:?}",
+        view.invocations[0].state
+    );
     assert_eq!(model.requests().len(), 1, "no further model step started");
 
     let page = handle
@@ -134,7 +145,7 @@ async fn an_unknown_tool_outcome_parks_the_turn_until_a_client_decides() {
     let mut spec = spec();
     spec.config.tool_names = vec!["write".to_owned()];
 
-    let session = Session::create(&path, spec, services(model.clone(), tools))
+    let mut session = Session::create(&path, spec, services(model.clone(), tools))
         .await
         .expect("create session");
     let handle = session.handle();
@@ -203,7 +214,7 @@ async fn repeating_an_unknown_action_requires_a_repeat_safe_policy() {
     let mut spec = spec();
     spec.config.tool_names = vec!["write".to_owned()];
 
-    let session = Session::create(&path, spec, services(model, tools))
+    let mut session = Session::create(&path, spec, services(model, tools))
         .await
         .expect("create session");
     let handle = session.handle();

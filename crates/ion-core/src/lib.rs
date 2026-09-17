@@ -42,10 +42,11 @@ pub use invocation::{InvocationOutcome, InvocationState, Resolution, ToolInvocat
 pub use limits::{LimitsError, SessionLimits};
 pub use request::{AssembledRequest, RequestError};
 pub use session::{
-    AdmissionReceipt, CancelReceipt, ConfigureRequest, EntryQuery, ResolveRequest, Services,
-    Session, SessionEvent, SessionHandle, SessionSpec, SessionWatch, SubmitRequest, WatchError,
+    AdmissionReceipt, CancelReceipt, CloseOutcome, ConfigureRequest, EntryQuery, ResolveRequest,
+    Services, Session, SessionEvent, SessionHandle, SessionSpec, SessionWatch, SubmitRequest,
+    WatchError,
 };
-pub use tool::{ScriptedTool, Tool, ToolOutcome, ToolRegistry};
+pub use tool::{ScriptedTool, Stop, Tool, ToolOutcome, ToolRegistry};
 pub use turn::{Cancellation, PendingOutcome, Turn, TurnFailure, TurnOutcome, TurnPhase};
 pub use view::{EntryPage, TurnView};
 

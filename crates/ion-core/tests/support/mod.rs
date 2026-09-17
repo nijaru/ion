@@ -11,7 +11,7 @@ use ion_ai::{
     ProviderError, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice, ToolSpec, Usage,
 };
 use ion_core::{
-    ContextPolicy, ConversationConfig, RunLimits, Services, SessionLimits, SessionSpec, Tool,
+    ContextPolicy, ConversationConfig, RunLimits, Services, SessionLimits, SessionSpec, Stop, Tool,
     ToolOutcome, ToolRegistry,
 };
 
@@ -51,9 +51,19 @@ pub fn config() -> ConversationConfig {
     }
 }
 
+/// Session limits that reach a stop grace quickly.
+pub fn limits() -> SessionLimits {
+    SessionLimits {
+        // Long enough for a cooperative action to report, short enough for a
+        // test to reach the bounded join.
+        execution_join_grace_ms: 150,
+        ..SessionLimits::default()
+    }
+}
+
 pub fn spec() -> SessionSpec {
     SessionSpec {
-        limits: SessionLimits::default(),
+        limits: limits(),
         config: config(),
     }
 }
@@ -78,7 +88,7 @@ fn uuid_like() -> u128 {
         .unwrap_or_default()
 }
 
-/// A tool that never returns, so cancellation and parking can be observed.
+/// A tool that honors a stop request and reports that it never took effect.
 pub struct PendingTool {
     name: String,
 }
@@ -95,7 +105,7 @@ impl Tool for PendingTool {
     fn spec(&self) -> ToolSpec {
         ToolSpec {
             name: self.name.clone(),
-            description: "never returns".to_owned(),
+            description: "runs until it is asked to stop".to_owned(),
             input_schema: serde_json::json!({"type": "object"}),
         }
     }
@@ -104,11 +114,137 @@ impl Tool for PendingTool {
         format!("{}@pending-1", self.name)
     }
 
-    fn execute<'a>(&'a self, _call: &'a ToolCall) -> BoxFuture<'a, ToolOutcome> {
-        Box::pin(async {
-            std::future::pending::<()>().await;
-            unreachable!("the pending tool never completes")
+    fn execute<'a>(&'a self, _call: &'a ToolCall, stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
+        Box::pin(async move {
+            stop.requested().await;
+            ToolOutcome::KnownFailure("the action was stopped before it took effect".to_owned())
         })
+    }
+}
+
+/// A tool that ignores a stop request and completes only when a test says so.
+///
+/// It exists to observe the other half of the stop contract: an action that
+/// outlives its turn is still owned, and its late report is published as
+/// evidence rather than used to revise a settled turn.
+pub struct DeafTool {
+    name: String,
+    started: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+}
+
+impl DeafTool {
+    pub fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_owned(),
+            started: tokio::sync::Notify::new(),
+            release: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Resolves once the action has begun.
+    pub async fn started(&self) {
+        self.started.notified().await;
+    }
+
+    /// Let the action finish, whatever the session asked it to do.
+    pub fn release(&self) {
+        self.release.notify_waiters();
+    }
+}
+
+impl Tool for DeafTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: self.name.clone(),
+            description: "ignores stop requests".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn identity(&self) -> String {
+        format!("{}@deaf-1", self.name)
+    }
+
+    fn execute<'a>(&'a self, _call: &'a ToolCall, _stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
+        Box::pin(async move {
+            self.started.notify_one();
+            self.release.notified().await;
+            ToolOutcome::Completed(serde_json::json!({"completed": true}))
+        })
+    }
+}
+
+/// A tool that ignores a stop request and never reports.
+pub struct ImmortalTool {
+    name: String,
+    started: tokio::sync::Notify,
+}
+
+impl ImmortalTool {
+    pub fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_owned(),
+            started: tokio::sync::Notify::new(),
+        })
+    }
+
+    /// Resolves once the action has begun.
+    pub async fn started(&self) {
+        self.started.notified().await;
+    }
+}
+
+impl Tool for ImmortalTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: self.name.clone(),
+            description: "never reports".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn identity(&self) -> String {
+        format!("{}@immortal-1", self.name)
+    }
+
+    fn execute<'a>(&'a self, _call: &'a ToolCall, _stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
+        Box::pin(async move {
+            self.started.notify_one();
+            std::future::pending::<()>().await;
+            unreachable!("the immortal tool never completes")
+        })
+    }
+}
+
+/// A tool that panics while it runs.
+pub struct PanickingTool {
+    name: String,
+}
+
+impl PanickingTool {
+    pub fn new(name: &str) -> Arc<Self> {
+        Arc::new(Self {
+            name: name.to_owned(),
+        })
+    }
+}
+
+impl Tool for PanickingTool {
+    fn spec(&self) -> ToolSpec {
+        ToolSpec {
+            name: self.name.clone(),
+            description: "panics".to_owned(),
+            input_schema: serde_json::json!({"type": "object"}),
+        }
+    }
+
+    fn identity(&self) -> String {
+        format!("{}@panicking-1", self.name)
+    }
+
+    fn execute<'a>(&'a self, _call: &'a ToolCall, _stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
+        Box::pin(async { panic!("the action blew up while it was running") })
     }
 }
 
@@ -138,7 +274,7 @@ impl Tool for UncertainTool {
         format!("{}@uncertain-1", self.name)
     }
 
-    fn execute<'a>(&'a self, _call: &'a ToolCall) -> BoxFuture<'a, ToolOutcome> {
+    fn execute<'a>(&'a self, _call: &'a ToolCall, _stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
         Box::pin(async { ToolOutcome::Indeterminate("the write may have reached disk".to_owned()) })
     }
 }

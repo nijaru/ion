@@ -19,8 +19,10 @@ The engine implements the accepted [turn contracts](ARCHITECTURE.md): durable
 admission with request-key replay, frozen request bases, response-ready evidence
 that survives a crash without a second provider call, sequential tool execution,
 cancellation whose only winner is a committed turn success, truthful results for
-uncertain actions, exclusive session ownership, and bounded pages and content
-budgets. A scripted model/tool exchange runs end to end through the headless API.
+uncertain actions, supervisor-owned tool execution with stop, join and
+retries-after-close semantics, exclusive session ownership, and bounded pages and
+content budgets. A scripted model/tool exchange runs end to end through the
+headless API.
 
 Still missing: real provider adapters, a runnable `ion` binary, workspace tools
 (read/edit/exec), context compaction and forking, the terminal UI, and workers.
@@ -47,6 +49,7 @@ The turn-engine regressions are grouped by boundary:
 cargo test --locked -p ion-core --test c1_turn          # admission, steps, tools, queues
 cargo test --locked -p ion-core --test c1_cancellation  # cancellation precedence, uncertainty
 cargo test --locked -p ion-core --test c1_storage       # ownership, schema, corruption, pages
+cargo test --locked -p ion-core --test c2_execution     # stop, join, close, late evidence
 cargo test --locked -p ion-core --lib                   # commit faults, recovery boundaries
 ```
 

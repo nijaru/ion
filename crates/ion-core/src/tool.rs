@@ -14,6 +14,49 @@ use std::sync::{Arc, Mutex};
 
 use ion_ai::{BoxFuture, ToolCall, ToolSpec};
 use serde_json::Value;
+use tokio_util::sync::CancellationToken;
+
+/// A request that a running action stop.
+///
+/// Stopping is a request, not an interruption. `request` may race the action's
+/// own completion, and a tool that cannot stop itself is permitted to keep
+/// running: what it may not do is claim an outcome it did not establish. The
+/// session keeps ownership of an action that has not reported, so nothing here
+/// releases a workspace claim or promises that an external effect ended.
+#[derive(Clone, Debug)]
+pub struct Stop {
+    token: CancellationToken,
+}
+
+impl Default for Stop {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Stop {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            token: CancellationToken::new(),
+        }
+    }
+
+    /// Ask the action to stop. Idempotent, and safe to call before it starts.
+    pub fn request(&self) {
+        self.token.cancel();
+    }
+
+    #[must_use]
+    pub fn is_requested(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    /// Resolves once a stop has been requested.
+    pub async fn requested(&self) {
+        self.token.cancelled().await;
+    }
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ToolOutcome {
@@ -42,7 +85,15 @@ pub trait Tool: Send + Sync {
         false
     }
 
-    fn execute<'a>(&'a self, call: &'a ToolCall) -> BoxFuture<'a, ToolOutcome>;
+    /// Perform the action, honoring `stop`.
+    ///
+    /// A tool that stops before it took effect returns
+    /// [`ToolOutcome::KnownFailure`] with that fact; a tool that cannot
+    /// establish whether it happened returns [`ToolOutcome::Indeterminate`]
+    /// rather than guessing. Returning promptly after a stop is what lets a
+    /// cancelled turn record a truthful outcome instead of leaving the action
+    /// unresolved.
+    fn execute<'a>(&'a self, call: &'a ToolCall, stop: &'a Stop) -> BoxFuture<'a, ToolOutcome>;
 }
 
 /// The tools a session can execute, keyed by the name a model uses.
@@ -160,7 +211,7 @@ impl Tool for ScriptedTool {
         self.repeat_safe
     }
 
-    fn execute<'a>(&'a self, call: &'a ToolCall) -> BoxFuture<'a, ToolOutcome> {
+    fn execute<'a>(&'a self, call: &'a ToolCall, _stop: &'a Stop) -> BoxFuture<'a, ToolOutcome> {
         Box::pin(async move {
             self.calls.lock().expect("call mutex").push(call.clone());
             self.outcomes
