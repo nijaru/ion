@@ -24,6 +24,22 @@ retries-after-close semantics, exclusive session ownership, and bounded pages an
 content budgets. A scripted model/tool exchange runs end to end through the
 headless API.
 
+Hosts can opt trusted tools into a durable, exclusive mutation claim with
+`Workspace::open(root)?.bind(tool)`, then register the returned tool normally.
+The `.ion/claims.sqlite` coordinator records the execution identity, implementation
+and exact call before execution. Known outcomes release the claim; uncertainty,
+panic and process loss retain it. There is no automatic expiry or force-clear API.
+
+This is **unconfined coordination**, not approval or sandbox enforcement. Hosts
+must use the same canonical root and bind tools to that actual environment;
+nested roots are not coordinated. External writers and tools that delete the
+coordinator can bypass it. Preserve the coordinator files across restarts.
+Approval/revocation and evidence-based reconciliation are not implemented.
+
+Known lifecycle limitation: closing during an unfinished turn currently follows
+its cancellation path rather than preserving the suspended continuation required
+by the architecture. Close/join ownership tests do not establish resumable close.
+
 Still missing: real provider adapters, a runnable `ion` binary, workspace tools
 (read/edit/exec), context compaction and forking, the terminal UI, and workers.
 No live-provider effectiveness has been measured.
@@ -50,6 +66,7 @@ cargo test --locked -p ion-core --test c1_turn          # admission, steps, tool
 cargo test --locked -p ion-core --test c1_cancellation  # cancellation precedence, uncertainty
 cargo test --locked -p ion-core --test c1_storage       # ownership, schema, corruption, pages
 cargo test --locked -p ion-core --test c2_execution     # stop, join, close, late evidence
+cargo test --locked -p ion-core --test c2_workspace     # claims, cross-session conflict, process loss
 cargo test --locked -p ion-core --lib                   # commit faults, recovery boundaries
 ```
 

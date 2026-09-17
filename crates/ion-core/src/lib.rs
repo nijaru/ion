@@ -21,6 +21,7 @@ mod store;
 mod tool;
 mod turn;
 mod view;
+mod workspace;
 
 pub use attempt::{AttemptState, ModelAttempt, ModelStep};
 pub use config::{
@@ -49,6 +50,7 @@ pub use session::{
 pub use tool::{ScriptedTool, Stop, Tool, ToolOutcome, ToolRegistry};
 pub use turn::{Cancellation, PendingOutcome, Turn, TurnFailure, TurnOutcome, TurnPhase};
 pub use view::{EntryPage, TurnView};
+pub use workspace::{Workspace, WorkspaceError};
 
 /// The oldest page size this build will serve. Larger requests are clamped.
 pub const MAX_ENTRY_PAGE: u32 = store::sqlite::entry::MAX_ENTRY_PAGE;
