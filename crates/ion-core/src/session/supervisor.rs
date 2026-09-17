@@ -721,15 +721,6 @@ async fn drive(shared: Arc<Shared>, turn: TurnId, token: CancellationToken) -> R
     // without authorizing another step.
     let mut evidence = Vec::new();
     loop {
-        if token.is_cancelled() {
-            return finish(
-                &shared,
-                turn,
-                PendingOutcome::Cancelled,
-                std::mem::take(&mut evidence),
-            )
-            .await;
-        }
         let view = match shared
             .db
             .run(ReadTurnView { turn })
@@ -753,6 +744,12 @@ async fn drive(shared: Arc<Shared>, turn: TurnId, token: CancellationToken) -> R
                 std::mem::take(&mut evidence),
             )
             .await;
+        }
+        // The local token also interrupts work for close. Only durable user
+        // cancellation authorizes a terminal Cancelled outcome; close leaves
+        // the continuation and any recorded action evidence for explicit resume.
+        if token.is_cancelled() {
+            return Ok(());
         }
         if past_deadline(&view.turn) {
             return finish(

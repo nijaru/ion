@@ -20,6 +20,65 @@ use support::{
 };
 use tokio::time::timeout;
 
+#[tokio::test]
+async fn close_suspends_an_unfinished_turn_and_reopen_can_resume_it() {
+    let path = database("close-suspends");
+    let model = Arc::new(ScriptedModelService::new([
+        Script::Stream(stream(tool_answer(call("call-1", "pending")))),
+        Script::Stream(stream(answer("resumed"))),
+    ]));
+    let mut tools = ToolRegistry::new();
+    tools.insert(support::PendingTool::new("pending"));
+    let mut config = spec();
+    config.config.tool_names = vec!["pending".into()];
+    let services = services(model.clone(), tools);
+    let mut session = Session::create(&path, config, services.clone())
+        .await
+        .expect("create");
+    let handle = session.handle();
+    let conversation = session.root();
+    let turn = handle
+        .submit(SubmitRequest::user("run"))
+        .await
+        .expect("submit")
+        .turn
+        .expect("turn");
+    eventually(|| async {
+        handle.turn(turn).await.expect("view").filter(|view| {
+            view.invocations
+                .iter()
+                .any(|invocation| invocation.state == InvocationState::Dispatched)
+        })
+    })
+    .await;
+    assert!(session.close().await.expect("close").is_closed());
+    assert_eq!(model.requests().len(), 1);
+    let mut reopened = Session::open(&path, support::limits(), services)
+        .await
+        .expect("reopen");
+    let handle = reopened.handle();
+    let view = handle.turn(turn).await.expect("view").expect("turn");
+    assert!(
+        view.turn.outcome.is_none(),
+        "close cancelled the turn: {:?}",
+        view.turn.outcome
+    );
+    assert!(!view.turn.cancellation.requested);
+    assert_eq!(
+        handle.resume(conversation).await.expect("resume"),
+        Some(turn)
+    );
+    assert!(
+        timeout(Duration::from_secs(5), handle.wait(turn))
+            .await
+            .expect("bounded wait")
+            .expect("wait")
+            .is_completed()
+    );
+    assert!(reopened.close().await.expect("close reopened").is_closed());
+    std::fs::remove_dir_all(path.parent().expect("dir")).expect("cleanup");
+}
+
 fn call(id: &str, name: &str) -> ToolCall {
     ToolCall {
         id: id.to_owned(),
