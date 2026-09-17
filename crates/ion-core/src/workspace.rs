@@ -44,8 +44,11 @@ impl std::io::Write for BindingBytes {
 ///
 /// Only tools returned by [`Self::bind`] participate. Keep the coordinator
 /// files intact; deleting them or copying a live workspace defeats exclusion.
-/// Hosts must agree on the same canonical root: nested roots have separate
-/// coordinators and are not detected as conflicts. The wrapper does not change
+/// Hosts must agree on the same canonical root, and [`Self::open`] refuses a
+/// root nested below an existing coordinator: two coordinators over one tree
+/// would serialize only their own writers. A coordinator created *after* an
+/// outer workspace was opened is not discovered, so keep one root per tree.
+/// The wrapper does not change
 /// the tool's working directory; the host must bind the actual target environment.
 /// This binding provides no isolation from arbitrary external editors and no
 /// authority beyond the host's explicit choice to wrap an unconfined tool.
@@ -68,12 +71,22 @@ pub enum WorkspaceError {
 impl Workspace {
     /// Open or initialize the coordinator. This performs blocking filesystem
     /// I/O; async hosts should call it during setup or on a blocking thread.
+    ///
+    /// A root below an already-coordinated workspace is refused rather than
+    /// given a second coordinator that would not see its ancestor's claims.
     pub fn open(root: &Path) -> Result<Self, WorkspaceError> {
         let root = root.canonicalize()?;
         if !root.is_dir() || root.to_str().is_none() {
             return Err(WorkspaceError::Invalid(
                 "expected a UTF-8 directory path".into(),
             ));
+        }
+        if let Some(ancestor) = coordinating_ancestor(&root) {
+            return Err(WorkspaceError::Invalid(format!(
+                "workspace root is nested below the coordinated workspace {}; \
+                 overlapping trees must share one coordinator",
+                ancestor.display()
+            )));
         }
         let metadata = root.join(".ion");
         std::fs::create_dir_all(&metadata)?;
@@ -189,6 +202,42 @@ impl Workspace {
         }
         Ok(())
     }
+}
+
+/// The nearest ancestor directory that already holds a coordinator for this
+/// tree, if any.
+///
+/// The canonical root is walked upwards, so a root inside a coordinated
+/// workspace cannot acquire an independent coordinator that would miss its
+/// ancestor's claims. Files that are not recognizable coordinators are
+/// ignored: only the recorded application identity counts.
+fn coordinating_ancestor(root: &Path) -> Option<PathBuf> {
+    let mut current = root.parent();
+    while let Some(directory) = current {
+        if is_coordinator(&directory.join(".ion").join("claims.sqlite")) {
+            return Some(directory.to_path_buf());
+        }
+        current = directory.parent();
+    }
+    None
+}
+
+fn is_coordinator(database: &Path) -> bool {
+    if !database.is_file() {
+        return false;
+    }
+    let Ok(connection) =
+        Connection::open_with_flags(database, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+    else {
+        return false;
+    };
+    let application = connection
+        .pragma_query_value(None, "application_id", |row| row.get::<_, i64>(0))
+        .unwrap_or_default();
+    let version = connection
+        .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+        .unwrap_or_default();
+    application == APPLICATION_ID && version == 1
 }
 
 struct BoundTool {

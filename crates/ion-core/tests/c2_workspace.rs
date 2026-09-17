@@ -345,6 +345,36 @@ async fn separate_sessions_share_the_workspace_claim() {
     std::fs::remove_dir_all(root).expect("cleanup");
 }
 
+#[test]
+fn a_root_nested_below_a_coordinated_workspace_is_refused() {
+    let outer = root();
+    Workspace::open(&outer).expect("outer coordinator");
+    let nested = outer.join("packages").join("inner");
+    std::fs::create_dir_all(&nested).expect("nested dir");
+    let error = Workspace::open(&nested).expect_err("a nested root must be refused");
+    assert!(error.to_string().contains("nested"), "{error}");
+    assert!(
+        !nested.join(".ion").exists(),
+        "a refused root must not gain a second coordinator"
+    );
+    std::fs::remove_dir_all(outer).expect("cleanup");
+}
+
+#[test]
+fn an_unrelated_ancestor_file_does_not_refuse_a_nested_root() {
+    let outer = root();
+    std::fs::create_dir_all(outer.join(".ion")).expect("metadata dir");
+    std::fs::write(
+        outer.join(".ion").join("claims.sqlite"),
+        b"not a coordinator",
+    )
+    .expect("unrelated file");
+    let nested = outer.join("inner");
+    std::fs::create_dir_all(&nested).expect("nested dir");
+    Workspace::open(&nested).expect("unrelated files are not coordinators");
+    std::fs::remove_dir_all(outer).expect("cleanup");
+}
+
 // Run only by the parent below, in its own OS process and runtime.
 #[test]
 fn claim_owner_process() {

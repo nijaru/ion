@@ -31,8 +31,11 @@ and exact call before execution. Known outcomes release the claim; uncertainty,
 panic and process loss retain it. There is no automatic expiry or force-clear API.
 
 This is **unconfined coordination**, not approval or sandbox enforcement. Hosts
-must use the same canonical root and bind tools to that actual environment;
-nested roots are not coordinated. External writers and tools that delete the
+must use the same canonical root and bind tools to that actual environment.
+Opening a root nested below an already-coordinated workspace is refused, because
+two coordinators over one tree would each serialize only their own writers; a
+coordinator created after an outer workspace was opened is still not discovered,
+so keep one root per tree. External writers and tools that delete the
 coordinator can bypass it. Preserve the coordinator files across restarts.
 Approval/revocation and evidence-based reconciliation are not implemented.
 
