@@ -259,6 +259,103 @@ async fn response_ready_evidence_is_settled_without_another_provider_call() {
 }
 
 #[tokio::test]
+async fn a_retryable_failure_after_a_reused_attempt_still_retries() {
+    let path = database("retry-reused-attempt");
+    let conversation;
+    let turn;
+    {
+        let store = SqliteStore::create(&path).expect("create store");
+        let db = Db::start(store, limits()).expect("start database thread");
+        let info = db
+            .run(CreateSession {
+                session_id: SessionId::new(),
+                config: config(),
+            })
+            .await
+            .expect("create session");
+        let revision = info.last_commit.expect("create commit");
+        conversation = info.root;
+        let admitted = db
+            .run(AdmitInput {
+                conversation,
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: None,
+                body: InputBody::Text("hello".to_owned()),
+                limits: limits(),
+                now_unix_ms: now(),
+            })
+            .await
+            .expect("admit");
+        turn = match admitted {
+            Admitted::Started { turn, .. } => turn,
+            other => panic!("expected a started turn, got {other:?}"),
+        };
+        let step = match db
+            .run(BeginStep {
+                turn,
+                config_revision: revision,
+                model: config().model,
+                instructions: config().instructions,
+                context: Vec::new(),
+                controls: config().controls,
+                tools: Vec::new(),
+                max_request_bytes: config().context.max_request_bytes,
+                limits: limits(),
+            })
+            .await
+            .expect("begin step")
+        {
+            StepStart::Started(step) => step,
+            StepStart::Limit { setting } => panic!("unexpected limit {setting}"),
+        };
+        // The process stops between the attempt record and its dispatch intent:
+        // exactly the window a later retry has to survive.
+        db.run(PrepareAttempt { step })
+            .await
+            .expect("prepare attempt");
+        db.close().await;
+    }
+
+    // The first provider call fails retryably, so the drive retries. Reusing the
+    // attempt it just dispatched would dispatch one attempt twice.
+    let model = Arc::new(ScriptedModelService::new([
+        Script::OpenError(ion_ai::ProviderError {
+            kind: ion_ai::ProviderErrorKind::Transport,
+            message: "connection reset".to_owned(),
+        }),
+        Script::Stream(vec![ModelStreamEvent::Completed(answer("retried answer"))]),
+    ]));
+    let mut session = Session::open(
+        &path,
+        limits(),
+        Services::new(
+            Arc::clone(&model) as Arc<dyn ion_ai::ModelService>,
+            Arc::new(ToolRegistry::new()),
+        ),
+    )
+    .await
+    .expect("reopen");
+    let handle = session.handle();
+    assert_eq!(
+        handle.resume(conversation).await.expect("resume"),
+        Some(turn)
+    );
+    let outcome = tokio::time::timeout(std::time::Duration::from_secs(5), handle.wait(turn))
+        .await
+        .expect("the retry must not stall the turn")
+        .expect("wait");
+    assert!(
+        outcome.is_completed(),
+        "the retry must produce a new request: {outcome:?}"
+    );
+    assert_eq!(model.requests().len(), 2, "one failure and one retry");
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(path.parent().expect("dir")).ok();
+}
+
+#[tokio::test]
 async fn a_dispatched_attempt_without_a_response_is_never_silently_repeated() {
     let path = database("dispatched");
     let conversation;

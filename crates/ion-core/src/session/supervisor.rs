@@ -901,14 +901,27 @@ async fn model_step(
             .map_err(StoreError::into_error)?;
     }
 
+    // An attempt this drive dispatched must not be reused if a retryable
+    // failure sends the loop around again. The durable state has moved on, but
+    // this drive's snapshot still lists the attempt as prepared, so reusing it
+    // would dispatch one attempt twice and end the drive on a rejected
+    // transition: a stall with no phase event rather than a retry.
+    let mut dispatched: Option<crate::AttemptId> = None;
     loop {
         if token.is_cancelled() {
             return Ok(());
         }
+        // The deadline bounds every attempt, not just the last wait: a retry
+        // must not dispatch another request for a turn that has expired.
+        if past_deadline(&view.turn) {
+            return fail(shared, view.turn.id, TurnFailure::Deadline).await;
+        }
         let reusable = view
             .attempts
             .iter()
-            .find(|attempt| attempt.state == AttemptState::Prepared)
+            .find(|attempt| {
+                attempt.state == AttemptState::Prepared && Some(attempt.id) != dispatched
+            })
             .map(|attempt| attempt.id);
         let attempt = match reusable {
             Some(attempt) => attempt,
@@ -963,6 +976,7 @@ async fn model_step(
             })
             .await
             .map_err(StoreError::into_error)?;
+        dispatched = Some(attempt);
         let request = ion_ai::ModelRequest {
             model: basis.model.clone(),
             instructions: Some(assembled.instructions).filter(|text| !text.is_empty()),
@@ -978,6 +992,13 @@ async fn model_step(
                 request,
                 u64::from(view.turn.limits.max_response_bytes),
             ) => result,
+            // A provider that opens a stream and never completes it would
+            // otherwise hold the turn open past its own deadline. A response
+            // that is already ready is committed first: the answer is durable
+            // truth, and the deadline is still honored at the loop top.
+            () = wait_until(deadline_of(&view.turn)) => {
+                return fail(shared, view.turn.id, TurnFailure::Deadline).await;
+            }
         };
         match collected {
             Ok(response) => {

@@ -20,6 +20,23 @@ use support::{
 };
 use tokio::time::timeout;
 
+/// A provider that accepts a request and never answers it.
+struct SilentModel;
+
+impl ion_ai::ModelService for SilentModel {
+    fn stream<'a>(
+        &'a self,
+        _request: ion_ai::ModelRequest,
+    ) -> ion_ai::BoxFuture<'a, Result<ion_ai::ModelStream, ion_ai::ProviderError>> {
+        Box::pin(async {
+            let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::pending::<
+                Result<ion_ai::ModelStreamEvent, ion_ai::ProviderError>,
+            >());
+            Ok(stream)
+        })
+    }
+}
+
 #[tokio::test]
 async fn close_suspends_an_unfinished_turn_and_reopen_can_resume_it() {
     let path = database("close-suspends");
@@ -374,6 +391,41 @@ async fn a_turn_deadline_stops_waiting_without_claiming_the_action_stopped() {
     assert!(!session.close().await.expect("close").is_closed());
     tool.release();
     assert!(session.close().await.expect("retry").is_closed());
+    std::fs::remove_dir_all(path.parent().expect("dir")).expect("cleanup");
+}
+
+#[tokio::test]
+async fn a_stalled_provider_stream_is_bounded_by_the_turn_deadline() {
+    let path = database("stalled-provider");
+    let mut config = spec();
+    config.config.limits.deadline_ms = 200;
+    let services = services(Arc::new(SilentModel), ToolRegistry::new());
+    let mut session = Session::create(&path, config, services)
+        .await
+        .expect("create");
+    let handle = session.handle();
+    let turn = handle
+        .submit(SubmitRequest::user("hello"))
+        .await
+        .expect("submit")
+        .turn
+        .expect("turn");
+    // A provider that accepts the request and never answers must not hold the
+    // turn open past its own deadline.
+    let outcome = timeout(Duration::from_secs(5), handle.wait(turn))
+        .await
+        .expect("the deadline must bound the provider wait")
+        .expect("wait");
+    assert!(
+        matches!(
+            outcome,
+            TurnOutcome::Failed {
+                cause: ion_core::TurnFailure::Deadline
+            }
+        ),
+        "{outcome:?}"
+    );
+    assert!(session.close().await.expect("close").is_closed());
     std::fs::remove_dir_all(path.parent().expect("dir")).expect("cleanup");
 }
 
