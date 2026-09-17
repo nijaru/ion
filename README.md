@@ -36,9 +36,9 @@ nested roots are not coordinated. External writers and tools that delete the
 coordinator can bypass it. Preserve the coordinator files across restarts.
 Approval/revocation and evidence-based reconciliation are not implemented.
 
-Known lifecycle limitation: closing during an unfinished turn currently follows
-its cancellation path rather than preserving the suspended continuation required
-by the architecture. Close/join ownership tests do not establish resumable close.
+Closing interrupts active work without itself cancelling the unfinished turn.
+After reopening, explicit resume continues the turn; uncertain tool outcomes still
+require resolution rather than automatic repetition.
 
 Still missing: real provider adapters, a runnable `ion` binary, workspace tools
 (read/edit/exec), context compaction and forking, the terminal UI, and workers.
