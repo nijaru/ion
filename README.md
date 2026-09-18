@@ -23,13 +23,13 @@ actions, supervisor-owned tool execution with stop/join semantics, exclusive
 session ownership, and bounded pages and content budgets. A scripted model/tool
 exchange runs end to end through the headless API.
 
-The 2026-09-18 source review still found correctness work before the cancellation
-and observation contracts are implementation-complete: response settlement and
-provider/tool dispatch need transactional cancellation-generation fences, a
-panicking drive can publish a phase that differs from durable state, and one late
-tool-evidence window can lose the report. Tool-call arguments also still need
-schema validation before native tools ship. These are pre-C2 acceptance work, not
-reasons to add another runtime.
+The 2026-09-18 source review still found correctness work before the cancellation,
+observation and provider-stream contracts are implementation-complete: response
+settlement and provider/tool dispatch need transactional cancellation-generation
+fences; a valid terminal model event still waits for transport EOF; a panicking drive
+can publish a phase that differs from durable state; and one late tool-evidence window
+can lose the report. Tool-call arguments also still need schema validation before
+native tools ship. These are pre-C2 acceptance work, not reasons to add another runtime.
 
 Hosts can opt trusted tools into a durable, exclusive mutation claim with
 `Workspace::open(root)?.bind(tool)`, then register the returned tool normally.
