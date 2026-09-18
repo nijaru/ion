@@ -64,7 +64,10 @@ History ancestry, turn ownership, semantic environment, workspace binding, obser
 and live authority are separate relationships. A fork copies no running work or
 permission. One conversation has at most one unfinished turn. Inputs can queue without
 entering model context. Conversation configuration is the default for a **future** turn;
-starting a turn captures its TurnEnvironment. Changing the conversation while that turn
+starting a turn captures its TurnEnvironment, including its allowed generation/
+compaction ProviderBinding routes. Each ModelStep binds one exact provider/model from
+that captured route; fallback after step creation is another explicit step, never a
+mutation of the existing step or environment. Changing the conversation while that turn
 runs does not silently change later steps of that turn. Session identity is global;
 other identities and commit cursors are distinct Rust newtypes over a private
 session-local monotonic sequence. IDs escape only after commit.
@@ -108,13 +111,23 @@ process that exits cannot promise continued background execution without another
 Every provider or tool effect uses one effect sandwich:
 
 ```text
-prepare/authorize → commit intent → effect-gate admit → external effect → commit evidence
+prepare/authorize → commit intent → effect-gate admit → backend start → external effect → commit evidence
 ```
+
+Each logical ModelStep/ToolInvocation owns a stable EffectKey; every physical execution
+owns a distinct AttemptId. A frozen binding may use the EffectKey as an external
+idempotency key only when that backend/provider explicitly guarantees compatible
+semantics.
 
 The durable intent transaction rechecks the owning turn's current cancellation
 generation. After it commits, only that turn's process-local effect gate may cross the
-external boundary. A dispatch-intent record means the effect **may** have happened; it
-cannot prove delivery.
+external boundary. Session SQLite and an external execution backend are not one atomic
+transaction. A binding therefore states whether it supplies an authoritative durable
+start receipt discoverable by AttemptId. Such a backend records the receipt/resource
+claim before its first externally visible effect; after process loss the recovered
+receipt can prove the effect may have started, and an authoritative negative lookup can
+prove it did not. Absence from a backend without that guarantee proves nothing and stays
+indeterminate. Recovered receipts are persisted on the attempt before continuation.
 
 Cancellation closes the effect gate to new admission **before** committing its durable
 generation, then signals already-admitted effects after that commit. An effect that won
@@ -124,10 +137,12 @@ cancellation mark wins. Response-ready/model-tool evidence preserves facts but c
 authorize continuation after cancellation.
 
 Recovery either adopts known evidence, reconciles a durable external receipt, creates a
-new physical attempt when frozen and current policy both permit safe replay, or retains
-uncertainty. Safe replay never rewrites an earlier indeterminate attempt. Unknown is not
-failed, free or proof of non-execution. Missing implementations/unreadable evidence never
-mean unstarted.
+new physical attempt when frozen/current policy and backend safety all permit replay, or
+retains uncertainty. Safe replay never rewrites an earlier indeterminate attempt. A
+conflicting prior possibly-live mutation must be reconciled/quiesced, isolated, or
+protected by backend-guaranteed idempotency under the stable EffectKey before another
+attempt starts. Unknown is not failed, free or proof of non-execution. Missing
+implementations/unreadable evidence never mean unstarted.
 
 External execution truth and transcript settlement are independent. A logical tool call
 may receive one truthful model-visible "outcome unknown" result so the exchange can
@@ -214,12 +229,14 @@ assembled request**, including newly placed input and tool results, rather than 
 last-provider usage. Large outputs are bounded/spooled before this path.
 
 Starting a turn captures one bounded immutable TurnEnvironment: conversation
-configuration revision, resolved instructions/project context, provider adapter
-identity/revision, selected tool declarations and implementation revisions, context
-policy, canonical workspace/executor binding and baseline execution profile. Persistent
-configuration updates affect **later turns**, not later request boundaries of the active
-turn. A future active-turn rebase, if ever needed, is an explicit durable safe-boundary
-operation. Credentials and live authority remain refreshable/revocable and are not frozen.
+configuration revision, resolved instructions/project context, allowed generation route
+(ordered ProviderBindings/fallback policy), optional compaction route, selected tool
+declarations and implementation revisions, context policy, canonical workspace/executor
+binding and baseline execution profile. Each ModelStep selects one exact ProviderBinding
+from those captured routes. Persistent configuration updates affect **later turns**, not
+later request boundaries of the active turn. A future active-turn rebase, if ever needed,
+is an explicit durable safe-boundary operation. Credentials, live availability and live
+authority remain refreshable/revocable and are not frozen.
 
 Each model step persists a versioned request manifest containing the environment/epoch
 reference, context cutoff/input provenance, purpose, assembly revision and digest of the
