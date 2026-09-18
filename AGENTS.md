@@ -9,8 +9,10 @@
   Turn as continuation owner. The accepted target now includes a stable TurnEnvironment,
   frozen provider/tool bindings, versioned request manifests, effect-gated dispatch,
   logical tool invocations with immutable physical ToolAttempts, execution evidence
-  separate from transcript settlement, typed drive exits and exact-commit observations.
-  Current Rust predates this cutover; do not preserve its existing invocation/config/
+  separate from transcript settlement, durable outcome staging for compatible parallel
+  tool calls, typed drive exits, atomic commit update batches, ContextEpoch continuity and
+  a host-owned workspace registry. Worker context/lifetime/workspace inheritance are
+  separate axes. Current Rust predates this cutover; do not preserve its existing invocation/config/
   observation shapes merely because they are implemented. Do not reintroduce a generic
   task/plan graph, resident semantic mirror or undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
