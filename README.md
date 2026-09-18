@@ -24,13 +24,15 @@ end through the headless API.
 The accepted [architecture](ARCHITECTURE.md) was deliberately refined on 2026-09-18
 before real providers and native tools made the early v0 boundaries expensive to change.
 The current Rust is therefore **pre-cutover**, not the final internal API. The next
-cutover keeps the coding Turn but adds a stable per-turn semantic environment, frozen
-provider/tool implementation bindings, versioned request manifests, an explicit
-effect-admission gate, immutable physical ToolAttempt records beneath logical tool calls,
-external execution evidence separate from transcript settlement, typed drive exits and
-exact-causal observation cursors. The source-confirmed races around cancellation,
-provider EOF, late evidence and schema validation are acceptance tests for that new
-shape rather than reasons to preserve the existing one.
+cutover keeps the coding Turn but adds stable per-turn provider/tool/execution bindings,
+versioned semantic request manifests, explicit effect admission and recoverable backend
+start receipts, logical ToolInvocations with immutable physical ToolAttempts, durable
+outcome staging for safely parallel tool batches, external execution truth separate from
+the model-visible result, typed drive/session health and atomic commit-addressed update
+batches. The longer-horizon target also uses ContextEpochs (host-retained facts +
+structured checkpoint + lossless recent tail), a host-owned workspace registry and
+explicit fresh-vs-forked worker context. Source-confirmed races are acceptance tests for
+that cleaner shape rather than reasons to preserve the existing one.
 
 The current source also has an opt-in workspace wrapper,
 `Workspace::open(root)?.bind(tool)`, backed by `.ion/claims.sqlite`. It conservatively
