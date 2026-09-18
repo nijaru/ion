@@ -1,17 +1,20 @@
 # Ion architecture
 
-Accepted contract, 2026-09-15, replacing the earlier task-runtime design.
-[README.md](README.md) states what the current source implements; this file states the
-contracts the maintained engine must satisfy. Ion is unreleased: obsolete abstractions
-are replaced, not supported through compatibility layers.
+Accepted contract, 2026-09-15; materially refined 2026-09-18 after the current
+Pi/Pico and Codex review. [README.md](README.md) states what the current source
+implements; this file states the contracts the maintained engine must satisfy. Ion is
+unreleased v0: replace obsolete abstractions directly rather than preserving them
+through compatibility layers.
 
-The durable turn engine and its primary storage/recovery boundaries are implemented
-and covered by regressions, with the current implementation gaps called out in
-[README.md](README.md). An opt-in durable workspace mutation coordinator exists, but
-approval, revocation, reconciliation and confinement do not. Also not yet implemented:
-context compaction, reset and history forks, artifact publication, providers other than
-the scripted service, a client binary and workers. Where this document describes those,
-it describes the required shape rather than shipping behavior.
+The coding Turn remains the continuation owner, but the current Rust predates several
+accepted 2026-09-18 boundaries: a stable TurnEnvironment, frozen provider/tool bindings,
+versioned request manifests, first-class effect admission, logical tool invocations with
+immutable physical attempts, external evidence separate from transcript settlement,
+typed drive exits and exact-commit observations. Complete that targeted cutover before
+real providers or native tools become acceptance dependencies. An opt-in workspace
+mutation coordinator exists today; approval, revocation, structured reconciliation and
+confinement do not. Context compaction/reset/forks, artifact publication, a client binary
+and workers also remain future work.
 
 ## Product and boundaries
 
@@ -26,9 +29,11 @@ Other applications may host the same engine without importing the TUI.
 
 - `ion-ai` owns model requests, ordered content, stream protocol, usage and typed
   provider facts. It knows nothing about sessions, storage or execution authority.
-- `ion-core` owns turns, context, admission, recovery, storage and execution
-  interfaces. Providers and tools do not receive arbitrary database/scheduler access.
-- The application composes providers, credentials, execution policy and clients.
+- `ion-core` owns turns, frozen semantic environments, context, admission, recovery,
+  durable external-effect evidence, storage and the narrow execution interfaces.
+  Providers and tools do not receive arbitrary database/scheduler access.
+- The application composes provider implementations, credentials, execution backends,
+  live policy and clients. Live authority is not frozen into model configuration.
   `ion-terminal` owns reusable terminal mechanics, not agent execution.
 
 Keep modules cohesive around these responsibilities. Runtime-selected providers
@@ -43,19 +48,25 @@ ordinary functions and payload-bearing enums, not a generic workflow framework.
 | Conversation | Immutable transcript, configuration and optional history parent. |
 | Entry | A message, tool result or explicit context-boundary record. |
 | Input | Accepted request, attribution, deduplication and placement. |
-| Turn | A coding request's continuation, limits, cancellation and outcome. |
-| Model attempt | Frozen semantic request, dispatch/result evidence and usage. |
-| Tool invocation | Prepared action, authorization binding and execution evidence. |
+| Turn | A coding request's continuation, limits, cancellation and immutable terminal outcome. |
+| Turn environment | Frozen semantic model/tool/execution bindings for one turn; live authority is separate. |
+| Model step | Versioned request manifest: purpose, environment, context/input provenance, assembly revision and digest. |
+| Model attempt | One physical provider dispatch with immutable failure/result/usage evidence. |
+| Tool invocation | One assistant call, frozen binding/prepared action and at most one model-visible result. |
+| Tool attempt | One physical execution/replay with intent, executor receipt and monotonic external outcome evidence. |
 
 A turn replaces the former distributed root-task/membership/closure representation;
 it is not an additional layer over it. There is no durable Agent object, generic
 Effect object, arbitrary task DAG or public programmable settlement plan.
 
-History ancestry, turn ownership, workspace binding, observation and authority are
-separate relationships. A fork copies no running work or permission. One conversation
-has at most one unfinished turn. Inputs can queue without entering model context.
-Session identity is global; other identities and commit cursors are distinct Rust
-newtypes over a private session-local monotonic sequence. IDs escape only after commit.
+History ancestry, turn ownership, semantic environment, workspace binding, observation
+and live authority are separate relationships. A fork copies no running work or
+permission. One conversation has at most one unfinished turn. Inputs can queue without
+entering model context. Conversation configuration is the default for a **future** turn;
+starting a turn captures its TurnEnvironment. Changing the conversation while that turn
+runs does not silently change later steps of that turn. Session identity is global;
+other identities and commit cursors are distinct Rust newtypes over a private
+session-local monotonic sequence. IDs escape only after commit.
 
 ## Turn execution
 
@@ -67,10 +78,12 @@ admit input → prepare request → call model → validate response
 ```
 
 The turn owns continuation. Initial tool execution is sequential within a turn;
-parallelism must earn its scheduling complexity. Attempts and tool invocations retain
-recovery evidence, not independent generic successor graphs. Engine-owned semantic transactions admit
-input/start a turn, settle a response/admit its calls, and settle results/advance the
-turn. Every operation has a stable identity and idempotent settlement.
+parallelism must earn its scheduling complexity. A logical step/invocation is distinct
+from each physical provider/tool attempt so retries never erase earlier uncertainty or
+spend. Engine-owned semantic transactions admit input/start a turn and environment,
+seal request manifests, record effect intent/evidence, settle one model-visible result,
+and advance or finish the turn. Every operation has a stable identity and idempotent
+settlement; there is still no generic workflow DAG.
 
 Placement, inclusion in a request and answer completion are different facts.
 Duplicate admission with the same request key and content returns the original
@@ -84,24 +97,43 @@ process that exits cannot promise continued background execution without another
 
 ## External actions, cancellation and recovery
 
-Persist prepared evidence before dispatch and results before dependent continuation.
-A dispatch-intent record means an action **may** have happened; it cannot prove delivery.
-Recovery either adopts a known result, safely repeats under recorded policy,
-reconciles an external identity, or reports uncertainty. Unknown is not failed, free,
-or safe to repeat. Missing implementations or unreadable evidence never mean unstarted.
+Every provider or tool effect uses one effect sandwich:
 
-Cancellation commits intent before signaling local executors. Only committed **terminal
-turn success** wins if it precedes cancellation; response-ready evidence and individual
-tool results do not authorize continuation afterward. Generations fence obsolete executors.
-Executors return bounded evidence to the supervisor, which owns joining and persistence;
-fresh reconciliation may retain late facts without resuming cancelled continuation.
-Cancellation is not rollback or proof that a remote action stopped. Unpersisted evidence
-lost in a crash remains uncertain.
+```text
+prepare/authorize → commit intent → effect-gate admit → external effect → commit evidence
+```
 
-Local work is supervised and joined. Unexpected invocation failure stops its automatic
-continuation and becomes observable; ambiguous persistence failure fences the whole
-session. No blind crash/restart loop. Cleanup has bounded capacity independent of
-normal execution so saturated tools cannot prevent it.
+The durable intent transaction rechecks the owning turn's current cancellation
+generation. After it commits, only that turn's process-local effect gate may cross the
+external boundary. A dispatch-intent record means the effect **may** have happened; it
+cannot prove delivery.
+
+Cancellation closes the effect gate to new admission **before** committing its durable
+generation, then signals already-admitted effects after that commit. An effect that won
+admission is possibly live and must be joined/reconciled; one that lost admission cannot
+start after cancellation. Only committed **terminal turn success** that precedes the
+cancellation mark wins. Response-ready/model-tool evidence preserves facts but cannot
+authorize continuation after cancellation.
+
+Recovery either adopts known evidence, reconciles a durable external receipt, creates a
+new physical attempt when frozen and current policy both permit safe replay, or retains
+uncertainty. Safe replay never rewrites an earlier indeterminate attempt. Unknown is not
+failed, free or proof of non-execution. Missing implementations/unreadable evidence never
+mean unstarted.
+
+External execution truth and transcript settlement are independent. A logical tool call
+may receive one truthful model-visible "outcome unknown" result so the exchange can
+continue while its ToolAttempt remains externally indeterminate. Later reconciliation
+may advance that exact attempt and release workspace quarantine, even after the turn is
+terminal, but never rewrites the terminal turn or emits a second tool result.
+
+Local work is supervised and joined. Every drive returns a closed typed exit
+(settled/parked/stopped/faulted or equivalent); a non-panicking error is never treated as
+successful completion and a panic never fabricates a durable phase. Ambiguous
+persistence failure fences the whole process-local session against new mutation/effect
+admission while preserving inspection and controlled close/reopen. No blind
+crash/restart loop. Cleanup has bounded capacity independent of normal execution so
+saturated tools cannot prevent it.
 
 Close stops admission and dispatch, signals and joins local work, closes storage, and
 releases exclusive ownership last. It does not silently mark suspended work cancelled.
@@ -120,11 +152,17 @@ mirrored through an undo journal. Validate durable relationships and versions be
 trusting them. Ancestry must be acyclic and cutoffs visible; pagination arithmetic is
 checked. Failure must not publish partial semantic state.
 
-Publish committed observations after commit. Snapshot acquisition and subscription
-are atomic. Durable cursors identify coverage; overflow/restart gaps require resnapshot.
-Token/tool progress is bounded, provisional and invocation-addressed. Final committed
-content replaces it by identity. Cancellation/control traffic remains serviceable under
-output floods. Queues are bounded by both count and bytes.
+Publish committed observations only after commit. Every semantic transaction returns
+its exact commit cursor; an observation carries that causal cursor directly rather than
+sampling a later "current commit." The authoritative watch surface establishes
+subscription before taking a snapshot/cursor and discards events already covered by the
+snapshot, yielding a gap-free snapshot/subscription handoff. Lag/overflow requires
+resnapshot; the observation ring is bounded by both count and bytes.
+
+Token/tool progress is bounded and provisional, addressed by model/tool attempt identity.
+Final committed content replaces it by identity. Late external evidence is persisted to
+its exact attempt before publication. Cancellation/control traffic remains serviceable
+under output floods.
 
 Large content is published with integrity metadata before its durable reference.
 Crashes may leave reclaimable orphan content, never knowingly publish missing content.
@@ -146,17 +184,28 @@ conversation; automatic compaction and steering occur only at engine-owned reque
 A new answer turn uses current complete history, not a silent rewind. General-purpose
 transcript rewrite/document frameworks are not part of the engine.
 
-Capture configuration revision, context cutoff and input provenance atomically.
-Persist resolved instructions, model controls and tool definitions for the attempt,
-using immutable references rather than copying growing history repeatedly. Freeze
-semantic requests, not credentials or expiring transport authentication. Configuration
-updates affect later request boundaries; live authority remains separately revocable.
+Starting a turn captures one bounded immutable TurnEnvironment: conversation
+configuration revision, resolved instructions/project context, provider adapter
+identity/revision, selected tool declarations and implementation revisions, context
+policy, canonical workspace/executor binding and baseline execution profile. Persistent
+configuration updates affect **later turns**, not later request boundaries of the active
+turn. A future active-turn rebase, if ever needed, is an explicit durable safe-boundary
+operation. Credentials and live authority remain refreshable/revocable and are not frozen.
+
+Each model step persists a versioned request manifest containing the environment
+reference, context cutoff/input provenance, purpose, assembly revision and digest of the
+canonical normalized provider request. Recovery reconstructs and verifies that manifest;
+a build/adapter unable to reproduce it blocks rather than silently sending a different
+request. Immutable content references avoid copying growing history into every step.
 
 The provider adapter preserves ordered content and provider-scoped replay information,
-reports unsupported controls explicitly, and supplies typed failures and unknown-aware
-usage. The engine owns retry, deadline, compaction and budget policy. Hidden retries
-cannot bypass durable attempt accounting. Validate complete responses and tool calls
-before admission; incomplete output cannot authorize tools or masquerade as success.
+has a frozen adapter/encoding revision in the request manifest, reports unsupported
+controls explicitly, and supplies typed failures and unknown-aware usage. Every physical
+retry is a new ModelAttempt; typed failure/usage evidence from earlier attempts remains
+inspectable. The engine owns retry, deadline, compaction and budget policy. Hidden retries
+cannot bypass durable attempt accounting. Validate complete responses and calls against
+the **frozen bindings**, including tool arguments, before admitting execution; incomplete
+output cannot authorize tools or masquerade as success.
 
 The validated terminal event ends an attempt's stream; EOF without it is incomplete.
 Close the owned stream after that event rather than waiting indefinitely for EOF or
@@ -165,10 +214,19 @@ prompt/tool profiles and does not erase real API differences.
 
 ## Execution and authority
 
-Tools prepare exact operations; the host authorizes and executes them in the bound
-environment. Approval binds canonical arguments, implementation compatibility,
-resources, workspace/base revision and expiry. Recheck live authority at execution;
-revocation cannot undo an already-started external action. Ordinary text is never approval.
+The model-facing tool boundary is declaration plus deterministic preparation:
+validate/canonicalize arguments into one exact bounded PreparedAction under the frozen
+ToolBinding. It performs no external effect. The host execution boundary separately owns
+live authority, approval, workspace claims, sandboxing, effect admission, stop/join and
+reconciliation. Approval binds the invocation/prepared-action digest, binding/executor
+revision, resources/workspace base and expiry. Recheck live authority at effect admission;
+revocation cannot undo an already-started action. Ordinary text is never approval.
+
+A ToolInvocation owns one assistant call and at most one model-visible result. Every
+physical run or replay is an immutable ToolAttempt with its own ordinal, cancellation
+generation, implementation/executor binding, intent, external receipt and outcome/usage.
+A current implementation may narrow a stored replay permission but never upgrade an old
+non-replayable action.
 
 Serialize conflicting workspace mutations or isolate workspaces. Session serialization
 alone does not coordinate filesystem writes across sessions. Arbitrary exec is treated
@@ -205,10 +263,13 @@ baseline, not an arbitrary workflow abstraction.
 
 ## Acceptance and change
 
-This contract fixes owners, recovery semantics and trust boundaries. Concrete layout,
-provider wire behavior, token estimates, tool format effectiveness and performance
-thresholds require evidence. Change this contract when that evidence changes an
-invariant; do not compensate with a parallel authority or compatibility shim.
+This contract fixes owners, recovery semantics and trust boundaries after the
+2026-09-18 v0 refinement. The current source is intentionally allowed to lag while the
+targeted cutover lands; do not add compatibility shims or a parallel runtime to bridge
+the old internal shape. Concrete layout, provider wire behavior, token estimates, tool
+format effectiveness and performance thresholds require evidence. Change this contract
+again when evidence changes an invariant rather than preserving an early decision by
+inertia.
 
 A usable baseline requires real provider requests, bounded read/edit/exec, externally
 verified coding tasks and the same behavior headlessly and through the terminal.
