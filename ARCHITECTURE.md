@@ -62,13 +62,15 @@ History ancestry, turn ownership, semantic environment, workspace binding, obser
 and live authority are separate relationships. A fork copies no running work or
 permission. One conversation has at most one unfinished turn. Inputs can queue without
 entering model context. Conversation configuration is the default for a **future** turn. Starting a turn captures
-one immutable TurnEnvironment **inside the Turn**, including allowed generation/
-compaction ProviderBinding routes, frozen tool bindings, workspace/executor identity and
-AuthorityCeiling. The baseline has no active-turn environment rebase. Each ModelStep
-binds one exact provider/model from the captured route; fallback after step creation is
-another explicit step under the same Turn, never a mutation of the existing step or
-environment. Changing conversation configuration while that turn runs affects later
-turns only. Session identity is global;
+one immutable TurnEnvironment **inside the Turn**, including a frozen allowed
+ProviderBinding set/routes, frozen allowed ToolBindings, generation-control ranges,
+workspace/executor identity and AuthorityCeiling. The baseline has no active-turn
+environment rebase. The Turn also stores a small revisioned TurnSettings selection
+(provider binding, permitted controls and active tool-loadout subset) constrained by the
+environment. Explicit user/host changes or frozen fallback policy affect future
+ModelSteps only; no new implementation/capability can enter mid-turn. Changing
+conversation configuration while that turn runs affects later turns only. Session
+identity is global;
 other identities and commit cursors are distinct Rust newtypes over a private
 session-local monotonic sequence. IDs escape only after commit.
 
@@ -254,19 +256,23 @@ assembled request**, including newly placed input and tool results, rather than 
 last-provider usage. Large outputs are bounded/spooled before this path.
 
 Starting a turn captures one bounded immutable TurnEnvironment value directly in the
-Turn: conversation configuration revision, resolved instructions/project context, allowed
-generation route (ordered ProviderBindings/fallback policy), optional compaction route,
-selected tool declarations/implementation revisions, context policy, canonical
+Turn: conversation configuration revision, resolved instructions/project context, frozen
+allowed ProviderBindings plus default/fallback/compaction routes, frozen allowed
+ToolBindings, permitted generation-control ranges, context policy, canonical
 workspace/executor binding and an AuthorityCeiling defining the maximum execution
-classes/resources that turn may receive. Each ModelStep selects one exact ProviderBinding
-from those captured routes. Persistent configuration updates and broad authority widening
-affect **later turns**, not later request boundaries of the active turn. Credentials/live
-availability remain refreshable and live policy may revoke/narrow immediately.
-Per-action approval can satisfy an `ask` only inside the captured ceiling. Do not carry
-active-turn environment revision machinery until a measured requirement justifies it.
+classes/resources that turn may receive. It also installs initial revisioned TurnSettings
+(provider binding, controls, active tool-loadout subset) constrained by that environment.
+
+Persistent configuration updates and broad authority widening affect **later turns**.
+Explicit turn-setting changes may switch model/reasoning/service tier or tool subset only
+within the frozen environment and affect future ModelSteps. Credentials/live availability
+remain refreshable and live policy may revoke/narrow immediately. Per-action approval can
+satisfy an `ask` only inside the captured ceiling. Do not carry environment-rebase
+machinery until a measured requirement justifies it.
 
 Each model step persists a versioned request manifest containing the TurnEnvironment
-digest, exact ProviderBinding, ContextBoundary EntryId (or implicit initial epoch),
+digest, captured TurnSettings revision/value, exact ProviderBinding/tool loadout,
+ContextBoundary EntryId (or implicit initial epoch),
 context cutoff/input provenance, purpose, assembly revision and digest of the canonical
 **semantic** provider request. The digest includes model-visible messages,
 tools and semantic controls but excludes credentials, auth headers, trace IDs,
