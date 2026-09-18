@@ -215,15 +215,21 @@ transcript rewrite/document frameworks are not part of the engine.
 Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
-- **Retained facts:** bounded host-owned user/verified facts whose loss would change
-  instruction or authority semantics; missing evidence is marked incomplete, never inferred.
-- **Continuation checkpoint:** bounded structured model-generated execution frontier
-  (goal, progress, blockers, decisions, evidence refs, next action); advisory, never authority.
+- **Retained facts:** bounded host-owned model-visible facts with source identity and
+  scope/lifetime; relevant user/steer instructions, verified answers, intentionally
+  model-visible scoped decisions and delegation attribution live here. Bounded loss marks
+  the family incomplete; live execution authority remains separate.
+- **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
+  (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
+  action/terminal condition). Schema validation is required, but content remains advisory
+  and never authority.
 - **Operational tail:** bounded lossless suffix of recent complete exchange groups.
 
 Compaction creates a new ContextEpoch referencing its source cutoff, retained-facts
-revision, structured checkpoint, raw-tail boundary, checkpoint/compactor revision and
-optional provider-owned opaque artifact. It does not fork the visible conversation.
+revision, typed checkpoint, raw-tail boundary, checkpoint/compactor revision and optional
+provider-owned opaque artifact. It does not fork the visible conversation. The renderer
+keeps retained facts distinct from checkpoint text and deduplicates exact retained
+instructions.
 Compact only at safe complete-exchange boundaries. Decide from the estimated **next
 assembled request**, including newly placed input and tool results, rather than stale
 last-provider usage. Large outputs are bounded/spooled before this path.
@@ -232,11 +238,14 @@ Starting a turn captures one bounded immutable TurnEnvironment: conversation
 configuration revision, resolved instructions/project context, allowed generation route
 (ordered ProviderBindings/fallback policy), optional compaction route, selected tool
 declarations and implementation revisions, context policy, canonical workspace/executor
-binding and baseline execution profile. Each ModelStep selects one exact ProviderBinding
-from those captured routes. Persistent configuration updates affect **later turns**, not
-later request boundaries of the active turn. A future active-turn rebase, if ever needed,
-is an explicit durable safe-boundary operation. Credentials, live availability and live
-authority remain refreshable/revocable and are not frozen.
+binding and an AuthorityCeiling defining the maximum execution classes/resources that
+turn may receive. Each ModelStep selects one exact ProviderBinding from those captured
+routes. Persistent configuration updates affect **later turns**, not later request
+boundaries of the active turn. A future active-turn semantic/ceiling rebase, if ever
+needed, is an explicit durable safe-boundary operation. Credentials and live availability
+remain refreshable. Live policy may revoke/narrow immediately; broad widening applies to
+later turns by default. Per-action approval can satisfy an `ask` only inside the
+captured ceiling.
 
 Each model step persists a versioned request manifest containing the environment/epoch
 reference, context cutoff/input provenance, purpose, assembly revision and digest of the
