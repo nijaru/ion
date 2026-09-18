@@ -4,10 +4,15 @@
 
 - `ARCHITECTURE.md` owns the accepted turn-engine contracts. `README.md` describes
   what currently works. Target, implemented and validated are different states.
-- The 2026-09-15 design replaced the former generic task runtime; that replacement
-  has landed in `ion-core`. There is one runtime: session-owned turns, model steps,
-  attempts and tool invocations over a private SQLite store. Do not reintroduce a
-  task/plan graph, a resident semantic mirror or an undo journal.
+- The 2026-09-15 design replaced the former generic task runtime. The 2026-09-18
+  review deliberately reopens the *external-boundary internals* while keeping the coding
+  Turn as continuation owner. The accepted target now includes a stable TurnEnvironment,
+  frozen provider/tool bindings, versioned request manifests, effect-gated dispatch,
+  logical tool invocations with immutable physical ToolAttempts, execution evidence
+  separate from transcript settlement, typed drive exits and exact-commit observations.
+  Current Rust predates this cutover; do not preserve its existing invocation/config/
+  observation shapes merely because they are implemented. Do not reintroduce a generic
+  task/plan graph, resident semantic mirror or undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
   shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
   Git preserves old code and documents; retain useful failure scenarios as new tests.
@@ -24,8 +29,10 @@
 - Decide consequential boundaries before implementing them. Update the architecture
   when evidence changes a contract; do not conceal a disagreement with an adapter.
   Keep research, working rationale and cutover tracking with their knowledge owner.
-- Add the boundary regression before marking a defect repaired. Preserve uncertainty,
-  cancellation fencing, durable admission and bounded resources when deleting APIs.
+- Add the boundary regression before marking a defect repaired. For the 2026-09-18
+  cutover, test the new owner/invariant first rather than patching every race into the
+  superseded shape. Preserve uncertainty, immutable attempt evidence, effect-admission
+  fencing, durable admission and bounded resources when deleting APIs.
 - Do not equate declared capabilities with confinement, future cancellation with stopped
   external effects, or green scripted tests with a working live coding agent.
 - Keep this as the only repository agent-instruction file. Add a project skill only
