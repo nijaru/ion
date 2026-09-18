@@ -195,13 +195,23 @@ replaces it by identity. Late external evidence is persisted to its exact attemp
 its commit's update is published. Cancellation/control traffic remains serviceable under
 output floods.
 
-Large content is published with integrity metadata before its durable reference.
-Crashes may leave reclaimable orphan content, never knowingly publish missing content.
+Large durable content lives in a host-owned immutable BlobStore outside the
+agent-writable workspace. A BlobRef is content-addressed and bounded by hard spool/content
+quotas. Publication writes/finalizes/verifies the blob under the configured durability
+policy before a semantic DB commit may reference it; crashes may leave reclaimable
+orphans, but committed state must never knowingly reference missing content.
+
+Canonical tool results keep a bounded model-visible preview plus explicit truncation
+metadata and optional BlobRef for complete output. Full blobs never enter model context
+implicitly; bounded artifact reads page them explicitly. Running output remains
+provisional, with an optional bounded attempt ProgressCheckpoint separate from the final
+blob/result. Reachability GC preserves everything referenced by immutable history,
+ContextEpochs and active request/attempt state.
+
 Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
-and output growth cannot consume it. Truncation is explicit. Managed quota refusal is
-not disk failure: actual I/O failure can still fence the session. Enforce limits while
-reading/writing, not after unlimited buffering. Durability remains conditional on the
-filesystem/platform.
+and output growth cannot consume it. Managed quota refusal is not disk failure: actual
+I/O failure can still fence the session. Enforce limits while reading/writing, not after
+unlimited buffering. Durability remains conditional on the filesystem/platform.
 
 ## Context and model requests
 
