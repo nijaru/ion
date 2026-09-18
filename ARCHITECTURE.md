@@ -92,8 +92,10 @@ result per invocation, and advance or finish the turn. Every operation has a sta
 identity and idempotent settlement.
 
 Placement, inclusion in a request and answer completion are different facts.
-Duplicate admission with the same request key and content returns the original
-receipt; conflicting reuse rejects. Steering enters the next complete-exchange
+Duplicate admission with the same conversation-scoped request key and content returns
+the original receipt; conflicting reuse within that conversation rejects. A host needing
+a wider principal/global idempotency domain namespaces keys before submission; a key
+never grants cross-conversation read authority. Steering enters the next complete-exchange
 request boundary, never an already-dispatched request. Follow-ups start later turns.
 Withdrawing unplaced input does not erase previously placed transcript entries.
 
@@ -159,16 +161,21 @@ trusting them. Ancestry must be acyclic and cutoffs visible; pagination arithmet
 checked. Failure must not publish partial semantic state.
 
 Publish committed observations only after commit. Every semantic transaction returns
-its exact commit cursor; an observation carries that causal cursor directly rather than
-sampling a later "current commit." The authoritative watch surface establishes
-subscription before taking a snapshot/cursor and discards events already covered by the
-snapshot, yielding a gap-free snapshot/subscription handoff. Lag/overflow requires
-resnapshot; the observation ring is bounded by both count and bytes.
+one exact `CommitReceipt { seq, update }`: an ordered atomic SessionUpdate batch for
+that commit. Clients never infer ordering among multiple same-commit events, and
+publication uses that receipt directly rather than sampling a later "current commit."
 
-Token/tool progress is bounded and provisional, addressed by model/tool attempt identity.
-Final committed content replaces it by identity. Late external evidence is persisted to
-its exact attempt before publication. Cancellation/control traffic remains serviceable
-under output floods.
+The authoritative watch surface subscribes before taking a complete snapshot plus
+coverage sequence, then discards queued batches at or below that sequence and applies
+later batches atomically. Lag/overflow requires resnapshot; the observation ring is
+bounded by both count and bytes. SessionUpdate is structural notification, not another
+semantic database.
+
+Token/tool progress is bounded and provisional outside the durable update stream,
+addressed by model/tool attempt identity and attachment epoch. Final committed content
+replaces it by identity. Late external evidence is persisted to its exact attempt before
+its commit's update is published. Cancellation/control traffic remains serviceable under
+output floods.
 
 Large content is published with integrity metadata before its durable reference.
 Crashes may leave reclaimable orphan content, never knowingly publish missing content.
@@ -214,11 +221,14 @@ configuration updates affect **later turns**, not later request boundaries of th
 turn. A future active-turn rebase, if ever needed, is an explicit durable safe-boundary
 operation. Credentials and live authority remain refreshable/revocable and are not frozen.
 
-Each model step persists a versioned request manifest containing the environment
+Each model step persists a versioned request manifest containing the environment/epoch
 reference, context cutoff/input provenance, purpose, assembly revision and digest of the
-canonical normalized provider request. Recovery reconstructs and verifies that manifest;
-a build/adapter unable to reproduce it blocks rather than silently sending a different
-request. Immutable content references avoid copying growing history into every step.
+canonical **semantic** provider request. The digest includes model-visible messages,
+tools and semantic controls but excludes credentials, auth headers, trace IDs,
+timestamps and other intentionally live transport data. Recovery reconstructs and
+verifies that manifest; a build/adapter unable to reproduce it blocks rather than
+silently sending a different request. Immutable content references avoid copying growing
+history into every step.
 
 The provider adapter preserves ordered content and provider-scoped replay information.
 The frozen ProviderBinding carries model/provider identity, adapter/request-encoding
@@ -261,6 +271,11 @@ file normal workspace tools can delete. Claims are keyed by invocation/attempt i
 Known mutations advance a host workspace revision; indeterminate mutations quarantine the
 binding. Prepared mutations may bind expected workspace revision and exact base-content
 facts, both rechecked before effect admission.
+
+Worktree isolation does not imply independent Git metadata: worktrees can share object,
+ref and configuration state. Execution backends therefore declare repository-level
+resource claims separately from workspace-file claims; shared ref/config mutations
+serialize or use an isolated repository clone.
 
 Arbitrary exec is treated as mutating unless an enforceable backend restricts it.
 Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
