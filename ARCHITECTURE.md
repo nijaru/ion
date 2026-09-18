@@ -268,17 +268,26 @@ prompt/tool profiles and does not erase real API differences.
 
 The model-facing tool boundary is declaration plus deterministic preparation:
 validate/canonicalize arguments into one exact bounded PreparedAction under the frozen
-ToolBinding. It performs no external effect. The host execution boundary separately owns
-live authority, approval, workspace claims, sandboxing, effect admission, stop/join and
-reconciliation. Approval binds the invocation/prepared-action digest, binding/executor
-revision, resources/workspace base and expiry. Recheck live authority at effect admission;
-revocation cannot undo an already-started action. Ordinary text is never approval.
+ToolBinding. It performs no external effect. Preparation runs at most once for the logical
+invocation under that binding revision and persists the PreparedAction before the first
+ToolAttempt; replay reuses it. If the exact preparer is unavailable, Ion does not
+reinterpret the call under a newer implementation.
+
+The host execution boundary separately owns live authority, approval, workspace claims,
+sandboxing, effect admission, stop/join and reconciliation. Approval binds the exact
+invocation/prepared-action digest, binding/executor revision, resources/workspace base
+and expiry. Policy never silently rewrites an approved action; a changed action needs a
+new digest/decision. Recheck live authority at effect admission; revocation cannot undo an
+already-started action. Ordinary text is never approval.
 
 A ToolInvocation owns one assistant call and at most one model-visible result. Every
-physical run or replay is an immutable ToolAttempt with its own ordinal, cancellation
-generation, implementation/executor binding, intent, external receipt and outcome/usage.
-A current implementation may narrow a stored replay permission but never upgrade an old
-non-replayable action.
+physical run or replay has a distinct AttemptId and monotonic ToolAttempt evidence with
+ordinal, cancellation generation, implementation/executor binding, intent, optional start
+receipt/progress checkpoint and outcome/usage. **Only NotStarted proves no effect.** A
+settled execution carries a canonical ToolResult plus an EffectSummary; an error result
+may still describe known partial/complete mutation. Indeterminate means the effect truth
+is unresolved, not failed. A current implementation may narrow a stored replay permission
+but never upgrade an old non-replayable action.
 
 Serialize conflicting workspace mutations or isolate workspaces. Session serialization
 alone does not coordinate filesystem writes across sessions. The durable workspace
@@ -297,6 +306,11 @@ serialize or use an isolated repository clone.
 Arbitrary exec is treated as mutating unless an enforceable backend restricts it.
 Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
 compare-and-swap against an uncooperative external editor. Report that limitation.
+Multi-file edits preflight all targets/bases and use per-file atomic replacement where
+available, but they do not claim transaction rollback unless a backend supplies it.
+Known partial application returns an error ToolResult **and** an exact EffectSummary of
+the applied subset, advances workspace revision, and is never NotStarted.
+
 An unresolved possibly-live operation keeps its binding quarantined until reconciled,
 confirmed stopped or replaced by an isolated binding; turn abandonment does not release
 it. Verification binds to the actual tested state, not a worker's earlier result.
