@@ -280,10 +280,17 @@ Every ModelStep manifest names the binding/context-boundary projection and norma
 request digest.
 
 Every physical retry is a new ModelAttempt; typed failure/usage evidence from earlier
-attempts remains inspectable. The engine owns retry, deadline, compaction and budget
-policy. Hidden retries cannot bypass durable attempt accounting. Validate complete
-responses and calls against the **frozen bindings**, including tool arguments, before
-admitting execution; incomplete output cannot authorize tools or masquerade as success.
+attempts remains inspectable. A ModelStep selects at most one validated ResponseReady
+attempt for semantic settlement through an atomic first-winner transition. If a
+timed-out/cancelled earlier attempt reports late after a retry, persist its exact
+response/failure/usage evidence but never append a second assistant entry or admit its
+tools. Physical retries to the same binding share the ModelStep/EffectKey; provider/model
+fallback is another ModelStep.
+
+The engine owns retry, deadline, compaction and budget policy. Hidden retries cannot
+bypass durable attempt accounting. Validate complete responses and calls against the
+**frozen bindings**, including tool arguments, before admitting execution; incomplete
+output cannot authorize tools or masquerade as success.
 
 The validated terminal event ends an attempt's stream; EOF without it is incomplete.
 Close the owned stream after that event rather than waiting indefinitely for EOF or
@@ -343,7 +350,14 @@ it. Verification binds to the actual tested state, not a worker's earlier result
 
 Capabilities must cover alternate shell/browser/extension routes. In-process extensions
 are trusted code, not a sandbox. Requested confinement must fail closed if unavailable;
-explicitly unconfined execution is labeled as such. Credentials remain host-owned.
+explicitly unconfined execution is labeled as such. Preflight path canonicalization is
+not confinement: the execution backend must enforce filesystem/network authority at the
+actual effect boundary, and confined file tools must resolve against the bound root
+without allowing symlink/path swaps to escape it. Use platform-native race-resistant
+resolution/enforcement where available or refuse the stronger claim. Ordinary edit tools
+do not mutate protected repository administrative metadata or Ion host state through the
+generic file path; those require explicit authority/resource handling. Credentials remain
+host-owned.
 
 ## Clients and optional workers
 
