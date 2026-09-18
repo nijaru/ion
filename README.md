@@ -15,14 +15,21 @@ The workspace builds three libraries:
 - `ion-ai`: provider-neutral model contracts and a scripted model service.
 - `ion-terminal`: low-level terminal components.
 
-The engine implements the accepted [turn contracts](ARCHITECTURE.md): durable
-admission with request-key replay, frozen request bases, response-ready evidence
-that survives a crash without a second provider call, sequential tool execution,
-cancellation whose only winner is a committed turn success, truthful results for
-uncertain actions, supervisor-owned tool execution with stop, join and
-retries-after-close semantics, exclusive session ownership, and bounded pages and
-content budgets. A scripted model/tool exchange runs end to end through the
-headless API.
+The engine implements the core durability path in the accepted
+[turn contracts](ARCHITECTURE.md): durable admission with request-key replay,
+frozen request bases, response-ready evidence that survives a crash without a
+second provider call, sequential tool execution, truthful results for uncertain
+actions, supervisor-owned tool execution with stop/join semantics, exclusive
+session ownership, and bounded pages and content budgets. A scripted model/tool
+exchange runs end to end through the headless API.
+
+The 2026-09-18 source review still found correctness work before the cancellation
+and observation contracts are implementation-complete: response settlement and
+provider/tool dispatch need transactional cancellation-generation fences, a
+panicking drive can publish a phase that differs from durable state, and one late
+tool-evidence window can lose the report. Tool-call arguments also still need
+schema validation before native tools ship. These are pre-C2 acceptance work, not
+reasons to add another runtime.
 
 Hosts can opt trusted tools into a durable, exclusive mutation claim with
 `Workspace::open(root)?.bind(tool)`, then register the returned tool normally.
