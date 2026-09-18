@@ -15,27 +15,29 @@ The workspace builds three libraries:
 - `ion-ai`: provider-neutral model contracts and a scripted model service.
 - `ion-terminal`: low-level terminal components.
 
-The engine implements the core durability path in the accepted
-[turn contracts](ARCHITECTURE.md): durable admission with request-key replay,
-frozen request bases, response-ready evidence that survives a crash without a
-second provider call, sequential tool execution, truthful results for uncertain
-actions, supervisor-owned tool execution with stop/join semantics, exclusive
-session ownership, and bounded pages and content budgets. A scripted model/tool
-exchange runs end to end through the headless API.
+The current engine implements the first durable-turn slice: request-key replay,
+frozen per-step request bases, response-ready crash recovery, sequential scripted tool
+execution, conservative unknown outcomes, supervised stop/join behavior, exclusive
+session ownership and bounded pages/content. A scripted model/tool exchange runs end to
+end through the headless API.
 
-The 2026-09-18 source review still found correctness work before the cancellation,
-observation and provider-stream contracts are implementation-complete: response
-settlement and provider/tool dispatch need transactional cancellation-generation
-fences; a valid terminal model event still waits for transport EOF; a panicking drive
-can publish a phase that differs from durable state; and one late tool-evidence window
-can lose the report. Tool-call arguments also still need schema validation before
-native tools ship. These are pre-C2 acceptance work, not reasons to add another runtime.
+The accepted [architecture](ARCHITECTURE.md) was deliberately refined on 2026-09-18
+before real providers and native tools made the early v0 boundaries expensive to change.
+The current Rust is therefore **pre-cutover**, not the final internal API. The next
+cutover keeps the coding Turn but adds a stable per-turn semantic environment, frozen
+provider/tool implementation bindings, versioned request manifests, an explicit
+effect-admission gate, immutable physical ToolAttempt records beneath logical tool calls,
+external execution evidence separate from transcript settlement, typed drive exits and
+exact-causal observation cursors. The source-confirmed races around cancellation,
+provider EOF, late evidence and schema validation are acceptance tests for that new
+shape rather than reasons to preserve the existing one.
 
-Hosts can opt trusted tools into a durable, exclusive mutation claim with
-`Workspace::open(root)?.bind(tool)`, then register the returned tool normally.
-The `.ion/claims.sqlite` coordinator records the execution identity, implementation
-and exact call before execution. Known outcomes release the claim; uncertainty,
-panic and process loss retain it. There is no automatic expiry or force-clear API.
+The current source also has an opt-in workspace wrapper,
+`Workspace::open(root)?.bind(tool)`, backed by `.ion/claims.sqlite`. It conservatively
+retains a mutation claim across uncertainty, panic and process loss. The revised target
+keeps that safety property but moves claims/reconciliation behind the structured host
+execution boundary so a ToolAttempt records the execution receipt explicitly instead of
+hiding it inside a Tool wrapper. There is no automatic expiry or force-clear policy.
 
 This is **unconfined coordination**, not approval or sandbox enforcement. Hosts
 must use the same canonical root and bind tools to that actual environment.
