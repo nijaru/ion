@@ -48,10 +48,8 @@ ordinary functions and payload-bearing enums, not a generic workflow framework.
 | Conversation | Immutable transcript, configuration and optional history parent. |
 | Entry | A message, tool result or explicit context-boundary record. |
 | Input | Accepted request, attribution, deduplication and placement. |
-| Turn | A coding request's continuation, limits, cancellation and immutable terminal outcome. |
-| Turn environment | Frozen semantic model/tool/execution bindings for one turn; live authority is separate. |
-| Context epoch | One model-facing continuation view: retained host facts, structured checkpoint and lossless recent tail over immutable history. |
-| Model step | Versioned request manifest: purpose, environment/epoch, context/input provenance, assembly revision and digest. |
+| Turn | A coding request's continuation, inline immutable TurnEnvironment, limits, cancellation and terminal outcome. |
+| Model step | Versioned request manifest: purpose, exact ProviderBinding, context-boundary/input provenance, assembly revision and digest. |
 | Model attempt | One physical provider dispatch with immutable failure/result/usage evidence. |
 | Tool invocation | One assistant call, frozen binding/prepared action, source index and one exchange result. |
 | Tool attempt | One physical execution/replay with intent, executor receipt, optional progress checkpoint and monotonic external outcome evidence. |
@@ -63,12 +61,14 @@ Effect object, arbitrary task DAG or public programmable settlement plan.
 History ancestry, turn ownership, semantic environment, workspace binding, observation
 and live authority are separate relationships. A fork copies no running work or
 permission. One conversation has at most one unfinished turn. Inputs can queue without
-entering model context. Conversation configuration is the default for a **future** turn;
-starting a turn captures its TurnEnvironment, including its allowed generation/
-compaction ProviderBinding routes. Each ModelStep binds one exact provider/model from
-that captured route; fallback after step creation is another explicit step, never a
-mutation of the existing step or environment. Changing the conversation while that turn
-runs does not silently change later steps of that turn. Session identity is global;
+entering model context. Conversation configuration is the default for a **future** turn. Starting a turn captures
+one immutable TurnEnvironment **inside the Turn**, including allowed generation/
+compaction ProviderBinding routes, frozen tool bindings, workspace/executor identity and
+AuthorityCeiling. The baseline has no active-turn environment rebase. Each ModelStep
+binds one exact provider/model from the captured route; fallback after step creation is
+another explicit step under the same Turn, never a mutation of the existing step or
+environment. Changing conversation configuration while that turn runs affects later
+turns only. Session identity is global;
 other identities and commit cursors are distinct Rust newtypes over a private
 session-local monotonic sequence. IDs escape only after commit.
 
@@ -205,8 +205,8 @@ Canonical tool results keep a bounded model-visible preview plus explicit trunca
 metadata and optional BlobRef for complete output. Full blobs never enter model context
 implicitly; bounded artifact reads page them explicitly. Running output remains
 provisional, with an optional bounded attempt ProgressCheckpoint separate from the final
-blob/result. Reachability GC preserves everything referenced by immutable history,
-ContextEpochs and active request/attempt state.
+blob/result. Reachability GC preserves everything referenced by immutable history/context-boundary
+entries and active request/attempt state.
 
 Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
 and output growth cannot consume it. Managed quota refusal is not disk failure: actual
@@ -228,41 +228,44 @@ transcript rewrite/document frameworks are not part of the engine.
 Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
-- **Retained facts:** bounded host-owned model-visible facts with source identity and
-  scope/lifetime; relevant user/steer instructions, verified answers, intentionally
-  model-visible scoped decisions and delegation attribution live here. Bounded loss marks
-  the family incomplete; live execution authority remains separate.
+- **Retained inputs:** bounded mechanically selected exact User/Steer messages and
+  verified user replies that must survive a context boundary. Items keep source
+  identity/order and explicit incompleteness when bounded. Project/base instructions
+  already live in TurnEnvironment; arbitrary facts/memories/worker chatter/live approval
+  authority do not enter this layer.
 - **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
   (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
   action/terminal condition). Schema validation is required, but content remains advisory
   and never authority.
 - **Operational tail:** bounded lossless suffix of recent complete exchange groups.
 
-Compaction creates a new ContextEpoch referencing its source cutoff, retained-facts
-revision, typed checkpoint, raw-tail boundary, checkpoint/compactor revision and optional
-provider-owned opaque artifact. It does not fork the visible conversation. The renderer
-keeps retained facts distinct from checkpoint text and deduplicates exact retained
-instructions.
+Compaction/reset appends one immutable **ContextBoundary Entry** containing its source
+cutoff, RetainedInputs snapshot, typed checkpoint, raw-tail range,
+checkpoint/compactor revision and optional provider-owned opaque artifact.
+`ContextEpoch` is only the model-facing projection identified by that EntryId; it is not
+another table/entity. The initial epoch is implicit before the first boundary. It does
+not fork the visible conversation. The renderer keeps retained inputs distinct from
+checkpoint text and deduplicates exact retained instructions.
 Compact only at safe complete-exchange boundaries. Decide from the estimated **next
 assembled request**, including newly placed input and tool results, rather than stale
 last-provider usage. Large outputs are bounded/spooled before this path.
 
-Starting a turn captures one bounded immutable TurnEnvironment: conversation
-configuration revision, resolved instructions/project context, allowed generation route
-(ordered ProviderBindings/fallback policy), optional compaction route, selected tool
-declarations and implementation revisions, context policy, canonical workspace/executor
-binding and an AuthorityCeiling defining the maximum execution classes/resources that
-turn may receive. Each ModelStep selects one exact ProviderBinding from those captured
-routes. Persistent configuration updates affect **later turns**, not later request
-boundaries of the active turn. A future active-turn semantic/ceiling rebase, if ever
-needed, is an explicit durable safe-boundary operation. Credentials and live availability
-remain refreshable. Live policy may revoke/narrow immediately; broad widening applies to
-later turns by default. Per-action approval can satisfy an `ask` only inside the
-captured ceiling.
+Starting a turn captures one bounded immutable TurnEnvironment value directly in the
+Turn: conversation configuration revision, resolved instructions/project context, allowed
+generation route (ordered ProviderBindings/fallback policy), optional compaction route,
+selected tool declarations/implementation revisions, context policy, canonical
+workspace/executor binding and an AuthorityCeiling defining the maximum execution
+classes/resources that turn may receive. Each ModelStep selects one exact ProviderBinding
+from those captured routes. Persistent configuration updates and broad authority widening
+affect **later turns**, not later request boundaries of the active turn. Credentials/live
+availability remain refreshable and live policy may revoke/narrow immediately.
+Per-action approval can satisfy an `ask` only inside the captured ceiling. Do not carry
+active-turn environment revision machinery until a measured requirement justifies it.
 
-Each model step persists a versioned request manifest containing the environment/epoch
-reference, context cutoff/input provenance, purpose, assembly revision and digest of the
-canonical **semantic** provider request. The digest includes model-visible messages,
+Each model step persists a versioned request manifest containing the TurnEnvironment
+digest, exact ProviderBinding, ContextBoundary EntryId (or implicit initial epoch),
+context cutoff/input provenance, purpose, assembly revision and digest of the canonical
+**semantic** provider request. The digest includes model-visible messages,
 tools and semantic controls but excludes credentials, auth headers, trace IDs,
 timestamps and other intentionally live transport data. Recovery reconstructs and
 verifies that manifest; a build/adapter unable to reproduce it blocks rather than
@@ -273,7 +276,8 @@ The provider adapter preserves ordered content and provider-scoped replay inform
 The frozen ProviderBinding carries model/provider identity, adapter/request-encoding
 revision, relevant capability snapshot, context-window/token-estimator revision and
 semantic controls. Credentials and intentionally live endpoints remain host capabilities.
-Every ModelStep manifest names the binding/ContextEpoch and normalized request digest.
+Every ModelStep manifest names the binding/context-boundary projection and normalized
+request digest.
 
 Every physical retry is a new ModelAttempt; typed failure/usage evidence from earlier
 attempts remains inspectable. The engine owns retry, deadline, compaction and budget
