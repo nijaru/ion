@@ -50,10 +50,11 @@ ordinary functions and payload-bearing enums, not a generic workflow framework.
 | Input | Accepted request, attribution, deduplication and placement. |
 | Turn | A coding request's continuation, limits, cancellation and immutable terminal outcome. |
 | Turn environment | Frozen semantic model/tool/execution bindings for one turn; live authority is separate. |
-| Model step | Versioned request manifest: purpose, environment, context/input provenance, assembly revision and digest. |
+| Context epoch | One model-facing continuation view: retained host facts, structured checkpoint and lossless recent tail over immutable history. |
+| Model step | Versioned request manifest: purpose, environment/epoch, context/input provenance, assembly revision and digest. |
 | Model attempt | One physical provider dispatch with immutable failure/result/usage evidence. |
-| Tool invocation | One assistant call, frozen binding/prepared action and at most one model-visible result. |
-| Tool attempt | One physical execution/replay with intent, executor receipt and monotonic external outcome evidence. |
+| Tool invocation | One assistant call, frozen binding/prepared action, source index and one exchange result. |
+| Tool attempt | One physical execution/replay with intent, executor receipt, optional progress checkpoint and monotonic external outcome evidence. |
 
 A turn replaces the former distributed root-task/membership/closure representation;
 it is not an additional layer over it. There is no durable Agent object, generic
@@ -77,13 +78,18 @@ admit input → prepare request → call model → validate response
                                                or finish
 ```
 
-The turn owns continuation. Initial tool execution is sequential within a turn;
-parallelism must earn its scheduling complexity. A logical step/invocation is distinct
-from each physical provider/tool attempt so retries never erase earlier uncertainty or
-spend. Engine-owned semantic transactions admit input/start a turn and environment,
-seal request manifests, record effect intent/evidence, settle one model-visible result,
-and advance or finish the turn. Every operation has a stable identity and idempotent
-settlement; there is still no generic workflow DAG.
+The turn owns continuation. A logical step/invocation is distinct from each physical
+provider/tool attempt so retries never erase earlier uncertainty or spend. One assistant
+tool batch may run compatible effects concurrently under bounded resource claims; this is
+not a generic workflow DAG. A complete result is durably staged as
+`outcome_ready` in effect-completion order, then immutable tool-result entries are
+materialized only in assistant source order. Already staged outcomes never replay after a
+crash merely because an earlier call was unfinished.
+
+Engine-owned semantic transactions admit input/start a turn and environment, seal
+request manifests, record effect intent/evidence, stage/materialize one model-visible
+result per invocation, and advance or finish the turn. Every operation has a stable
+identity and idempotent settlement.
 
 Placement, inclusion in a request and answer completion are different facts.
 Duplicate admission with the same request key and content returns the original
@@ -184,6 +190,22 @@ conversation; automatic compaction and steering occur only at engine-owned reque
 A new answer turn uses current complete history, not a silent rewind. General-purpose
 transcript rewrite/document frameworks are not part of the engine.
 
+Model-facing context has four distinct layers:
+
+- **Evidence history:** immutable transcript and execution records; ground truth.
+- **Retained facts:** bounded host-owned user/verified facts whose loss would change
+  instruction or authority semantics; missing evidence is marked incomplete, never inferred.
+- **Continuation checkpoint:** bounded structured model-generated execution frontier
+  (goal, progress, blockers, decisions, evidence refs, next action); advisory, never authority.
+- **Operational tail:** bounded lossless suffix of recent complete exchange groups.
+
+Compaction creates a new ContextEpoch referencing its source cutoff, retained-facts
+revision, structured checkpoint, raw-tail boundary, checkpoint/compactor revision and
+optional provider-owned opaque artifact. It does not fork the visible conversation.
+Compact only at safe complete-exchange boundaries. Decide from the estimated **next
+assembled request**, including newly placed input and tool results, rather than stale
+last-provider usage. Large outputs are bounded/spooled before this path.
+
 Starting a turn captures one bounded immutable TurnEnvironment: conversation
 configuration revision, resolved instructions/project context, provider adapter
 identity/revision, selected tool declarations and implementation revisions, context
@@ -198,14 +220,17 @@ canonical normalized provider request. Recovery reconstructs and verifies that m
 a build/adapter unable to reproduce it blocks rather than silently sending a different
 request. Immutable content references avoid copying growing history into every step.
 
-The provider adapter preserves ordered content and provider-scoped replay information,
-has a frozen adapter/encoding revision in the request manifest, reports unsupported
-controls explicitly, and supplies typed failures and unknown-aware usage. Every physical
-retry is a new ModelAttempt; typed failure/usage evidence from earlier attempts remains
-inspectable. The engine owns retry, deadline, compaction and budget policy. Hidden retries
-cannot bypass durable attempt accounting. Validate complete responses and calls against
-the **frozen bindings**, including tool arguments, before admitting execution; incomplete
-output cannot authorize tools or masquerade as success.
+The provider adapter preserves ordered content and provider-scoped replay information.
+The frozen ProviderBinding carries model/provider identity, adapter/request-encoding
+revision, relevant capability snapshot, context-window/token-estimator revision and
+semantic controls. Credentials and intentionally live endpoints remain host capabilities.
+Every ModelStep manifest names the binding/ContextEpoch and normalized request digest.
+
+Every physical retry is a new ModelAttempt; typed failure/usage evidence from earlier
+attempts remains inspectable. The engine owns retry, deadline, compaction and budget
+policy. Hidden retries cannot bypass durable attempt accounting. Validate complete
+responses and calls against the **frozen bindings**, including tool arguments, before
+admitting execution; incomplete output cannot authorize tools or masquerade as success.
 
 The validated terminal event ends an attempt's stream; EOF without it is incomplete.
 Close the owned stream after that event rather than waiting indefinitely for EOF or
@@ -229,13 +254,20 @@ A current implementation may narrow a stored replay permission but never upgrade
 non-replayable action.
 
 Serialize conflicting workspace mutations or isolate workspaces. Session serialization
-alone does not coordinate filesystem writes across sessions. Arbitrary exec is treated
-as mutating unless an enforceable backend restricts it. Recheck expected file state;
-cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
+alone does not coordinate filesystem writes across sessions. The durable workspace
+coordinator is host-owned outside the agent-writable checkout and addressed through a
+WorkspaceBindingId; do not put final claim authority in `.ion/claims.sqlite` or another
+file normal workspace tools can delete. Claims are keyed by invocation/attempt identity.
+Known mutations advance a host workspace revision; indeterminate mutations quarantine the
+binding. Prepared mutations may bind expected workspace revision and exact base-content
+facts, both rechecked before effect admission.
+
+Arbitrary exec is treated as mutating unless an enforceable backend restricts it.
+Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
 compare-and-swap against an uncooperative external editor. Report that limitation.
 An unresolved possibly-live operation keeps its binding quarantined until reconciled,
-confirmed stopped or replaced by an isolated binding; turn abandonment does not release it.
-Verification binds to the actual tested state, not a worker's earlier result.
+confirmed stopped or replaced by an isolated binding; turn abandonment does not release
+it. Verification binds to the actual tested state, not a worker's earlier result.
 
 Capabilities must cover alternate shell/browser/extension routes. In-process extensions
 are trusted code, not a sandbox. Requested confinement must fail closed if unavailable;
@@ -254,12 +286,24 @@ handle graphemes/display widths, and keep paste distinct from submission. Render
 never waits on external I/O; output must not steal focus or destroy scroll anchors.
 Real-terminal and PTY tests are required in addition to reducer tests.
 
-Workers use the same turn engine. Joined lifetime explicitly propagates cancellation
-and collects a selected result; retained lifetime is independent of the creator's
-waiter/turn. History and permission inheritance remain separate. Existing workers
-remain inspectable when new spawning is disabled. Single-agent requests carry no
-mandatory worker instructions or tools. Worker expansion follows a measured coding
-baseline, not an arbitrary workflow abstraction.
+Workers are optional conversations using the same Turn engine. Context shape and
+lifetime are independent axes:
+
+- **Delegate/Fresh:** bounded delegation packet, no parent transcript; use for focused
+  research/review/tests.
+- **Fork:** explicit complete parent history/ContextEpoch cutoff; use when the child needs
+  most parent context.
+- **Joined:** creator turn owns result/cancellation reach.
+- **Retained:** child survives the creator turn and remains separately addressable.
+
+Read-only children may share the parent's workspace binding; mutating children default to
+an isolated worktree/workspace. Shared mutation requires explicit serialization. Worker
+messages are Conversation-attributed input, never User authority or approval. A joined
+child returns a bounded result/evidence packet rather than automatically injecting its
+whole transcript into the parent. History inheritance, lifetime ownership and permission
+inheritance remain separate. Existing workers remain inspectable when new spawning is
+disabled. Single-agent requests carry no mandatory worker instructions/tools/team state.
+Worker expansion follows a measured coding baseline, not an arbitrary workflow abstraction.
 
 ## Acceptance and change
 
