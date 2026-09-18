@@ -115,19 +115,22 @@ prepare/authorize → commit intent → effect-gate admit → backend start → 
 ```
 
 Each logical ModelStep/ToolInvocation owns a stable EffectKey; every physical execution
-owns a distinct AttemptId. A frozen binding may use the EffectKey as an external
-idempotency key only when that backend/provider explicitly guarantees compatible
+owns a distinct AttemptId. EffectKey is derived from the Session-namespaced logical
+identity rather than persisted as another entity. A frozen binding may expose it as an
+external idempotency key only when that provider/backend explicitly guarantees compatible
 semantics.
 
 The durable intent transaction rechecks the owning turn's current cancellation
 generation. After it commits, only that turn's process-local effect gate may cross the
-external boundary. Session SQLite and an external execution backend are not one atomic
-transaction. A binding therefore states whether it supplies an authoritative durable
-start receipt discoverable by AttemptId. Such a backend records the receipt/resource
-claim before its first externally visible effect; after process loss the recovered
-receipt can prove the effect may have started, and an authoritative negative lookup can
-prove it did not. Absence from a backend without that guarantee proves nothing and stays
-indeterminate. Recovered receipts are persisted on the attempt before continuation.
+external boundary. Session SQLite and an outside provider/tool boundary are not one
+atomic transaction. Provider adapters and tool execution backends remain separate narrow
+interfaces; Ion does not add a generic durable Effect object/backend just to share this
+invariant. Each frozen binding states whether its own boundary supplies an authoritative
+durable start receipt discoverable by AttemptId. A boundary with that guarantee records
+the receipt/resource claim before its first externally visible effect; after process loss
+the recovered receipt can prove the effect may have started, and an authoritative
+negative lookup can prove it did not. Absence without that guarantee proves nothing and
+stays indeterminate. Recovered receipts are persisted on the attempt before continuation.
 
 Cancellation closes the effect gate to new admission **before** committing its durable
 generation, then signals already-admitted effects after that commit. An effect that won
