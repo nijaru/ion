@@ -228,11 +228,14 @@ transcript rewrite/document frameworks are not part of the engine.
 Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
-- **Retained inputs:** bounded mechanically selected exact User/Steer messages and
-  verified user replies that must survive a context boundary. Items keep source
-  identity/order and explicit incompleteness when bounded. Project/base instructions
-  already live in TurnEnvironment; arbitrary facts/memories/worker chatter/live approval
-  authority do not enter this layer.
+- **Retained inputs:** the active Turn's exact accepted User/Steer messages and
+  verified user replies that must survive mid-turn compaction. Items keep source
+  identity/order. Admission/steering/question budgets reserve enough allowance to keep
+  this active-turn set exact; if a new input cannot fit that contract, refuse it or
+  require an explicit bounded artifact/reference rather than silently dropping current
+  user instructions. Between turns this layer may be empty. Project/base instructions
+  already live in TurnEnvironment; arbitrary old facts/memories/worker chatter/live
+  approval authority do not enter it.
 - **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
   (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
   action/terminal condition). Schema validation is required, but content remains advisory
