@@ -5,12 +5,13 @@ Accepted contract, 2026-09-15, replacing the earlier task-runtime design.
 contracts the maintained engine must satisfy. Ion is unreleased: obsolete abstractions
 are replaced, not supported through compatibility layers.
 
-The durable turn engine, its storage boundaries and its cancellation/recovery rules are
-implemented and covered by regressions. Not yet implemented: context compaction, reset
-and history forks, approval records, workspace binding and confinement, artifact
-publication, providers other than the scripted service, a client binary and workers.
-Where this document describes those, it describes the required shape rather than
-shipping behavior.
+The durable turn engine and its primary storage/recovery boundaries are implemented
+and covered by regressions, with the current implementation gaps called out in
+[README.md](README.md). An opt-in durable workspace mutation coordinator exists, but
+approval, revocation, reconciliation and confinement do not. Also not yet implemented:
+context compaction, reset and history forks, artifact publication, providers other than
+the scripted service, a client binary and workers. Where this document describes those,
+it describes the required shape rather than shipping behavior.
 
 ## Product and boundaries
 
