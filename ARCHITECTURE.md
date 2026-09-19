@@ -49,7 +49,7 @@ ordinary functions and payload-bearing enums, not a generic workflow framework.
 | Entry | A message, tool result or explicit context-boundary record. |
 | Input | Accepted request, attribution, deduplication and placement. |
 | Turn | A coding request's continuation, inline immutable TurnEnvironment, limits, cancellation and terminal outcome. |
-| Model step | Versioned request manifest: purpose, exact ProviderBinding, context-boundary/input provenance, assembly revision and digest. |
+| Model step | Versioned semantic request plus `open | selected(AttemptId) | superseded` disposition, exact ProviderBinding, context/input provenance, assembly revision and digest. |
 | Model attempt | One physical provider dispatch with immutable failure/result/usage evidence. |
 | Tool invocation | One assistant call, frozen binding/prepared action, source index and one exchange result. |
 | Tool attempt | One physical execution/replay with intent, executor receipt, optional progress checkpoint and monotonic external outcome evidence. |
@@ -232,14 +232,15 @@ transcript rewrite/document frameworks are not part of the engine.
 Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
-- **Retained inputs:** the active Turn's exact accepted User/Steer messages and
-  verified user replies that must survive mid-turn compaction. Items keep source
-  identity/order. Admission/steering/question budgets reserve enough allowance to keep
-  this active-turn set exact; if a new input cannot fit that contract, refuse it or
-  require an explicit bounded artifact/reference rather than silently dropping current
-  user instructions. Between turns this layer may be empty. Project/base instructions
-  already live in TurnEnvironment; arbitrary old facts/memories/worker chatter/live
-  approval authority do not enter it.
+- **Retained inputs:** ordered references to immutable Input records, not copied payloads.
+  `active_exact` contains every accepted User/Steer message and verified user reply that
+  belongs to the active Turn and must survive mid-turn compaction. Admission/steering/
+  question budgets reserve enough allowance to keep this tier exact; if new input cannot
+  fit, refuse it or require an explicit bounded artifact/reference.
+  `history_bounded` carries a strictly bounded set of older user-origin instruction/
+  reply InputIds across compaction, with an explicit `history_incomplete` marker when
+  older retained input was evicted. Project/base instructions already live in
+  TurnEnvironment; model memories, worker chatter and live approval authority do not.
 - **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
   (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
   action/terminal condition). Schema validation is required, but content remains advisory
@@ -247,15 +248,19 @@ Model-facing context has four distinct layers:
 - **Operational tail:** bounded lossless suffix of recent complete exchange groups.
 
 Compaction/reset appends one immutable **ContextBoundary Entry** containing its source
-cutoff, RetainedInputs snapshot, typed checkpoint, raw-tail range,
-checkpoint/compactor revision and optional provider-owned opaque artifact.
+cutoff, the ordered `active_exact`/`history_bounded` InputId lists plus historical
+completeness marker, typed checkpoint, raw-tail range, checkpoint/compactor revision and
+optional provider-owned opaque artifact. The boundary never duplicates retained input
+bodies.
 `ContextEpoch` is only the model-facing projection identified by that EntryId; it is not
 another table/entity. The initial epoch is implicit before the first boundary. It does
 not fork the visible conversation. The renderer keeps retained inputs distinct from
 checkpoint text and deduplicates exact retained instructions.
 Compact only at safe complete-exchange boundaries. Decide from the estimated **next
-assembled request**, including newly placed input and tool results, rather than stale
-last-provider usage. Large outputs are bounded/spooled before this path.
+assembled request**, including newly placed input, tool results, retained-input tiers and
+tail, rather than stale last-provider usage. Never evict `active_exact` merely to fit:
+trim the historical tier/tail first, then refuse further growth if the exact active
+request still cannot fit. Large outputs are bounded/spooled before this path.
 
 Starting a turn captures one bounded immutable TurnEnvironment value directly in the
 Turn: conversation configuration revision, resolved instructions/project context, frozen
@@ -290,15 +295,24 @@ semantic controls. Credentials and intentionally live endpoints remain host capa
 Every ModelStep manifest names the binding/context-boundary projection and normalized
 request digest.
 
-ModelStep is the prepared semantic request. A ModelAttempt is created only when physical
-dispatch intent commits; there is no durable Prepared-attempt state. Every physical retry
-is therefore a new AttemptId with typed dispatch/start/failure/response/usage evidence.
-A ModelStep selects at most one validated ResponseReady attempt for semantic settlement
-through an atomic first-winner transition. If a
-timed-out/cancelled earlier attempt reports late after a retry, persist its exact
-response/failure/usage evidence but never append a second assistant entry or admit its
-tools. Physical retries to the same binding share the ModelStep/EffectKey; provider/model
-fallback is another ModelStep.
+ModelStep is the prepared semantic request and carries one durable disposition:
+`open | selected(AttemptId) | superseded(reason, successor_step?)`. A ModelAttempt is
+created only when physical dispatch intent commits; there is no durable Prepared-attempt
+state. Every physical retry is therefore a new AttemptId with typed
+dispatch/start/failure/response/usage evidence.
+
+An `open` step selects at most one validated ResponseReady attempt through an atomic
+first-winner transition to `selected(AttemptId)`. If a timed-out earlier attempt reports
+late after a same-step retry, persist its exact response/failure/usage evidence but never
+append a second assistant entry or admit its tools. Physical retries to the same binding
+share the ModelStep/EffectKey.
+
+A provider/model fallback, compaction-mediated regeneration or otherwise semantically
+different request is another ModelStep. Creating that successor atomically changes the
+predecessor `open → superseded`; a selected step cannot be superseded. Attempts of a
+superseded step may still settle usage/evidence but are permanently ineligible for
+semantic selection. Thus a late old-provider response can never race a different fallback
+request into the transcript.
 
 The engine owns retry, compaction and budget policy. Timing is boundary-specific:
 ProviderBindings/ModelAttempts and PreparedActions/ToolAttempts capture their concrete
@@ -408,9 +422,20 @@ an isolated worktree/workspace. Shared mutation requires explicit serialization.
 messages are Conversation-attributed input, never User authority or approval. A joined
 child returns a bounded result/evidence packet rather than automatically injecting its
 whole transcript into the parent. History inheritance, lifetime ownership and permission
-inheritance remain separate. Existing workers remain inspectable when new spawning is
-disabled. Single-agent requests carry no mandatory worker instructions/tools/team state.
-Worker expansion follows a measured coding baseline, not an arbitrary workflow abstraction.
+inheritance remain separate.
+
+Budgets are **transferred, not shared through a live parent pointer**. Joined spawn
+atomically carves a fixed child allowance from the creator Turn's remaining worker/spend
+allowance and installs it in the child; the creator can no longer spend it, preventing
+concurrent child oversubscription. Baseline accounting is monotonic and does not reclaim
+unused child allowance. Model-driven spawn is Joined by default. Retained creation or
+conversion requires explicit host/user authorization of an independent future-turn
+budget/configuration, because it may outlive the creator and cannot keep charging an ended
+Turn.
+
+Existing workers remain inspectable when new spawning is disabled. Single-agent requests
+carry no mandatory worker instructions/tools/team state. Worker expansion follows a
+measured coding baseline, not an arbitrary workflow abstraction.
 
 ## Acceptance and change
 
