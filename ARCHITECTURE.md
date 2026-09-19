@@ -290,9 +290,11 @@ semantic controls. Credentials and intentionally live endpoints remain host capa
 Every ModelStep manifest names the binding/context-boundary projection and normalized
 request digest.
 
-Every physical retry is a new ModelAttempt; typed failure/usage evidence from earlier
-attempts remains inspectable. A ModelStep selects at most one validated ResponseReady
-attempt for semantic settlement through an atomic first-winner transition. If a
+ModelStep is the prepared semantic request. A ModelAttempt is created only when physical
+dispatch intent commits; there is no durable Prepared-attempt state. Every physical retry
+is therefore a new AttemptId with typed dispatch/start/failure/response/usage evidence.
+A ModelStep selects at most one validated ResponseReady attempt for semantic settlement
+through an atomic first-winner transition. If a
 timed-out/cancelled earlier attempt reports late after a retry, persist its exact
 response/failure/usage evidence but never append a second assistant entry or admit its
 tools. Physical retries to the same binding share the ModelStep/EffectKey; provider/model
