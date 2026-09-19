@@ -416,9 +416,13 @@ provider-hosted computer/action tools do not bypass execution authority.
 
 ProviderBinding also freezes model-routing semantics. Default `ExactModel` rejects an
 unexpected returned semantic model when the protocol exposes one. Explicit
-`ServerRoute` bindings may name a bounded allowed returned-model/replay family; every
-ModelAttempt records the actual returned model, and anything outside that frozen route is
-a protocol/configuration failure rather than a hidden fallback.
+`ServerRoute` bindings may name a bounded allowed returned-model/replay family, but their
+capability snapshot is the conservative guarantee common to **all** members: required
+features intersect, context/output limits use safe minima, and monetary-cap admission
+uses a route-wide worst-case CostQuote. Request preparation may rely only on those
+guarantees. Every ModelAttempt records the actual returned model when observable, and
+anything outside the frozen route is a protocol/configuration failure rather than a
+hidden fallback. An unbounded/unstated route is not a ServerRoute contract.
 
 ## Execution and authority
 
