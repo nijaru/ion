@@ -263,7 +263,10 @@ Compaction/reset appends one immutable **ContextBoundary Entry** containing its 
 cutoff, the ordered `active_exact`/`history_bounded` InputId lists plus historical
 completeness marker, typed checkpoint, raw-tail range, checkpoint/compactor revision and
 optional provider-owned opaque artifact. The boundary never duplicates retained input
-bodies.
+bodies. The opaque artifact is an encoding optimization with explicit provider/model/
+replay-family compatibility identity, never semantic truth: compatible bindings may use
+it; incompatible switching reconstructs from the typed checkpoint + retained inputs +
+raw tail instead. The compatibility choice is part of the request manifest/fingerprint.
 
 Projection is source-aware: a retained InputId is rendered only when its canonical
 model-visible occurrence is no longer in the raw tail/current suffix. Ordinary user/steer
