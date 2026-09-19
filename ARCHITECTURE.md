@@ -224,6 +224,16 @@ history/context-boundary entries and active request/attempt state; Session delet
 closes ownership before removing its blob namespace. Cross-session export copies and
 verifies content explicitly.
 
+The field holding a BlobRef determines whether it is **semantic-required** or auxiliary.
+Required out-of-line content needed to reproduce an active Turn/ModelStep (such as a
+large frozen AllowedToolSet) is digest-verified before use; missing/corrupt required
+content fences Session mutation and blocks resume/dispatch rather than being rebuilt from
+current host state. Auxiliary evidence such as full stdout behind an already-committed
+bounded ToolResult may become unavailable without rewriting that result or effect truth;
+artifact reads return explicit ContentUnavailable instead of empty/fabricated bytes.
+Open need not hash all historical blobs: verify required content at consumption,
+auxiliary content at read, and all reachable content only in explicit integrity/export.
+
 Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
 and output growth cannot consume it. Managed quota refusal is not disk failure: actual
 I/O failure can still fence the session. Enforce limits while reading/writing, not after
