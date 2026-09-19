@@ -206,18 +206,23 @@ replaces it by identity. Late external evidence is persisted to its exact attemp
 its commit's update is published. Cancellation/control traffic remains serviceable under
 output floods.
 
-Large durable content lives in a host-owned immutable BlobStore outside the
-agent-writable workspace. A BlobRef is content-addressed and bounded by hard spool/content
-quotas. Publication writes/finalizes/verifies the blob under the configured durability
-policy before a semantic DB commit may reference it; crashes may leave reclaimable
-orphans, but committed state must never knowingly reference missing content.
+Large durable content lives in a host-owned immutable **Session-scoped**
+BlobStore outside the agent-writable workspace. Baseline has no cross-session blob
+dedup/refcount: workers/conversations in one Session share a namespace, so GC only needs
+that Session's durable references. A BlobRef is content-addressed within its owning
+Session and bounded by hard spool/content quotas. Publication writes/finalizes/verifies
+the blob under the configured durability policy before that Session DB may reference it;
+crashes may leave reclaimable local orphans, but committed state must never knowingly
+reference missing content.
 
 Canonical tool results keep a bounded model-visible preview plus explicit truncation
 metadata and optional BlobRef for complete output. Full blobs never enter model context
 implicitly; bounded artifact reads page them explicitly. Running output remains
 provisional, with an optional bounded attempt ProgressCheckpoint separate from the final
-blob/result. Reachability GC preserves everything referenced by immutable history/context-boundary
-entries and active request/attempt state.
+blob/result. Session-local reachability GC preserves everything referenced by immutable
+history/context-boundary entries and active request/attempt state; Session deletion
+closes ownership before removing its blob namespace. Cross-session export copies and
+verifies content explicitly.
 
 Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
 and output growth cannot consume it. Managed quota refusal is not disk failure: actual
