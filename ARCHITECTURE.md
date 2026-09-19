@@ -508,8 +508,12 @@ coordinator is host-owned outside the agent-writable checkout and addressed thro
 WorkspaceBindingId backed by a frozen descriptor: canonical root, execution-backend
 identity and platform filesystem/repository/common-dir identity where available. A path
 string alone is not durable workspace identity. Do not put final claim authority in
-`.ion/claims.sqlite` or another file normal workspace tools can delete. Claims are keyed by invocation/attempt identity.
-Known mutations advance a host workspace revision; indeterminate mutations quarantine the
+`.ion/claims.sqlite` or another file normal workspace tools can delete. Claims are keyed by invocation/attempt identity. Safety-critical registry records are
+bounded and self-contained: binding/resource claim, start/termination receipt identity
+and effect-certainty summary cannot depend on Session SQLite or Session BlobRefs for
+quarantine/release decisions. Session/Invocation/Attempt IDs are attribution only; large
+outputs/diffs remain Session artifacts. Thus Session/blob deletion cannot erase an orphan
+quarantine. Known mutations advance a host workspace revision; indeterminate mutations quarantine the
 binding. Every mutating registry admission revalidates the current root/repository identity
 against the frozen descriptor together with quarantine/revision checks. Directory
 replacement, remount, symlink retarget or repository/common-dir change fails as
