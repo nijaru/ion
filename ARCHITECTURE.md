@@ -382,11 +382,21 @@ A ToolInvocation owns one assistant call and at most one model-visible result. E
 physical run or replay begins at an execution-intent commit and has a distinct AttemptId
 with monotonic ToolAttempt evidence: ordinal, cancellation generation,
 implementation/executor binding, optional start receipt/progress checkpoint and
-outcome/usage. **Only NotStarted proves no effect.** A
-settled execution carries a canonical ToolResult plus an EffectSummary; an error result
-may still describe known partial/complete mutation. Indeterminate means the effect truth
-is unresolved, not failed. A current implementation may narrow a stored replay permission
-but never upgrade an old non-replayable action.
+outcome/usage. **Only NotStarted proves the effect never began.** A settled execution
+carries a canonical ToolResult plus a typed EffectSummary; ToolResult success/error and
+mutation knowledge are independent.
+
+EffectSummary has a small closed certainty vocabulary: `NoMutation` when the enforced
+execution class proves no user/external mutation; `KnownChanges` when concrete changed
+resources/content identities are known; `MayHaveMutated` when execution is known
+terminal but its permitted mutation scope cannot be enumerated exactly; or a
+binding-specific external receipt summary whose semantics are frozen by the binding.
+Baseline arbitrary exec settles as `MayHaveMutated`, whether it exits zero or returns an
+error. A terminal `MayHaveMutated` attempt is no longer “possibly still running,” but
+the affected workspace/resource revision advances conservatively so stale prepared bases
+are invalidated. Indeterminate remains unresolved and retains any required quarantine.
+A current implementation may narrow a stored replay permission but never upgrade an old
+non-replayable action.
 
 Serialize conflicting workspace mutations or isolate workspaces. Session serialization
 alone does not coordinate filesystem writes across sessions. The durable workspace
