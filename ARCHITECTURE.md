@@ -95,7 +95,17 @@ grow a generic batch resource scheduler: each frozen ToolBinding is either `Seri
 (default) or host-proven `ParallelSafeReadOnly`. Execute maximal contiguous source-order
 runs of `ParallelSafeReadOnly` calls with a hard concurrency limit; every `Serial` call
 is a barrier that waits for the preceding run, executes alone, and settles before later
-calls start. Mutating/unknown/remote-effect tools are Serial in baseline. A complete result is durably staged as
+calls start. Mutating/unknown/remote-effect tools are Serial in baseline. Before any tool in an admitted assistant batch crosses the effect boundary, the batch
+must be **continuation-representable**. Reserve/model-bound one minimal truthful result
+envelope plus bounded preview per call and verify that, after legal compaction of older
+history, at least one frozen allowed next-step ProviderBinding can hold the active exact
+input + complete current exchange. If even the minimum exchange cannot fit, do not start
+the effects; settle/park with bounded truthful not-started/context-capacity results.
+Complete tool output may spill to BlobStore; only the reserved preview enters model
+context. A TurnSettings change to a smaller binding is rejected if the required current
+continuation cannot fit it.
+
+A complete result is durably staged as
 `outcome_ready` in effect-completion order, then immutable tool-result entries are
 materialized only in assistant source order. Already staged outcomes never replay after a
 crash merely because an earlier call was unfinished.
