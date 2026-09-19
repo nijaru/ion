@@ -255,14 +255,14 @@ Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
 - **Retained inputs:** ordered references to immutable Input records, not copied payloads.
-  `active_exact` contains every accepted User/Steer message and verified user reply that
-  belongs to the active Turn and must survive mid-turn compaction. Admission/steering/
-  question budgets reserve enough allowance to keep this tier exact; if new input cannot
-  fit, refuse it or require an explicit bounded artifact/reference.
-  `history_bounded` carries a strictly bounded set of older user-origin instruction/
-  reply InputIds across compaction, with an explicit `history_incomplete` marker when
-  older retained input was evicted. Project/base instructions already live in
-  TurnEnvironment; model memories, worker chatter and live approval authority do not.
+  `active_exact` contains only User/Steer content already consumed into the active
+  Turn's model-visible exchange plus verified InteractionReply Inputs already consumed
+  through their canonical tool result. Queued/unplaced input is never exposed early.
+  Admission/steering/question budgets keep this tier exact or refuse consumption.
+  `history_bounded` is a bounded newest suffix of older user-origin Inputs that were
+  actually model-visible historically, with explicit `history_incomplete` when older
+  evidence was evicted. Project/base instructions already live in TurnEnvironment; model
+  memories, worker chatter and live approval authority do not.
 - **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
   (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
   action/terminal condition). Schema validation is required, but content remains advisory
