@@ -382,7 +382,11 @@ WorkspaceBindingId; do not put final claim authority in `.ion/claims.sqlite` or 
 file normal workspace tools can delete. Claims are keyed by invocation/attempt identity.
 Known mutations advance a host workspace revision; indeterminate mutations quarantine the
 binding. Prepared mutations may bind expected workspace revision and exact base-content
-facts, both rechecked before effect admission.
+facts, both rechecked before effect admission. Registry authority is cross-process for the
+current host user and outlives Session loss: a missing/deleted/corrupt Session leaves an
+orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
+possibly-live attempts; reconcile with execution evidence or continue in an isolated
+replacement binding.
 
 Worktree isolation does not imply independent Git metadata: worktrees can share object,
 ref and configuration state. Execution backends therefore declare repository-level
