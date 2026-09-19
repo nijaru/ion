@@ -252,6 +252,14 @@ cutoff, the ordered `active_exact`/`history_bounded` InputId lists plus historic
 completeness marker, typed checkpoint, raw-tail range, checkpoint/compactor revision and
 optional provider-owned opaque artifact. The boundary never duplicates retained input
 bodies.
+
+Projection is source-aware: a retained InputId is rendered only when its canonical
+model-visible occurrence is no longer in the raw tail/current suffix. Ordinary user/steer
+input is therefore never duplicated. A targeted InteractionReply appears through its
+canonical tool-result exchange while that exchange is retained; after compaction removes
+that raw exchange, the exact verified question + reply is reconstructed from the
+invocation PreparedAction and immutable reply Input. Model-generated checkpoint text
+never substitutes for or duplicates this retained evidence.
 `ContextEpoch` is only the model-facing projection identified by that EntryId; it is not
 another table/entity. The initial epoch is implicit before the first boundary. It does
 not fork the visible conversation. The renderer keeps retained inputs distinct from
