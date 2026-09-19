@@ -320,9 +320,11 @@ prompt/tool profiles and does not erase real API differences.
 The model-facing tool boundary is declaration plus deterministic preparation:
 validate/canonicalize arguments into one exact bounded PreparedAction under the frozen
 ToolBinding. It performs no external effect. Preparation runs at most once for the logical
-invocation under that binding revision and persists the PreparedAction before the first
-ToolAttempt; replay reuses it. If the exact preparer is unavailable, Ion does not
-reinterpret the call under a newer implementation.
+invocation under that binding revision and persists the PreparedAction before physical
+execution. A ToolAttempt is created only by the transaction that commits execution
+intent; there is no durable Prepared-attempt state. Replay reuses the PreparedAction. If
+the exact preparer is unavailable, Ion does not reinterpret the call under a newer
+implementation.
 
 The host execution boundary separately owns live authority, approval, workspace claims,
 sandboxing, effect admission, stop/join and reconciliation. Approval binds the exact
@@ -332,9 +334,10 @@ new digest/decision. Recheck live authority at effect admission; revocation cann
 already-started action. Ordinary text is never approval.
 
 A ToolInvocation owns one assistant call and at most one model-visible result. Every
-physical run or replay has a distinct AttemptId and monotonic ToolAttempt evidence with
-ordinal, cancellation generation, implementation/executor binding, intent, optional start
-receipt/progress checkpoint and outcome/usage. **Only NotStarted proves no effect.** A
+physical run or replay begins at an execution-intent commit and has a distinct AttemptId
+with monotonic ToolAttempt evidence: ordinal, cancellation generation,
+implementation/executor binding, optional start receipt/progress checkpoint and
+outcome/usage. **Only NotStarted proves no effect.** A
 settled execution carries a canonical ToolResult plus an EffectSummary; an error result
 may still describe known partial/complete mutation. Indeterminate means the effect truth
 is unresolved, not failed. A current implementation may narrow a stored replay permission
