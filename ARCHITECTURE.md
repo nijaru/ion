@@ -234,6 +234,14 @@ artifact reads return explicit ContentUnavailable instead of empty/fabricated by
 Open need not hash all historical blobs: verify required content at consumption,
 auxiliary content at read, and all reachable content only in explicit integrity/export.
 
+Every ModelAttempt dispatch also captures the host CostQuote revision/rates or
+conservative bound used for monetary admission. Price is not part of semantic request
+identity. A configured monetary ceiling dispatches only when a conservative reservation
+can be made; missing/unknown bounded pricing parks rather than guessing, unknown usage
+retains its reservation, and later price-catalog changes never rewrite historical
+attempt accounting. Provider-reported billed cost may be stored separately; host-side
+caps are not represented as provider billing guarantees.
+
 Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
 and output growth cannot consume it. Managed quota refusal is not disk failure: actual
 I/O failure can still fence the session. Enforce limits while reading/writing, not after
@@ -393,6 +401,12 @@ uncertain ModelAttempt replay limited to billing/output nondeterminism rather th
 user-side effects. A future provider-native read-only/isolated augmentation may be added
 only with explicit bounded data/usage, privacy and replay/projection semantics;
 provider-hosted computer/action tools do not bypass execution authority.
+
+ProviderBinding also freezes model-routing semantics. Default `ExactModel` rejects an
+unexpected returned semantic model when the protocol exposes one. Explicit
+`ServerRoute` bindings may name a bounded allowed returned-model/replay family; every
+ModelAttempt records the actual returned model, and anything outside that frozen route is
+a protocol/configuration failure rather than a hidden fallback.
 
 ## Execution and authority
 
