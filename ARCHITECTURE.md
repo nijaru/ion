@@ -86,9 +86,10 @@ admit input → prepare request → call model → validate response
 The turn owns continuation. A logical step/invocation is distinct from each physical
 provider/tool attempt so retries never erase earlier uncertainty or spend. Core does not
 grow a generic batch resource scheduler: each frozen ToolBinding is either `Serial`
-(default) or host-proven `ParallelSafeReadOnly`; only ready read-only siblings in the
-latter class may overlap under a hard batch limit. Mutating/unknown/remote-effect tools
-stay serial in baseline. A complete result is durably staged as
+(default) or host-proven `ParallelSafeReadOnly`. Execute maximal contiguous source-order
+runs of `ParallelSafeReadOnly` calls with a hard concurrency limit; every `Serial` call
+is a barrier that waits for the preceding run, executes alone, and settles before later
+calls start. Mutating/unknown/remote-effect tools are Serial in baseline. A complete result is durably staged as
 `outcome_ready` in effect-completion order, then immutable tool-result entries are
 materialized only in assistant source order. Already staged outcomes never replay after a
 crash merely because an earlier call was unfinished.
