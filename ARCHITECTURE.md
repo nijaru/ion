@@ -376,12 +376,16 @@ wire bytes.
 
 The provider adapter preserves ordered content and provider-scoped replay information.
 The frozen ProviderBinding carries a semantic **service realm** (provider/backend +
-model/route contract), adapter/request-encoding revision, relevant capability snapshot,
+model/route contract plus data-egress/privacy class), adapter/request-encoding revision,
+relevant capability snapshot,
 context-window/token-estimator revision and semantic controls. Credentials/auth refresh,
 proxies/DNS and explicitly equivalent regional/network routing may remain live host
 capabilities inside that realm. Switching to a different compatible API/backend is a new
 ProviderBinding, not a live endpoint refresh; EffectKey idempotency is never assumed
-across service realms. Every ModelStep manifest names the binding/context-boundary
+across service realms. Every provider dispatch also rechecks current host data-egress
+policy inside the Turn's frozen ceiling. A local/on-device route cannot silently fall
+back to a cloud realm unless that realm was explicitly frozen as allowed and remains
+permitted live; a blocked realm parks before network I/O. Every ModelStep manifest names the binding/context-boundary
 projection and normalized request digest.
 
 Canonical history links tool calls/results by ToolInvocationId, never by a provider's
