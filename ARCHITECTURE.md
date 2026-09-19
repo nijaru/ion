@@ -204,9 +204,11 @@ publication uses that receipt directly rather than sampling a later "current com
 
 The authoritative watch surface subscribes before taking a complete snapshot plus
 coverage sequence, then discards queued batches at or below that sequence and applies
-later batches atomically. Lag/overflow requires resnapshot; the observation ring is
-bounded by both count and bytes. SessionUpdate is structural notification, not another
-semantic database.
+later batches atomically. The subscription tracks overflow/reset generation: overflow
+before the snapshot handoff completes invalidates the handshake and forces a fresh
+snapshot/watch instead of returning a stream that already has a gap. Lag/overflow after
+handoff likewise requires resnapshot. The ring is bounded by both count and bytes.
+SessionUpdate is structural notification, not another semantic database.
 
 Token/tool progress is bounded and provisional outside the durable update stream,
 addressed by model/tool attempt identity and attachment epoch. Final committed content
