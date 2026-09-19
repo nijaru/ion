@@ -296,8 +296,13 @@ response/failure/usage evidence but never append a second assistant entry or adm
 tools. Physical retries to the same binding share the ModelStep/EffectKey; provider/model
 fallback is another ModelStep.
 
-The engine owns retry, deadline, compaction and budget policy. Hidden retries cannot
-bypass durable attempt accounting. Validate complete responses and calls against the
+The engine owns retry, compaction and budget policy. Timing is boundary-specific:
+ProviderBindings/ModelAttempts and PreparedActions/ToolAttempts capture their concrete
+timeouts; retry backoff has bounded attempts and durable not-before times. A Turn has no
+mandatory wall timeout, but may carry an explicitly configured absolute wall deadline for
+unattended/automation use. Durable user questions/approvals may otherwise remain parked
+without consuming compute. A timeout never proves an already-admitted effect stopped.
+Hidden retries cannot bypass durable attempt accounting. Validate complete responses and calls against the
 **frozen bindings**, including tool arguments, before admitting execution; incomplete
 output cannot authorize tools or masquerade as success.
 
