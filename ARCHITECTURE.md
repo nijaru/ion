@@ -113,9 +113,17 @@ never grants cross-conversation read authority. Steering enters the next complet
 request boundary, never an already-dispatched request. Follow-ups start later turns.
 Withdrawing unplaced input does not erase previously placed transcript entries.
 
-Opening and inspection start no work. Submit and explicit resume authorize driving.
-A dropped waiter or disconnected frontend does not cancel accepted work. A host
-process that exits cannot promise continued background execution without another host.
+Opening and inspection are semantically passive. Open may acquire exclusive
+ownership and validate/load bounded local durable state, but it performs no semantic
+recovery writes and no provider/tool-backend reconciliation, claim acquisition,
+dispatch/retry, timer drive, worker start or cleanup effect. Inspection may therefore show
+unreconciled durable attempts exactly as stored.
+
+Submit and explicit resume authorize driving. Resume reconciles existing attempt/backend
+evidence first, persists recovered facts, rechecks cancellation/supersession eligibility,
+and only then may start new physical work. A dropped waiter or disconnected frontend does
+not cancel accepted work. A host process that exits cannot promise continued background
+execution without another host.
 
 ## External actions, cancellation and recovery
 
