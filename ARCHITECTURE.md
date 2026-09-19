@@ -162,11 +162,14 @@ Recovery either adopts known evidence, reconciles a durable external receipt, cr
 new physical attempt when frozen/current policy and backend safety all permit replay, or
 retains uncertainty. Safe replay never rewrites earlier evidence. Baseline never
 intentionally overlaps two physical ToolAttempts for one ToolInvocation: every prior tool
-attempt must be known non-live/terminal before another starts. Backend idempotency may
-deduplicate accidental delivery or strengthen reconciliation, but does not authorize
-overlap. Changing to an isolated workspace/binding is later work under a **new
-invocation/turn**, not replay of the frozen PreparedAction. Unknown is not failed, free
-or proof of non-execution. Missing implementations/unreadable evidence never mean
+attempt must be known non-live/terminal **and its outcome evidence must authorize another
+execution**. Automatic retry is limited to NotStarted or a typed retryable failure with
+NoMutation/equivalent binding receipt under the frozen recovery policy.
+KnownChanges/MayHaveMutated do not become retry-safe merely because execution terminated.
+Backend idempotency may deduplicate accidental delivery or strengthen reconciliation, but
+does not authorize overlap. Changing to an isolated workspace/binding is later work under
+a **new invocation/turn**, not replay of the frozen PreparedAction. Unknown is not failed,
+free or proof of non-execution. Missing implementations/unreadable evidence never mean
 unstarted.
 
 External execution truth and transcript settlement are independent. A logical tool call
