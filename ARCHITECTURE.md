@@ -505,11 +505,18 @@ non-replayable action.
 Serialize conflicting workspace mutations or isolate workspaces. Session serialization
 alone does not coordinate filesystem writes across sessions. The durable workspace
 coordinator is host-owned outside the agent-writable checkout and addressed through a
-WorkspaceBindingId; do not put final claim authority in `.ion/claims.sqlite` or another
-file normal workspace tools can delete. Claims are keyed by invocation/attempt identity.
+WorkspaceBindingId backed by a frozen descriptor: canonical root, execution-backend
+identity and platform filesystem/repository/common-dir identity where available. A path
+string alone is not durable workspace identity. Do not put final claim authority in
+`.ion/claims.sqlite` or another file normal workspace tools can delete. Claims are keyed by invocation/attempt identity.
 Known mutations advance a host workspace revision; indeterminate mutations quarantine the
-binding. Prepared mutations may bind expected workspace revision and exact base-content
-facts, both rechecked before effect admission. Registry authority is cross-process for the
+binding. Every mutating registry admission revalidates the current root/repository identity
+against the frozen descriptor together with quarantine/revision checks. Directory
+replacement, remount, symlink retarget or repository/common-dir change fails as
+`BindingChanged` before a claim/effect. The old revision/quarantine never transfers to
+a different object merely because the pathname is reused; adopting the replacement is an
+explicit host operation. Prepared mutations may bind expected workspace revision and
+exact base-content facts, both rechecked before effect admission. Registry authority is cross-process for the
 current host user and outlives Session loss: a missing/deleted/corrupt Session leaves an
 orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
