@@ -29,9 +29,10 @@ versioned semantic request manifests, explicit effect admission and recoverable 
 start receipts, logical ToolInvocations with immutable physical ToolAttempts, durable
 outcome staging for safely parallel tool batches, external execution truth separate from
 the model-visible result, typed drive/session health and atomic commit-addressed update
-batches. The longer-horizon target also uses ContextEpochs (host-retained facts +
-structured checkpoint + lossless recent tail), a host-owned workspace registry and
-explicit fresh-vs-forked worker context. Source-confirmed races are acceptance tests for
+batches. The longer-horizon target anchors context in immutable ContextBoundary
+entries (exact retained Input references + typed checkpoint + lossless recent tail),
+uses a host-owned cross-process workspace registry, and keeps fresh-vs-forked worker
+context separate from joined-vs-retained lifetime. Source-confirmed races are acceptance tests for
 that cleaner shape rather than reasons to preserve the existing one.
 
 The current source also has an opt-in workspace wrapper,
