@@ -74,6 +74,12 @@ identity is global;
 other identities and commit cursors are distinct Rust newtypes over a private
 session-local monotonic sequence. IDs escape only after commit.
 
+Persisted provider/tool implementation revisions are **semantic compatibility IDs**, not
+build/display versions. Current code may execute/recover old work only when it explicitly
+advertises the exact persisted ID; changes to preparation, request encoding/replay,
+receipt interpretation or effect/recovery semantics require a new ID. Build hashes may be
+diagnostic metadata but do not prove compatibility, and a shared name never implies it.
+
 ## Turn execution
 
 ```text
