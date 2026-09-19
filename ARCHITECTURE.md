@@ -458,7 +458,9 @@ hidden fallback. An unbounded/unstated route is not a ServerRoute contract.
 
 The model-facing tool boundary is declaration plus deterministic preparation:
 validate/canonicalize arguments into one exact bounded PreparedAction under the frozen
-ToolBinding. It performs no external effect. Preparation runs at most once for the logical
+ToolBinding. Remote/MCP ToolBindings freeze their service realm/catalog semantics and
+data-egress class as part of semantic implementation identity; reconnect/auth/proxy may be
+live only inside that realm, while a different remote backend is a new binding/turn. It performs no external effect. Preparation runs at most once for the logical
 invocation under that binding revision and persists the PreparedAction before physical
 execution. A ToolAttempt is created only by the transaction that commits execution
 intent; there is no durable Prepared-attempt state. Replay reuses the PreparedAction. If
@@ -466,7 +468,9 @@ the exact preparer is unavailable, Ion does not reinterpret the call under a new
 implementation.
 
 The host execution boundary separately owns live authority, approval, workspace claims,
-sandboxing, effect admission, stop/join and reconciliation. Approval binds the exact
+sandboxing, data-egress policy, effect admission, stop/join and reconciliation.
+PreparedAction identifies the execution/egress realm and bounded outbound resources for
+remote effects, and live policy is rechecked before admission. Approval binds the exact
 invocation/prepared-action digest, binding/executor revision, resources/workspace base
 and expiry. Policy never silently rewrites an approved action; a changed action needs a
 new digest/decision. Recheck live authority at effect admission; revocation cannot undo an
