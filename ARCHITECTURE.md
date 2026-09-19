@@ -160,11 +160,14 @@ authorize continuation after cancellation.
 
 Recovery either adopts known evidence, reconciles a durable external receipt, creates a
 new physical attempt when frozen/current policy and backend safety all permit replay, or
-retains uncertainty. Safe replay never rewrites an earlier indeterminate attempt. A
-conflicting prior possibly-live mutation must be reconciled/quiesced, isolated, or
-protected by backend-guaranteed idempotency under the stable EffectKey before another
-attempt starts. Unknown is not failed, free or proof of non-execution. Missing
-implementations/unreadable evidence never mean unstarted.
+retains uncertainty. Safe replay never rewrites earlier evidence. Baseline never
+intentionally overlaps two physical ToolAttempts for one ToolInvocation: every prior tool
+attempt must be known non-live/terminal before another starts. Backend idempotency may
+deduplicate accidental delivery or strengthen reconciliation, but does not authorize
+overlap. Changing to an isolated workspace/binding is later work under a **new
+invocation/turn**, not replay of the frozen PreparedAction. Unknown is not failed, free
+or proof of non-execution. Missing implementations/unreadable evidence never mean
+unstarted.
 
 External execution truth and transcript settlement are independent. A logical tool call
 may receive one truthful model-visible "outcome unknown" result so the exchange can
@@ -452,8 +455,11 @@ and expiry. Policy never silently rewrites an approved action; a changed action 
 new digest/decision. Recheck live authority at effect admission; revocation cannot undo an
 already-started action. Ordinary text is never approval.
 
-A ToolInvocation owns one assistant call and at most one model-visible result. Every
-physical run or replay begins at an execution-intent commit and has a distinct AttemptId
+A ToolInvocation owns one assistant call and at most one model-visible result.
+Its `outcome_ready` state records provenance: the exact eligible ToolAttemptId that
+supplied the canonical result, or an explicit synthetic source such as
+cancelled-before-start/accepted-unknown. Every physical run or replay begins at an
+execution-intent commit and has a distinct AttemptId
 with monotonic ToolAttempt evidence: ordinal, cancellation generation,
 implementation/executor binding, optional start receipt/progress checkpoint and
 outcome/usage. **Only NotStarted proves the effect never began.** A settled execution
@@ -498,9 +504,10 @@ available, but they do not claim transaction rollback unless a backend supplies 
 Known partial application returns an error ToolResult **and** an exact EffectSummary of
 the applied subset, advances workspace revision, and is never NotStarted.
 
-An unresolved possibly-live operation keeps its binding quarantined until reconciled,
-confirmed stopped or replaced by an isolated binding; turn abandonment does not release
-it. Verification binds to the actual tested state, not a worker's earlier result.
+An unresolved possibly-live operation keeps its binding quarantined until reconciled
+or confirmed stopped; turn abandonment does not release it. Later coding work may move to
+a **new** isolated binding, but that does not clear or replay the original invocation.
+Verification binds to the actual tested state, not a worker's earlier result.
 
 Capabilities must cover alternate shell/browser/extension routes. In-process extensions
 are trusted code, not a sandbox. Requested confinement must fail closed if unavailable;
