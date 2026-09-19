@@ -363,11 +363,14 @@ created only when physical dispatch intent commits; there is no durable Prepared
 state. Every physical retry is therefore a new AttemptId with typed
 dispatch/start/failure/response/usage evidence.
 
-An `open` step selects at most one validated ResponseReady attempt through an atomic
-first-winner transition to `selected(AttemptId)`. If a timed-out earlier attempt reports
-late after a same-step retry, persist its exact response/failure/usage evidence but never
-append a second assistant entry or admit its tools. Physical retries to the same binding
-share the ModelStep/EffectKey.
+ResponseReady is attempt evidence and may be persisted even after cancellation or
+supersession. An `open` step selects at most one validated ResponseReady attempt only
+through a transaction that also rechecks the Turn's current cancellation generation/
+intent and that the step is still the current eligible step. That transaction changes
+`open → selected(AttemptId)`. If cancellation or supersession committed first, the late
+response remains usage/diagnostic evidence and is never selected. A timed-out earlier
+same-step retry therefore cannot append a second assistant entry or admit tools. Physical
+retries to the same binding share the ModelStep/EffectKey.
 
 A provider/model fallback, compaction-mediated regeneration or otherwise semantically
 different request is another ModelStep. Creating that successor atomically changes the
