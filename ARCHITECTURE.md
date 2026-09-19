@@ -547,10 +547,11 @@ Budgets are **transferred, not shared through a live parent pointer**. Joined sp
 atomically carves a fixed child allowance from the creator Turn's remaining worker/spend
 allowance and installs it in the child; the creator can no longer spend it, preventing
 concurrent child oversubscription. Baseline accounting is monotonic and does not reclaim
-unused child allowance. Model-driven spawn is Joined by default. Retained creation or
-conversion requires explicit host/user authorization of an independent future-turn
-budget/configuration, because it may outlive the creator and cannot keep charging an ended
-Turn.
+unused child allowance. Model-driven spawn is Joined by default. An authenticated
+host/user may create a Retained worker directly with an independent budget/configuration,
+because it may outlive the originating request. Baseline has no Joined→Retained promotion;
+continuity uses an explicit new retained Fresh/Fork conversation instead of transferring a
+live cancellation edge.
 
 Fan-out also has explicit durable limits: per-Turn child count, worker-origin depth and
 Session active-worker count. Worker depth follows creator/origin metadata rather than
