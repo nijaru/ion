@@ -84,9 +84,11 @@ admit input → prepare request → call model → validate response
 ```
 
 The turn owns continuation. A logical step/invocation is distinct from each physical
-provider/tool attempt so retries never erase earlier uncertainty or spend. One assistant
-tool batch may run compatible effects concurrently under bounded resource claims; this is
-not a generic workflow DAG. A complete result is durably staged as
+provider/tool attempt so retries never erase earlier uncertainty or spend. Core does not
+grow a generic batch resource scheduler: each frozen ToolBinding is either `Serial`
+(default) or host-proven `ParallelSafeReadOnly`; only ready read-only siblings in the
+latter class may overlap under a hard batch limit. Mutating/unknown/remote-effect tools
+stay serial in baseline. A complete result is durably staged as
 `outcome_ready` in effect-completion order, then immutable tool-result entries are
 materialized only in assistant source order. Already staged outcomes never replay after a
 crash merely because an earlier call was unfinished.
