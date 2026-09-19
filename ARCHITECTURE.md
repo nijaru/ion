@@ -318,10 +318,13 @@ share the ModelStep/EffectKey.
 
 A provider/model fallback, compaction-mediated regeneration or otherwise semantically
 different request is another ModelStep. Creating that successor atomically changes the
-predecessor `open → superseded`; a selected step cannot be superseded. Attempts of a
-superseded step may still settle usage/evidence but are permanently ineligible for
-semantic selection. Thus a late old-provider response can never race a different fallback
-request into the transcript.
+predecessor `open → superseded`; a selected step cannot be superseded. After commit,
+signal old live attempts to stop best-effort, but do not infer remote termination.
+Superseded attempts remain charged/reserved until evidence resolves and may still settle
+usage/diagnostics, while being permanently ineligible for semantic selection. Budget/
+capacity policy may delay the successor if it cannot conservatively cover both. Thus a
+late old-provider response can never race a different fallback request into the
+transcript.
 
 The engine owns retry, compaction and budget policy. Timing is boundary-specific:
 ProviderBindings/ModelAttempts and PreparedActions/ToolAttempts capture their concrete
