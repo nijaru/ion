@@ -331,7 +331,17 @@ Compact only at safe complete-exchange boundaries. Decide from the estimated **n
 assembled request**, including newly placed input, tool results, exact active-turn
 retained input and tail, rather than stale last-provider usage. Never evict retained
 current-turn input merely to fit: compact/trim older history/tail first, then refuse or
-defer further growth if the exact active request still cannot fit. Large outputs are bounded/spooled before this path.
+defer further growth if the exact active request still cannot fit.
+
+Compaction is **incremental from the current projection**: previous typed checkpoint plus
+selected complete exchanges from the current tail/new suffix. It never reloads and
+resummarizes the entire raw EvidenceHistory prefix. Trigger policy reserves enough
+headroom that this bounded compactor input fits the frozen compaction ProviderBinding
+before generation becomes stranded. If it cannot fit, return a typed ContextCapacity
+block; do not recursively compact the compaction request or silently select another
+provider. Compactor ModelSteps expose no tools/provider-hosted actions, require the typed
+checkpoint output schema and use ordinary ModelStep/Attempt budget/recovery semantics.
+Large outputs are bounded/spooled before this path.
 
 Starting a turn captures one bounded immutable TurnEnvironment value directly in the
 Turn: conversation configuration revision, resolved instructions/project context, frozen
