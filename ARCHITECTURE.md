@@ -575,10 +575,13 @@ whole transcript into the parent. History inheritance, lifetime ownership and pe
 inheritance remain separate.
 
 Budgets are **transferred, not shared through a live parent pointer**. Joined spawn
-atomically carves a fixed child allowance from the creator Turn's remaining worker/spend
-allowance and installs it in the child; the creator can no longer spend it, preventing
-concurrent child oversubscription. Baseline accounting is monotonic and does not reclaim
-unused child allowance. Model-driven spawn is Joined by default. An authenticated
+atomically carves a typed WorkerBudgetSlice from the creator Turn's remaining fungible
+allowance—baseline model-step slots, tool-invocation slots and optional monetary
+allowance—and installs it in the child; the creator can no longer spend it. Nested worker
+allocation must come out of the slice the child actually received. Non-fungible safety
+caps (per-step retry count, context/result/output sizes, concrete timeouts) are inherited
+equal-or-narrower rather than carved. Baseline accounting is monotonic and does not
+reclaim unused child allowance. Model-driven spawn is Joined by default. An authenticated
 host/user may create a Retained worker directly with an independent budget/configuration,
 because it may outlive the originating request. Baseline has no Joined→Retained promotion;
 continuity uses an explicit new retained Fresh/Fork conversation instead of transferring a
