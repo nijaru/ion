@@ -370,6 +370,14 @@ Close the owned stream after that event rather than waiting indefinitely for EOF
 promising to inspect events after closure. Provider neutrality permits model-specific
 prompt/tool profiles and does not erase real API differences.
 
+Baseline provider requests expose **no provider-hosted side-effect tools**. Any action that
+can mutate workspace/account/browser/external state must return as an Ion ToolInvocation
+and cross the frozen ToolBinding, live host authority and ToolAttempt boundary. This keeps
+uncertain ModelAttempt replay limited to billing/output nondeterminism rather than hidden
+user-side effects. A future provider-native read-only/isolated augmentation may be added
+only with explicit bounded data/usage, privacy and replay/projection semantics;
+provider-hosted computer/action tools do not bypass execution authority.
+
 ## Execution and authority
 
 The model-facing tool boundary is declaration plus deterministic preparation:
