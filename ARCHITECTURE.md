@@ -271,14 +271,16 @@ Model-facing context has four distinct layers:
 
 - **Evidence history:** immutable transcript and execution records; ground truth.
 - **Retained inputs:** ordered references to immutable Input records, not copied payloads.
-  `active_exact` contains only User/Steer content already consumed into the active
-  Turn's model-visible exchange plus verified InteractionReply Inputs already consumed
-  through their canonical tool result. Queued/unplaced input is never exposed early.
-  Admission/steering/question budgets keep this tier exact or refuse consumption.
-  `history_bounded` is a bounded newest suffix of older user-origin Inputs that were
-  actually model-visible historically, with explicit `history_incomplete` when older
-  evidence was evicted. Project/base instructions already live in TurnEnvironment; model
-  memories, worker chatter and live approval authority do not.
+  They contain only User/Steer content already consumed into the active Turn's
+  model-visible exchange plus verified InteractionReply Inputs already consumed through
+  their canonical tool result. Queued/unplaced input is never exposed early. Admission/
+  steering/question budgets keep this current-turn set exact or refuse/defer further
+  consumption. Older ordinary user messages are **not** mechanically re-emitted across
+  turns: without explicit instruction-lifetime/rollback semantics that could resurrect
+  superseded text. Older history remains immutable evidence and is represented by the
+  advisory checkpoint/tail; requirements that must persist exactly across turns belong in
+  explicit conversation instructions/configuration. Model memories, worker chatter and
+  live approval authority do not enter this layer.
 - **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
   (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
   action/terminal condition). Schema validation is required, but content remains advisory
@@ -286,10 +288,9 @@ Model-facing context has four distinct layers:
 - **Operational tail:** bounded lossless suffix of recent complete exchange groups.
 
 Compaction/reset appends one immutable **ContextBoundary Entry** containing its source
-cutoff, the ordered `active_exact`/`history_bounded` InputId lists plus historical
-completeness marker, typed checkpoint, raw-tail range, checkpoint/compactor revision and
-optional provider-owned opaque artifact. The boundary never duplicates retained input
-bodies. The opaque artifact is an encoding optimization with explicit provider/model/
+cutoff, ordered exact active-turn RetainedInput IDs, typed checkpoint, raw-tail range,
+checkpoint/compactor revision and optional provider-owned opaque artifact. The boundary
+never duplicates retained input bodies. The opaque artifact is an encoding optimization with explicit provider/model/
 replay-family compatibility identity, never semantic truth: compatible bindings may use
 it; incompatible switching reconstructs from the typed checkpoint + retained inputs +
 raw tail instead. The compatibility choice is part of the request manifest/fingerprint.
@@ -306,10 +307,10 @@ another table/entity. The initial epoch is implicit before the first boundary. I
 not fork the visible conversation. The renderer keeps retained inputs distinct from
 checkpoint text and deduplicates exact retained instructions.
 Compact only at safe complete-exchange boundaries. Decide from the estimated **next
-assembled request**, including newly placed input, tool results, retained-input tiers and
-tail, rather than stale last-provider usage. Never evict `active_exact` merely to fit:
-trim the historical tier/tail first, then refuse further growth if the exact active
-request still cannot fit. Large outputs are bounded/spooled before this path.
+assembled request**, including newly placed input, tool results, exact active-turn
+retained input and tail, rather than stale last-provider usage. Never evict retained
+current-turn input merely to fit: compact/trim older history/tail first, then refuse or
+defer further growth if the exact active request still cannot fit. Large outputs are bounded/spooled before this path.
 
 Starting a turn captures one bounded immutable TurnEnvironment value directly in the
 Turn: conversation configuration revision, resolved instructions/project context, frozen
