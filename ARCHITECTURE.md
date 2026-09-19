@@ -310,6 +310,14 @@ remain refreshable and live policy may revoke/narrow immediately. Per-action app
 satisfy an `ask` only inside the captured ceiling. Do not carry environment-rebase
 machinery until a measured requirement justifies it.
 
+Baseline also does not auto-reread agent-writable AGENTS/project instruction files during
+the active Turn. Resolved project/developer instructions are part of the frozen
+environment; User/Steer Inputs are the dynamic instruction channel. This prevents tool
+effects from silently changing their own future prompt semantics and keeps request replay
+independent of later workspace bytes. A future live instruction provider, if measured
+need justifies it, must enter through an authenticated host operation that durably
+captures the exact future-step snapshot rather than implicit filesystem observation.
+
 Each model step persists a versioned request manifest containing the TurnEnvironment
 digest, captured TurnSettings revision/value, exact ProviderBinding/tool loadout,
 ContextBoundary EntryId (or implicit initial epoch), context cutoff/input provenance and
