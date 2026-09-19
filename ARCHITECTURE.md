@@ -552,6 +552,13 @@ conversion requires explicit host/user authorization of an independent future-tu
 budget/configuration, because it may outlive the creator and cannot keep charging an ended
 Turn.
 
+Fan-out also has explicit durable limits: per-Turn child count, worker-origin depth and
+Session active-worker count. Worker depth follows creator/origin metadata rather than
+history ancestry, so a fresh parentless delegated conversation still consumes one depth
+level. Spawn admission checks limits, records origin/lifetime, transfers budget and
+creates the child Turn atomically; refusal leaves neither a child nor a consumed
+allocation.
+
 Existing workers remain inspectable when new spawning is disabled. Single-agent requests
 carry no mandatory worker instructions/tools/team state. Worker expansion follows a
 measured coding baseline, not an arbitrary workflow abstraction.
