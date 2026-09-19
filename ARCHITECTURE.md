@@ -341,6 +341,14 @@ semantic controls. Credentials and intentionally live endpoints remain host capa
 Every ModelStep manifest names the binding/context-boundary projection and normalized
 request digest.
 
+Canonical history links tool calls/results by ToolInvocationId, never by a provider's
+call/item ID. Origin provider IDs are replay metadata. ReplayProjection preserves exact
+IDs for compatible replay families; for an incompatible target it deterministically maps
+each ToolInvocationId to a target-valid wire ID and uses that alias consistently for the
+call/result pair. The map is derived and collision-checked during request preparation,
+not stored as a second identity system, and is covered by the provider-request
+fingerprint.
+
 ModelStep is the prepared semantic request and carries one durable disposition:
 `open | selected(AttemptId) | superseded(reason, successor_step?)`. A ModelAttempt is
 created only when physical dispatch intent commits; there is no durable Prepared-attempt
