@@ -322,12 +322,17 @@ workspace/executor binding and an AuthorityCeiling defining the maximum executio
 classes/resources that turn may receive. It also installs initial revisioned TurnSettings
 (provider binding, controls, active tool-loadout subset) constrained by that environment.
 
-Persistent configuration updates and broad authority widening affect **later turns**.
-Explicit turn-setting changes may switch model/reasoning/service tier or tool subset only
-within the frozen environment and affect future ModelSteps. Credentials/live availability
-remain refreshable and live policy may revoke/narrow immediately. Per-action approval can
-satisfy an `ask` only inside the captured ceiling. Do not carry environment-rebase
-machinery until a measured requirement justifies it.
+Persistent semantic configuration updates and **AuthorityCeiling widening** affect
+later turns. Explicit turn-setting changes may switch model/reasoning/service tier or tool
+subset only within the frozen environment and affect future ModelSteps. Credentials/live
+availability remain refreshable.
+
+Live policy is mutable **inside** the frozen ceiling: revocation/narrowing applies
+immediately, and an explicit authenticated user/host policy change may alter future
+allow/ask decisions within that ceiling during the turn. Passive config/file reloads do
+not silently widen current-turn policy. Per-action approval can satisfy one `ask` only
+inside the captured ceiling; neither approval nor policy can widen the ceiling. Do not
+carry environment-rebase machinery until a measured requirement justifies it.
 
 Baseline also does not auto-reread agent-writable AGENTS/project instruction files during
 the active Turn. Resolved project/developer instructions are part of the frozen
