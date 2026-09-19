@@ -352,11 +352,14 @@ dispatch. Immutable references avoid storing another full copy of growing histor
 wire bytes.
 
 The provider adapter preserves ordered content and provider-scoped replay information.
-The frozen ProviderBinding carries model/provider identity, adapter/request-encoding
-revision, relevant capability snapshot, context-window/token-estimator revision and
-semantic controls. Credentials and intentionally live endpoints remain host capabilities.
-Every ModelStep manifest names the binding/context-boundary projection and normalized
-request digest.
+The frozen ProviderBinding carries a semantic **service realm** (provider/backend +
+model/route contract), adapter/request-encoding revision, relevant capability snapshot,
+context-window/token-estimator revision and semantic controls. Credentials/auth refresh,
+proxies/DNS and explicitly equivalent regional/network routing may remain live host
+capabilities inside that realm. Switching to a different compatible API/backend is a new
+ProviderBinding, not a live endpoint refresh; EffectKey idempotency is never assumed
+across service realms. Every ModelStep manifest names the binding/context-boundary
+projection and normalized request digest.
 
 Canonical history links tool calls/results by ToolInvocationId, never by a provider's
 call/item ID. Origin provider IDs are replay metadata. ReplayProjection preserves exact
