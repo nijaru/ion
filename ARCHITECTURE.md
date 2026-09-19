@@ -299,14 +299,19 @@ machinery until a measured requirement justifies it.
 
 Each model step persists a versioned request manifest containing the TurnEnvironment
 digest, captured TurnSettings revision/value, exact ProviderBinding/tool loadout,
-ContextBoundary EntryId (or implicit initial epoch),
-context cutoff/input provenance, purpose, assembly revision and digest of the canonical
-**semantic** provider request. The digest includes model-visible messages,
-tools and semantic controls but excludes credentials, auth headers, trace IDs,
-timestamps and other intentionally live transport data. Recovery reconstructs and
-verifies that manifest; a build/adapter unable to reproduce it blocks rather than
-silently sending a different request. Immutable content references avoid copying growing
-history into every step.
+ContextBoundary EntryId (or implicit initial epoch), context cutoff/input provenance and
+purpose, plus **two fingerprints**: the canonical provider-neutral semantic request digest
+and the exact frozen adapter's canonical provider-request fingerprint. The semantic digest
+includes model-visible messages/tools/controls but excludes live credentials, auth
+headers, trace IDs and transport timestamps. The provider fingerprint covers the
+provider-specific body/replay/tool/control representation and stable idempotency material,
+but excludes live auth/routing/telemetry.
+
+Before every physical dispatch, including recovery, Ion reconstructs and verifies the
+semantic request, re-prepares it with the frozen adapter/encoding revision and verifies
+the provider fingerprint. Any mismatch or unavailable encoding blocks before network
+dispatch. Immutable references avoid storing another full copy of growing history/raw
+wire bytes.
 
 The provider adapter preserves ordered content and provider-scoped replay information.
 The frozen ProviderBinding carries model/provider identity, adapter/request-encoding
