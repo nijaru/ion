@@ -218,9 +218,12 @@ one exact `CommitReceipt { seq, update }`: an ordered atomic SessionUpdate batch
 that commit. Clients never infer ordering among multiple same-commit events, and
 publication uses that receipt directly rather than sampling a later "current commit."
 
-The authoritative watch surface subscribes before taking a complete snapshot plus
-coverage sequence, then discards queued batches at or below that sequence and applies
-later batches atomically. The subscription tracks overflow/reset generation: overflow
+The authoritative watch surface subscribes before taking a **bounded snapshot of the
+requested client projection** plus coverage sequence, then discards queued batches at or
+below that sequence and applies later batches atomically. Complete means complete for
+that bounded projection (current state + limited transcript/worker summary), never
+full-history hydration; older immutable history remains paginated. Snapshot limits are
+bounded by count and bytes. The subscription tracks overflow/reset generation: overflow
 before the snapshot handoff completes invalidates the handshake and forces a fresh
 snapshot/watch instead of returning a stream that already has a gap. Lag/overflow after
 handoff likewise requires resnapshot. The ring is bounded by both count and bytes.
