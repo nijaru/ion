@@ -41,7 +41,7 @@ pub enum EntryData {
     ToolResult {
         invocation: InvocationId,
     },
-    ContextBoundary(ContextBoundary),
+    ContextBoundary(Box<ContextBoundary>),
     Notice {
         kind: String,
         detail: serde_json::Value,
