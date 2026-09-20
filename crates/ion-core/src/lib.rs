@@ -38,8 +38,9 @@ pub use input::{
     Input, InputBody, InputDisposition, InputMode, InputSender, RequestKey, RequestKeyError,
 };
 pub use model::{
-    CostQuote, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep, ProviderFailureEvidence,
-    ProviderFingerprint, ProviderStartReceipt, RequestManifest, StepDisposition, StepPurpose,
+    CostQuote, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
+    ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt, RequestManifest,
+    StepDisposition, StepPurpose,
 };
 pub use request::{AssembledRequest, RequestError, SemanticRequest, assemble};
 pub use store::{SessionStore, StoreError};
@@ -48,6 +49,4 @@ pub use tool_exec::{
     StartReceipt, ToolAttempt, ToolAttemptState, ToolExchangeState, ToolInvocation, ToolResult,
 };
 pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
-pub use turn::{
-    Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase,
-};
+pub use turn::{Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase};
