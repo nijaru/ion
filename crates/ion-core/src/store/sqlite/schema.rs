@@ -40,6 +40,7 @@ CREATE TABLE conversation_configs (
 CREATE TABLE entries (
     id              INTEGER PRIMARY KEY,
     conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+    commit_seq      INTEGER NOT NULL,
     kind            TEXT    NOT NULL,
     data            TEXT    NOT NULL,
     projection      TEXT    NOT NULL
@@ -47,15 +48,20 @@ CREATE TABLE entries (
 CREATE INDEX entries_by_conversation ON entries (conversation_id, id);
 
 CREATE TABLE inputs (
-    id              INTEGER PRIMARY KEY,
-    conversation_id INTEGER NOT NULL REFERENCES conversations(id),
-    request_key     TEXT,
-    sender          TEXT    NOT NULL,
-    mode            TEXT    NOT NULL,
-    body            TEXT    NOT NULL,
-    disposition     TEXT    NOT NULL
+    id               INTEGER PRIMARY KEY,
+    conversation_id  INTEGER NOT NULL REFERENCES conversations(id),
+    request_key      TEXT,
+    sender           TEXT    NOT NULL,
+    mode             TEXT    NOT NULL,
+    body             TEXT    NOT NULL,
+    disposition      TEXT    NOT NULL,
+    disposition_kind TEXT    NOT NULL
+        CHECK (disposition_kind IN ('queued', 'consumed', 'cancelled', 'abandoned')),
+    admitted_commit  INTEGER NOT NULL
 );
 CREATE INDEX inputs_by_conversation ON inputs (conversation_id, id);
+CREATE INDEX inputs_queue
+    ON inputs (conversation_id, disposition_kind, id);
 CREATE UNIQUE INDEX inputs_request_key
     ON inputs (conversation_id, request_key)
     WHERE request_key IS NOT NULL;
@@ -168,6 +174,46 @@ pub(super) fn verify(connection: &Connection) -> Result<(), StoreError> {
         return Err(StoreError::Corrupt(
             "session_meta must contain exactly one id=1 row".to_owned(),
         ));
+    }
+    verify_columns(
+        connection,
+        "entries",
+        &["id", "conversation_id", "commit_seq", "kind", "data", "projection"],
+    )?;
+    verify_columns(
+        connection,
+        "inputs",
+        &[
+            "id",
+            "conversation_id",
+            "request_key",
+            "sender",
+            "mode",
+            "body",
+            "disposition",
+            "disposition_kind",
+            "admitted_commit",
+        ],
+    )?;
+    Ok(())
+}
+
+fn verify_columns(
+    connection: &Connection,
+    table: &str,
+    required: &[&str],
+) -> Result<(), StoreError> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut statement = connection.prepare(&sql)?;
+    let rows = statement.query_map([], |row| row.get::<_, String>(1))?;
+    let columns: std::collections::BTreeSet<String> =
+        rows.collect::<Result<_, rusqlite::Error>>()?;
+    for column in required {
+        if !columns.contains(*column) {
+            return Err(StoreError::Corrupt(format!(
+                "schema v{SCHEMA_VERSION} table {table} is missing required column {column}"
+            )));
+        }
     }
     Ok(())
 }

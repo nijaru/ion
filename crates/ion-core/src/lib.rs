@@ -1,7 +1,7 @@
 //! Ion's durable coding-turn domain.
 //!
-//! R1A deliberately exposes only the replacement durable vocabulary, schema ownership
-//! and pure request assembly. Session execution is rebuilt on these owners in R1B.
+//! R1B adds the passive replacement Session owner, semantic SQLite transactions and
+//! bounded commit-addressed observation. Provider/tool drive remains a later R1B slice.
 
 mod blob;
 mod config;
@@ -11,7 +11,9 @@ mod entry;
 mod id;
 mod input;
 mod model;
+mod observation;
 mod request;
+mod session;
 mod store;
 mod tool_exec;
 mod transcript;
@@ -42,8 +44,17 @@ pub use model::{
     ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt, RequestManifest,
     StepDisposition, StepPurpose,
 };
+pub use observation::{
+    CommitReceipt, EntryPage, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_ENTRIES, MAX_SNAPSHOT_INPUTS,
+    MAX_WATCH_BYTES, MAX_WATCH_RECEIPTS, ObservationError, SessionChange, SessionSnapshot,
+    SessionUpdate, SessionWatch, SnapshotRequest, SnapshotWatch, WatchQueueLimits, WatchRequest,
+};
 pub use request::{AssembledRequest, RequestError, SemanticRequest, assemble};
-pub use store::{SessionStore, StoreError};
+pub use session::{
+    AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
+    CreatedConversation, CreatedSession, Session, SessionError, SessionHandle, SessionHealth,
+    StartTurnRequest, StartedTurn,
+};
 pub use tool_exec::{
     ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction, ProgressCheckpoint,
     StartReceipt, ToolAttempt, ToolAttemptState, ToolExchangeState, ToolInvocation, ToolResult,
