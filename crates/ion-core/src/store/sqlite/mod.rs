@@ -13,7 +13,7 @@ use crate::SessionId;
 
 pub(crate) struct SqliteStore {
     pub(crate) session_id: SessionId,
-    pub(crate) connection: Connection,
+    _connection: Connection,
     _ownership: ownership::Ownership,
 }
 
@@ -27,7 +27,7 @@ impl SqliteStore {
         schema::initialize(&connection, session_id)?;
         Ok(Self {
             session_id,
-            connection,
+            _connection: connection,
             _ownership: ownership,
         })
     }
