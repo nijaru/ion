@@ -434,7 +434,7 @@ impl ConversationConfig {
                     tool.id.as_str().to_owned(),
                 ));
             }
-            if matches!(tool.egress, EgressRealm::Remote(_)) && !self.authority.remote_tools {
+            if matches!(&tool.egress, EgressRealm::Remote(_)) && !self.authority.remote_tools {
                 return Err(ConfigError::RemoteToolOutsideCeiling);
             }
             if !self.authority.permits(&tool.egress) {
