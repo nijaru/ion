@@ -21,19 +21,21 @@ execution, conservative unknown outcomes, supervised stop/join behavior, exclusi
 session ownership and bounded pages/content. A scripted model/tool exchange runs end to
 end through the headless API.
 
-The accepted [architecture](ARCHITECTURE.md) was deliberately refined on 2026-09-18
-before real providers and native tools made the early v0 boundaries expensive to change.
-The current Rust is therefore **pre-cutover**, not the final internal API. The next
-cutover keeps the coding Turn but adds stable per-turn provider/tool/execution bindings,
-versioned semantic request manifests, explicit effect admission and recoverable backend
-start receipts, logical ToolInvocations with immutable physical ToolAttempts, durable
-outcome staging for safely parallel tool batches, external execution truth separate from
-the model-visible result, typed drive/session health and atomic commit-addressed update
-batches. The longer-horizon target anchors context in immutable ContextBoundary
-entries (exact retained Input references + typed checkpoint + lossless recent tail),
-uses a host-owned cross-process workspace registry, and keeps fresh-vs-forked worker
-context separate from joined-vs-retained lifetime. Source-confirmed races are acceptance tests for
-that cleaner shape rather than reasons to preserve the existing one.
+The accepted [architecture](ARCHITECTURE.md) was deliberately refined before real
+providers and native tools made the early v0 boundaries expensive to change. The current
+Rust is now treated as a **prototype to mine and replace**, not a migration base. The
+maintained runtime will be fully rewritten/refactored in place around the accepted coding
+Turn design: frozen per-turn provider/tool/execution bindings, versioned semantic request
+manifests, explicit effect admission and backend receipts, logical ToolInvocations with
+immutable physical ToolAttempts, durable outcome staging for safe read-only parallelism,
+external execution truth separate from model-visible settlement, typed drive/session
+health and atomic commit-addressed updates. Context is anchored by immutable
+ContextBoundary entries, workspace coordination moves to a host-owned cross-process
+registry, and worker context/lifetime/workspace remain separate axes.
+
+There is no compatibility bridge or hybrid old/new runtime. Useful leaf algorithms and
+failure regressions may be retained; obsolete production representations, SQLite schema
+and APIs are deleted/replaced as part of the rewrite.
 
 The current source also has an opt-in workspace wrapper,
 `Workspace::open(root)?.bind(tool)`, backed by `.ion/claims.sqlite`. It conservatively
