@@ -1,56 +1,53 @@
-//! Ion durable session kernel: a provider-neutral coding turn engine.
+//! Ion's durable coding-turn domain.
 //!
-//! The durable nouns are a session, its conversations, immutable entries,
-//! accepted inputs and the turns that answer them. A turn owns model-step
-//! continuation, tool invocation, resource accounting, cancellation and its
-//! terminal outcome. There is no generic task graph, no resident state mirror
-//! and no second runtime.
+//! R1A deliberately exposes only the replacement durable vocabulary, schema ownership
+//! and pure request assembly. Session execution is rebuilt on these owners in R1B.
 
-mod attempt;
+mod blob;
 mod config;
 mod conversation;
+mod digest;
 mod entry;
-mod error;
 mod id;
 mod input;
-mod invocation;
-mod limits;
+mod model;
 mod request;
-mod session;
 mod store;
-mod tool;
+mod tool_exec;
+mod transcript;
 mod turn;
-mod view;
-mod workspace;
 
-pub use attempt::{AttemptState, ModelAttempt, ModelStep};
+pub use blob::BlobRef;
 pub use config::{
-    ConfigError, ContextPolicy, ConversationConfig, InstalledConfig, MAX_ATTEMPTS_PER_STEP,
-    RunLimits,
+    AuthorityCeiling, ConfigError, ContextPolicy, ControlCeiling, ConversationConfig, EgressRealm,
+    InstalledConfig, ProviderBinding, ProviderBindingId, ProviderCapabilities, ReturnedModelPolicy,
+    SemanticCompatibilityId, ToolBinding, ToolBindingId, ToolConcurrency, ToolRecoveryPolicy,
+    TurnEnvironment, TurnLimits, TurnSettings, WorkspaceBinding,
 };
 pub use conversation::{Conversation, HistoryParent};
-pub use entry::{ASSISTANT_ENTRY, Entry, EntryKind, EntryKindError, INPUT_ENTRY, TOOL_ENTRY};
-pub use error::{Error, Result};
+pub use digest::ContentDigest;
+pub use entry::{
+    CheckpointDecision, ContextBoundary, ContinuationCheckpoint, Entry, EntryData, EntryRange,
+    EvidenceRef,
+};
 pub use id::{
     AttemptId, CommitSeq, ConversationId, EntryId, IdError, InputId, InvocationId, SessionId,
     StepId, TurnId,
 };
 pub use input::{
-    EntryPlacement, Input, InputBody, InputDisposition, InputMode, InputPlacement, InputSender,
-    RequestKey, RequestKeyError,
+    Input, InputBody, InputDisposition, InputMode, InputSender, RequestKey, RequestKeyError,
 };
-pub use invocation::{InvocationOutcome, InvocationState, Resolution, ToolInvocation};
-pub use limits::{LimitsError, SessionLimits};
-pub use request::{AssembledRequest, RequestError};
-pub use session::{
-    AdmissionReceipt, CancelReceipt, CloseOutcome, ConfigureRequest, EntryQuery, ResolveRequest,
-    Services, Session, SessionEvent, SessionHandle, SessionSpec, SessionWatch, SubmitRequest,
-    WatchError,
+pub use model::{
+    CostQuote, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep, ProviderFailureEvidence,
+    ProviderFingerprint, ProviderStartReceipt, RequestManifest, StepDisposition, StepPurpose,
 };
-pub use tool::{ScriptedTool, Stop, Tool, ToolOutcome, ToolRegistry};
-pub use turn::{Cancellation, PendingOutcome, Turn, TurnFailure, TurnOutcome, TurnPhase};
-pub use view::{EntryPage, TurnView};
-pub use workspace::{Workspace, WorkspaceError};
-
-/// The oldest page size this build will serve. Larger requests are clamped.
-pub const MAX_ENTRY_PAGE: u32 = store::sqlite::entry::MAX_ENTRY_PAGE;
+pub use request::{AssembledRequest, RequestError, SemanticRequest, assemble};
+pub use store::{SessionStore, StoreError};
+pub use tool_exec::{
+    ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction, ProgressCheckpoint,
+    StartReceipt, ToolAttempt, ToolAttemptState, ToolExchangeState, ToolInvocation, ToolResult,
+};
+pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
+pub use turn::{
+    Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase,
+};
