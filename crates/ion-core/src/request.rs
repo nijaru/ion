@@ -1,42 +1,56 @@
-//! Request assembly from a frozen basis.
+//! Pure provider-neutral request assembly.
 //!
-//! Assembly reads durable entries and turns them into the exact provider
-//! message list a step promised. It is a pure function of the frozen basis and
-//! the stored transcript, so a retry sends the same request, and a recovered
-//! process rebuilds the same messages without rereading any external file.
-//!
-//! It refuses to produce a malformed exchange. Asking a provider to complete an
-//! assistant message whose tool calls have no results is not a retry; it is a
-//! different request, and the engine will not fabricate the missing results to
-//! make it valid.
+//! Context selection happens before this function. Assembly only verifies that the
+//! supplied immutable entries form a complete exchange, selects the frozen provider/tool
+//! bindings from TurnEnvironment + TurnSettings, and produces one semantic request digest.
 
-use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
-use ion_ai::{Content, Message, Role};
+use ion_ai::{Content, GenerationControls, Message, ModelRef, Role, ToolSpec};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::attempt::ModelStep;
-use crate::entry::Entry;
+use crate::{
+    ContentDigest, Entry, EntryId, ProviderBindingId, ToolBindingId, TranscriptContent,
+    TranscriptMessage, TranscriptRole, TurnEnvironment, TurnSettings,
+};
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SemanticRequest {
+    pub provider: ProviderBindingId,
+    pub model: ModelRef,
+    pub instructions: String,
+    pub messages: Vec<TranscriptMessage>,
+    pub tools: Vec<ToolSpec>,
+    pub controls: GenerationControls,
+}
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct AssembledRequest {
-    pub instructions: String,
-    pub messages: Vec<Message>,
-    /// Serialized size of the assembled request, for the byte budget.
+    pub request: SemanticRequest,
+    pub semantic_digest: ContentDigest,
     pub bytes: u64,
 }
 
-/// Build the provider request for `step` from `entries` (conversation order).
-pub fn assemble(step: &ModelStep, entries: &[Entry]) -> Result<AssembledRequest, RequestError> {
-    let mut messages: Vec<Message> = step.context.clone();
-    // Call ids of the assistant message currently awaiting tool results,
-    // together with the entry that introduced them.
-    let mut pending: BTreeMap<&str, ()> = BTreeMap::new();
-    let mut pending_from: Option<crate::EntryId> = None;
+pub fn assemble(
+    environment: &TurnEnvironment,
+    settings: &TurnSettings,
+    entries: &[Entry],
+    cut: Option<EntryId>,
+) -> Result<AssembledRequest, RequestError> {
+    settings
+        .validate(environment)
+        .map_err(|error| RequestError::Configuration(error.to_string()))?;
+    let provider = environment
+        .provider(&settings.provider)
+        .ok_or_else(|| RequestError::MissingProvider(settings.provider.as_str().to_owned()))?;
+
+    let mut messages = project_context(&environment.project_context)?;
+    let mut pending = BTreeSet::new();
     let mut last_id = None;
 
     for entry in entries {
-        if let Some(cut) = step.cut
+        if let Some(cut) = cut
             && entry.id > cut
         {
             break;
@@ -53,45 +67,41 @@ pub fn assemble(step: &ModelStep, entries: &[Entry]) -> Result<AssembledRequest,
 
         for message in &entry.projection {
             match message.role {
-                Role::Assistant => {
+                TranscriptRole::Assistant => {
                     if !pending.is_empty() {
                         return Err(RequestError::UnansweredCalls {
                             entry: entry.id,
-                            missing: pending.keys().map(|id| (*id).to_owned()).collect(),
+                            missing: pending.iter().copied().collect(),
                         });
                     }
-                    for block in &message.content {
-                        if let Content::ToolCall(call) = block {
-                            if call.id.is_empty() {
-                                return Err(RequestError::EmptyCallId { entry: entry.id });
-                            }
-                            if pending.insert(&call.id, ()).is_some() {
-                                return Err(RequestError::DuplicateCallId {
-                                    entry: entry.id,
-                                    call: call.id.clone(),
-                                });
-                            }
-                            pending_from = Some(entry.id);
-                        }
-                    }
-                }
-                Role::Tool => {
-                    for block in &message.content {
-                        if let Content::ToolResult(result) = block
-                            && pending.remove(result.call_id.as_str()).is_none()
+                    for content in &message.content {
+                        if let TranscriptContent::ToolCall { invocation, .. } = content
+                            && !pending.insert(*invocation)
                         {
-                            return Err(RequestError::OrphanToolResult {
+                            return Err(RequestError::DuplicateInvocation {
                                 entry: entry.id,
-                                call: result.call_id.clone(),
+                                invocation: *invocation,
                             });
                         }
                     }
                 }
-                Role::User => {
+                TranscriptRole::Tool => {
+                    for content in &message.content {
+                        if let TranscriptContent::ToolResult { invocation, .. } = content
+                            && !pending.remove(invocation)
+                        {
+                            return Err(RequestError::OrphanToolResult {
+                                entry: entry.id,
+                                invocation: *invocation,
+                            });
+                        }
+                    }
+                }
+                TranscriptRole::User => {
                     if !pending.is_empty() {
                         return Err(RequestError::UnansweredCalls {
                             entry: entry.id,
-                            missing: pending.keys().map(|id| (*id).to_owned()).collect(),
+                            missing: pending.iter().copied().collect(),
                         });
                     }
                 }
@@ -101,39 +111,237 @@ pub fn assemble(step: &ModelStep, entries: &[Entry]) -> Result<AssembledRequest,
     }
 
     if !pending.is_empty() {
-        let entry = pending_from.or(last_id).ok_or(RequestError::EmptyBasis)?;
         return Err(RequestError::UnansweredCalls {
-            entry,
-            missing: pending.keys().map(|id| (*id).to_owned()).collect(),
+            entry: last_id.ok_or(RequestError::EmptyBasis)?,
+            missing: pending.into_iter().collect(),
         });
     }
 
-    let bytes = serde_json::to_vec(&messages).map_or(0, |encoded| encoded.len() as u64);
-    Ok(AssembledRequest {
-        instructions: step.instructions.clone(),
+    let mut tools = Vec::with_capacity(settings.active_tools.len());
+    for id in &settings.active_tools {
+        let binding = environment
+            .tool(id)
+            .ok_or_else(|| RequestError::MissingTool(id.as_str().to_owned()))?;
+        tools.push(binding.spec.clone());
+    }
+
+    if !tools.is_empty() && !provider.capabilities.tools {
+        return Err(RequestError::Unsupported(
+            "selected provider cannot encode tools".to_owned(),
+        ));
+    }
+    if settings.controls.parallel_tool_calls && !provider.capabilities.parallel_tool_calls {
+        return Err(RequestError::Unsupported(
+            "selected provider cannot encode parallel tool calls".to_owned(),
+        ));
+    }
+    if settings.controls.max_output_tokens > provider.capabilities.max_output_tokens {
+        return Err(RequestError::Unsupported(
+            "selected provider output cap is smaller than the request".to_owned(),
+        ));
+    }
+
+    let request = SemanticRequest {
+        provider: settings.provider.clone(),
+        model: provider.model.clone(),
+        instructions: environment.instructions.clone(),
         messages,
+        tools,
+        controls: settings.controls.clone(),
+    };
+    let encoded = serde_json::to_vec(&request).map_err(RequestError::Serialization)?;
+    let bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
+    if bytes > u64::from(environment.context.max_request_bytes) {
+        return Err(RequestError::TooLarge {
+            bytes,
+            limit: environment.context.max_request_bytes,
+        });
+    }
+    Ok(AssembledRequest {
+        semantic_digest: ContentDigest::of_bytes(&encoded),
+        request,
         bytes,
     })
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Error)]
+fn project_context(messages: &[Message]) -> Result<Vec<TranscriptMessage>, RequestError> {
+    let mut projected = Vec::with_capacity(messages.len());
+    for message in messages {
+        if message.role != Role::User || message.provider_replay.is_some() {
+            return Err(RequestError::InvalidProjectContext);
+        }
+        let mut content = Vec::with_capacity(message.content.len());
+        for item in &message.content {
+            match item {
+                Content::Text(text) => content.push(TranscriptContent::Text(text.clone())),
+                Content::ToolCall(_) | Content::ToolResult(_) => {
+                    return Err(RequestError::InvalidProjectContext);
+                }
+            }
+        }
+        projected.push(TranscriptMessage {
+            role: TranscriptRole::User,
+            content,
+            provider_replay: None,
+        });
+    }
+    Ok(projected)
+}
+
+#[derive(Debug, Error)]
 pub enum RequestError {
-    #[error("entry {found} appears after {previous}; the transcript is not in order")]
-    OutOfOrder {
-        previous: crate::EntryId,
-        found: crate::EntryId,
-    },
-    #[error("entry {entry} continues an exchange whose calls {missing:?} have no results")]
+    #[error("configuration cannot produce this request: {0}")]
+    Configuration(String),
+    #[error("provider binding {0:?} is unavailable")]
+    MissingProvider(String),
+    #[error("tool binding {0:?} is unavailable")]
+    MissingTool(String),
+    #[error("entry {found} appears after {previous}")]
+    OutOfOrder { previous: EntryId, found: EntryId },
+    #[error("entry {entry} continues an exchange with unanswered invocations {missing:?}")]
     UnansweredCalls {
-        entry: crate::EntryId,
-        missing: Vec<String>,
+        entry: EntryId,
+        missing: Vec<crate::InvocationId>,
     },
-    #[error("entry {entry} carries a tool result for unknown call {call:?}")]
-    OrphanToolResult { entry: crate::EntryId, call: String },
-    #[error("entry {entry} repeats the call id {call:?} within one message")]
-    DuplicateCallId { entry: crate::EntryId, call: String },
-    #[error("entry {entry} carries a tool call with an empty call id")]
-    EmptyCallId { entry: crate::EntryId },
-    #[error("the frozen basis selects no conversation entry")]
+    #[error("entry {entry} repeats invocation {invocation}")]
+    DuplicateInvocation {
+        entry: EntryId,
+        invocation: crate::InvocationId,
+    },
+    #[error("entry {entry} contains an orphan result for invocation {invocation}")]
+    OrphanToolResult {
+        entry: EntryId,
+        invocation: crate::InvocationId,
+    },
+    #[error("request basis is empty while a tool exchange is incomplete")]
     EmptyBasis,
+    #[error("project context is not plain user text")]
+    InvalidProjectContext,
+    #[error("request needs an unsupported provider capability: {0}")]
+    Unsupported(String),
+    #[error("semantic request is {bytes} bytes; maximum is {limit}")]
+    TooLarge { bytes: u64, limit: u32 },
+    #[error("cannot encode semantic request: {0}")]
+    Serialization(serde_json::Error),
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        AuthorityCeiling, ContextPolicy, ControlCeiling, EgressRealm, InstalledConfig,
+        ProviderBinding, ProviderCapabilities, ReturnedModelPolicy, SemanticCompatibilityId,
+        ToolBinding, ToolBindingId, ToolConcurrency, ToolRecoveryPolicy, TurnLimits,
+        WorkspaceBinding,
+    };
+    use ion_ai::{Reasoning, ToolChoice};
+
+    fn environment() -> (TurnEnvironment, TurnSettings) {
+        let tool = ToolBinding::new(
+            ToolBindingId::new("read").expect("id"),
+            ToolSpec {
+                name: "read".to_owned(),
+                description: "read".to_owned(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
+            SemanticCompatibilityId::new("read-v1").expect("id"),
+            ToolConcurrency::ParallelSafeReadOnly,
+            ToolRecoveryPolicy::RepeatAfterNotStartedOrNoMutation,
+            EgressRealm::Local,
+        )
+        .expect("tool");
+        let config = crate::ConversationConfig {
+            instructions: "rules".to_owned(),
+            project_context: Vec::new(),
+            providers: vec![ProviderBinding {
+                id: crate::ProviderBindingId::new("scripted").expect("id"),
+                model: ModelRef {
+                    provider: "scripted".to_owned(),
+                    model: "test".to_owned(),
+                },
+                adapter: SemanticCompatibilityId::new("adapter-v1").expect("id"),
+                request_encoding: SemanticCompatibilityId::new("request-v1").expect("id"),
+                replay_family: None,
+                capabilities: ProviderCapabilities {
+                    max_input_tokens: 100_000,
+                    max_output_tokens: 8192,
+                    tools: true,
+                    parallel_tool_calls: true,
+                    structured_output: false,
+                    replay: false,
+                    reasoning: true,
+                },
+                returned_model: ReturnedModelPolicy::Exact,
+                egress: EgressRealm::Local,
+            }],
+            default_provider: crate::ProviderBindingId::new("scripted").expect("id"),
+            fallback_route: Vec::new(),
+            compaction_route: Vec::new(),
+            tools: vec![tool],
+            initial_tools: vec![ToolBindingId::new("read").expect("id")],
+            controls: GenerationControls {
+                max_output_tokens: 4096,
+                temperature: None,
+                top_p: None,
+                reasoning: Reasoning::ProviderDefault,
+                tool_choice: ToolChoice::Auto,
+                parallel_tool_calls: true,
+            },
+            control_ceiling: ControlCeiling {
+                max_output_tokens: 8192,
+                sampling: false,
+                parallel_tool_calls: true,
+                allowed_reasoning: vec![Reasoning::ProviderDefault, Reasoning::Off],
+            },
+            context: ContextPolicy {
+                max_request_bytes: 1_000_000,
+                max_input_tokens: 100_000,
+                max_checkpoint_bytes: 100_000,
+                max_tail_bytes: 500_000,
+            },
+            workspace: WorkspaceBinding {
+                id: "workspace".to_owned(),
+                canonical_root: "/tmp/project".to_owned(),
+                backend: "local".to_owned(),
+                object_identity: "object".to_owned(),
+            },
+            authority: AuthorityCeiling {
+                workspace_mutation: false,
+                unconfined_execution: false,
+                remote_tools: false,
+                egress_realms: vec![EgressRealm::Local],
+            },
+            limits: TurnLimits {
+                max_model_steps: 10,
+                max_model_attempts_per_step: 3,
+                max_tool_invocations: 20,
+                max_parallel_read_tools: 4,
+                max_response_bytes: 100_000,
+                max_tool_preview_bytes: 10_000,
+                max_cost_microusd: None,
+            },
+        };
+        TurnEnvironment::capture(&InstalledConfig {
+            revision: crate::CommitSeq::new(1).expect("revision"),
+            config,
+        })
+        .expect("capture")
+    }
+
+    #[test]
+    fn semantic_digest_changes_with_model_visible_content() {
+        let (environment, settings) = environment();
+        let first = assemble(&environment, &settings, &[], None).expect("request");
+        let entry = Entry {
+            id: EntryId::new(10).expect("entry"),
+            conversation: crate::ConversationId::new(1).expect("conversation"),
+            data: crate::EntryData::Notice {
+                kind: "test".to_owned(),
+                detail: serde_json::Value::Null,
+            },
+            projection: vec![TranscriptMessage::user_text("hello")],
+        };
+        let second = assemble(&environment, &settings, &[entry], None).expect("request");
+        assert_ne!(first.semantic_digest, second.semantic_digest);
+    }
 }
