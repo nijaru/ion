@@ -63,10 +63,8 @@ mod tests {
 
     #[test]
     fn a_second_owner_is_refused_and_release_frees_it() {
-        let dir = std::env::temp_dir().join(format!(
-            "ion-r1a-ownership-{}",
-            crate::SessionId::new()
-        ));
+        let dir =
+            std::env::temp_dir().join(format!("ion-r1a-ownership-{}", crate::SessionId::new()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let database = dir.join("session.sqlite");
 
