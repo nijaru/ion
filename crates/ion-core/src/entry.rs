@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptId, BlobRef, ConversationId, EntryId, InputId, InvocationId,
-    SemanticCompatibilityId, TranscriptMessage,
+    AttemptId, BlobRef, ConversationId, EntryId, InputId, InvocationId, SemanticCompatibilityId,
+    TranscriptMessage,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -32,11 +32,20 @@ impl Entry {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum EntryData {
-    UserInput { input: InputId },
-    Assistant { step: crate::StepId },
-    ToolResult { invocation: InvocationId },
+    UserInput {
+        input: InputId,
+    },
+    Assistant {
+        step: crate::StepId,
+    },
+    ToolResult {
+        invocation: InvocationId,
+    },
     ContextBoundary(ContextBoundary),
-    Notice { kind: String, detail: serde_json::Value },
+    Notice {
+        kind: String,
+        detail: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
