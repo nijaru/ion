@@ -134,10 +134,7 @@ CREATE TABLE blobs (
 );
 "#;
 
-pub(super) fn initialize(
-    connection: &Connection,
-    session_id: SessionId,
-) -> Result<(), StoreError> {
+pub(super) fn initialize(connection: &Connection, session_id: SessionId) -> Result<(), StoreError> {
     let existing: i64 = connection.pragma_query_value(None, "user_version", |row| row.get(0))?;
     if existing != 0 {
         return Err(StoreError::UnsupportedSchema {
@@ -216,7 +213,9 @@ mod tests {
     #[test]
     fn old_schema_version_is_refused_not_migrated() {
         let connection = Connection::open_in_memory().expect("sqlite");
-        connection.pragma_update(None, "user_version", 1).expect("version");
+        connection
+            .pragma_update(None, "user_version", 1)
+            .expect("version");
         let error = verify(&connection).expect_err("v1 must be refused");
         assert!(matches!(
             error,
