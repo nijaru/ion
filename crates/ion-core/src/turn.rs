@@ -3,8 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptId, ConversationId, EntryId, InvocationId, StepId, TurnEnvironment, TurnId,
-    TurnSettings,
+    AttemptId, ConversationId, EntryId, InvocationId, StepId, TurnEnvironment, TurnId, TurnSettings,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
