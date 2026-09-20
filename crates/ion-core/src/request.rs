@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    ContentDigest, Entry, EntryId, ProviderBindingId, ToolBindingId, TranscriptContent,
-    TranscriptMessage, TranscriptRole, TurnEnvironment, TurnSettings,
+    ContentDigest, Entry, EntryId, ProviderBindingId, TranscriptContent, TranscriptMessage,
+    TranscriptRole, TurnEnvironment, TurnSettings,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
