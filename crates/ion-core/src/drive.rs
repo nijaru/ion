@@ -13,7 +13,7 @@ use tokio::time::{Instant, timeout, timeout_at};
 use crate::session::SessionInner;
 use crate::store::{DriveBasis, FinishedTurn, RecordedModelAttempt, StoreError};
 use crate::{
-    ContentDigest, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries,
+    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries,
     ModelBoundary, ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint,
     ProviderStartReceipt, RequestManifest, SemanticRequest, SessionHealth, StartReceiptCapability,
     StartReconciliation, StepDisposition, TurnId, TurnOutcome, assemble,
@@ -176,7 +176,7 @@ fn prepare_initial(
         .turn
         .environment
         .provider(&basis.turn.settings.provider)
-        .ok_or_else(|| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
+        .ok_or(PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
     let boundary = boundaries
         .resolve(binding)
         .map_err(|_| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
@@ -241,7 +241,7 @@ fn prepare_existing(
         .turn
         .environment
         .provider(&step.manifest.settings.provider)
-        .ok_or_else(|| PrepareExit::Parked(ParkReason::RecoveryRequired))?;
+        .ok_or(PrepareExit::Parked(ParkReason::RecoveryRequired))?;
     let boundary = boundaries
         .resolve(binding)
         .map_err(|_| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
