@@ -2,7 +2,7 @@
 //!
 //! Version 1 belonged to the prototype turn runtime. R1 does not migrate it.
 
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 use super::super::StoreError;
 use crate::SessionId;
@@ -223,19 +223,6 @@ fn verify_columns(
         }
     }
     Ok(())
-}
-
-pub(super) fn read_session_id(connection: &Connection) -> Result<SessionId, StoreError> {
-    let raw: Option<String> = connection
-        .query_row(
-            "SELECT session_id FROM session_meta WHERE id = 1",
-            [],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let raw = raw.ok_or_else(|| StoreError::Corrupt("session metadata is missing".to_owned()))?;
-    raw.parse::<SessionId>()
-        .map_err(|error| StoreError::Corrupt(format!("invalid session id: {error}")))
 }
 
 #[cfg(test)]

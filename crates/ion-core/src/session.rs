@@ -45,6 +45,7 @@ pub struct SessionHandle {
     inner: Arc<SessionInner>,
 }
 
+#[derive(Debug)]
 struct SessionInner {
     session_id: SessionId,
     primary_conversation: ConversationId,
@@ -186,12 +187,12 @@ impl Session {
     }
 
     #[must_use]
-    pub const fn session_id(&self) -> SessionId {
+    pub fn session_id(&self) -> SessionId {
         self.inner.session_id
     }
 
     #[must_use]
-    pub const fn primary_conversation(&self) -> ConversationId {
+    pub fn primary_conversation(&self) -> ConversationId {
         self.inner.primary_conversation
     }
 
@@ -247,12 +248,12 @@ impl Drop for Session {
 
 impl SessionHandle {
     #[must_use]
-    pub const fn session_id(&self) -> SessionId {
+    pub fn session_id(&self) -> SessionId {
         self.inner.session_id
     }
 
     #[must_use]
-    pub const fn primary_conversation(&self) -> ConversationId {
+    pub fn primary_conversation(&self) -> ConversationId {
         self.inner.primary_conversation
     }
 
