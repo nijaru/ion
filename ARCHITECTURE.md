@@ -10,8 +10,11 @@ The coding Turn remains the continuation owner, but the current Rust predates se
 accepted 2026-09-18 boundaries: a stable TurnEnvironment, frozen provider/tool bindings,
 versioned request manifests, first-class effect admission, logical tool invocations with
 immutable physical attempts, external evidence separate from transcript settlement,
-typed drive exits and exact-commit observations. Complete that targeted cutover before
-real providers or native tools become acceptance dependencies. An opt-in workspace
+typed drive exits and exact-commit observations. The maintained runtime must be
+**rewritten/refactored directly around this contract** before real providers or native
+tools become acceptance dependencies. The existing v0 core is prototype/evidence, not a
+schema/API migration base; preserve useful leaf behavior and regressions, but do not
+carry its internal representations forward merely for continuity. An opt-in workspace
 mutation coordinator exists today; approval, revocation, structured reconciliation and
 confinement do not. Context compaction/reset/forks, artifact publication, a client binary
 and workers also remain future work.
@@ -621,10 +624,12 @@ measured coding baseline, not an arbitrary workflow abstraction.
 
 ## Acceptance and change
 
-This contract fixes owners, recovery semantics and trust boundaries after the
-2026-09-18 v0 refinement. The current source is intentionally allowed to lag while the
-targeted cutover lands; do not add compatibility shims or a parallel runtime to bridge
-the old internal shape. Concrete layout, provider wire behavior, token estimates, tool
+This contract fixes owners, recovery semantics and trust boundaries after the v0
+refinement. The current source is intentionally disposable while the **single maintained
+runtime is rewritten/refactored** to this shape. Do not add compatibility shims, migration
+facades or a parallel runtime to bridge the old internal representation; delete/replace
+obsolete production code instead. Concrete layout, provider wire behavior, token
+estimates, tool
 format effectiveness and performance thresholds require evidence. Change this contract
 again when evidence changes an invariant rather than preserving an early decision by
 inertia.
