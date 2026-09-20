@@ -454,9 +454,9 @@ pub(super) fn start_turn(
         entry: Some(entry_id),
     };
 
+    insert_turn(&transaction, &turn)?;
     insert_entry(&transaction, &entry, commit)?;
     update_input_disposition(&transaction, &input)?;
-    insert_turn(&transaction, &turn)?;
     advance_metadata(&transaction, &sequence, commit, None)?;
     transaction.commit()?;
 
@@ -801,8 +801,8 @@ fn insert_input(
     connection.execute(
         "INSERT INTO inputs
          (id, conversation_id, request_key, sender, mode, body, disposition,
-          disposition_kind, admitted_commit)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', ?8)",
+          disposition_kind, placed_turn, placed_entry, admitted_commit)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'queued', NULL, NULL, ?8)",
         params![
             input.id.get(),
             input.conversation.get(),
@@ -818,15 +818,29 @@ fn insert_input(
 }
 
 fn update_input_disposition(connection: &Connection, input: &Input) -> Result<(), StoreError> {
-    let kind = match &input.disposition {
-        InputDisposition::Queued => "queued",
-        InputDisposition::Consumed { .. } => "consumed",
-        InputDisposition::Cancelled => "cancelled",
-        InputDisposition::Abandoned { .. } => "abandoned",
+    let (kind, placed_turn, placed_entry) = match &input.disposition {
+        InputDisposition::Queued => ("queued", None, None),
+        InputDisposition::Consumed { turn, entry } => {
+            ("consumed", Some(turn.get()), entry.map(EntryId::get))
+        }
+        InputDisposition::Cancelled => ("cancelled", None, None),
+        InputDisposition::Abandoned { turn, entry } => (
+            "abandoned",
+            turn.map(TurnId::get),
+            entry.map(EntryId::get),
+        ),
     };
     let updated = connection.execute(
-        "UPDATE inputs SET disposition = ?2, disposition_kind = ?3 WHERE id = ?1",
-        params![input.id.get(), json_to(&input.disposition)?, kind],
+        "UPDATE inputs
+         SET disposition = ?2, disposition_kind = ?3, placed_turn = ?4, placed_entry = ?5
+         WHERE id = ?1",
+        params![
+            input.id.get(),
+            json_to(&input.disposition)?,
+            kind,
+            placed_turn,
+            placed_entry
+        ],
     )?;
     if updated != 1 {
         return Err(StoreError::Corrupt(format!(
@@ -971,7 +985,7 @@ fn load_input(
     let row = connection
         .query_row(
             "SELECT conversation_id, request_key, sender, mode, body, disposition,
-                    disposition_kind, admitted_commit
+                    disposition_kind, placed_turn, placed_entry, admitted_commit
              FROM inputs WHERE id = ?1",
             [input_id.get()],
             |row| {
@@ -983,7 +997,9 @@ fn load_input(
                     row.get::<_, String>(4)?,
                     row.get::<_, String>(5)?,
                     row.get::<_, String>(6)?,
-                    row.get::<_, i64>(7)?,
+                    row.get::<_, Option<i64>>(7)?,
+                    row.get::<_, Option<i64>>(8)?,
+                    row.get::<_, i64>(9)?,
                 ))
             },
         )
@@ -1005,6 +1021,20 @@ fn load_input(
             row.6
         )));
     }
+    let expected_placement = match &disposition {
+        InputDisposition::Queued | InputDisposition::Cancelled => (None, None),
+        InputDisposition::Consumed { turn, entry } => {
+            (Some(turn.get()), entry.map(EntryId::get))
+        }
+        InputDisposition::Abandoned { turn, entry } => {
+            (turn.map(TurnId::get), entry.map(EntryId::get))
+        }
+    };
+    if (row.7, row.8) != expected_placement {
+        return Err(StoreError::Corrupt(format!(
+            "input {input_id} placement columns disagree with disposition payload"
+        )));
+    }
     let request_key = row.1.map(RequestKey::new).transpose().map_err(|error| {
         StoreError::Corrupt(format!("input {input_id} has invalid request key: {error}"))
     })?;
@@ -1018,7 +1048,7 @@ fn load_input(
             body: json_from(&row.4, "input body")?,
             disposition,
         },
-        id::<CommitSeq>(row.7, "input admission commit")?,
+        id::<CommitSeq>(row.9, "input admission commit")?,
     ))
 }
 

@@ -57,11 +57,15 @@ CREATE TABLE inputs (
     disposition      TEXT    NOT NULL,
     disposition_kind TEXT    NOT NULL
         CHECK (disposition_kind IN ('queued', 'consumed', 'cancelled', 'abandoned')),
+    placed_turn      INTEGER REFERENCES turns(id),
+    placed_entry     INTEGER REFERENCES entries(id),
     admitted_commit  INTEGER NOT NULL
 );
 CREATE INDEX inputs_by_conversation ON inputs (conversation_id, id);
 CREATE INDEX inputs_queue
     ON inputs (conversation_id, disposition_kind, id);
+CREATE INDEX inputs_by_turn
+    ON inputs (placed_turn, id);
 CREATE UNIQUE INDEX inputs_request_key
     ON inputs (conversation_id, request_key)
     WHERE request_key IS NOT NULL;
@@ -199,6 +203,8 @@ pub(super) fn verify(connection: &Connection) -> Result<(), StoreError> {
             "body",
             "disposition",
             "disposition_kind",
+            "placed_turn",
+            "placed_entry",
             "admitted_commit",
         ],
     )?;

@@ -12,6 +12,7 @@ mod id;
 mod input;
 mod model;
 mod observation;
+mod provider;
 mod request;
 mod session;
 mod store;
@@ -48,6 +49,10 @@ pub use observation::{
     CommitReceipt, EntryPage, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_ENTRIES, MAX_SNAPSHOT_INPUTS,
     MAX_WATCH_BYTES, MAX_WATCH_RECEIPTS, ObservationError, SessionChange, SessionSnapshot,
     SessionUpdate, SessionWatch, SnapshotRequest, SnapshotWatch, WatchQueueLimits, WatchRequest,
+};
+pub use provider::{
+    ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity, ModelStart,
+    StartReconciliation,
 };
 pub use request::{AssembledRequest, RequestError, SemanticRequest, assemble};
 pub use session::{
