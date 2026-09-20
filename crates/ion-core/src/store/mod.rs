@@ -471,11 +471,7 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
                 timing,
                 reply,
             } => {
-                let _ = reply.send(database.commit_model_attempt_intent(
-                    step,
-                    generation,
-                    timing,
-                ));
+                let _ = reply.send(database.commit_model_attempt_intent(step, generation, timing));
             }
             Command::RecordModelStartReceipt {
                 attempt,

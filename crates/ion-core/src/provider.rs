@@ -158,8 +158,5 @@ pub enum ModelBoundaryError {
     #[error("provider boundary {0:?} is unavailable")]
     Missing(String),
     #[error("provider boundary {binding:?} has incompatible {fact}")]
-    Incompatible {
-        binding: String,
-        fact: &'static str,
-    },
+    Incompatible { binding: String, fact: &'static str },
 }

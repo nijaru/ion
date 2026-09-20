@@ -3,16 +3,16 @@
 use ion_ai::{Content, Role};
 use rusqlite::{Connection, OptionalExtension, params};
 
-use super::semantic::{
-    Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_turn,
-};
 use super::super::{
     CreatedModelAttempt, CreatedModelStep, DriveBasis, RecordedModelAttempt, SelectedModelResponse,
     StoreError,
 };
+use super::semantic::{
+    Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_turn,
+};
 use crate::{
-    AttemptId, CommitReceipt, CommitSeq, Entry, EntryData, EntryId, InputId,
-    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
+    AttemptId, CommitReceipt, CommitSeq, Entry, EntryData, EntryId, InputId, ModelAttempt,
+    ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
     SessionUpdate, StepDisposition, StepId, StepPurpose, TranscriptContent, TranscriptMessage,
     TranscriptRole, TurnId, TurnOutcome, TurnPhase,
 };
@@ -146,9 +146,7 @@ pub(super) fn commit_attempt_intent(
         |row| row.get(0),
     )?;
     let previous_attempts = u32::try_from(previous_attempts).map_err(|_| {
-        StoreError::Corrupt(format!(
-            "model step {step_id} has an invalid attempt count"
-        ))
+        StoreError::Corrupt(format!("model step {step_id} has an invalid attempt count"))
     })?;
     if previous_attempts >= turn.environment.limits.max_model_attempts_per_step {
         return Err(StoreError::Limit(format!(
@@ -352,10 +350,7 @@ pub(super) fn select_final_response(
     })
 }
 
-pub(super) fn load_step(
-    connection: &Connection,
-    step_id: StepId,
-) -> Result<ModelStep, StoreError> {
+pub(super) fn load_step(connection: &Connection, step_id: StepId) -> Result<ModelStep, StoreError> {
     let row = connection
         .query_row(
             "SELECT turn_id, ordinal, purpose, manifest, disposition
@@ -401,9 +396,8 @@ pub(super) fn load_attempts(
     connection: &Connection,
     step_id: StepId,
 ) -> Result<Vec<ModelAttempt>, StoreError> {
-    let mut statement = connection.prepare(
-        "SELECT id FROM model_attempts WHERE step_id = ?1 ORDER BY ordinal",
-    )?;
+    let mut statement =
+        connection.prepare("SELECT id FROM model_attempts WHERE step_id = ?1 ORDER BY ordinal")?;
     let rows = statement.query_map([step_id.get()], |row| row.get::<_, i64>(0))?;
     let mut attempts = Vec::new();
     for row in rows {
@@ -570,10 +564,7 @@ fn load_turn_entries(
     Ok(entries)
 }
 
-fn turn_input_ids(
-    connection: &Connection,
-    turn_id: TurnId,
-) -> Result<Vec<InputId>, StoreError> {
+fn turn_input_ids(connection: &Connection, turn_id: TurnId) -> Result<Vec<InputId>, StoreError> {
     let mut statement =
         connection.prepare("SELECT id FROM inputs WHERE placed_turn = ?1 ORDER BY id")?;
     let rows = statement.query_map([turn_id.get()], |row| row.get::<_, i64>(0))?;
@@ -628,8 +619,9 @@ fn insert_attempt(connection: &Connection, attempt: &ModelAttempt) -> Result<(),
             attempt.id.get(),
             attempt.step.get(),
             i64::from(attempt.ordinal),
-            i64::try_from(attempt.generation)
-                .map_err(|_| StoreError::Limit("attempt generation exceeds SQLite range".to_owned()))?,
+            i64::try_from(attempt.generation).map_err(|_| StoreError::Limit(
+                "attempt generation exceeds SQLite range".to_owned()
+            ))?,
             json_to(&attempt.timing)?,
             attempt.cost_quote.as_ref().map(json_to).transpose()?,
             json_to(&attempt.state)?,
@@ -638,10 +630,7 @@ fn insert_attempt(connection: &Connection, attempt: &ModelAttempt) -> Result<(),
     Ok(())
 }
 
-fn update_attempt_state(
-    connection: &Connection,
-    attempt: &ModelAttempt,
-) -> Result<(), StoreError> {
+fn update_attempt_state(connection: &Connection, attempt: &ModelAttempt) -> Result<(), StoreError> {
     let updated = connection.execute(
         "UPDATE model_attempts SET state = ?2 WHERE id = ?1",
         params![attempt.id.get(), json_to(&attempt.state)?],
@@ -655,10 +644,7 @@ fn update_attempt_state(
     Ok(())
 }
 
-fn update_step_disposition(
-    connection: &Connection,
-    step: &ModelStep,
-) -> Result<(), StoreError> {
+fn update_step_disposition(connection: &Connection, step: &ModelStep) -> Result<(), StoreError> {
     let updated = connection.execute(
         "UPDATE model_steps SET disposition = ?2 WHERE id = ?1",
         params![step.id.get(), json_to(&step.disposition)?],

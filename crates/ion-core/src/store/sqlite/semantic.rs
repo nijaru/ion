@@ -844,11 +844,9 @@ fn update_input_disposition(connection: &Connection, input: &Input) -> Result<()
             ("consumed", Some(turn.get()), entry.map(EntryId::get))
         }
         InputDisposition::Cancelled => ("cancelled", None, None),
-        InputDisposition::Abandoned { turn, entry } => (
-            "abandoned",
-            turn.map(TurnId::get),
-            entry.map(EntryId::get),
-        ),
+        InputDisposition::Abandoned { turn, entry } => {
+            ("abandoned", turn.map(TurnId::get), entry.map(EntryId::get))
+        }
     };
     let updated = connection.execute(
         "UPDATE inputs
@@ -1043,9 +1041,7 @@ fn load_input(
     }
     let expected_placement = match &disposition {
         InputDisposition::Queued | InputDisposition::Cancelled => (None, None),
-        InputDisposition::Consumed { turn, entry } => {
-            (Some(turn.get()), entry.map(EntryId::get))
-        }
+        InputDisposition::Consumed { turn, entry } => (Some(turn.get()), entry.map(EntryId::get)),
         InputDisposition::Abandoned { turn, entry } => {
             (turn.map(TurnId::get), entry.map(EntryId::get))
         }
