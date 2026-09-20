@@ -180,7 +180,8 @@ impl ToolBinding {
             return Err(ConfigError::EmptyToolName);
         }
         self.egress.validate()?;
-        let actual = ContentDigest::of(&self.spec.input_schema).map_err(ConfigError::Serialization)?;
+        let actual =
+            ContentDigest::of(&self.spec.input_schema).map_err(ConfigError::Serialization)?;
         if actual != self.schema_digest {
             return Err(ConfigError::ToolSchemaDigestMismatch {
                 binding: self.id.as_str().to_owned(),
@@ -447,9 +448,7 @@ impl ConversationConfig {
                 return Err(ConfigError::UnknownToolBinding(tool.as_str().to_owned()));
             }
             if !active.insert(tool) {
-                return Err(ConfigError::DuplicateActiveTool(
-                    tool.as_str().to_owned(),
-                ));
+                return Err(ConfigError::DuplicateActiveTool(tool.as_str().to_owned()));
             }
         }
 
@@ -552,9 +551,9 @@ pub struct TurnSettings {
 
 impl TurnSettings {
     pub fn validate(&self, environment: &TurnEnvironment) -> Result<(), ConfigError> {
-        let provider = environment
-            .provider(&self.provider)
-            .ok_or_else(|| ConfigError::UnknownProviderBinding(self.provider.as_str().to_owned()))?;
+        let provider = environment.provider(&self.provider).ok_or_else(|| {
+            ConfigError::UnknownProviderBinding(self.provider.as_str().to_owned())
+        })?;
 
         environment.control_ceiling.permits(&self.controls)?;
         if self.controls.max_output_tokens > provider.capabilities.max_output_tokens {
@@ -563,7 +562,10 @@ impl TurnSettings {
             ));
         }
         if !provider.capabilities.reasoning
-            && !matches!(self.controls.reasoning, Reasoning::ProviderDefault | Reasoning::Off)
+            && !matches!(
+                self.controls.reasoning,
+                Reasoning::ProviderDefault | Reasoning::Off
+            )
         {
             return Err(ConfigError::ProviderControlMismatch(
                 "provider does not support requested reasoning".to_owned(),
