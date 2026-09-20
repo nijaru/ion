@@ -13,11 +13,10 @@ use tokio::time::{Instant, timeout, timeout_at};
 use crate::session::SessionInner;
 use crate::store::{DriveBasis, FinishedTurn, RecordedModelAttempt, StoreError};
 use crate::{
-    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries,
-    ModelBoundary, ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint,
-    ProviderStartReceipt, RequestManifest, SemanticRequest, SessionHealth, StartReceiptCapability,
-    StartReconciliation, StepDisposition, TurnId, TurnOutcome, assemble,
-    semantic_request_assembly_revision,
+    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries, ModelBoundary,
+    ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt,
+    RequestManifest, SemanticRequest, SessionHealth, StartReceiptCapability, StartReconciliation,
+    StepDisposition, TurnId, TurnOutcome, assemble, semantic_request_assembly_revision,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
