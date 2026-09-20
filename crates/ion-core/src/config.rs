@@ -119,10 +119,10 @@ impl ProviderBinding {
         }
         self.capabilities.validate()?;
         self.egress.validate()?;
-        if let ReturnedModelPolicy::ServerRoute { allowed_family } = &self.returned_model {
-            if allowed_family.is_empty() || allowed_family.iter().any(String::is_empty) {
-                return Err(ConfigError::EmptyReturnedModelFamily);
-            }
+        if let ReturnedModelPolicy::ServerRoute { allowed_family } = &self.returned_model
+            && (allowed_family.is_empty() || allowed_family.iter().any(String::is_empty))
+        {
+            return Err(ConfigError::EmptyReturnedModelFamily);
         }
         Ok(())
     }
