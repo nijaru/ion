@@ -19,7 +19,11 @@ pub(crate) struct EffectGates {
 impl EffectGates {
     pub(crate) fn gate(&self, turn: TurnId) -> Arc<EffectGate> {
         let mut gates = self.inner.lock().expect("effect-gate map poisoned");
-        Arc::clone(gates.entry(turn).or_insert_with(|| Arc::new(EffectGate::new())))
+        Arc::clone(
+            gates
+                .entry(turn)
+                .or_insert_with(|| Arc::new(EffectGate::new())),
+        )
     }
 
     pub(crate) fn begin_abort(&self, turn: TurnId) -> Vec<CancellationToken> {

@@ -80,14 +80,12 @@ pub(crate) async fn run(
                     Ok(prepared) => prepared,
                     Err(exit) => return exit.with_turn(turn_id),
                 };
-                if let Err(error) = inner
-                    .observe_store(
-                        inner
-                            .store()
-                            .create_initial_model_step(turn_id, prepared.manifest)
-                            .await,
-                    )
-                {
+                if let Err(error) = inner.observe_store(
+                    inner
+                        .store()
+                        .create_initial_model_step(turn_id, prepared.manifest)
+                        .await,
+                ) {
                     return store_exit(turn_id, error);
                 }
             }
@@ -95,10 +93,7 @@ pub(crate) async fn run(
                 if !matches!(step.disposition, StepDisposition::Open) {
                     return DriveExit::Faulted {
                         turn: turn_id,
-                        message: format!(
-                            "current model step {} is not open",
-                            step.id
-                        ),
+                        message: format!("current model step {} is not open", step.id),
                     };
                 }
 
@@ -110,26 +105,13 @@ pub(crate) async fn run(
                 if let Some(attempt) = basis.attempts.last() {
                     match &attempt.state {
                         ModelAttemptState::IntentCommitted { .. } => {
-                            match reconcile_intent(
-                                &inner,
-                                &basis,
-                                attempt,
-                                &prepared,
-                            )
-                            .await
-                            {
+                            match reconcile_intent(&inner, &basis, attempt, &prepared).await {
                                 ReconcileAction::Continue => continue,
                                 ReconcileAction::Exit(exit) => return exit,
                             }
                         }
                         ModelAttemptState::ResponseReady { response, .. } => {
-                            return select_ready(
-                                &inner,
-                                turn_id,
-                                attempt,
-                                response,
-                            )
-                            .await;
+                            return select_ready(&inner, turn_id, attempt, response).await;
                         }
                         ModelAttemptState::Indeterminate { .. } => {
                             return DriveExit::Parked(ParkReason::RecoveryRequired);
@@ -149,14 +131,7 @@ pub(crate) async fn run(
                     }
                 }
 
-                match dispatch(
-                    &inner,
-                    &basis,
-                    &prepared,
-                    policy.model_timing.clone(),
-                )
-                .await
-                {
+                match dispatch(&inner, &basis, &prepared, policy.model_timing.clone()).await {
                     DispatchAction::Continue => {}
                     DispatchAction::Exit(exit) => return exit,
                 }
@@ -205,15 +180,13 @@ fn prepare_initial(
     let boundary = boundaries
         .resolve(binding)
         .map_err(|_| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
-    let provider_digest = boundary
-        .fingerprint(&assembled.request)
-        .map_err(|error| PrepareExit::Faulted(format!("provider request preparation failed: {error}")))?;
+    let provider_digest = boundary.fingerprint(&assembled.request).map_err(|error| {
+        PrepareExit::Faulted(format!("provider request preparation failed: {error}"))
+    })?;
     let manifest = RequestManifest {
-        environment_digest: basis
-            .turn
-            .environment
-            .digest()
-            .map_err(|error| PrepareExit::Faulted(format!("turn environment digest failed: {error}")))?,
+        environment_digest: basis.turn.environment.digest().map_err(|error| {
+            PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
+        })?,
         settings: basis.turn.settings.clone(),
         context_boundary: None,
         cutoff: basis.entries.last().map(|entry| entry.id),
@@ -243,11 +216,9 @@ fn prepare_existing(
     if step.manifest.assembly != semantic_request_assembly_revision() {
         return Err(PrepareExit::Parked(ParkReason::RecoveryRequired));
     }
-    let environment_digest = basis
-        .turn
-        .environment
-        .digest()
-        .map_err(|error| PrepareExit::Faulted(format!("turn environment digest failed: {error}")))?;
+    let environment_digest = basis.turn.environment.digest().map_err(|error| {
+        PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
+    })?;
     if step.manifest.environment_digest != environment_digest
         || step.manifest.included_inputs != basis.included_inputs
         || step.manifest.cutoff != basis.entries.last().map(|entry| entry.id)
@@ -338,12 +309,8 @@ async fn reconcile_intent(
         .await;
     match reconciliation {
         StartReconciliation::NotStarted { reason } => {
-            if let Err(error) = persist_attempt(
-                inner,
-                attempt.id,
-                ModelAttemptState::NotStarted { reason },
-            )
-            .await
+            if let Err(error) =
+                persist_attempt(inner, attempt.id, ModelAttemptState::NotStarted { reason }).await
             {
                 return ReconcileAction::Exit(store_exit(basis.turn.id, error));
             }
@@ -359,8 +326,9 @@ async fn reconcile_intent(
                 return ReconcileAction::Exit(store_exit(basis.turn.id, error));
             }
             let state = ModelAttemptState::Indeterminate {
-                reason: "provider start was recovered but no terminal response evidence is available"
-                    .to_owned(),
+                reason:
+                    "provider start was recovered but no terminal response evidence is available"
+                        .to_owned(),
                 usage: Usage::unknown(),
                 start_receipt: Some(receipt),
             };
@@ -394,7 +362,10 @@ async fn dispatch(
     prepared: &PreparedDrive,
     timing: ModelAttemptTiming,
 ) -> DispatchAction {
-    let step = basis.current_step.as_ref().expect("dispatch needs current step");
+    let step = basis
+        .current_step
+        .as_ref()
+        .expect("dispatch needs current step");
     let created = match inner.observe_store(
         inner
             .store()
@@ -543,13 +514,8 @@ async fn dispatch(
                 let event = match next {
                     Ok(Some(Ok(event))) => event,
                     Ok(Some(Err(error))) => {
-                        let state = provider_stream_error(
-                            error,
-                            usage,
-                            start_receipt.clone(),
-                        );
-                        if let Err(error) =
-                            persist_attempt(inner, created.attempt.id, state).await
+                        let state = provider_stream_error(error, usage, start_receipt.clone());
+                        if let Err(error) = persist_attempt(inner, created.attempt.id, state).await
                         {
                             return DispatchAction::Exit(store_exit(basis.turn.id, error));
                         }
@@ -561,8 +527,7 @@ async fn dispatch(
                             usage,
                             start_receipt: start_receipt.clone(),
                         };
-                        if let Err(error) =
-                            persist_attempt(inner, created.attempt.id, state).await
+                        if let Err(error) = persist_attempt(inner, created.attempt.id, state).await
                         {
                             return DispatchAction::Exit(store_exit(basis.turn.id, error));
                         }
@@ -576,8 +541,7 @@ async fn dispatch(
                             usage,
                             start_receipt: start_receipt.clone(),
                         };
-                        if let Err(error) =
-                            persist_attempt(inner, created.attempt.id, state).await
+                        if let Err(error) = persist_attempt(inner, created.attempt.id, state).await
                         {
                             return DispatchAction::Exit(store_exit(basis.turn.id, error));
                         }
@@ -619,28 +583,21 @@ async fn dispatch(
                             if let Err(error) =
                                 persist_attempt(inner, created.attempt.id, state).await
                             {
-                                return DispatchAction::Exit(store_exit(
-                                    basis.turn.id,
-                                    error,
-                                ));
+                                return DispatchAction::Exit(store_exit(basis.turn.id, error));
                             }
-                            return DispatchAction::Exit(DriveExit::Parked(
-                                ParkReason::Capacity,
-                            ));
+                            return DispatchAction::Exit(DriveExit::Parked(ParkReason::Capacity));
                         }
 
                         let state = ModelAttemptState::ResponseReady {
                             response: response.clone(),
                             start_receipt: start_receipt.clone(),
                         };
-                        if let Err(error) =
-                            persist_attempt(inner, created.attempt.id, state).await
+                        if let Err(error) = persist_attempt(inner, created.attempt.id, state).await
                         {
                             return DispatchAction::Exit(store_exit(basis.turn.id, error));
                         }
                         return DispatchAction::Exit(
-                            select_ready(inner, basis.turn.id, &created.attempt, &response)
-                                .await,
+                            select_ready(inner, basis.turn.id, &created.attempt, &response).await,
                         );
                     }
                 }
@@ -667,12 +624,7 @@ async fn select_ready(
         return DriveExit::Parked(ParkReason::ToolUnavailable);
     }
 
-    match inner.observe_store(
-        inner
-            .store()
-            .select_final_model_response(attempt.id)
-            .await,
-    ) {
+    match inner.observe_store(inner.store().select_final_model_response(attempt.id).await) {
         Ok(selected) => match selected.turn.outcome {
             Some(outcome) => DriveExit::Settled(outcome),
             None => DriveExit::Faulted {
@@ -760,9 +712,7 @@ fn provider_stream_error(
 fn retryable_provider_failure(kind: ProviderErrorKind) -> bool {
     matches!(
         kind,
-        ProviderErrorKind::RateLimited
-            | ProviderErrorKind::Overloaded
-            | ProviderErrorKind::Server
+        ProviderErrorKind::RateLimited | ProviderErrorKind::Overloaded | ProviderErrorKind::Server
     )
 }
 

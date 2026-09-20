@@ -502,10 +502,7 @@ impl SessionInner {
         }
     }
 
-    pub(crate) fn observe_store<T>(
-        &self,
-        result: Result<T, StoreError>,
-    ) -> Result<T, StoreError> {
+    pub(crate) fn observe_store<T>(&self, result: Result<T, StoreError>) -> Result<T, StoreError> {
         if let Err(error) = &result
             && error.requires_fence()
         {

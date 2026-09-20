@@ -31,6 +31,7 @@ pub use config::{
 };
 pub use conversation::{Conversation, HistoryParent};
 pub use digest::ContentDigest;
+pub use drive::{DriveExit, DrivePolicy};
 pub use entry::{
     CheckpointDecision, ContextBoundary, ContinuationCheckpoint, Entry, EntryData, EntryRange,
     EvidenceRef,
@@ -56,7 +57,6 @@ pub use provider::{
     ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity, ModelStart,
     StartReconciliation,
 };
-pub use drive::{DriveExit, DrivePolicy};
 pub use request::{
     AssembledRequest, RequestError, SEMANTIC_REQUEST_ASSEMBLY_REVISION, SemanticRequest, assemble,
     semantic_request_assembly_revision,

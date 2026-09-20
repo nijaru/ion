@@ -1,6 +1,6 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use ion_ai::{
     BoxFuture, Content, GenerationControls, Message, ModelRef, ModelResponse, ModelStreamEvent,
@@ -198,10 +198,9 @@ impl ModelBoundary for CompleteBoundary {
                 usage: Usage::known(10, 4),
                 termination: ResponseTermination::Completed,
             };
-            let stream: ion_ai::ModelStream =
-                Box::pin(futures_util::stream::iter([Ok(ModelStreamEvent::Completed(
-                    response,
-                ))]));
+            let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
+                ModelStreamEvent::Completed(response),
+            )]));
             ModelStart::Started {
                 stream,
                 start_receipt: None,
