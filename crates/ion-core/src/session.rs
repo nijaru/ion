@@ -4,19 +4,24 @@
 //! Provider/tool reconciliation and drive are explicit later operations; open is
 //! semantically passive.
 
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::{Arc, Mutex};
 
+use futures_util::FutureExt;
 use thiserror::Error;
+use tokio::sync::watch;
+use tokio::task::JoinHandle;
 
+use crate::effect_gate::{EffectGate, EffectGates, signal};
 use crate::observation::{ObservationHub, Subscription};
 use crate::store::{SessionStore, StoreError};
 use crate::{
-    CommitReceipt, CommitSeq, ConfigError, Conversation, ConversationConfig, ConversationId, Entry,
-    EntryPage, Input, InputBody, InputMode, InputSender, InstalledConfig, ObservationError,
-    RequestKey, SessionId, SessionSnapshot, SnapshotRequest, SnapshotWatch, Turn, TurnId,
-    WatchRequest,
+    CommitReceipt, CommitSeq, ConfigError, Conversation, ConversationConfig, ConversationId,
+    DriveExit, DrivePolicy, Entry, EntryPage, Input, InputBody, InputMode, InputSender,
+    InstalledConfig, ModelBoundaries, ObservationError, RequestKey, SessionId, SessionSnapshot,
+    SnapshotRequest, SnapshotWatch, Turn, TurnId, WatchRequest,
 };
 
 const HEALTH_OPEN: u8 = 0;
@@ -46,12 +51,15 @@ pub struct SessionHandle {
 }
 
 #[derive(Debug)]
-struct SessionInner {
+pub(crate) struct SessionInner {
     session_id: SessionId,
     primary_conversation: ConversationId,
     store: SessionStore,
     observations: ObservationHub,
     health: AtomicU8,
+    effects: EffectGates,
+    drives: Mutex<HashMap<TurnId, watch::Receiver<Option<DriveExit>>>>,
+    joins: Mutex<Vec<JoinHandle<()>>>,
 }
 
 #[derive(Debug)]
@@ -165,6 +173,9 @@ impl Session {
                 store,
                 observations,
                 health: AtomicU8::new(HEALTH_OPEN),
+                effects: EffectGates::default(),
+                drives: Mutex::new(HashMap::new()),
+                joins: Mutex::new(Vec::new()),
             }),
             closed: false,
         };
@@ -181,6 +192,9 @@ impl Session {
                 store,
                 observations,
                 health: AtomicU8::new(HEALTH_OPEN),
+                effects: EffectGates::default(),
+                drives: Mutex::new(HashMap::new()),
+                joins: Mutex::new(Vec::new()),
             }),
             closed: false,
         })
@@ -226,6 +240,15 @@ impl Session {
                 }
             })
             .map_err(|_| SessionError::Closed)?;
+        signal(self.inner.effects.seal_all());
+        let joins = {
+            let mut joins = self.inner.joins.lock().expect("drive join list poisoned");
+            std::mem::take(&mut *joins)
+        };
+        for join in joins {
+            let _ = join.await;
+        }
+
         self.inner.store.shutdown().await?;
         self.inner.health.store(HEALTH_CLOSED, Ordering::Release);
         self.closed = true;
@@ -241,7 +264,7 @@ impl Drop for Session {
         let current = self.inner.health.load(Ordering::Acquire);
         if current == HEALTH_OPEN || current == HEALTH_FENCED {
             self.inner.health.store(HEALTH_CLOSING, Ordering::Release);
-            self.inner.store.try_shutdown();
+            signal(self.inner.effects.seal_all());
         }
     }
 }
@@ -320,7 +343,73 @@ impl SessionHandle {
 
     pub async fn cancel_turn(&self, turn: TurnId) -> Result<CancellationResult, SessionError> {
         self.ensure_mutable()?;
-        self.observe(self.inner.store.cancel_turn(turn).await)
+        let tokens = self.inner.effects.begin_abort(turn);
+        let result = self.observe(self.inner.store.cancel_turn(turn).await);
+        signal(tokens);
+        result
+    }
+
+    pub async fn resume(
+        &self,
+        turn: TurnId,
+        boundaries: ModelBoundaries,
+    ) -> Result<DriveExit, SessionError> {
+        self.resume_with_policy(turn, boundaries, DrivePolicy::default())
+            .await
+    }
+
+    pub async fn resume_with_policy(
+        &self,
+        turn: TurnId,
+        boundaries: ModelBoundaries,
+        policy: DrivePolicy,
+    ) -> Result<DriveExit, SessionError> {
+        self.ensure_mutable()?;
+
+        let mut receiver = {
+            let mut drives = self.inner.drives.lock().expect("drive map poisoned");
+            if let Some(existing) = drives.get(&turn) {
+                existing.clone()
+            } else {
+                let (sender, receiver) = watch::channel(None);
+                drives.insert(turn, receiver.clone());
+
+                let inner = Arc::clone(&self.inner);
+                let task_inner = Arc::clone(&inner);
+                let join = tokio::spawn(async move {
+                    let exit = std::panic::AssertUnwindSafe(crate::drive::run(
+                        Arc::clone(&task_inner),
+                        turn,
+                        boundaries,
+                        policy,
+                    ))
+                    .catch_unwind()
+                    .await
+                    .unwrap_or_else(|_| DriveExit::Faulted {
+                        turn,
+                        message: "drive task panicked".to_owned(),
+                    });
+                    let _ = sender.send(Some(exit));
+                    task_inner
+                        .drives
+                        .lock()
+                        .expect("drive map poisoned")
+                        .remove(&turn);
+                });
+
+                let mut joins = inner.joins.lock().expect("drive join list poisoned");
+                joins.retain(|join| !join.is_finished());
+                joins.push(join);
+                receiver
+            }
+        };
+
+        loop {
+            if let Some(exit) = receiver.borrow().clone() {
+                return Ok(exit);
+            }
+            receiver.changed().await.map_err(|_| SessionError::Closed)?;
+        }
     }
 
     pub async fn abandon_turn(&self, turn: TurnId) -> Result<AbandonResult, SessionError> {
@@ -386,20 +475,24 @@ impl SessionHandle {
     }
 
     fn observe<T>(&self, result: Result<T, StoreError>) -> Result<T, SessionError> {
-        match result {
-            Ok(value) => Ok(value),
-            Err(error) => {
-                if error.requires_fence() {
-                    self.inner.health.store(HEALTH_FENCED, Ordering::Release);
-                }
-                Err(error.into())
-            }
-        }
+        self.inner.observe_store(result).map_err(Into::into)
     }
 }
 
 impl SessionInner {
-    fn health(&self) -> SessionHealth {
+    pub(crate) fn session_id(&self) -> SessionId {
+        self.session_id
+    }
+
+    pub(crate) fn store(&self) -> &SessionStore {
+        &self.store
+    }
+
+    pub(crate) fn effect_gate(&self, turn: TurnId) -> Arc<EffectGate> {
+        self.effects.gate(turn)
+    }
+
+    pub(crate) fn health(&self) -> SessionHealth {
         match self.health.load(Ordering::Acquire) {
             HEALTH_OPEN => SessionHealth::Open,
             HEALTH_FENCED => SessionHealth::Fenced,
@@ -407,6 +500,19 @@ impl SessionInner {
             HEALTH_CLOSED => SessionHealth::Closed,
             _ => SessionHealth::Fenced,
         }
+    }
+
+    pub(crate) fn observe_store<T>(
+        &self,
+        result: Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        if let Err(error) = &result
+            && error.requires_fence()
+        {
+            self.health.store(HEALTH_FENCED, Ordering::Release);
+            signal(self.effects.seal_all());
+        }
+        result
     }
 }
 

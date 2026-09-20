@@ -11,8 +11,8 @@ use std::path::Path;
 use rusqlite::Connection;
 
 use super::{
-    CreatedModelAttempt, CreatedModelStep, DriveBasis, RecordedModelAttempt, SelectedModelResponse,
-    StoreError, StoreMetadata,
+    CreatedModelAttempt, CreatedModelStep, DriveBasis, FinishedTurn, RecordedModelAttempt,
+    SelectedModelResponse, StoreError, StoreMetadata,
 };
 use crate::observation::ObservationHub;
 use crate::session::{
@@ -217,6 +217,16 @@ impl SqliteDatabase {
     ) -> Result<SelectedModelResponse, StoreError> {
         let result =
             self.mutate(|connection| model_state::select_final_response(connection, attempt))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn finish_cancelled_turn(
+        &mut self,
+        turn: TurnId,
+    ) -> Result<FinishedTurn, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::finish_cancelled_turn(connection, turn))?;
         self.observations.publish(result.receipt.clone());
         Ok(result)
     }

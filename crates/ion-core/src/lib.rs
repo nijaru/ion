@@ -7,6 +7,8 @@ mod blob;
 mod config;
 mod conversation;
 mod digest;
+mod drive;
+mod effect_gate;
 mod entry;
 mod id;
 mod input;
@@ -54,7 +56,11 @@ pub use provider::{
     ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity, ModelStart,
     StartReconciliation,
 };
-pub use request::{AssembledRequest, RequestError, SemanticRequest, assemble};
+pub use drive::{DriveExit, DrivePolicy};
+pub use request::{
+    AssembledRequest, RequestError, SEMANTIC_REQUEST_ASSEMBLY_REVISION, SemanticRequest, assemble,
+    semantic_request_assembly_revision,
+};
 pub use session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
     CreatedConversation, CreatedSession, Session, SessionError, SessionHandle, SessionHealth,

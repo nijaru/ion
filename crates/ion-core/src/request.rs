@@ -15,6 +15,14 @@ use crate::{
     TranscriptRole, TurnEnvironment, TurnSettings,
 };
 
+pub const SEMANTIC_REQUEST_ASSEMBLY_REVISION: &str = "ion-semantic-request-v1";
+
+#[must_use]
+pub fn semantic_request_assembly_revision() -> crate::SemanticCompatibilityId {
+    crate::SemanticCompatibilityId::new(SEMANTIC_REQUEST_ASSEMBLY_REVISION)
+        .expect("static semantic-request assembly revision is valid")
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SemanticRequest {
     pub provider: ProviderBindingId,

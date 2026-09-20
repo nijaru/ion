@@ -4,8 +4,8 @@ use ion_ai::{Content, Role};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use super::super::{
-    CreatedModelAttempt, CreatedModelStep, DriveBasis, RecordedModelAttempt, SelectedModelResponse,
-    StoreError,
+    CreatedModelAttempt, CreatedModelStep, DriveBasis, FinishedTurn, RecordedModelAttempt,
+    SelectedModelResponse, StoreError,
 };
 use super::semantic::{
     Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_turn,
@@ -283,7 +283,7 @@ pub(super) fn select_final_response(
     let transaction = connection.transaction()?;
     let attempt = load_attempt(&transaction, attempt_id)?;
     let response = match &attempt.state {
-        ModelAttemptState::ResponseReady { response } => response,
+        ModelAttemptState::ResponseReady { response, .. } => response,
         _ => {
             return Err(StoreError::InvalidState(format!(
                 "model attempt {attempt_id} has no response ready"
@@ -346,6 +346,63 @@ pub(super) fn select_final_response(
                 SessionChange::ModelStep(step),
                 SessionChange::Turn(turn),
             ]),
+        },
+    })
+}
+
+pub(super) fn finish_cancelled_turn(
+    connection: &mut Connection,
+    turn_id: TurnId,
+) -> Result<FinishedTurn, StoreError> {
+    let transaction = connection.transaction()?;
+    let mut turn = load_turn(&transaction, turn_id)?;
+    if turn.is_terminal() {
+        return Err(StoreError::InvalidState(format!(
+            "turn {turn_id} is already terminal"
+        )));
+    }
+    if !turn.cancellation.requested {
+        return Err(StoreError::InvalidState(format!(
+            "turn {turn_id} has no durable cancellation request"
+        )));
+    }
+
+    let mut statement = transaction.prepare(
+        "SELECT ma.id
+         FROM model_attempts ma
+         JOIN model_steps ms ON ms.id = ma.step_id
+         WHERE ms.turn_id = ?1
+         ORDER BY ma.id",
+    )?;
+    let rows = statement.query_map([turn_id.get()], |row| row.get::<_, i64>(0))?;
+    let mut unresolved_attempts = Vec::new();
+    for row in rows {
+        let attempt_id = id::<AttemptId>(row?, "cancelled model attempt")?;
+        let attempt = load_attempt(&transaction, attempt_id)?;
+        if matches!(
+            attempt.state,
+            ModelAttemptState::IntentCommitted { .. } | ModelAttemptState::Indeterminate { .. }
+        ) {
+            unresolved_attempts.push(attempt_id);
+        }
+    }
+    drop(statement);
+
+    turn.outcome = Some(TurnOutcome::Cancelled {
+        unresolved_attempts,
+    });
+    update_turn_runtime(&transaction, &turn)?;
+
+    let mut sequence = Sequence::load(&transaction)?;
+    let commit: CommitSeq = sequence.next()?;
+    advance_metadata(&transaction, &sequence, commit, None)?;
+    transaction.commit()?;
+
+    Ok(FinishedTurn {
+        turn: turn.clone(),
+        receipt: CommitReceipt {
+            seq: commit,
+            update: SessionUpdate::new(vec![SessionChange::Turn(turn)]),
         },
     })
 }

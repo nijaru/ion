@@ -87,6 +87,7 @@ pub enum ModelAttemptState {
     },
     Failed {
         failure: ProviderFailureEvidence,
+        start_receipt: Option<ProviderStartReceipt>,
     },
     Indeterminate {
         reason: String,
@@ -95,6 +96,7 @@ pub enum ModelAttemptState {
     },
     ResponseReady {
         response: ModelResponse,
+        start_receipt: Option<ProviderStartReceipt>,
     },
 }
 

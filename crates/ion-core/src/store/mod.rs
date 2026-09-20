@@ -66,6 +66,12 @@ pub(crate) struct SelectedModelResponse {
     pub(crate) receipt: CommitReceipt,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FinishedTurn {
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
 #[derive(Clone)]
 pub(crate) struct SessionStore {
     tx: mpsc::Sender<Command>,
@@ -282,6 +288,14 @@ impl SessionStore {
             .await
     }
 
+    pub(crate) async fn finish_cancelled_turn(
+        &self,
+        turn: TurnId,
+    ) -> Result<FinishedTurn, StoreError> {
+        self.call(|reply| Command::FinishCancelledTurn { turn, reply })
+            .await
+    }
+
     pub(crate) async fn snapshot(
         &self,
         request: SnapshotRequest,
@@ -312,10 +326,6 @@ impl SessionStore {
             .await
             .map_err(|_| StoreError::Closed)?;
         receive.await.map_err(|_| StoreError::Closed)
-    }
-
-    pub(crate) fn try_shutdown(&self) {
-        let _ = self.tx.try_send(Command::Shutdown { reply: None });
     }
 
     async fn call<T>(
@@ -396,6 +406,10 @@ enum Command {
     SelectFinalModelResponse {
         attempt: crate::AttemptId,
         reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
+    },
+    FinishCancelledTurn {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<FinishedTurn, StoreError>>,
     },
     Snapshot {
         request: SnapshotRequest,
@@ -489,6 +503,9 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
             }
             Command::SelectFinalModelResponse { attempt, reply } => {
                 let _ = reply.send(database.select_final_model_response(attempt));
+            }
+            Command::FinishCancelledTurn { turn, reply } => {
+                let _ = reply.send(database.finish_cancelled_turn(turn));
             }
             Command::Snapshot { request, reply } => {
                 let _ = reply.send(database.snapshot(request));
