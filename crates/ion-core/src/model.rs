@@ -4,8 +4,8 @@ use ion_ai::{ModelResponse, ProviderErrorKind, Usage};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptId, ContentDigest, EntryId, InputId, ProviderBindingId, SemanticCompatibilityId, StepId,
-    ToolBindingId, TurnId,
+    AttemptId, ContentDigest, EntryId, InputId, SemanticCompatibilityId, StepId, TurnId,
+    TurnSettings,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -38,9 +38,7 @@ pub enum StepDisposition {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RequestManifest {
     pub environment_digest: ContentDigest,
-    pub settings_revision: u32,
-    pub provider: ProviderBindingId,
-    pub active_tools: Vec<ToolBindingId>,
+    pub settings: TurnSettings,
     pub context_boundary: Option<EntryId>,
     pub cutoff: Option<EntryId>,
     pub included_inputs: Vec<InputId>,

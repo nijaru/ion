@@ -23,8 +23,8 @@ pub use blob::BlobRef;
 pub use config::{
     AuthorityCeiling, ConfigError, ContextPolicy, ControlCeiling, ConversationConfig, EgressRealm,
     InstalledConfig, ProviderBinding, ProviderBindingId, ProviderCapabilities, ReturnedModelPolicy,
-    SemanticCompatibilityId, ToolBinding, ToolBindingId, ToolConcurrency, ToolRecoveryPolicy,
-    TurnEnvironment, TurnLimits, TurnSettings, WorkspaceBinding,
+    SemanticCompatibilityId, StartReceiptCapability, ToolBinding, ToolBindingId, ToolConcurrency,
+    ToolRecoveryPolicy, TurnEnvironment, TurnLimits, TurnSettings, WorkspaceBinding,
 };
 pub use conversation::{Conversation, HistoryParent};
 pub use digest::ContentDigest;

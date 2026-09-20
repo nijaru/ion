@@ -45,6 +45,7 @@ fn config(instructions: &str) -> ConversationConfig {
                 reasoning: true,
             },
             returned_model: ReturnedModelPolicy::Exact,
+            start_receipts: ion_core::StartReceiptCapability::None,
             egress: EgressRealm::Local,
         }],
         default_provider: provider_id,

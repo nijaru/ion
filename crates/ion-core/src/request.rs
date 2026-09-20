@@ -272,6 +272,7 @@ mod tests {
                     reasoning: true,
                 },
                 returned_model: ReturnedModelPolicy::Exact,
+                start_receipts: crate::StartReceiptCapability::None,
                 egress: EgressRealm::Local,
             }],
             default_provider: crate::ProviderBindingId::new("scripted").expect("id"),

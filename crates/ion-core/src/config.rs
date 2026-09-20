@@ -100,6 +100,12 @@ impl ProviderCapabilities {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartReceiptCapability {
+    None,
+    Authoritative,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ProviderBinding {
     pub id: ProviderBindingId,
@@ -109,6 +115,7 @@ pub struct ProviderBinding {
     pub replay_family: Option<SemanticCompatibilityId>,
     pub capabilities: ProviderCapabilities,
     pub returned_model: ReturnedModelPolicy,
+    pub start_receipts: StartReceiptCapability,
     pub egress: EgressRealm,
 }
 
@@ -148,6 +155,7 @@ pub struct ToolBinding {
     pub implementation: SemanticCompatibilityId,
     pub concurrency: ToolConcurrency,
     pub recovery: ToolRecoveryPolicy,
+    pub start_receipts: StartReceiptCapability,
     pub egress: EgressRealm,
 }
 
@@ -169,6 +177,7 @@ impl ToolBinding {
             implementation,
             concurrency,
             recovery,
+            start_receipts: StartReceiptCapability::None,
             egress,
         };
         binding.validate()?;
@@ -692,6 +701,7 @@ mod tests {
                 reasoning: true,
             },
             returned_model: ReturnedModelPolicy::Exact,
+            start_receipts: StartReceiptCapability::None,
             egress: EgressRealm::Local,
         }
     }
