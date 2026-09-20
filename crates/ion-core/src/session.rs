@@ -143,10 +143,7 @@ pub enum CancellationResult {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum AbandonResult {
-    Committed {
-        turn: Turn,
-        receipt: CommitReceipt,
-    },
+    Committed { turn: Turn, receipt: CommitReceipt },
     Terminal(Turn),
 }
 
