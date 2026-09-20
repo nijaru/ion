@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    AttemptId, BlobRef, ContentDigest, EgressRealm, EntryId, InvocationId,
-    SemanticCompatibilityId, StepId, ToolBindingId,
+    AttemptId, BlobRef, ContentDigest, EgressRealm, EntryId, InvocationId, SemanticCompatibilityId,
+    StepId, ToolBindingId,
 };
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
