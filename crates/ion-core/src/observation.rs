@@ -12,8 +12,8 @@ use thiserror::Error;
 use tokio::sync::Notify;
 
 use crate::{
-    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InstalledConfig, SessionId,
-    Turn,
+    CommitSeq, Conversation, ConversationId, Entry, EntryId, Input, InstalledConfig, ModelAttempt,
+    ModelStep, SessionId, Turn,
 };
 
 pub const MAX_SNAPSHOT_INPUTS: usize = 256;
@@ -56,6 +56,8 @@ pub enum SessionChange {
     Input(Input),
     Entry(Entry),
     Turn(Turn),
+    ModelStep(ModelStep),
+    ModelAttempt(ModelAttempt),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -150,6 +152,8 @@ pub struct SessionSnapshot {
     pub conversation: Conversation,
     pub config: InstalledConfig,
     pub unfinished_turn: Option<Turn>,
+    pub current_model_step: Option<ModelStep>,
+    pub model_attempts: Vec<ModelAttempt>,
     pub queued_inputs: Vec<Input>,
     pub has_more_inputs: bool,
     pub transcript_tail: Vec<Entry>,

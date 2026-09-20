@@ -18,13 +18,13 @@ use crate::{
     TurnPhase,
 };
 
-struct Sequence {
+pub(super) struct Sequence {
     base: i64,
     last: i64,
 }
 
 impl Sequence {
-    fn load(connection: &Connection) -> Result<Self, StoreError> {
+    pub(super) fn load(connection: &Connection) -> Result<Self, StoreError> {
         let last: i64 = connection.query_row(
             "SELECT last_seq FROM session_meta WHERE id = 1",
             [],
@@ -38,7 +38,7 @@ impl Sequence {
         Ok(Self { base: last, last })
     }
 
-    fn next<T>(&mut self) -> Result<T, StoreError>
+    pub(super) fn next<T>(&mut self) -> Result<T, StoreError>
     where
         T: From<LocalSeq>,
     {
@@ -620,6 +620,24 @@ pub(super) fn snapshot(
         .map(|raw| load_turn(&transaction, id::<TurnId>(raw, "unfinished turn")?))
         .transpose()?;
 
+    let current_model_step = match unfinished_turn.as_ref().map(|turn| &turn.phase) {
+        Some(TurnPhase::Model(step) | TurnPhase::Tools(step)) => {
+            Some(super::model_state::load_step(&transaction, *step)?)
+        }
+        Some(
+            TurnPhase::Ready
+            | TurnPhase::WaitingInteraction(_)
+            | TurnPhase::BlockedEffect { .. }
+            | TurnPhase::Parked(_),
+        )
+        | None => None,
+    };
+    let model_attempts = current_model_step
+        .as_ref()
+        .map(|step| super::model_state::load_attempts(&transaction, step.id))
+        .transpose()?
+        .unwrap_or_default();
+
     let input_limit = sql_limit_plus_one(request.max_inputs)?;
     let mut input_statement = transaction.prepare(
         "SELECT id FROM inputs
@@ -667,6 +685,8 @@ pub(super) fn snapshot(
         conversation,
         config,
         unfinished_turn,
+        current_model_step,
+        model_attempts,
         queued_inputs,
         has_more_inputs,
         transcript_tail,
@@ -851,7 +871,7 @@ fn update_input_disposition(connection: &Connection, input: &Input) -> Result<()
     Ok(())
 }
 
-fn insert_entry(
+pub(super) fn insert_entry(
     connection: &Connection,
     entry: &Entry,
     commit: CommitSeq,
@@ -1052,7 +1072,7 @@ fn load_input(
     ))
 }
 
-fn load_entry(connection: &Connection, entry_id: EntryId) -> Result<Entry, StoreError> {
+pub(super) fn load_entry(connection: &Connection, entry_id: EntryId) -> Result<Entry, StoreError> {
     let row = connection
         .query_row(
             "SELECT conversation_id, kind, data, projection
@@ -1089,7 +1109,7 @@ fn load_entry(connection: &Connection, entry_id: EntryId) -> Result<Entry, Store
     Ok(entry)
 }
 
-fn load_turn(connection: &Connection, turn_id: TurnId) -> Result<Turn, StoreError> {
+pub(super) fn load_turn(connection: &Connection, turn_id: TurnId) -> Result<Turn, StoreError> {
     type Row = (
         i64,
         String,
@@ -1190,7 +1210,7 @@ fn load_turn(connection: &Connection, turn_id: TurnId) -> Result<Turn, StoreErro
     })
 }
 
-fn advance_metadata(
+pub(super) fn advance_metadata(
     transaction: &Transaction<'_>,
     sequence: &Sequence,
     commit: CommitSeq,
@@ -1225,12 +1245,12 @@ fn validate_new_config(config: &ConversationConfig) -> Result<(), StoreError> {
     })
 }
 
-fn json_to<T: Serialize>(value: &T) -> Result<String, StoreError> {
+pub(super) fn json_to<T: Serialize>(value: &T) -> Result<String, StoreError> {
     serde_json::to_string(value)
         .map_err(|error| StoreError::InvalidState(format!("cannot encode durable value: {error}")))
 }
 
-fn json_from<T: DeserializeOwned>(raw: &str, label: &str) -> Result<T, StoreError> {
+pub(super) fn json_from<T: DeserializeOwned>(raw: &str, label: &str) -> Result<T, StoreError> {
     serde_json::from_str(raw)
         .map_err(|error| StoreError::Corrupt(format!("invalid {label}: {error}")))
 }

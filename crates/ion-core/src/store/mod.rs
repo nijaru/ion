@@ -13,8 +13,9 @@ use crate::session::{
     CreatedConversation, StartTurnRequest, StartedTurn,
 };
 use crate::{
-    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, EntryId, EntryPage,
-    InstalledConfig, SessionId, SessionSnapshot, SnapshotRequest, TurnId,
+    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, Entry, EntryId, EntryPage,
+    InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
+    RequestManifest, SessionId, SessionSnapshot, SnapshotRequest, StepId, Turn, TurnId,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -23,6 +24,46 @@ const COMMAND_CAPACITY: usize = 64;
 pub(crate) struct StoreMetadata {
     pub(crate) session_id: SessionId,
     pub(crate) primary_conversation: ConversationId,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DriveBasis {
+    pub(crate) turn: Turn,
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) included_inputs: Vec<InputId>,
+    pub(crate) current_step: Option<ModelStep>,
+    pub(crate) attempts: Vec<ModelAttempt>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreatedModelStep {
+    pub(crate) step: ModelStep,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreatedModelAttempt {
+    pub(crate) attempt: ModelAttempt,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RecordedModelAttempt {
+    Committed {
+        attempt: ModelAttempt,
+        receipt: CommitReceipt,
+    },
+    Unchanged(ModelAttempt),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SelectedModelResponse {
+    pub(crate) entry: Entry,
+    pub(crate) step: ModelStep,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
 }
 
 #[derive(Clone)]
@@ -175,6 +216,72 @@ impl SessionStore {
             .await
     }
 
+    pub(crate) async fn drive_basis(&self, turn: TurnId) -> Result<DriveBasis, StoreError> {
+        self.call(|reply| Command::DriveBasis { turn, reply }).await
+    }
+
+    pub(crate) async fn create_initial_model_step(
+        &self,
+        turn: TurnId,
+        manifest: RequestManifest,
+    ) -> Result<CreatedModelStep, StoreError> {
+        self.call(|reply| Command::CreateInitialModelStep {
+            turn,
+            manifest,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn commit_model_attempt_intent(
+        &self,
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+    ) -> Result<CreatedModelAttempt, StoreError> {
+        self.call(|reply| Command::CommitModelAttemptIntent {
+            step,
+            generation,
+            timing,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn record_model_start_receipt(
+        &self,
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        self.call(|reply| Command::RecordModelStartReceipt {
+            attempt,
+            receipt_value,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn settle_model_attempt(
+        &self,
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        self.call(|reply| Command::SettleModelAttempt {
+            attempt,
+            state,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn select_final_model_response(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        self.call(|reply| Command::SelectFinalModelResponse { attempt, reply })
+            .await
+    }
+
     pub(crate) async fn snapshot(
         &self,
         request: SnapshotRequest,
@@ -261,6 +368,35 @@ enum Command {
         turn: TurnId,
         reply: oneshot::Sender<Result<AbandonResult, StoreError>>,
     },
+    DriveBasis {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<DriveBasis, StoreError>>,
+    },
+    CreateInitialModelStep {
+        turn: TurnId,
+        manifest: RequestManifest,
+        reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
+    },
+    CommitModelAttemptIntent {
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+        reply: oneshot::Sender<Result<CreatedModelAttempt, StoreError>>,
+    },
+    RecordModelStartReceipt {
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+        reply: oneshot::Sender<Result<RecordedModelAttempt, StoreError>>,
+    },
+    SettleModelAttempt {
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+        reply: oneshot::Sender<Result<RecordedModelAttempt, StoreError>>,
+    },
+    SelectFinalModelResponse {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
+    },
     Snapshot {
         request: SnapshotRequest,
         reply: oneshot::Sender<Result<SessionSnapshot, StoreError>>,
@@ -319,6 +455,45 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
             Command::AbandonTurn { turn, reply } => {
                 let _ = reply.send(database.abandon_turn(turn));
             }
+            Command::DriveBasis { turn, reply } => {
+                let _ = reply.send(database.drive_basis(turn));
+            }
+            Command::CreateInitialModelStep {
+                turn,
+                manifest,
+                reply,
+            } => {
+                let _ = reply.send(database.create_initial_model_step(turn, manifest));
+            }
+            Command::CommitModelAttemptIntent {
+                step,
+                generation,
+                timing,
+                reply,
+            } => {
+                let _ = reply.send(database.commit_model_attempt_intent(
+                    step,
+                    generation,
+                    timing,
+                ));
+            }
+            Command::RecordModelStartReceipt {
+                attempt,
+                receipt_value,
+                reply,
+            } => {
+                let _ = reply.send(database.record_model_start_receipt(attempt, receipt_value));
+            }
+            Command::SettleModelAttempt {
+                attempt,
+                state,
+                reply,
+            } => {
+                let _ = reply.send(database.settle_model_attempt(attempt, state));
+            }
+            Command::SelectFinalModelResponse { attempt, reply } => {
+                let _ = reply.send(database.select_final_model_response(attempt));
+            }
             Command::Snapshot { request, reply } => {
                 let _ = reply.send(database.snapshot(request));
             }
@@ -372,6 +547,14 @@ pub(crate) enum StoreError {
     InvalidState(String),
     #[error("invalid session request: {0}")]
     InvalidRequest(String),
+    #[error("turn {0} was cancelled before this transition")]
+    Cancelled(TurnId),
+    #[error("turn context cannot be assembled within bounded runtime limits: {0}")]
+    ContextCapacity(String),
+    #[error("turn reached a configured limit: {0}")]
+    Limit(String),
+    #[error("model response contains tool calls awaiting tool admission")]
+    ToolsPending,
     #[error("snapshot mandatory state exceeds the requested {maximum}-byte bound")]
     SnapshotTooLarge { maximum: usize },
     #[error("session mutation is fenced after ambiguous persistence: {cause}")]
@@ -400,6 +583,10 @@ impl StoreError {
                 | Self::RevisionConflict { .. }
                 | Self::InvalidState(_)
                 | Self::InvalidRequest(_)
+                | Self::Cancelled(_)
+                | Self::ContextCapacity(_)
+                | Self::Limit(_)
+                | Self::ToolsPending
                 | Self::SnapshotTooLarge { .. }
         )
     }

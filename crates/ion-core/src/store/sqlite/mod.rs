@@ -1,6 +1,7 @@
 //! SQLite connection owner for the replacement Session runtime.
 
 mod connection;
+mod model_state;
 mod ownership;
 pub(crate) mod schema;
 mod semantic;
@@ -9,7 +10,10 @@ use std::path::Path;
 
 use rusqlite::Connection;
 
-use super::{StoreError, StoreMetadata};
+use super::{
+    CreatedModelAttempt, CreatedModelStep, DriveBasis, RecordedModelAttempt, SelectedModelResponse,
+    StoreError, StoreMetadata,
+};
 use crate::observation::ObservationHub;
 use crate::session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
@@ -17,7 +21,8 @@ use crate::session::{
 };
 use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, EntryId, EntryPage,
-    InstalledConfig, SessionId, SessionSnapshot, SnapshotRequest, TurnId,
+    InstalledConfig, ModelAttemptState, ModelAttemptTiming, RequestManifest, SessionId,
+    SessionSnapshot, SnapshotRequest, StepId, TurnId,
 };
 
 pub(crate) struct SqliteDatabase {
@@ -148,6 +153,71 @@ impl SqliteDatabase {
         if let AbandonResult::Committed { receipt, .. } = &result {
             self.observations.publish(receipt.clone());
         }
+        Ok(result)
+    }
+
+    pub(crate) fn drive_basis(&self, turn: TurnId) -> Result<DriveBasis, StoreError> {
+        model_state::drive_basis(&self.connection, turn)
+    }
+
+    pub(crate) fn create_initial_model_step(
+        &mut self,
+        turn: TurnId,
+        manifest: RequestManifest,
+    ) -> Result<CreatedModelStep, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::create_initial_step(connection, turn, manifest))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn commit_model_attempt_intent(
+        &mut self,
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+    ) -> Result<CreatedModelAttempt, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::commit_attempt_intent(connection, step, generation, timing)
+        })?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn record_model_start_receipt(
+        &mut self,
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::record_start_receipt(connection, attempt, receipt_value)
+        })?;
+        if let RecordedModelAttempt::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn settle_model_attempt(
+        &mut self,
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::settle_attempt(connection, attempt, state))?;
+        if let RecordedModelAttempt::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn select_final_model_response(
+        &mut self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::select_final_response(connection, attempt))?;
+        self.observations.publish(result.receipt.clone());
         Ok(result)
     }
 
