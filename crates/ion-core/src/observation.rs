@@ -273,10 +273,7 @@ pub(crate) struct Subscription {
 }
 
 impl Subscription {
-    pub(crate) fn handoff(
-        self,
-        coverage: CommitSeq,
-    ) -> Result<SessionWatch, ObservationError> {
+    pub(crate) fn handoff(self, coverage: CommitSeq) -> Result<SessionWatch, ObservationError> {
         {
             let mut state = self
                 .inner

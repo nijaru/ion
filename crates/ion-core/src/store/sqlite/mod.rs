@@ -2,8 +2,8 @@
 
 mod connection;
 mod ownership;
-mod semantic;
 pub(crate) mod schema;
+mod semantic;
 
 use std::path::Path;
 
@@ -135,10 +135,7 @@ impl SqliteDatabase {
         Ok(result)
     }
 
-    pub(crate) fn cancel_turn(
-        &mut self,
-        turn: TurnId,
-    ) -> Result<CancellationResult, StoreError> {
+    pub(crate) fn cancel_turn(&mut self, turn: TurnId) -> Result<CancellationResult, StoreError> {
         let result = self.mutate(|connection| semantic::cancel_turn(connection, turn))?;
         if let CancellationResult::Committed { receipt, .. } = &result {
             self.observations.publish(receipt.clone());
@@ -146,10 +143,7 @@ impl SqliteDatabase {
         Ok(result)
     }
 
-    pub(crate) fn abandon_turn(
-        &mut self,
-        turn: TurnId,
-    ) -> Result<AbandonResult, StoreError> {
+    pub(crate) fn abandon_turn(&mut self, turn: TurnId) -> Result<AbandonResult, StoreError> {
         let result = self.mutate(|connection| semantic::abandon_turn(connection, turn))?;
         if let AbandonResult::Committed { receipt, .. } = &result {
             self.observations.publish(receipt.clone());

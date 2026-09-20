@@ -32,7 +32,9 @@ pub(crate) struct SessionStore {
 
 impl std::fmt::Debug for SessionStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.debug_struct("SessionStore").finish_non_exhaustive()
+        formatter
+            .debug_struct("SessionStore")
+            .finish_non_exhaustive()
     }
 }
 
@@ -50,12 +52,8 @@ impl SessionStore {
         std::thread::Builder::new()
             .name(format!("ion-db-{session_id}"))
             .spawn(move || {
-                let startup = sqlite::SqliteDatabase::create(
-                    &path,
-                    session_id,
-                    config,
-                    observations,
-                );
+                let startup =
+                    sqlite::SqliteDatabase::create(&path, session_id, config, observations);
                 match startup {
                     Ok((database, metadata, receipt)) => {
                         let _ = startup_tx.send(Ok((metadata, receipt)));
@@ -68,9 +66,7 @@ impl SessionStore {
             })
             .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
 
-        let (metadata, receipt) = startup_rx
-            .await
-            .map_err(|_| StoreError::Closed)??;
+        let (metadata, receipt) = startup_rx.await.map_err(|_| StoreError::Closed)??;
         Ok((Self { tx }, metadata, receipt))
     }
 
@@ -98,9 +94,7 @@ impl SessionStore {
             })
             .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
 
-        let metadata = startup_rx
-            .await
-            .map_err(|_| StoreError::Closed)??;
+        let metadata = startup_rx.await.map_err(|_| StoreError::Closed)??;
         Ok((Self { tx }, metadata))
     }
 
@@ -172,18 +166,11 @@ impl SessionStore {
             .await
     }
 
-    pub(crate) async fn cancel_turn(
-        &self,
-        turn: TurnId,
-    ) -> Result<CancellationResult, StoreError> {
-        self.call(|reply| Command::CancelTurn { turn, reply })
-            .await
+    pub(crate) async fn cancel_turn(&self, turn: TurnId) -> Result<CancellationResult, StoreError> {
+        self.call(|reply| Command::CancelTurn { turn, reply }).await
     }
 
-    pub(crate) async fn abandon_turn(
-        &self,
-        turn: TurnId,
-    ) -> Result<AbandonResult, StoreError> {
+    pub(crate) async fn abandon_turn(&self, turn: TurnId) -> Result<AbandonResult, StoreError> {
         self.call(|reply| Command::AbandonTurn { turn, reply })
             .await
     }
@@ -314,11 +301,7 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
                 config,
                 reply,
             } => {
-                let _ = reply.send(database.configure(
-                    conversation,
-                    expected_revision,
-                    config,
-                ));
+                let _ = reply.send(database.configure(conversation, expected_revision, config));
             }
             Command::AdmitInput {
                 conversation,

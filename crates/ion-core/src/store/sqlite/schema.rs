@@ -178,7 +178,14 @@ pub(super) fn verify(connection: &Connection) -> Result<(), StoreError> {
     verify_columns(
         connection,
         "entries",
-        &["id", "conversation_id", "commit_seq", "kind", "data", "projection"],
+        &[
+            "id",
+            "conversation_id",
+            "commit_seq",
+            "kind",
+            "data",
+            "projection",
+        ],
     )?;
     verify_columns(
         connection,

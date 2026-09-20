@@ -13,8 +13,8 @@ use thiserror::Error;
 use crate::observation::{ObservationHub, Subscription};
 use crate::store::{SessionStore, StoreError};
 use crate::{
-    CommitReceipt, CommitSeq, ConfigError, Conversation, ConversationConfig, ConversationId,
-    Entry, EntryPage, Input, InputBody, InputMode, InputSender, InstalledConfig, ObservationError,
+    CommitReceipt, CommitSeq, ConfigError, Conversation, ConversationConfig, ConversationId, Entry,
+    EntryPage, Input, InputBody, InputMode, InputSender, InstalledConfig, ObservationError,
     RequestKey, SessionId, SessionSnapshot, SnapshotRequest, SnapshotWatch, Turn, TurnId,
     WatchRequest,
 };
@@ -136,10 +136,7 @@ pub struct ConfiguredConversation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum CancellationResult {
-    Committed {
-        turn: Turn,
-        receipt: CommitReceipt,
-    },
+    Committed { turn: Turn, receipt: CommitReceipt },
     AlreadyRequested(Turn),
     Terminal(Turn),
 }
@@ -178,8 +175,7 @@ impl Session {
 
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
         let observations = ObservationHub::new();
-        let (store, metadata) =
-            SessionStore::open(path.as_ref(), observations.clone()).await?;
+        let (store, metadata) = SessionStore::open(path.as_ref(), observations.clone()).await?;
         Ok(Self {
             inner: Arc::new(SessionInner {
                 session_id: metadata.session_id,
@@ -291,12 +287,7 @@ impl SessionHandle {
         revision: CommitSeq,
     ) -> Result<InstalledConfig, SessionError> {
         self.ensure_readable()?;
-        self.observe(
-            self.inner
-                .store
-                .config_as_of(conversation, revision)
-                .await,
-        )
+        self.observe(self.inner.store.config_as_of(conversation, revision).await)
     }
 
     pub async fn configure(
@@ -324,10 +315,7 @@ impl SessionHandle {
         self.observe(self.inner.store.admit_input(conversation, request).await)
     }
 
-    pub async fn start_turn(
-        &self,
-        request: StartTurnRequest,
-    ) -> Result<StartedTurn, SessionError> {
+    pub async fn start_turn(&self, request: StartTurnRequest) -> Result<StartedTurn, SessionError> {
         self.ensure_mutable()?;
         self.observe(self.inner.store.start_turn(request).await)
     }

@@ -25,19 +25,17 @@ struct Sequence {
 
 impl Sequence {
     fn load(connection: &Connection) -> Result<Self, StoreError> {
-        let last: i64 =
-            connection.query_row("SELECT last_seq FROM session_meta WHERE id = 1", [], |row| {
-                row.get(0)
-            })?;
+        let last: i64 = connection.query_row(
+            "SELECT last_seq FROM session_meta WHERE id = 1",
+            [],
+            |row| row.get(0),
+        )?;
         if last < 0 {
             return Err(StoreError::Corrupt(format!(
                 "session sequence is negative: {last}"
             )));
         }
-        Ok(Self {
-            base: last,
-            last,
-        })
+        Ok(Self { base: last, last })
     }
 
     fn next<T>(&mut self) -> Result<T, StoreError>
@@ -81,7 +79,9 @@ fn metadata_row(connection: &Connection) -> Result<MetadataRow, StoreError> {
         .optional()?
         .ok_or_else(|| StoreError::Corrupt("session metadata is missing".to_owned()))?;
     let session_id = row.0.parse::<SessionId>().map_err(|error| {
-        StoreError::Corrupt(format!("session metadata has an invalid session id: {error}"))
+        StoreError::Corrupt(format!(
+            "session metadata has an invalid session id: {error}"
+        ))
     })?;
     if row.1 <= 0 {
         return Err(StoreError::Corrupt(
@@ -144,12 +144,7 @@ pub(super) fn create_primary(
 
     insert_conversation(&transaction, &conversation)?;
     insert_config(&transaction, conversation_id, &installed)?;
-    advance_metadata(
-        &transaction,
-        &sequence,
-        commit,
-        Some(conversation_id),
-    )?;
+    advance_metadata(&transaction, &sequence, commit, Some(conversation_id))?;
     transaction.commit()?;
 
     let metadata = StoreMetadata {
@@ -277,11 +272,7 @@ pub(super) fn configure(
     let updated = transaction.execute(
         "UPDATE conversations SET current_config_revision = ?2
          WHERE id = ?1 AND current_config_revision = ?3",
-        params![
-            conversation_id.get(),
-            commit.get(),
-            expected_revision.get()
-        ],
+        params![conversation_id.get(), commit.get(), expected_revision.get()],
     )?;
     if updated != 1 {
         return Err(StoreError::Corrupt(format!(
@@ -497,11 +488,10 @@ pub(super) fn cancel_turn(
         return Ok(CancellationResult::AlreadyRequested(turn));
     }
 
-    let generation = turn
-        .cancellation
-        .generation
-        .checked_add(1)
-        .ok_or_else(|| StoreError::InvalidState("cancellation generation exhausted".to_owned()))?;
+    let generation =
+        turn.cancellation.generation.checked_add(1).ok_or_else(|| {
+            StoreError::InvalidState("cancellation generation exhausted".to_owned())
+        })?;
     let mut sequence = Sequence::load(&transaction)?;
     let commit: CommitSeq = sequence.next()?;
 
@@ -627,12 +617,7 @@ pub(super) fn snapshot(
         )
         .optional()?;
     let unfinished_turn = unfinished_turn_id
-        .map(|raw| {
-            load_turn(
-                &transaction,
-                id::<TurnId>(raw, "unfinished turn")?,
-            )
-        })
+        .map(|raw| load_turn(&transaction, id::<TurnId>(raw, "unfinished turn")?))
         .transpose()?;
 
     let input_limit = sql_limit_plus_one(request.max_inputs)?;
@@ -642,10 +627,10 @@ pub(super) fn snapshot(
          ORDER BY id
          LIMIT ?2",
     )?;
-    let input_rows = input_statement.query_map(
-        params![request.conversation.get(), input_limit],
-        |row| row.get::<_, i64>(0),
-    )?;
+    let input_rows = input_statement
+        .query_map(params![request.conversation.get(), input_limit], |row| {
+            row.get::<_, i64>(0)
+        })?;
     let mut queued_inputs = Vec::new();
     for row in input_rows {
         let input_id = id::<InputId>(row?, "queued input")?;
@@ -662,16 +647,13 @@ pub(super) fn snapshot(
          ORDER BY id DESC
          LIMIT ?2",
     )?;
-    let entry_rows = entry_statement.query_map(
-        params![request.conversation.get(), entry_limit],
-        |row| row.get::<_, i64>(0),
-    )?;
+    let entry_rows = entry_statement
+        .query_map(params![request.conversation.get(), entry_limit], |row| {
+            row.get::<_, i64>(0)
+        })?;
     let mut transcript_tail = Vec::new();
     for row in entry_rows {
-        transcript_tail.push(load_entry(
-            &transaction,
-            id::<EntryId>(row?, "entry")?,
-        )?);
+        transcript_tail.push(load_entry(&transaction, id::<EntryId>(row?, "entry")?)?);
     }
     drop(entry_statement);
     let mut has_older_entries = transcript_tail.len() > request.max_entries;
@@ -749,10 +731,9 @@ pub(super) fn page_entries(
         }
     } else {
         let mut statement = connection.prepare(sql)?;
-        let rows = statement.query_map(
-            params![conversation.get(), 0_i64, sql_limit],
-            |row| row.get::<_, i64>(0),
-        )?;
+        let rows = statement.query_map(params![conversation.get(), 0_i64, sql_limit], |row| {
+            row.get::<_, i64>(0)
+        })?;
         for row in rows {
             ids.push(row?);
         }
@@ -891,7 +872,11 @@ fn insert_turn(connection: &Connection, turn: &Turn) -> Result<(), StoreError> {
             json_to(&turn.settings)?,
             json_to(&turn.phase)?,
             i64_from_u64(turn.cancellation.generation, "cancellation generation")?,
-            if turn.cancellation.requested { 1_i64 } else { 0_i64 },
+            if turn.cancellation.requested {
+                1_i64
+            } else {
+                0_i64
+            },
             json_to(&turn.budget)?,
             turn.admitted_at_unix_ms,
             turn.wall_deadline_unix_ms,
@@ -1020,13 +1005,9 @@ fn load_input(
             row.6
         )));
     }
-    let request_key = row
-        .1
-        .map(RequestKey::new)
-        .transpose()
-        .map_err(|error| {
-            StoreError::Corrupt(format!("input {input_id} has invalid request key: {error}"))
-        })?;
+    let request_key = row.1.map(RequestKey::new).transpose().map_err(|error| {
+        StoreError::Corrupt(format!("input {input_id} has invalid request key: {error}"))
+    })?;
     Ok((
         Input {
             id: input_id,
@@ -1123,7 +1104,10 @@ fn load_turn(connection: &Connection, turn_id: TurnId) -> Result<Turn, StoreErro
     let conversation = id::<ConversationId>(row.0, "turn conversation")?;
     let environment: crate::TurnEnvironment = json_from(&row.1, "turn environment")?;
     let settings_revision = u32::try_from(row.2).map_err(|_| {
-        StoreError::Corrupt(format!("turn {turn_id} has invalid settings revision {}", row.2))
+        StoreError::Corrupt(format!(
+            "turn {turn_id} has invalid settings revision {}",
+            row.2
+        ))
     })?;
     let settings: crate::TurnSettings = json_from(&row.3, "turn settings")?;
     if settings.revision != settings_revision {
@@ -1187,12 +1171,7 @@ fn advance_metadata(
             "UPDATE session_meta
              SET last_seq = ?1, last_commit = ?2, primary_conversation = ?3
              WHERE id = 1 AND last_seq = ?4 AND primary_conversation IS NULL",
-            params![
-                sequence.last,
-                commit.get(),
-                primary.get(),
-                sequence.base
-            ],
+            params![sequence.last, commit.get(), primary.get(), sequence.base],
         )?
     } else {
         transaction.execute(
@@ -1211,9 +1190,9 @@ fn advance_metadata(
 }
 
 fn validate_new_config(config: &ConversationConfig) -> Result<(), StoreError> {
-    config
-        .validate()
-        .map_err(|error| StoreError::InvalidRequest(format!("invalid conversation config: {error}")))
+    config.validate().map_err(|error| {
+        StoreError::InvalidRequest(format!("invalid conversation config: {error}"))
+    })
 }
 
 fn json_to<T: Serialize>(value: &T) -> Result<String, StoreError> {

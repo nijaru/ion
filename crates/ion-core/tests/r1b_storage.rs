@@ -2,11 +2,11 @@ use std::path::PathBuf;
 
 use ion_ai::{GenerationControls, ModelRef, Reasoning, ToolChoice};
 use ion_core::{
-    AbandonResult, Admission, AuthorityCeiling, ContextPolicy, ControlCeiling,
-    ConversationConfig, EgressRealm, InputBody, InputMode, InputSender, ProviderBinding,
-    ProviderBindingId, ProviderCapabilities, RequestKey, ReturnedModelPolicy,
-    SemanticCompatibilityId, Session, SessionError, SessionHealth, SessionId, SnapshotRequest,
-    StartTurnRequest, TurnLimits, WatchQueueLimits, WatchRequest, WorkspaceBinding,
+    AbandonResult, Admission, AuthorityCeiling, ContextPolicy, ControlCeiling, ConversationConfig,
+    EgressRealm, InputBody, InputMode, InputSender, ProviderBinding, ProviderBindingId,
+    ProviderCapabilities, RequestKey, ReturnedModelPolicy, SemanticCompatibilityId, Session,
+    SessionError, SessionHealth, SessionId, SnapshotRequest, StartTurnRequest, TurnLimits,
+    WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
 
 fn database(name: &str) -> (PathBuf, PathBuf) {
@@ -238,7 +238,10 @@ async fn request_keys_are_conversation_scoped() {
         .expect("second");
 
     assert_ne!(first.input().id, second_admission.input().id);
-    assert_eq!(first.input().request_key, second_admission.input().request_key);
+    assert_eq!(
+        first.input().request_key,
+        second_admission.input().request_key
+    );
     cleanup(session, dir).await;
 }
 
@@ -348,7 +351,10 @@ async fn active_turn_freezes_environment_and_later_turn_uses_new_config() {
         .start_turn(start_request(conversation, second_input.input().id, 20))
         .await
         .expect("second turn");
-    assert_eq!(second_turn.turn.environment.instructions, "new instructions");
+    assert_eq!(
+        second_turn.turn.environment.instructions,
+        "new instructions"
+    );
     assert_eq!(
         second_turn.turn.environment.config_revision,
         configured.config.revision
@@ -408,10 +414,7 @@ async fn cancellation_generation_is_durable() {
         .await
         .expect("turn");
 
-    let cancelled = handle
-        .cancel_turn(started.turn.id)
-        .await
-        .expect("cancel");
+    let cancelled = handle.cancel_turn(started.turn.id).await.expect("cancel");
     let cancel_seq = match cancelled {
         ion_core::CancellationResult::Committed { turn, receipt } => {
             assert!(turn.cancellation.requested);
@@ -569,10 +572,7 @@ async fn snapshot_is_bounded_and_old_history_remains_paginated() {
             ))
             .await
             .expect("turn");
-        handle
-            .abandon_turn(started.turn.id)
-            .await
-            .expect("abandon");
+        handle.abandon_turn(started.turn.id).await.expect("abandon");
     }
 
     let snapshot = handle
