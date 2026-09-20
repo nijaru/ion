@@ -12,8 +12,9 @@
   separate from transcript settlement, durable outcome staging for compatible parallel
   tool calls, typed drive exits, atomic commit update batches, ContextEpoch continuity and
   a host-owned workspace registry. Worker context/lifetime/workspace inheritance are
-  separate axes. Current Rust predates this cutover; do not preserve its existing invocation/config/
-  observation shapes merely because they are implemented. Do not reintroduce a generic
+  separate axes. The current Rust is **rewrite input, not an implementation shape to
+  migrate forward**: replace/refactor maintained production modules directly and delete
+  obsolete representations rather than adapting them. Do not reintroduce a generic
   task/plan graph, resident semantic mirror or undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
   shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
@@ -30,10 +31,12 @@
   boundary and acceptance test. Read affected code and current Git status first.
 - Decide consequential boundaries before implementing them. Update the architecture
   when evidence changes a contract; do not conceal a disagreement with an adapter.
-  Keep research, working rationale and cutover tracking with their knowledge owner.
-- Add the boundary regression before marking a defect repaired. For the 2026-09-18
-  cutover, test the new owner/invariant first rather than patching every race into the
-  superseded shape. Preserve uncertainty, immutable attempt evidence, effect-admission
+  Keep research, working rationale and rewrite tracking with their knowledge owner.
+- Add the boundary regression before marking a defect repaired. During the v0 rewrite,
+  test the new owner/invariant first rather than patching races into superseded modules.
+  Rewrite checkpoints may be staged as commits for review, but no checkpoint is a
+  compatibility/migration layer and no old+new production runtime may coexist. Preserve
+  uncertainty, immutable attempt evidence, effect-admission
   fencing, durable admission and bounded resources when deleting APIs.
 - Do not equate declared capabilities with confinement, future cancellation with stopped
   external effects, or green scripted tests with a working live coding agent.
