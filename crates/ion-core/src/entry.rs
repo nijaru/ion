@@ -20,7 +20,7 @@ pub struct Entry {
 impl Entry {
     #[must_use]
     pub const fn kind_name(&self) -> &'static str {
-        match self.data {
+        match &self.data {
             EntryData::UserInput { .. } => "user",
             EntryData::Assistant { .. } => "assistant",
             EntryData::ToolResult { .. } => "tool_result",
