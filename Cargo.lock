@@ -579,12 +579,15 @@ dependencies = [
 name = "ion-core"
 version = "0.0.0"
 dependencies = [
+ "futures-util",
  "ion-ai",
  "rusqlite",
  "serde",
  "serde_json",
  "sha2",
  "thiserror 2.0.20",
+ "tokio",
+ "tokio-util",
  "uuid",
 ]
 
