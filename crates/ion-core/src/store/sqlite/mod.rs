@@ -42,7 +42,7 @@ impl SqliteStore {
         let session_id = schema::read_session_id(&connection)?;
         Ok(Self {
             session_id,
-            connection,
+            _connection: connection,
             _ownership: ownership,
         })
     }
