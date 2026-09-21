@@ -9,9 +9,9 @@ use ion_ai::{
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
     ConversationConfig, DriveExit, EgressRealm, InputBody, InputMode, InputSender, ModelBoundaries,
-    ModelBoundary, ModelBoundaryIdentity, ModelStart, ParkReason, ProviderBinding,
-    ProviderBindingId, ProviderCapabilities, RequestKey, ReturnedModelPolicy,
-    ObservationError, SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
+    ModelBoundary, ModelBoundaryIdentity, ModelStart, ObservationError, ParkReason,
+    ProviderBinding, ProviderBindingId, ProviderCapabilities, RequestKey, ReturnedModelPolicy,
+    SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
     StartReceiptCapability, StartTurnRequest, StepDisposition, StepPurpose, TurnLimits,
     TurnOutcome, WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
@@ -377,7 +377,6 @@ async fn missing_provider_boundary_parks_before_dispatch_intent() {
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
-
 
 fn fallback_config() -> ConversationConfig {
     let mut config = config();
