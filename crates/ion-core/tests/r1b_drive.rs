@@ -747,7 +747,6 @@ async fn safety_refusal_does_not_route_to_fallback_provider() {
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
-
 struct NegativeThenCompleteBoundary {
     starts: AtomicUsize,
     reconciles: AtomicUsize,
@@ -870,7 +869,10 @@ async fn authoritative_negative_is_durable_before_retry_attempt() {
 
     let boundaries =
         ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
-    let second = handle.resume(turn, boundaries).await.expect("second resume");
+    let second = handle
+        .resume(turn, boundaries)
+        .await
+        .expect("second resume");
     assert!(matches!(
         second,
         DriveExit::Settled(TurnOutcome::Completed { .. })
@@ -894,10 +896,7 @@ async fn authoritative_negative_is_durable_before_retry_attempt() {
                     not_started_seq = Some(receipt.seq);
                 }
                 if attempt.ordinal == 2
-                    && matches!(
-                        &attempt.state,
-                        ModelAttemptState::IntentCommitted { .. }
-                    )
+                    && matches!(&attempt.state, ModelAttemptState::IntentCommitted { .. })
                 {
                     retry_intent_seq = Some(receipt.seq);
                 }
