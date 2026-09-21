@@ -6,18 +6,20 @@ implements; this file states the contracts the maintained engine must satisfy. I
 unreleased v0: replace obsolete abstractions directly rather than preserving them
 through compatibility layers.
 
-The coding Turn remains the continuation owner, but the current Rust predates several
-accepted 2026-09-18 boundaries: a stable TurnEnvironment, frozen provider/tool bindings,
-versioned request manifests, first-class effect admission, logical tool invocations with
-immutable physical attempts, external evidence separate from transcript settlement,
-typed drive exits and exact-commit observations. The maintained runtime must be
-**rewritten/refactored directly around this contract** before real providers or native
-tools become acceptance dependencies. The existing v0 core is prototype/evidence, not a
-schema/API migration base; preserve useful leaf behavior and regressions, but do not
-carry its internal representations forward merely for continuity. An opt-in workspace
-mutation coordinator exists today; approval, revocation, structured reconciliation and
-confinement do not. Context compaction/reset/forks, artifact publication, a client binary
-and workers also remain future work.
+The maintained runtime is being rewritten directly around this contract. R1A and the
+provider-side R1B foundation now implement the replacement durable vocabulary/schema,
+inline immutable TurnEnvironment, frozen provider/tool bindings, semantic request
+manifests, passive Session open, exact-commit observations, typed provider drive/effect
+admission, cancellation generation fencing, physical ModelAttempt evidence, provider
+start-receipt reconciliation and atomic ModelStep fallback supersession. The old
+Session/task/tool/workspace runtime is not a compatibility layer underneath them.
+
+Native tool execution remains the next boundary: logical ToolInvocation/ToolAttempt types
+and schema exist, but PreparedAction admission, execution receipts, result staging,
+WorkspaceRegistry coordination and native read/edit/exec are not connected yet. Context
+compaction/reset/forks, artifact publication, a client binary and workers also remain
+future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
+tests, not obsolete owners or schema/API compatibility.
 
 ## Product and boundaries
 

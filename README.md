@@ -9,61 +9,55 @@ compatibility targets.
 
 The workspace builds three libraries:
 
-- `ion-core`: the durable turn engine. A session owns conversations, immutable
-  entries, accepted inputs and the turns that answer them, backed by per-session
-  SQLite storage on a dedicated database thread.
-- `ion-ai`: provider-neutral model contracts and a scripted model service.
+- `ion-core`: the replacement durable Turn runtime and storage layer.
+- `ion-ai`: provider-neutral model contracts and scripted provider fixtures.
 - `ion-terminal`: low-level terminal components.
 
-The current engine implements the first durable-turn slice: request-key replay,
-frozen per-step request bases, response-ready crash recovery, sequential scripted tool
-execution, conservative unknown outcomes, supervised stop/join behavior, exclusive
-session ownership and bounded pages/content. A scripted model/tool exchange runs end to
-end through the headless API.
+The maintained `ion-core` no longer contains the prototype Session/task/tool/workspace
+runtime. The replacement branch now implements the R1 durable domain and schema plus the
+R1B Session/provider foundation:
 
-The accepted [architecture](ARCHITECTURE.md) was deliberately refined before real
-providers and native tools made the early v0 boundaries expensive to change. The current
-Rust is now treated as a **prototype to mine and replace**, not a migration base. The
-maintained runtime will be fully rewritten/refactored in place around the accepted coding
-Turn design: frozen per-turn provider/tool/execution bindings, versioned semantic request
-manifests, explicit effect admission and backend receipts, logical ToolInvocations with
-immutable physical ToolAttempts, durable outcome staging for safe read-only parallelism,
-external execution truth separate from model-visible settlement, typed drive/session
-health and atomic commit-addressed updates. Context is anchored by immutable
-ContextBoundary entries, workspace coordination moves to a host-owned cross-process
-registry, and worker context/lifetime/workspace remain separate axes.
+- fresh SQLite schema v2 with one Session-local identity sequence and exact commit cursor;
+- revisioned conversation configuration, conversation-scoped idempotent input admission,
+  inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
+  per conversation;
+- a dedicated bounded SQLite command thread with WAL, `synchronous=FULL`, foreign keys,
+  strict durable decoding, and mutation fencing after ambiguous persistence;
+- semantically passive `Session::open()`: reopening performs no provider/tool
+  reconciliation, dispatch, retry, timer work, worker start, workspace claim, or recovery write;
+- exact `CommitReceipt { seq, update }` publication and bounded subscribe-before-snapshot
+  observation with overflow/resnapshot semantics and paginated older history;
+- explicit supervised `resume()`, typed `DriveExit`, process-local `SessionHealth`,
+  per-Turn effect gates, and cancellation generation linearization;
+- logical `ModelStep` versus physical `ModelAttempt`, durable response-ready evidence,
+  monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
+  step eligibility, and atomic predecessor-superseding provider fallback;
+- stable provider effect keys derived from Session + Turn + step ordinal and covered by the
+  provider-request fingerprint when adapters use them as idempotency material.
 
-There is no compatibility bridge or hybrid old/new runtime. Useful leaf algorithms and
-failure regressions may be retained; obsolete production representations, SQLite schema
-and APIs are deleted/replaced as part of the rewrite.
+Opening and inspection are passive; explicit resume is the boundary that may reconcile a
+persisted provider attempt and start new provider work. Closing seals local effect admission,
+signals and joins locally owned drive work, then releases storage ownership without silently
+turning suspended work into user cancellation.
 
-The current source also has an opt-in workspace wrapper,
-`Workspace::open(root)?.bind(tool)`, backed by `.ion/claims.sqlite`. It conservatively
-retains a mutation claim across uncertainty, panic and process loss. The revised target
-keeps that safety property but moves claims/reconciliation behind the structured host
-execution boundary so a ToolAttempt records the execution receipt explicitly instead of
-hiding it inside a Tool wrapper. There is no automatic expiry or force-clear policy.
+Native tool execution is deliberately not connected yet. The replacement
+`ToolBinding`/`ToolInvocation`/`ToolAttempt` domain and schema exist, but an active tool
+loadout currently parks before provider dispatch. R1C will add deterministic PreparedAction
+admission, immutable physical tool attempts, source-order result materialization, execution
+receipts, and the host-owned WorkspaceRegistry. The deleted `.ion/claims.sqlite` workspace
+wrapper is not part of the replacement runtime.
 
-This is **unconfined coordination**, not approval or sandbox enforcement. Hosts
-must use the same canonical root and bind tools to that actual environment.
-Opening a root nested below an already-coordinated workspace is refused, because
-two coordinators over one tree would each serialize only their own writers; a
-coordinator created after an outer workspace was opened is still not discovered,
-so keep one root per tree. External writers and tools that delete the
-coordinator can bypass it. Preserve the coordinator files across restarts.
-Approval/revocation and evidence-based reconciliation are not implemented.
+There is no compatibility bridge or hybrid old/new runtime. Schema v1 is refused rather than
+migrated; Git retains the prototype and its useful failure scenarios are being restored against
+the replacement owners.
 
-Closing interrupts active work without itself cancelling the unfinished turn.
-After reopening, explicit resume continues the turn; uncertain tool outcomes still
-require resolution rather than automatic repetition.
-
-Still missing: real provider adapters, a runnable `ion` binary, workspace tools
-(read/edit/exec), context compaction and forking, the terminal UI, and workers.
-No live-provider effectiveness has been measured.
+Still missing: native read/edit/exec tools, the host-owned workspace registry, BlobStore,
+context compaction/forking, real provider adapters, a runnable `ion` binary, the terminal UI,
+and workers. No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
-`crates/ion/` application source is reference material outside the workspace; its
-CLI, provider configuration and usage instructions do not describe the new core.
+`crates/ion/` application source is reference material outside the workspace; its CLI,
+provider configuration and usage instructions do not describe the new core.
 `cargo run -p ion` is not supported at this revision.
 
 ## Development
@@ -76,19 +70,16 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-The turn-engine regressions are grouped by boundary:
+The replacement runtime regressions currently live here:
 
 ```sh
-cargo test --locked -p ion-core --test c1_turn          # admission, steps, tools, queues
-cargo test --locked -p ion-core --test c1_cancellation  # cancellation precedence, uncertainty
-cargo test --locked -p ion-core --test c1_storage       # ownership, schema, corruption, pages
-cargo test --locked -p ion-core --test c2_execution     # stop, join, close, late evidence
-cargo test --locked -p ion-core --test c2_workspace     # claims, cross-session conflict, process loss
-cargo test --locked -p ion-core --lib                   # commit faults, recovery boundaries
+cargo test --locked -p ion-core --test r1b_storage  # admission/config/Turn/store/watch
+cargo test --locked -p ion-core --test r1b_drive    # provider drive/cancellation/recovery/fallback
+cargo test --locked -p ion-core --lib               # domain/schema/request/observation contracts
 ```
 
-These exercise the libraries against scripted services; they are not evidence of
-live-provider effectiveness or a usable terminal application.
+These are deterministic library/fixture checks; they are not evidence of live-provider
+effectiveness or a usable terminal application.
 
 ## Project documentation
 
