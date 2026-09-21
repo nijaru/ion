@@ -38,7 +38,13 @@ pub(super) fn drive_basis(
     };
     let attempts = current_step
         .as_ref()
-        .map(|step| load_attempts(connection, step.id))
+        .map(|step| {
+            load_attempts(
+                connection,
+                step.id,
+                turn.environment.limits.max_model_attempts_per_step,
+            )
+        })
         .transpose()?
         .unwrap_or_default();
 
@@ -147,7 +153,11 @@ pub(super) fn create_fallback_step(
         )));
     }
 
-    let attempts = load_attempts(&transaction, predecessor_id)?;
+    let attempts = load_attempts(
+        &transaction,
+        predecessor_id,
+        turn.environment.limits.max_model_attempts_per_step,
+    )?;
     if attempts.iter().any(|attempt| {
         !matches!(
             &attempt.state,
@@ -670,16 +680,29 @@ pub(super) fn load_step(connection: &Connection, step_id: StepId) -> Result<Mode
 pub(super) fn load_attempts(
     connection: &Connection,
     step_id: StepId,
+    maximum: u32,
 ) -> Result<Vec<ModelAttempt>, StoreError> {
-    let mut statement =
-        connection.prepare("SELECT id FROM model_attempts WHERE step_id = ?1 ORDER BY ordinal")?;
-    let rows = statement.query_map([step_id.get()], |row| row.get::<_, i64>(0))?;
+    let limit = i64::from(maximum)
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Corrupt("model-attempt limit overflow".to_owned()))?;
+    let mut statement = connection.prepare(
+        "SELECT id FROM model_attempts
+         WHERE step_id = ?1
+         ORDER BY ordinal
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(params![step_id.get(), limit], |row| row.get::<_, i64>(0))?;
     let mut attempts = Vec::new();
     for row in rows {
         attempts.push(load_attempt(
             connection,
             id::<AttemptId>(row?, "model attempt")?,
         )?);
+    }
+    if attempts.len() > maximum as usize {
+        return Err(StoreError::Corrupt(format!(
+            "model step {step_id} exceeds its frozen attempt limit"
+        )));
     }
     Ok(attempts)
 }

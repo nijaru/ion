@@ -135,6 +135,9 @@ pub(crate) async fn run(
                                 >= basis.turn.environment.limits.max_model_attempts_per_step
                                     as usize;
                             if !retryable_provider_failure(failure.kind) || retry_exhausted {
+                                if !provider_failure_permits_fallback(failure.kind) {
+                                    return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                                }
                                 let reason = format!(
                                     "provider {:?} failure on model step {}",
                                     failure.kind, step.id
@@ -871,6 +874,20 @@ fn provider_stream_error(
             start_receipt,
         },
     }
+}
+
+fn provider_failure_permits_fallback(kind: ProviderErrorKind) -> bool {
+    matches!(
+        kind,
+        ProviderErrorKind::Authentication
+            | ProviderErrorKind::Permission
+            | ProviderErrorKind::ContextLength
+            | ProviderErrorKind::RateLimited
+            | ProviderErrorKind::Quota
+            | ProviderErrorKind::Unsupported
+            | ProviderErrorKind::Overloaded
+            | ProviderErrorKind::Server
+    )
 }
 
 fn retryable_provider_failure(kind: ProviderErrorKind) -> bool {

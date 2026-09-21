@@ -396,12 +396,14 @@ fn fallback_config() -> ConversationConfig {
 
 struct FailingBoundary {
     starts: AtomicUsize,
+    kind: ProviderErrorKind,
 }
 
 impl FailingBoundary {
-    fn new() -> Arc<Self> {
+    fn new(kind: ProviderErrorKind) -> Arc<Self> {
         Arc::new(Self {
             starts: AtomicUsize::new(0),
+            kind,
         })
     }
 }
@@ -429,8 +431,8 @@ impl ModelBoundary for FailingBoundary {
             self.starts.fetch_add(1, Ordering::SeqCst);
             let stream: ion_ai::ModelStream =
                 Box::pin(futures_util::stream::iter([Err(ProviderError {
-                    kind: ProviderErrorKind::Authentication,
-                    message: "primary rejected credentials".to_owned(),
+                    kind: self.kind,
+                    message: "primary rejected request".to_owned(),
                 })]));
             ModelStart::Started {
                 stream,
@@ -523,7 +525,7 @@ async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
         .await
         .expect("watch");
 
-    let primary = FailingBoundary::new();
+    let primary = FailingBoundary::new(ProviderErrorKind::Authentication);
     let fallback = FallbackBoundary::new();
     let boundaries = ModelBoundaries::new([
         primary.clone() as Arc<dyn ModelBoundary>,
@@ -709,5 +711,32 @@ async fn passive_open_does_not_reconcile_but_resume_reconciles_indeterminate_att
     }
 
     reopened.close().await.expect("close reopened");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+
+#[tokio::test]
+async fn safety_refusal_does_not_route_to_fallback_provider() {
+    let (dir, path) = database("safety-no-fallback");
+    let created = Session::create(&path, fallback_config())
+        .await
+        .expect("create");
+    let session = created.session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+
+    let primary = FailingBoundary::new(ProviderErrorKind::Safety);
+    let fallback = FallbackBoundary::new();
+    let boundaries = ModelBoundaries::new([
+        primary.clone() as Arc<dyn ModelBoundary>,
+        fallback.clone() as Arc<dyn ModelBoundary>,
+    ])
+    .expect("boundaries");
+
+    let exit = handle.resume(turn, boundaries).await.expect("resume");
+    assert_eq!(exit, DriveExit::Parked(ParkReason::ProviderUnavailable));
+    assert_eq!(primary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.starts.load(Ordering::SeqCst), 0);
+
+    session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
