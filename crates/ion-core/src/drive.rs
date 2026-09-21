@@ -120,7 +120,8 @@ pub(crate) async fn run(
 
                 if let Some(attempt) = basis.attempts.last() {
                     match &attempt.state {
-                        ModelAttemptState::IntentCommitted { .. } => {
+                        ModelAttemptState::IntentCommitted { .. }
+                        | ModelAttemptState::Indeterminate { .. } => {
                             match reconcile_intent(&inner, &basis, attempt, &prepared).await {
                                 ReconcileAction::Continue => continue,
                                 ReconcileAction::Exit(exit) => return exit,
@@ -128,9 +129,6 @@ pub(crate) async fn run(
                         }
                         ModelAttemptState::ResponseReady { response, .. } => {
                             return select_ready(&inner, turn_id, attempt, response).await;
-                        }
-                        ModelAttemptState::Indeterminate { .. } => {
-                            return DriveExit::Parked(ParkReason::RecoveryRequired);
                         }
                         ModelAttemptState::Failed { failure, .. } => {
                             let retry_exhausted = basis.attempts.len()
@@ -440,21 +438,31 @@ async fn reconcile_intent(
     attempt: &ModelAttempt,
     prepared: &PreparedDrive,
 ) -> ReconcileAction {
-    let existing_receipt = match &attempt.state {
-        ModelAttemptState::IntentCommitted { start_receipt } => start_receipt.clone(),
+    let (existing_receipt, existing_usage, was_intent) = match &attempt.state {
+        ModelAttemptState::IntentCommitted { start_receipt } => {
+            (start_receipt.clone(), Usage::unknown(), true)
+        }
+        ModelAttemptState::Indeterminate {
+            usage,
+            start_receipt,
+            ..
+        } => (start_receipt.clone(), *usage, false),
         _ => return ReconcileAction::Continue,
     };
     let effect_key = effect_key(inner, attempt.step);
 
     if prepared.boundary.start_receipts() != StartReceiptCapability::Authoritative {
-        let state = ModelAttemptState::Indeterminate {
-            reason: "provider dispatch intent survived without authoritative start reconciliation"
-                .to_owned(),
-            usage: Usage::unknown(),
-            start_receipt: existing_receipt,
-        };
-        if let Err(error) = persist_attempt(inner, attempt.id, state).await {
-            return ReconcileAction::Exit(store_exit(basis.turn.id, error));
+        if was_intent {
+            let state = ModelAttemptState::Indeterminate {
+                reason:
+                    "provider dispatch intent survived without authoritative start reconciliation"
+                        .to_owned(),
+                usage: existing_usage,
+                start_receipt: existing_receipt,
+            };
+            if let Err(error) = persist_attempt(inner, attempt.id, state).await {
+                return ReconcileAction::Exit(store_exit(basis.turn.id, error));
+            }
         }
         return ReconcileAction::Exit(DriveExit::Parked(ParkReason::RecoveryRequired));
     }
@@ -485,7 +493,7 @@ async fn reconcile_intent(
                 reason:
                     "provider start was recovered but no terminal response evidence is available"
                         .to_owned(),
-                usage: Usage::unknown(),
+                usage: existing_usage,
                 start_receipt: Some(receipt),
             };
             if let Err(error) = persist_attempt(inner, attempt.id, state).await {
@@ -496,7 +504,7 @@ async fn reconcile_intent(
         StartReconciliation::Unknown { reason } => {
             let state = ModelAttemptState::Indeterminate {
                 reason,
-                usage: Usage::unknown(),
+                usage: existing_usage,
                 start_receipt: existing_receipt,
             };
             if let Err(error) = persist_attempt(inner, attempt.id, state).await {

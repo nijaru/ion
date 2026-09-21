@@ -9,10 +9,11 @@ use ion_ai::{
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
     ConversationConfig, DriveExit, EgressRealm, InputBody, InputMode, InputSender, ModelBoundaries,
-    ModelBoundary, ModelBoundaryIdentity, ModelStart, ObservationError, ParkReason,
-    ProviderBinding, ProviderBindingId, ProviderCapabilities, RequestKey, ReturnedModelPolicy,
-    SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
-    StartReceiptCapability, StartTurnRequest, StepDisposition, StepPurpose, TurnLimits,
+    ModelAttemptState, ModelBoundary, ModelBoundaryIdentity, ModelStart, ObservationError,
+    ParkReason, ProviderBinding, ProviderBindingId, ProviderCapabilities, ProviderStartReceipt,
+    RequestKey, ReturnedModelPolicy, SemanticCompatibilityId, Session, SessionChange, SessionId,
+    SnapshotRequest, StartReceiptCapability, StartReconciliation, StartTurnRequest,
+    StepDisposition, StepPurpose, TurnLimits,
     TurnOutcome, WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
 use tokio_util::sync::CancellationToken;
@@ -586,5 +587,127 @@ async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
     );
 
     session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+
+struct RecoveringBoundary {
+    starts: AtomicUsize,
+    reconciles: AtomicUsize,
+}
+
+impl RecoveringBoundary {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            starts: AtomicUsize::new(0),
+            reconciles: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ModelBoundary for RecoveringBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request)
+    }
+
+    fn start_receipts(&self) -> StartReceiptCapability {
+        StartReceiptCapability::Authoritative
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        _request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            ModelStart::Indeterminate {
+                reason: "transport outcome unknown".to_owned(),
+                usage: Usage::unknown(),
+                start_receipt: None,
+            }
+        })
+    }
+
+    fn reconcile_start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+    ) -> BoxFuture<'a, StartReconciliation> {
+        Box::pin(async move {
+            self.reconciles.fetch_add(1, Ordering::SeqCst);
+            StartReconciliation::Started(ProviderStartReceipt {
+                kind: "test-start".to_owned(),
+                data: serde_json::json!({"started": true}),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn passive_open_does_not_reconcile_but_resume_reconciles_indeterminate_attempt() {
+    let (dir, path) = database("reconcile-on-resume");
+    let mut cfg = config();
+    cfg.providers[0].start_receipts = StartReceiptCapability::Authoritative;
+    let created = Session::create(&path, cfg).await.expect("create");
+    let session = created.session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+
+    let boundary = RecoveringBoundary::new();
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let first = handle.resume(turn, boundaries).await.expect("first resume");
+    assert_eq!(first, DriveExit::Parked(ParkReason::RecoveryRequired));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 0);
+
+    session.close().await.expect("close");
+    let reopened = Session::open(&path).await.expect("open");
+    assert_eq!(
+        boundary.reconciles.load(Ordering::SeqCst),
+        0,
+        "passive open must not reconcile provider state"
+    );
+
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let second = reopened
+        .handle()
+        .resume(turn, boundaries)
+        .await
+        .expect("second resume");
+    assert_eq!(second, DriveExit::Parked(ParkReason::RecoveryRequired));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 1);
+
+    let snapshot = reopened
+        .handle()
+        .snapshot(SnapshotRequest {
+            conversation: reopened.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .expect("snapshot");
+    assert_eq!(snapshot.model_attempts.len(), 1);
+    match &snapshot.model_attempts[0].state {
+        ModelAttemptState::Indeterminate {
+            start_receipt: Some(receipt),
+            ..
+        } => assert_eq!(receipt.kind, "test-start"),
+        other => panic!("unexpected recovered attempt state: {other:?}"),
+    }
+
+    reopened.close().await.expect("close reopened");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
