@@ -746,3 +746,171 @@ async fn safety_refusal_does_not_route_to_fallback_provider() {
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
+
+
+struct NegativeThenCompleteBoundary {
+    starts: AtomicUsize,
+    reconciles: AtomicUsize,
+}
+
+impl NegativeThenCompleteBoundary {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            starts: AtomicUsize::new(0),
+            reconciles: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ModelBoundary for NegativeThenCompleteBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request, effect_key)
+    }
+
+    fn start_receipts(&self) -> StartReceiptCapability {
+        StartReceiptCapability::Authoritative
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        _request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            let ordinal = self.starts.fetch_add(1, Ordering::SeqCst) + 1;
+            if ordinal == 1 {
+                return ModelStart::Indeterminate {
+                    reason: "first transport outcome unknown".to_owned(),
+                    usage: Usage::unknown(),
+                    start_receipt: None,
+                };
+            }
+            let response = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("retry done".to_owned())],
+                    provider_replay: None,
+                },
+                usage: Usage::known(9, 3),
+                termination: ResponseTermination::Completed,
+            };
+            let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
+                ModelStreamEvent::Completed(response),
+            )]));
+            ModelStart::Started {
+                stream,
+                start_receipt: None,
+            }
+        })
+    }
+
+    fn reconcile_start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+    ) -> BoxFuture<'a, StartReconciliation> {
+        Box::pin(async move {
+            self.reconciles.fetch_add(1, Ordering::SeqCst);
+            StartReconciliation::NotStarted {
+                reason: "authoritative provider ledger has no start record".to_owned(),
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn authoritative_negative_is_durable_before_retry_attempt() {
+    let (dir, path) = database("authoritative-negative");
+    let mut cfg = config();
+    cfg.providers[0].start_receipts = StartReceiptCapability::Authoritative;
+    let created = Session::create(&path, cfg).await.expect("create");
+    let session = created.session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+
+    let boundary = NegativeThenCompleteBoundary::new();
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let first = handle.resume(turn, boundaries).await.expect("first resume");
+    assert_eq!(first, DriveExit::Parked(ParkReason::RecoveryRequired));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 0);
+
+    let established = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: SnapshotRequest {
+                conversation: session.primary_conversation(),
+                max_inputs: 16,
+                max_entries: 16,
+                max_bytes: 1024 * 1024,
+            },
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .expect("watch");
+    assert_eq!(established.snapshot.model_attempts.len(), 1);
+    let first_attempt = &established.snapshot.model_attempts[0];
+    assert_eq!(first_attempt.ordinal, 1);
+    assert!(matches!(
+        &first_attempt.state,
+        ModelAttemptState::Indeterminate { .. }
+    ));
+
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let second = handle.resume(turn, boundaries).await.expect("second resume");
+    assert!(matches!(
+        second,
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 2);
+
+    let mut not_started_seq = None;
+    let mut retry_intent_seq = None;
+    loop {
+        let receipt = match established.watch.try_recv() {
+            Ok(receipt) => receipt,
+            Err(ObservationError::Empty) => break,
+            Err(error) => panic!("watch failed: {error}"),
+        };
+        for change in &receipt.update.changes {
+            if let SessionChange::ModelAttempt(attempt) = change {
+                if attempt.ordinal == 1
+                    && matches!(&attempt.state, ModelAttemptState::NotStarted { .. })
+                {
+                    not_started_seq = Some(receipt.seq);
+                }
+                if attempt.ordinal == 2
+                    && matches!(
+                        &attempt.state,
+                        ModelAttemptState::IntentCommitted { .. }
+                    )
+                {
+                    retry_intent_seq = Some(receipt.seq);
+                }
+            }
+        }
+    }
+    let not_started_seq = not_started_seq.expect("authoritative negative commit");
+    let retry_intent_seq = retry_intent_seq.expect("retry intent commit");
+    assert!(
+        not_started_seq < retry_intent_seq,
+        "NotStarted evidence must commit before a replacement physical attempt"
+    );
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
