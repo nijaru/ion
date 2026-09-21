@@ -15,8 +15,8 @@ use crate::store::{DriveBasis, FinishedTurn, RecordedModelAttempt, StoreError};
 use crate::{
     ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries, ModelBoundary,
     ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt,
-    RequestManifest, SemanticRequest, SessionHealth, StartReceiptCapability, StartReconciliation,
-    StepDisposition, TurnId, TurnOutcome, TurnSettings, assemble,
+    RequestManifest, SemanticRequest, SessionHealth, SessionId, StartReceiptCapability,
+    StartReconciliation, StepDisposition, TurnId, TurnOutcome, TurnSettings, assemble,
     semantic_request_assembly_revision,
 };
 
@@ -76,7 +76,7 @@ pub(crate) async fn run(
 
         match &basis.current_step {
             None => {
-                let prepared = match prepare_initial(&basis, &boundaries) {
+                let prepared = match prepare_initial(inner.session_id(), &basis, &boundaries) {
                     Ok(prepared) => prepared,
                     Err(exit) => return exit.with_turn(turn_id),
                 };
@@ -97,7 +97,7 @@ pub(crate) async fn run(
                     };
                 }
 
-                let prepared = match prepare_existing(&basis, &boundaries) {
+                let prepared = match prepare_existing(inner.session_id(), &basis, &boundaries) {
                     Ok(prepared) => prepared,
                     Err(PrepareExit::Parked(ParkReason::ProviderUnavailable)) => {
                         match commit_fallback(
@@ -190,6 +190,7 @@ pub(crate) async fn run(
 struct PreparedDrive {
     request: SemanticRequest,
     boundary: Arc<dyn ModelBoundary>,
+    effect_key: String,
     manifest: RequestManifest,
     response_limit: u32,
 }
@@ -209,6 +210,7 @@ impl PrepareExit {
 }
 
 fn prepare_initial(
+    session: SessionId,
     basis: &DriveBasis,
     boundaries: &ModelBoundaries,
 ) -> Result<PreparedDrive, PrepareExit> {
@@ -227,9 +229,13 @@ fn prepare_initial(
     let boundary = boundaries
         .resolve(binding)
         .map_err(|_| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
-    let provider_digest = boundary.fingerprint(&assembled.request).map_err(|error| {
-        PrepareExit::Faulted(format!("provider request preparation failed: {error}"))
-    })?;
+    let ordinal = next_step_ordinal(basis)?;
+    let effect_key = model_effect_key(session, basis.turn.id, ordinal);
+    let provider_digest = boundary
+        .fingerprint(&assembled.request, &effect_key)
+        .map_err(|error| {
+            PrepareExit::Faulted(format!("provider request preparation failed: {error}"))
+        })?;
     let manifest = RequestManifest {
         environment_digest: basis.turn.environment.digest().map_err(|error| {
             PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
@@ -248,12 +254,14 @@ fn prepare_initial(
     Ok(PreparedDrive {
         request: assembled.request,
         boundary,
+        effect_key,
         manifest,
         response_limit: basis.turn.environment.limits.max_response_bytes,
     })
 }
 
 fn prepare_existing(
+    session: SessionId,
     basis: &DriveBasis,
     boundaries: &ModelBoundaries,
 ) -> Result<PreparedDrive, PrepareExit> {
@@ -292,8 +300,9 @@ fn prepare_existing(
     let boundary = boundaries
         .resolve(binding)
         .map_err(|_| PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
+    let effect_key = model_effect_key(session, step.turn, step.ordinal);
     let provider_digest = boundary
-        .fingerprint(&assembled.request)
+        .fingerprint(&assembled.request, &effect_key)
         .map_err(|_| PrepareExit::Parked(ParkReason::RecoveryRequired))?;
     if step.manifest.provider_fingerprint.encoding != binding.request_encoding
         || step.manifest.provider_fingerprint.digest != provider_digest
@@ -304,6 +313,7 @@ fn prepare_existing(
     Ok(PreparedDrive {
         request: assembled.request,
         boundary,
+        effect_key,
         manifest: step.manifest.clone(),
         response_limit: basis.turn.environment.limits.max_response_bytes,
     })
@@ -315,6 +325,7 @@ struct PreparedFallback {
 }
 
 fn prepare_fallback(
+    session: SessionId,
     basis: &DriveBasis,
     boundaries: &ModelBoundaries,
 ) -> Result<Option<PreparedFallback>, PrepareExit> {
@@ -359,7 +370,9 @@ fn prepare_fallback(
             | Err(crate::RequestError::Configuration(_)) => continue,
             Err(error) => return Err(map_request_error(error)),
         };
-        let provider_digest = match boundary.fingerprint(&assembled.request) {
+        let ordinal = next_step_ordinal(basis)?;
+        let effect_key = model_effect_key(session, basis.turn.id, ordinal);
+        let provider_digest = match boundary.fingerprint(&assembled.request, &effect_key) {
             Ok(digest) => digest,
             Err(_) => continue,
         };
@@ -396,7 +409,7 @@ async fn commit_fallback(
     let Some(predecessor) = basis.current_step.as_ref() else {
         return Ok(false);
     };
-    let fallback = match prepare_fallback(basis, boundaries) {
+    let fallback = match prepare_fallback(inner.session_id(), basis, boundaries) {
         Ok(Some(fallback)) => fallback,
         Ok(None) => return Ok(false),
         Err(exit) => return Err(exit.with_turn(basis.turn.id)),
@@ -452,7 +465,7 @@ async fn reconcile_intent(
         } => (start_receipt.clone(), *usage, false),
         _ => return ReconcileAction::Continue,
     };
-    let effect_key = effect_key(inner, attempt.step);
+    let effect_key = prepared.effect_key.clone();
 
     if prepared.boundary.start_receipts() != StartReceiptCapability::Authoritative {
         if was_intent {
@@ -571,7 +584,7 @@ async fn dispatch(
         return DispatchAction::Exit(finish_cancelled(inner, basis.turn.id).await);
     }
 
-    let effect_key = effect_key(inner, step.id);
+    let effect_key = prepared.effect_key.clone();
     let start = tokio::select! {
         () = stop.cancelled() => {
             let state = ModelAttemptState::Indeterminate {
@@ -897,8 +910,17 @@ fn retryable_provider_failure(kind: ProviderErrorKind) -> bool {
     )
 }
 
-fn effect_key(inner: &SessionInner, step: crate::StepId) -> String {
-    format!("ion:{}:model-step:{step}", inner.session_id())
+fn next_step_ordinal(basis: &DriveBasis) -> Result<u32, PrepareExit> {
+    basis
+        .turn
+        .budget
+        .model_steps
+        .checked_add(1)
+        .ok_or_else(|| PrepareExit::Faulted("model-step ordinal overflow".to_owned()))
+}
+
+fn model_effect_key(session: SessionId, turn: TurnId, ordinal: u32) -> String {
+    format!("ion:{session}:turn:{turn}:model-step:{ordinal}")
 }
 
 fn store_exit(turn: TurnId, error: StoreError) -> DriveExit {

@@ -51,9 +51,14 @@ pub trait ModelBoundary: Send + Sync {
     fn identity(&self) -> ModelBoundaryIdentity;
 
     /// Hash the exact provider-specific canonical request representation produced by
-    /// this frozen encoding revision. Authentication, trace IDs and transport-local
-    /// metadata must not influence this digest.
-    fn fingerprint(&self, request: &SemanticRequest) -> Result<ContentDigest, ProviderError>;
+    /// this frozen encoding revision. The stable logical effect key is supplied because
+    /// adapters that send it as idempotency material must cover it in the fingerprint.
+    /// Authentication, trace IDs and transport-local metadata must not influence this digest.
+    fn fingerprint(
+        &self,
+        request: &SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError>;
 
     /// Cross the provider start boundary for one already-durable AttemptId.
     fn start<'a>(

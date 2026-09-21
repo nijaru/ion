@@ -151,8 +151,11 @@ fn identity() -> ModelBoundaryIdentity {
     }
 }
 
-fn fingerprint(request: &ion_core::SemanticRequest) -> Result<ContentDigest, ProviderError> {
-    ContentDigest::of(request).map_err(|error| ProviderError {
+fn fingerprint(
+    request: &ion_core::SemanticRequest,
+    effect_key: &str,
+) -> Result<ContentDigest, ProviderError> {
+    ContentDigest::of(&(request, effect_key)).map_err(|error| ProviderError {
         kind: ProviderErrorKind::InvalidRequest,
         message: error.to_string(),
     })
@@ -178,8 +181,9 @@ impl ModelBoundary for CompleteBoundary {
     fn fingerprint(
         &self,
         request: &ion_core::SemanticRequest,
+        effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        fingerprint(request)
+        fingerprint(request, effect_key)
     }
 
     fn start<'a>(
@@ -243,8 +247,9 @@ impl ModelBoundary for WaitingBoundary {
     fn fingerprint(
         &self,
         request: &ion_core::SemanticRequest,
+        effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        fingerprint(request)
+        fingerprint(request, effect_key)
     }
 
     fn start<'a>(
@@ -416,8 +421,9 @@ impl ModelBoundary for FailingBoundary {
     fn fingerprint(
         &self,
         request: &ion_core::SemanticRequest,
+        effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        fingerprint(request)
+        fingerprint(request, effect_key)
     }
 
     fn start<'a>(
@@ -467,8 +473,9 @@ impl ModelBoundary for FallbackBoundary {
     fn fingerprint(
         &self,
         request: &ion_core::SemanticRequest,
+        effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        fingerprint(request)
+        fingerprint(request, effect_key)
     }
 
     fn start<'a>(
@@ -614,8 +621,9 @@ impl ModelBoundary for RecoveringBoundary {
     fn fingerprint(
         &self,
         request: &ion_core::SemanticRequest,
+        effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        fingerprint(request)
+        fingerprint(request, effect_key)
     }
 
     fn start_receipts(&self) -> StartReceiptCapability {
