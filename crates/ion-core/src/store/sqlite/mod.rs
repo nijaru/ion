@@ -179,13 +179,7 @@ impl SqliteDatabase {
         reason: String,
     ) -> Result<CreatedModelStep, StoreError> {
         let result = self.mutate(|connection| {
-            model_state::create_fallback_step(
-                connection,
-                predecessor,
-                settings,
-                manifest,
-                reason,
-            )
+            model_state::create_fallback_step(connection, predecessor, settings, manifest, reason)
         })?;
         self.observations.publish(result.receipt.clone());
         Ok(result)
