@@ -592,7 +592,6 @@ async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
-
 struct RecoveringBoundary {
     starts: AtomicUsize,
     reconciles: AtomicUsize,
@@ -713,7 +712,6 @@ async fn passive_open_does_not_reconcile_but_resume_reconciles_indeterminate_att
     reopened.close().await.expect("close reopened");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
-
 
 #[tokio::test]
 async fn safety_refusal_does_not_route_to_fallback_provider() {

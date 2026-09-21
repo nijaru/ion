@@ -634,7 +634,15 @@ pub(super) fn snapshot(
     };
     let model_attempts = current_model_step
         .as_ref()
-        .map(|step| super::model_state::load_attempts(&transaction, step.id))
+        .map(|step| {
+            let maximum = unfinished_turn
+                .as_ref()
+                .expect("current model step implies an unfinished turn")
+                .environment
+                .limits
+                .max_model_attempts_per_step;
+            super::model_state::load_attempts(&transaction, step.id, maximum)
+        })
         .transpose()?
         .unwrap_or_default();
 
