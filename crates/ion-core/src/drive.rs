@@ -141,14 +141,7 @@ pub(crate) async fn run(
                                     "provider {:?} failure on model step {}",
                                     failure.kind, step.id
                                 );
-                                match commit_fallback(
-                                    &inner,
-                                    &basis,
-                                    &boundaries,
-                                    reason,
-                                )
-                                .await
-                                {
+                                match commit_fallback(&inner, &basis, &boundaries, reason).await {
                                     Ok(true) => continue,
                                     Ok(false) => {
                                         return DriveExit::Parked(ParkReason::ProviderUnavailable);
