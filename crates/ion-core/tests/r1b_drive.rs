@@ -11,8 +11,9 @@ use ion_core::{
     ConversationConfig, DriveExit, EgressRealm, InputBody, InputMode, InputSender, ModelBoundaries,
     ModelBoundary, ModelBoundaryIdentity, ModelStart, ParkReason, ProviderBinding,
     ProviderBindingId, ProviderCapabilities, RequestKey, ReturnedModelPolicy,
-    SemanticCompatibilityId, Session, SessionId, SnapshotRequest, StartReceiptCapability,
-    StartTurnRequest, TurnLimits, TurnOutcome, WorkspaceBinding,
+    ObservationError, SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
+    StartReceiptCapability, StartTurnRequest, StepDisposition, StepPurpose, TurnLimits,
+    TurnOutcome, WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -372,6 +373,218 @@ async fn missing_provider_boundary_parks_before_dispatch_intent() {
         .expect("snapshot");
     assert!(snapshot.current_model_step.is_none());
     assert!(snapshot.model_attempts.is_empty());
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+
+fn fallback_config() -> ConversationConfig {
+    let mut config = config();
+    let fallback_id = ProviderBindingId::new("fallback").expect("fallback id");
+    let mut fallback = config.providers[0].clone();
+    fallback.id = fallback_id.clone();
+    fallback.model.provider = "fallback".to_owned();
+    fallback.model.model = "fallback-test".to_owned();
+    fallback.adapter = SemanticCompatibilityId::new("fallback-adapter-v1").expect("adapter");
+    fallback.request_encoding =
+        SemanticCompatibilityId::new("fallback-request-v1").expect("encoding");
+    config.providers.push(fallback);
+    config.fallback_route = vec![fallback_id];
+    config
+}
+
+struct FailingBoundary {
+    starts: AtomicUsize,
+}
+
+impl FailingBoundary {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            starts: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ModelBoundary for FailingBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request)
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        _request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            let stream: ion_ai::ModelStream =
+                Box::pin(futures_util::stream::iter([Err(ProviderError {
+                    kind: ProviderErrorKind::Authentication,
+                    message: "primary rejected credentials".to_owned(),
+                })]));
+            ModelStart::Started {
+                stream,
+                start_receipt: None,
+            }
+        })
+    }
+}
+
+struct FallbackBoundary {
+    starts: AtomicUsize,
+}
+
+impl FallbackBoundary {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            starts: AtomicUsize::new(0),
+        })
+    }
+}
+
+impl ModelBoundary for FallbackBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        ModelBoundaryIdentity {
+            binding: ProviderBindingId::new("fallback").expect("binding"),
+            adapter: SemanticCompatibilityId::new("fallback-adapter-v1").expect("adapter"),
+            request_encoding: SemanticCompatibilityId::new("fallback-request-v1")
+                .expect("encoding"),
+        }
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request)
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        _request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            let response = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("fallback done".to_owned())],
+                    provider_replay: None,
+                },
+                usage: Usage::known(8, 3),
+                termination: ResponseTermination::Completed,
+            };
+            let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
+                ModelStreamEvent::Completed(response),
+            )]));
+            ModelStart::Started {
+                stream,
+                start_receipt: None,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
+    let (dir, path) = database("fallback");
+    let created = Session::create(&path, fallback_config())
+        .await
+        .expect("create");
+    let session = created.session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+
+    let established = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: SnapshotRequest {
+                conversation: session.primary_conversation(),
+                max_inputs: 16,
+                max_entries: 16,
+                max_bytes: 1024 * 1024,
+            },
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .expect("watch");
+
+    let primary = FailingBoundary::new();
+    let fallback = FallbackBoundary::new();
+    let boundaries = ModelBoundaries::new([
+        primary.clone() as Arc<dyn ModelBoundary>,
+        fallback.clone() as Arc<dyn ModelBoundary>,
+    ])
+    .expect("boundaries");
+
+    let exit = handle.resume(turn, boundaries).await.expect("resume");
+    assert!(matches!(
+        exit,
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    assert_eq!(primary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.starts.load(Ordering::SeqCst), 1);
+
+    let mut saw_atomic_fallback = false;
+    loop {
+        let receipt = match established.watch.try_recv() {
+            Ok(receipt) => receipt,
+            Err(ObservationError::Empty) => break,
+            Err(error) => panic!("watch failed: {error}"),
+        };
+        let mut predecessor = None;
+        let mut successor = None;
+        let mut updated_turn = None;
+        for change in &receipt.update.changes {
+            match change {
+                SessionChange::ModelStep(step) => match &step.disposition {
+                    StepDisposition::Superseded {
+                        successor: Some(successor_id),
+                        ..
+                    } => predecessor = Some((step.id, *successor_id)),
+                    StepDisposition::Open
+                        if matches!(&step.purpose, StepPurpose::Fallback { .. }) =>
+                    {
+                        successor = Some(step);
+                    }
+                    _ => {}
+                },
+                SessionChange::Turn(value) if value.id == turn => updated_turn = Some(value),
+                _ => {}
+            }
+        }
+        if let (Some((predecessor_id, successor_id)), Some(successor), Some(updated_turn)) =
+            (predecessor, successor, updated_turn)
+        {
+            assert_eq!(successor.id, successor_id);
+            assert!(matches!(
+                &successor.purpose,
+                StepPurpose::Fallback { predecessor } if *predecessor == predecessor_id
+            ));
+            assert_eq!(successor.manifest.settings.revision, 1);
+            assert_eq!(successor.manifest.settings.provider.as_str(), "fallback");
+            assert_eq!(updated_turn.settings, successor.manifest.settings);
+            saw_atomic_fallback = true;
+        }
+    }
+    assert!(
+        saw_atomic_fallback,
+        "supersession, successor creation and TurnSettings update must share one commit"
+    );
 
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");

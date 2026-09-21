@@ -16,7 +16,8 @@ use crate::{
     ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries, ModelBoundary,
     ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt,
     RequestManifest, SemanticRequest, SessionHealth, StartReceiptCapability, StartReconciliation,
-    StepDisposition, TurnId, TurnOutcome, assemble, semantic_request_assembly_revision,
+    StepDisposition, TurnId, TurnOutcome, TurnSettings, assemble,
+    semantic_request_assembly_revision,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -98,6 +99,22 @@ pub(crate) async fn run(
 
                 let prepared = match prepare_existing(&basis, &boundaries) {
                     Ok(prepared) => prepared,
+                    Err(PrepareExit::Parked(ParkReason::ProviderUnavailable)) => {
+                        match commit_fallback(
+                            &inner,
+                            &basis,
+                            &boundaries,
+                            "current provider binding is unavailable".to_owned(),
+                        )
+                        .await
+                        {
+                            Ok(true) => continue,
+                            Ok(false) => {
+                                return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                            }
+                            Err(exit) => return exit,
+                        }
+                    }
                     Err(exit) => return exit.with_turn(turn_id),
                 };
 
@@ -116,16 +133,53 @@ pub(crate) async fn run(
                             return DriveExit::Parked(ParkReason::RecoveryRequired);
                         }
                         ModelAttemptState::Failed { failure, .. } => {
-                            if !retryable_provider_failure(failure.kind)
-                                || basis.attempts.len()
-                                    >= basis.turn.environment.limits.max_model_attempts_per_step
-                                        as usize
-                            {
-                                return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                            let retry_exhausted = basis.attempts.len()
+                                >= basis.turn.environment.limits.max_model_attempts_per_step
+                                    as usize;
+                            if !retryable_provider_failure(failure.kind) || retry_exhausted {
+                                let reason = format!(
+                                    "provider {:?} failure on model step {}",
+                                    failure.kind, step.id
+                                );
+                                match commit_fallback(
+                                    &inner,
+                                    &basis,
+                                    &boundaries,
+                                    reason,
+                                )
+                                .await
+                                {
+                                    Ok(true) => continue,
+                                    Ok(false) => {
+                                        return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                                    }
+                                    Err(exit) => return exit,
+                                }
                             }
                         }
                         ModelAttemptState::NotStarted { .. } => {
-                            return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                            if basis.attempts.len()
+                                >= basis.turn.environment.limits.max_model_attempts_per_step
+                                    as usize
+                            {
+                                match commit_fallback(
+                                    &inner,
+                                    &basis,
+                                    &boundaries,
+                                    format!(
+                                        "provider did not start after {} attempts",
+                                        basis.attempts.len()
+                                    ),
+                                )
+                                .await
+                                {
+                                    Ok(true) => continue,
+                                    Ok(false) => {
+                                        return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                                    }
+                                    Err(exit) => return exit,
+                                }
+                            }
                         }
                     }
                 }
@@ -259,6 +313,116 @@ fn prepare_existing(
         manifest: step.manifest.clone(),
         response_limit: basis.turn.environment.limits.max_response_bytes,
     })
+}
+
+struct PreparedFallback {
+    settings: TurnSettings,
+    manifest: RequestManifest,
+}
+
+fn prepare_fallback(
+    basis: &DriveBasis,
+    boundaries: &ModelBoundaries,
+) -> Result<Option<PreparedFallback>, PrepareExit> {
+    let revision = basis
+        .turn
+        .settings
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| PrepareExit::Faulted("turn settings revision overflow".to_owned()))?;
+
+    for provider in &basis.turn.environment.fallback_route {
+        if basis.used_providers.contains(provider) {
+            continue;
+        }
+        let Some(binding) = basis.turn.environment.provider(provider) else {
+            return Err(PrepareExit::Faulted(format!(
+                "frozen fallback route references missing provider binding {provider:?}"
+            )));
+        };
+        let Ok(boundary) = boundaries.resolve(binding) else {
+            continue;
+        };
+
+        let mut settings = basis.turn.settings.clone();
+        settings.revision = revision;
+        settings.provider = provider.clone();
+        if settings.validate(&basis.turn.environment).is_err() {
+            continue;
+        }
+
+        let assembled = match assemble(
+            &basis.turn.environment,
+            &settings,
+            &basis.entries,
+            basis.entries.last().map(|entry| entry.id),
+        ) {
+            Ok(assembled) => assembled,
+            Err(crate::RequestError::TooLarge { .. })
+            | Err(crate::RequestError::MissingProvider(_))
+            | Err(crate::RequestError::MissingTool(_))
+            | Err(crate::RequestError::Unsupported(_))
+            | Err(crate::RequestError::Configuration(_)) => continue,
+            Err(error) => return Err(map_request_error(error)),
+        };
+        let provider_digest = match boundary.fingerprint(&assembled.request) {
+            Ok(digest) => digest,
+            Err(_) => continue,
+        };
+        let manifest = RequestManifest {
+            environment_digest: basis.turn.environment.digest().map_err(|error| {
+                PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
+            })?,
+            settings: settings.clone(),
+            context_boundary: basis
+                .current_step
+                .as_ref()
+                .and_then(|step| step.manifest.context_boundary),
+            cutoff: basis.entries.last().map(|entry| entry.id),
+            included_inputs: basis.included_inputs.clone(),
+            assembly: semantic_request_assembly_revision(),
+            semantic_digest: assembled.semantic_digest,
+            provider_fingerprint: ProviderFingerprint {
+                encoding: binding.request_encoding.clone(),
+                digest: provider_digest,
+            },
+        };
+        return Ok(Some(PreparedFallback { settings, manifest }));
+    }
+
+    Ok(None)
+}
+
+async fn commit_fallback(
+    inner: &Arc<SessionInner>,
+    basis: &DriveBasis,
+    boundaries: &ModelBoundaries,
+    reason: String,
+) -> Result<bool, DriveExit> {
+    let Some(predecessor) = basis.current_step.as_ref() else {
+        return Ok(false);
+    };
+    let fallback = match prepare_fallback(basis, boundaries) {
+        Ok(Some(fallback)) => fallback,
+        Ok(None) => return Ok(false),
+        Err(exit) => return Err(exit.with_turn(basis.turn.id)),
+    };
+
+    match inner.observe_store(
+        inner
+            .store()
+            .create_fallback_model_step(
+                predecessor.id,
+                fallback.settings,
+                fallback.manifest,
+                reason,
+            )
+            .await,
+    ) {
+        Ok(_) => Ok(true),
+        Err(StoreError::Cancelled(_)) => Err(finish_cancelled(inner, basis.turn.id).await),
+        Err(error) => Err(store_exit(basis.turn.id, error)),
+    }
 }
 
 fn map_request_error(error: crate::RequestError) -> PrepareExit {

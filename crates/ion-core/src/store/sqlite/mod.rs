@@ -22,7 +22,7 @@ use crate::session::{
 use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, EntryId, EntryPage,
     InstalledConfig, ModelAttemptState, ModelAttemptTiming, RequestManifest, SessionId,
-    SessionSnapshot, SnapshotRequest, StepId, TurnId,
+    SessionSnapshot, SnapshotRequest, StepId, TurnId, TurnSettings,
 };
 
 pub(crate) struct SqliteDatabase {
@@ -167,6 +167,26 @@ impl SqliteDatabase {
     ) -> Result<CreatedModelStep, StoreError> {
         let result =
             self.mutate(|connection| model_state::create_initial_step(connection, turn, manifest))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn create_fallback_model_step(
+        &mut self,
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+    ) -> Result<CreatedModelStep, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::create_fallback_step(
+                connection,
+                predecessor,
+                settings,
+                manifest,
+                reason,
+            )
+        })?;
         self.observations.publish(result.receipt.clone());
         Ok(result)
     }

@@ -15,7 +15,8 @@ use crate::session::{
 use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, Entry, EntryId, EntryPage,
     InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
-    RequestManifest, SessionId, SessionSnapshot, SnapshotRequest, StepId, Turn, TurnId,
+    ProviderBindingId, RequestManifest, SessionId, SessionSnapshot, SnapshotRequest, StepId, Turn,
+    TurnId, TurnSettings,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -31,6 +32,7 @@ pub(crate) struct DriveBasis {
     pub(crate) turn: Turn,
     pub(crate) entries: Vec<Entry>,
     pub(crate) included_inputs: Vec<InputId>,
+    pub(crate) used_providers: Vec<ProviderBindingId>,
     pub(crate) current_step: Option<ModelStep>,
     pub(crate) attempts: Vec<ModelAttempt>,
 }
@@ -239,6 +241,23 @@ impl SessionStore {
         .await
     }
 
+    pub(crate) async fn create_fallback_model_step(
+        &self,
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+    ) -> Result<CreatedModelStep, StoreError> {
+        self.call(|reply| Command::CreateFallbackModelStep {
+            predecessor,
+            settings,
+            manifest,
+            reason,
+            reply,
+        })
+        .await
+    }
+
     pub(crate) async fn commit_model_attempt_intent(
         &self,
         step: StepId,
@@ -387,6 +406,13 @@ enum Command {
         manifest: RequestManifest,
         reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
     },
+    CreateFallbackModelStep {
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+        reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
+    },
     CommitModelAttemptIntent {
         step: StepId,
         generation: u64,
@@ -478,6 +504,20 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
                 reply,
             } => {
                 let _ = reply.send(database.create_initial_model_step(turn, manifest));
+            }
+            Command::CreateFallbackModelStep {
+                predecessor,
+                settings,
+                manifest,
+                reason,
+                reply,
+            } => {
+                let _ = reply.send(database.create_fallback_model_step(
+                    predecessor,
+                    settings,
+                    manifest,
+                    reason,
+                ));
             }
             Command::CommitModelAttemptIntent {
                 step,

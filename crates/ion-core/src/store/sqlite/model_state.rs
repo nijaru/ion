@@ -14,7 +14,7 @@ use crate::{
     AttemptId, CommitReceipt, CommitSeq, Entry, EntryData, EntryId, InputId, ModelAttempt,
     ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
     SessionUpdate, StepDisposition, StepId, StepPurpose, TranscriptContent, TranscriptMessage,
-    TranscriptRole, TurnId, TurnOutcome, TurnPhase,
+    TranscriptRole, TurnId, TurnOutcome, TurnPhase, TurnSettings,
 };
 
 pub(super) const MAX_DRIVE_ENTRIES: usize = 1024;
@@ -27,6 +27,7 @@ pub(super) fn drive_basis(
     let turn = load_turn(connection, turn_id)?;
     let entries = load_turn_entries(connection, &turn)?;
     let included_inputs = turn_input_ids(connection, turn_id)?;
+    let used_providers = turn_provider_bindings(connection, &turn)?;
 
     let current_step = match &turn.phase {
         TurnPhase::Model(step) | TurnPhase::Tools(step) => Some(load_step(connection, *step)?),
@@ -45,6 +46,7 @@ pub(super) fn drive_basis(
         turn,
         entries,
         included_inputs,
+        used_providers,
         current_step,
         attempts,
     })
@@ -75,7 +77,7 @@ pub(super) fn create_initial_step(
             "turn {turn_id} exhausted its model-step limit"
         )));
     }
-    validate_manifest_basis(&transaction, &turn, &manifest)?;
+    validate_manifest_basis(&transaction, &turn, &turn.settings, &manifest)?;
 
     let mut sequence = Sequence::load(&transaction)?;
     let step_id: StepId = sequence.next()?;
@@ -108,6 +110,117 @@ pub(super) fn create_initial_step(
             seq: commit,
             update: SessionUpdate::new(vec![
                 SessionChange::ModelStep(step),
+                SessionChange::Turn(turn),
+            ]),
+        },
+    })
+}
+
+pub(super) fn create_fallback_step(
+    connection: &mut Connection,
+    predecessor_id: StepId,
+    settings: TurnSettings,
+    manifest: RequestManifest,
+    reason: String,
+) -> Result<CreatedModelStep, StoreError> {
+    let transaction = connection.transaction()?;
+    let mut predecessor = load_step(&transaction, predecessor_id)?;
+    if !matches!(predecessor.disposition, StepDisposition::Open) {
+        return Err(StoreError::InvalidState(format!(
+            "model step {predecessor_id} is no longer open"
+        )));
+    }
+
+    let mut turn = load_turn(&transaction, predecessor.turn)?;
+    if turn.is_terminal() || turn.cancellation.requested {
+        return Err(StoreError::Cancelled(turn.id));
+    }
+    if turn.phase != TurnPhase::Model(predecessor_id) {
+        return Err(StoreError::InvalidState(format!(
+            "model step {predecessor_id} is not the current turn step"
+        )));
+    }
+    if turn.budget.model_steps >= turn.environment.limits.max_model_steps {
+        return Err(StoreError::Limit(format!(
+            "turn {} exhausted its model-step limit",
+            turn.id
+        )));
+    }
+
+    let attempts = load_attempts(&transaction, predecessor_id)?;
+    if attempts.iter().any(|attempt| {
+        !matches!(
+            attempt.state,
+            ModelAttemptState::NotStarted { .. } | ModelAttemptState::Failed { .. }
+        )
+    }) {
+        return Err(StoreError::InvalidState(format!(
+            "model step {predecessor_id} still has selectable or unresolved attempt evidence"
+        )));
+    }
+
+    let expected_revision = turn
+        .settings
+        .revision
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Limit("turn settings revision overflow".to_owned()))?;
+    if settings.revision != expected_revision {
+        return Err(StoreError::InvalidState(format!(
+            "fallback settings revision {} does not follow current revision {}",
+            settings.revision, turn.settings.revision
+        )));
+    }
+    if settings.provider == turn.settings.provider {
+        return Err(StoreError::InvalidState(
+            "fallback must select a different provider binding".to_owned(),
+        ));
+    }
+    settings.validate(&turn.environment).map_err(|error| {
+        StoreError::InvalidState(format!("fallback settings are outside the frozen turn: {error}"))
+    })?;
+    validate_manifest_basis(&transaction, &turn, &settings, &manifest)?;
+
+    let mut sequence = Sequence::load(&transaction)?;
+    let successor_id: StepId = sequence.next()?;
+    let commit: CommitSeq = sequence.next()?;
+    let ordinal = turn
+        .budget
+        .model_steps
+        .checked_add(1)
+        .ok_or_else(|| StoreError::Limit("model-step ordinal overflow".to_owned()))?;
+    let successor = ModelStep {
+        id: successor_id,
+        turn: turn.id,
+        ordinal,
+        purpose: StepPurpose::Fallback {
+            predecessor: predecessor_id,
+        },
+        manifest,
+        disposition: StepDisposition::Open,
+    };
+
+    predecessor.disposition = StepDisposition::Superseded {
+        reason,
+        successor: Some(successor_id),
+    };
+    update_step_disposition(&transaction, &predecessor)?;
+    insert_step(&transaction, &successor)?;
+
+    turn.settings = settings;
+    turn.budget.model_steps = ordinal;
+    turn.phase = TurnPhase::Model(successor_id);
+    update_turn_runtime(&transaction, &turn)?;
+    advance_metadata(&transaction, &sequence, commit, None)?;
+    transaction.commit()?;
+
+    Ok(CreatedModelStep {
+        step: successor.clone(),
+        turn: turn.clone(),
+        receipt: CommitReceipt {
+            seq: commit,
+            update: SessionUpdate::new(vec![
+                SessionChange::ModelStep(predecessor),
+                SessionChange::ModelStep(successor),
                 SessionChange::Turn(turn),
             ]),
         },
@@ -201,32 +314,14 @@ pub(super) fn record_start_receipt(
 ) -> Result<RecordedModelAttempt, StoreError> {
     let transaction = connection.transaction()?;
     let mut attempt = load_attempt(&transaction, attempt_id)?;
-    match &attempt.state {
-        ModelAttemptState::IntentCommitted {
-            start_receipt: Some(existing),
-        } if existing == &receipt => {
-            return Ok(RecordedModelAttempt::Unchanged(attempt));
-        }
-        ModelAttemptState::IntentCommitted {
-            start_receipt: None,
-        } => {}
-        ModelAttemptState::IntentCommitted {
-            start_receipt: Some(_),
-        } => {
-            return Err(StoreError::InvalidState(format!(
-                "model attempt {attempt_id} already has a different start receipt"
-            )));
-        }
-        _ => {
-            return Err(StoreError::InvalidState(format!(
-                "model attempt {attempt_id} is already terminal"
-            )));
-        }
-    }
-
-    attempt.state = ModelAttemptState::IntentCommitted {
-        start_receipt: Some(receipt),
+    let next = attach_start_receipt(&attempt.state, &receipt).map_err(|message| {
+        StoreError::InvalidState(format!("model attempt {attempt_id} {message}"))
+    })?;
+    let Some(state) = next else {
+        return Ok(RecordedModelAttempt::Unchanged(attempt));
     };
+
+    attempt.state = state;
     update_attempt_state(&transaction, &attempt)?;
     let mut sequence = Sequence::load(&transaction)?;
     let commit: CommitSeq = sequence.next()?;
@@ -256,9 +351,9 @@ pub(super) fn settle_attempt(
     if attempt.state == state {
         return Ok(RecordedModelAttempt::Unchanged(attempt));
     }
-    if !matches!(attempt.state, ModelAttemptState::IntentCommitted { .. }) {
+    if !attempt_state_refines(&attempt.state, &state) {
         return Err(StoreError::InvalidState(format!(
-            "model attempt {attempt_id} already has terminal evidence"
+            "model attempt {attempt_id} evidence would move backward or conflict"
         )));
     }
 
@@ -274,6 +369,136 @@ pub(super) fn settle_attempt(
         update: SessionUpdate::new(vec![SessionChange::ModelAttempt(attempt.clone())]),
     };
     Ok(RecordedModelAttempt::Committed { attempt, receipt })
+}
+
+fn attach_start_receipt(
+    state: &ModelAttemptState,
+    receipt: &crate::ProviderStartReceipt,
+) -> Result<Option<ModelAttemptState>, &'static str> {
+    match state {
+        ModelAttemptState::IntentCommitted { start_receipt }
+        | ModelAttemptState::Indeterminate {
+            start_receipt,
+            ..
+        }
+        | ModelAttemptState::Failed {
+            start_receipt,
+            ..
+        }
+        | ModelAttemptState::ResponseReady {
+            start_receipt,
+            ..
+        } => {
+            if let Some(existing) = start_receipt {
+                return if existing == receipt {
+                    Ok(None)
+                } else {
+                    Err("already has a different start receipt")
+                };
+            }
+        }
+        ModelAttemptState::NotStarted { .. } => {
+            return Err("is known not-started and cannot gain a start receipt");
+        }
+    }
+
+    let next = match state {
+        ModelAttemptState::IntentCommitted { .. } => ModelAttemptState::IntentCommitted {
+            start_receipt: Some(receipt.clone()),
+        },
+        ModelAttemptState::Indeterminate { reason, usage, .. } => {
+            ModelAttemptState::Indeterminate {
+                reason: reason.clone(),
+                usage: *usage,
+                start_receipt: Some(receipt.clone()),
+            }
+        }
+        ModelAttemptState::Failed { failure, .. } => ModelAttemptState::Failed {
+            failure: failure.clone(),
+            start_receipt: Some(receipt.clone()),
+        },
+        ModelAttemptState::ResponseReady { response, .. } => ModelAttemptState::ResponseReady {
+            response: response.clone(),
+            start_receipt: Some(receipt.clone()),
+        },
+        ModelAttemptState::NotStarted { .. } => unreachable!("handled above"),
+    };
+    Ok(Some(next))
+}
+
+fn attempt_state_refines(old: &ModelAttemptState, new: &ModelAttemptState) -> bool {
+    match old {
+        ModelAttemptState::IntentCommitted { start_receipt } => {
+            evidence_preserves_receipt(start_receipt.as_ref(), new)
+        }
+        ModelAttemptState::Indeterminate {
+            usage,
+            start_receipt,
+            ..
+        } => match new {
+            ModelAttemptState::NotStarted { .. } => {
+                start_receipt.is_none()
+                    && usage.input_tokens.is_none()
+                    && usage.output_tokens.is_none()
+            }
+            ModelAttemptState::Failed {
+                failure,
+                start_receipt: next_receipt,
+            } => {
+                receipt_refines(start_receipt.as_ref(), next_receipt.as_ref())
+                    && usage_refines(*usage, failure.usage)
+            }
+            ModelAttemptState::Indeterminate {
+                usage: next_usage,
+                start_receipt: next_receipt,
+                ..
+            } => {
+                receipt_refines(start_receipt.as_ref(), next_receipt.as_ref())
+                    && usage_refines(*usage, *next_usage)
+            }
+            ModelAttemptState::ResponseReady {
+                response,
+                start_receipt: next_receipt,
+            } => {
+                receipt_refines(start_receipt.as_ref(), next_receipt.as_ref())
+                    && usage_refines(*usage, response.usage)
+            }
+            ModelAttemptState::IntentCommitted { .. } => false,
+        },
+        ModelAttemptState::NotStarted { .. }
+        | ModelAttemptState::Failed { .. }
+        | ModelAttemptState::ResponseReady { .. } => false,
+    }
+}
+
+fn evidence_preserves_receipt(
+    old: Option<&crate::ProviderStartReceipt>,
+    new: &ModelAttemptState,
+) -> bool {
+    match new {
+        ModelAttemptState::NotStarted { .. } => old.is_none(),
+        ModelAttemptState::Failed { start_receipt, .. }
+        | ModelAttemptState::Indeterminate { start_receipt, .. }
+        | ModelAttemptState::ResponseReady { start_receipt, .. } => {
+            receipt_refines(old, start_receipt.as_ref())
+        }
+        ModelAttemptState::IntentCommitted { .. } => false,
+    }
+}
+
+fn receipt_refines(
+    old: Option<&crate::ProviderStartReceipt>,
+    new: Option<&crate::ProviderStartReceipt>,
+) -> bool {
+    old.is_none_or(|old| new == Some(old))
+}
+
+fn usage_refines(old: ion_ai::Usage, new: ion_ai::Usage) -> bool {
+    old.input_tokens
+        .is_none_or(|value| new.input_tokens == Some(value))
+        && old
+            .output_tokens
+            .is_none_or(|value| new.output_tokens == Some(value))
 }
 
 pub(super) fn select_final_response(
@@ -526,6 +751,7 @@ pub(super) fn load_attempt(
 fn validate_manifest_basis(
     connection: &Connection,
     turn: &crate::Turn,
+    settings: &TurnSettings,
     manifest: &RequestManifest,
 ) -> Result<(), StoreError> {
     let environment_digest = turn.environment.digest().map_err(|error| {
@@ -539,9 +765,9 @@ fn validate_manifest_basis(
             "model manifest environment digest does not match the current turn".to_owned(),
         ));
     }
-    if manifest.settings != turn.settings {
+    if manifest.settings != *settings {
         return Err(StoreError::InvalidState(
-            "model manifest settings do not match the current turn settings".to_owned(),
+            "model manifest settings do not match the step settings".to_owned(),
         ));
     }
     if manifest.provider_fingerprint.encoding
@@ -619,6 +845,38 @@ fn load_turn_entries(
         )?);
     }
     Ok(entries)
+}
+
+fn turn_provider_bindings(
+    connection: &Connection,
+    turn: &crate::Turn,
+) -> Result<Vec<crate::ProviderBindingId>, StoreError> {
+    let maximum = usize::try_from(turn.environment.limits.max_model_steps)
+        .map_err(|_| StoreError::Corrupt("model-step limit does not fit usize".to_owned()))?;
+    let sql_limit = i64::try_from(maximum.saturating_add(1))
+        .map_err(|_| StoreError::Corrupt("model-step limit does not fit SQLite".to_owned()))?;
+    let mut statement = connection.prepare(
+        "SELECT manifest FROM model_steps
+         WHERE turn_id = ?1
+         ORDER BY ordinal
+         LIMIT ?2",
+    )?;
+    let rows = statement.query_map(
+        params![turn.id.get(), sql_limit],
+        |row| row.get::<_, String>(0),
+    )?;
+    let mut providers = Vec::new();
+    for row in rows {
+        let manifest: RequestManifest = json_from(&row?, "model step manifest")?;
+        providers.push(manifest.settings.provider);
+    }
+    if providers.len() > maximum {
+        return Err(StoreError::Corrupt(format!(
+            "turn {} exceeds its persisted model-step limit",
+            turn.id
+        )));
+    }
+    Ok(providers)
 }
 
 fn turn_input_ids(connection: &Connection, turn_id: TurnId) -> Result<Vec<InputId>, StoreError> {
