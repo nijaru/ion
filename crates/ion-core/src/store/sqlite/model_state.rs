@@ -150,7 +150,7 @@ pub(super) fn create_fallback_step(
     let attempts = load_attempts(&transaction, predecessor_id)?;
     if attempts.iter().any(|attempt| {
         !matches!(
-            attempt.state,
+            &attempt.state,
             ModelAttemptState::NotStarted { .. } | ModelAttemptState::Failed { .. }
         )
     }) {
@@ -176,7 +176,9 @@ pub(super) fn create_fallback_step(
         ));
     }
     settings.validate(&turn.environment).map_err(|error| {
-        StoreError::InvalidState(format!("fallback settings are outside the frozen turn: {error}"))
+        StoreError::InvalidState(format!(
+            "fallback settings are outside the frozen turn: {error}"
+        ))
     })?;
     validate_manifest_basis(&transaction, &turn, &settings, &manifest)?;
 
@@ -377,18 +379,9 @@ fn attach_start_receipt(
 ) -> Result<Option<ModelAttemptState>, &'static str> {
     match state {
         ModelAttemptState::IntentCommitted { start_receipt }
-        | ModelAttemptState::Indeterminate {
-            start_receipt,
-            ..
-        }
-        | ModelAttemptState::Failed {
-            start_receipt,
-            ..
-        }
-        | ModelAttemptState::ResponseReady {
-            start_receipt,
-            ..
-        } => {
+        | ModelAttemptState::Indeterminate { start_receipt, .. }
+        | ModelAttemptState::Failed { start_receipt, .. }
+        | ModelAttemptState::ResponseReady { start_receipt, .. } => {
             if let Some(existing) = start_receipt {
                 return if existing == receipt {
                     Ok(None)
@@ -861,10 +854,9 @@ fn turn_provider_bindings(
          ORDER BY ordinal
          LIMIT ?2",
     )?;
-    let rows = statement.query_map(
-        params![turn.id.get(), sql_limit],
-        |row| row.get::<_, String>(0),
-    )?;
+    let rows = statement.query_map(params![turn.id.get(), sql_limit], |row| {
+        row.get::<_, String>(0)
+    })?;
     let mut providers = Vec::new();
     for row in rows {
         let manifest: RequestManifest = json_from(&row?, "model step manifest")?;
