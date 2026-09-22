@@ -14,10 +14,16 @@ admission, cancellation generation fencing, physical ModelAttempt evidence, prov
 start-receipt reconciliation and atomic ModelStep fallback supersession. The old
 Session/task/tool/workspace runtime is not a compatibility layer underneath them.
 
-Native tool execution remains the next boundary: logical ToolInvocation/ToolAttempt types
-and schema exist, but PreparedAction admission, execution receipts, result staging,
-WorkspaceRegistry coordination and native read/edit/exec are not connected yet. Context
-compaction/reset/forks, artifact publication, a client binary and workers also remain
+The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
+physical attempt evidence, conservative reconciliation, closure reserves, and source-order
+result materialization through sequential host-supplied tools. Active tool state participates
+in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
+workspace/repository identity and orphan quarantine; a scripted integration test kills the
+owner after mutation and recovers through the registry without replay.
+
+R1C acceptance is not complete: durable approval interaction, native read/edit/exec,
+bounded artifact publication, and real parallel dispatch remain unimplemented. Context
+compaction/reset/forks, real provider adapters, a client binary and workers also remain
 future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
 tests, not obsolete owners or schema/API compatibility.
 

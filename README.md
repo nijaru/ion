@@ -14,8 +14,8 @@ The workspace builds three libraries:
 - `ion-terminal`: low-level terminal components.
 
 The maintained `ion-core` no longer contains the prototype Session/task/tool/workspace
-runtime. The replacement branch now implements the R1 durable domain and schema plus the
-R1B Session/provider foundation:
+runtime. The replacement branch implements the R1 durable domain, Session/provider
+foundation, and an initial tool-execution boundary:
 
 - fresh SQLite schema v2 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
@@ -34,6 +34,11 @@ R1B Session/provider foundation:
   step eligibility, and atomic predecessor-superseding provider fallback;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
   provider-request fingerprint when adapters use them as idempotency material;
+- frozen tool-schema validation and persisted `PreparedAction` admission; distinct physical
+  tool attempts, conservative receipt recovery, nonoverlapping retries, durable outcome staging,
+  source-order results, and model-context/storage closure reserves before execution;
+- explicit unknown-result acceptance without rewriting execution evidence, late reconciliation,
+  and cancellation that closes the tool exchange without claiming uncertain work stopped;
 - a host-owned cross-process `workspace_registry` outside the checkout, with frozen Unix
   filesystem/repository identity, durable mutation claims, revision checks, and orphan
   quarantine that survives Session/blob deletion. Trusted hosts authenticate resolution
@@ -44,21 +49,26 @@ persisted provider attempt and start new provider work. Closing seals local effe
 signals and joins locally owned drive work, then releases storage ownership without silently
 turning suspended work into user cancellation.
 
-Native tool execution is deliberately not connected yet. The replacement
-`ToolBinding`/`ToolInvocation`/`ToolAttempt` domain and schema exist, but an active tool
-loadout currently parks before provider dispatch. R1C will add deterministic PreparedAction
-admission, immutable physical tool attempts, source-order result materialization, execution
-receipts, and integration with the host-owned WorkspaceRegistry. The registry is available
-independently; native tool execution does not use it yet. The deleted `.ion/claims.sqlite`
-workspace wrapper is not part of the replacement runtime.
+`resume_with_tools` accepts exact compatible host tool implementations; missing bindings
+park before provider dispatch. `tool_records` inspects attempts, `accept_tool_unknown`
+settles an uncertain exchange, and `reconcile_tools` recovers evidence without dispatching.
+Active tool records are included in bounded snapshot/watch hydration.
+
+Tool execution is sequential. Scripted tests cover an actual owner-process kill after a
+filesystem mutation and host receipt, followed by passive reopen and explicit reconciliation
+without reexecution. These fixtures are not native tools or a confinement implementation.
+A host backend must enforce current authority, workspace claims, and stop/join behavior.
+The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Schema v1 is refused rather than
 migrated; Git retains the prototype and its useful failure scenarios are being restored against
 the replacement owners.
 
-Still missing: native read/edit/exec tools, tool/registry integration, BlobStore,
-context compaction/forking, real provider adapters, a runnable `ion` binary, the terminal UI,
-and workers. No live-provider effectiveness has been measured.
+Still missing: native read/edit/exec backends, durable approval interaction, BlobStore,
+parallel tool dispatch, context compaction/forking, real provider adapters, a runnable `ion`
+binary, the terminal UI, and workers. Oversized tool results park rather than fabricate
+truncated success; bounded artifact publication is required before large native output.
+No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
 `crates/ion/` application source is reference material outside the workspace; its CLI,
@@ -80,6 +90,7 @@ The replacement runtime regressions currently live here:
 ```sh
 cargo test --locked -p ion-core --test r1b_storage  # admission/config/Turn/store/watch
 cargo test --locked -p ion-core --test r1b_drive    # provider drive/cancellation/recovery/fallback
+cargo test --locked -p ion-core --test c1_tools     # tool exchanges/receipts/closure/process loss
 cargo test --locked -p ion-core --test r1c_workspace_registry # claims/identity/process loss
 cargo test --locked -p ion-core --lib               # domain/schema/request/observation contracts
 ```
