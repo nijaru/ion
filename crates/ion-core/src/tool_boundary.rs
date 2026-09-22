@@ -64,12 +64,19 @@ pub trait ToolBoundary: Send + Sync {
     fn reconcile<'a>(
         &'a self,
         _execution: ToolExecution,
-        _attempt: ToolAttempt,
+        attempt: ToolAttempt,
     ) -> BoxFuture<'a, ToolAttemptState> {
-        Box::pin(async {
-            ToolAttemptState::Indeterminate {
-                reason: "execution evidence unavailable".into(),
-                receipt: None,
+        Box::pin(async move {
+            match attempt.state {
+                ToolAttemptState::IntentCommitted { start_receipt }
+                | ToolAttemptState::Indeterminate {
+                    receipt: start_receipt,
+                    ..
+                } => ToolAttemptState::Indeterminate {
+                    reason: "execution evidence unavailable".into(),
+                    receipt: start_receipt,
+                },
+                terminal => terminal,
             }
         })
     }
@@ -168,6 +175,97 @@ pub(crate) fn permits_retry(binding: &ToolBinding, attempts: &[ToolAttempt]) -> 
                 } => result.is_error,
                 _ => false,
             }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct NoRecovery;
+    impl ToolBoundary for NoRecovery {
+        fn binding(&self) -> ToolBinding {
+            panic!("reconciliation must not re-prepare")
+        }
+        fn executor(&self) -> SemanticCompatibilityId {
+            panic!("unused")
+        }
+        fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
+            panic!("unused")
+        }
+        fn execute<'a>(
+            &'a self,
+            _: ToolExecution,
+            _: CancellationToken,
+        ) -> BoxFuture<'a, ToolAttemptState> {
+            panic!("must not execute")
+        }
+    }
+
+    #[tokio::test]
+    async fn default_recovery_retains_the_durable_start_receipt() {
+        let receipt = crate::StartReceipt {
+            kind: "test-v1".into(),
+            data: serde_json::json!({"started": true}),
+        };
+        let binding = ToolBinding::new(
+            ToolBindingId::new("read").unwrap(),
+            ion_ai::ToolSpec {
+                name: "read".into(),
+                description: String::new(),
+                input_schema: serde_json::json!({"type": "object"}),
+            },
+            SemanticCompatibilityId::new("read-v1").unwrap(),
+            crate::ToolConcurrency::Serial,
+            ToolRecoveryPolicy::NeverRepeat,
+            crate::EgressRealm::Local,
+        )
+        .unwrap();
+        let action = PreparedAction::new(
+            binding.id.clone(),
+            serde_json::json!({}),
+            crate::EgressRealm::Local,
+            None,
+            Vec::new(),
+        )
+        .unwrap();
+        let attempt = ToolAttempt {
+            id: AttemptId::new(2).unwrap(),
+            invocation: InvocationId::new(1).unwrap(),
+            ordinal: 1,
+            generation: 0,
+            executor: SemanticCompatibilityId::new("local-v1").unwrap(),
+            progress: None,
+            state: ToolAttemptState::Indeterminate {
+                reason: "owner lost".into(),
+                receipt: Some(receipt.clone()),
+            },
+        };
+        let execution = ToolExecution {
+            session: SessionId::new(),
+            invocation: attempt.invocation,
+            attempt: attempt.id,
+            effect_key: "stable-effect-key".into(),
+            binding,
+            action,
+            workspace: WorkspaceBinding {
+                id: "root".into(),
+                canonical_root: "/tmp".into(),
+                backend: "local-v1".into(),
+                object_identity: "test-object".into(),
+            },
+            ceiling: AuthorityCeiling {
+                workspace_mutation: false,
+                unconfined_execution: false,
+                remote_tools: false,
+                egress_realms: vec![crate::EgressRealm::Local],
+            },
+            output_limit: 1024,
+        };
+        let new = NoRecovery.reconcile(execution, attempt).await;
+        assert!(
+            matches!(new, ToolAttemptState::Indeterminate { receipt: Some(ref actual), .. } if actual == &receipt)
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
