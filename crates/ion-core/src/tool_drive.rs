@@ -211,10 +211,9 @@ pub(crate) async fn drive(
             .environment
             .tool(&call.binding)
             .ok_or(StoreError::ToolsPending)?;
-        let boundary = match tools.resolve(binding, &basis.turn.environment.workspace) {
-            Ok(b) => b,
-            Err(_) => return Ok(Some(ParkReason::ToolUnavailable)),
-        };
+        let boundary = tools
+            .resolve(binding, &basis.turn.environment.workspace)
+            .ok();
         let prior: Vec<_> = records
             .attempts
             .iter()
@@ -225,6 +224,9 @@ pub(crate) async fn drive(
             match &attempt.state {
                 ToolAttemptState::IntentCommitted { .. }
                 | ToolAttemptState::Indeterminate { .. } => {
+                    let Some(boundary) = boundary else {
+                        return Ok(Some(ParkReason::ToolUnavailable));
+                    };
                     let state = boundary
                         .reconcile(
                             execution(inner, &basis.turn, call, attempt),
@@ -271,7 +273,9 @@ pub(crate) async fn drive(
                     if basis.turn.cancellation.requested {
                         continue;
                     }
-                    if !boundary.permits_retry()
+                    // Terminal evidence belongs to the Session, not the executor.
+                    // Missing code cannot invalidate it or authorize another run.
+                    if !boundary.as_ref().is_some_and(|b| b.permits_retry())
                         || !crate::tool_boundary::permits_retry(binding, &prior)
                     {
                         inner.observe_store(
@@ -292,6 +296,9 @@ pub(crate) async fn drive(
         if basis.turn.cancellation.requested {
             continue;
         }
+        let Some(boundary) = boundary else {
+            return Ok(Some(ParkReason::ToolUnavailable));
+        };
         if !basis.turn.environment.authority.permits(&binding.egress) {
             return Ok(Some(ParkReason::AwaitingApproval));
         }

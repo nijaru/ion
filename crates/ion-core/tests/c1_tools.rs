@@ -412,6 +412,69 @@ async fn oversized_success_is_refused_without_truncation_or_reexecution() {
 }
 
 #[tokio::test]
+async fn terminal_evidence_materializes_without_an_executor_but_unknown_stays_pending() {
+    for state in [
+        success(),
+        ToolAttemptState::NotStarted {
+            reason: "authoritative negative".into(),
+        },
+        unknown(),
+    ] {
+        let terminal = matches!(
+            state,
+            ToolAttemptState::Settled { .. } | ToolAttemptState::NotStarted { .. }
+        );
+        let (s, path, turn) = setup(config()).await;
+        let m = model();
+        let t = Arc::new(Tool::new(unknown()));
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap();
+        let step = tool_step(&s).await;
+        let before = s.handle().tool_records(step).await.unwrap();
+        s.close().await.unwrap();
+        // Crash-window pre-state: evidence committed, outcome not yet staged.
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute(
+            "UPDATE tool_attempts SET state=?1 WHERE id=?2",
+            rusqlite::params![
+                serde_json::to_string(&state).unwrap(),
+                before.attempts[0].id.to_string().parse::<i64>().unwrap()
+            ],
+        )
+        .unwrap();
+        drop(db);
+        let s = Session::open(&path).await.unwrap();
+        assert_eq!(
+            s.handle()
+                .resume_with_tools(
+                    turn,
+                    models(&m),
+                    ToolBoundaries::default(),
+                    DrivePolicy::default()
+                )
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::ToolUnavailable)
+        );
+        let after = s.handle().tool_records(step).await.unwrap();
+        assert_eq!(after.attempts.len(), 1);
+        assert_eq!(after.attempts[0].id, before.attempts[0].id);
+        assert_eq!(after.attempts[0].state, state);
+        assert_eq!(
+            matches!(
+                after.invocations[0].exchange,
+                ToolExchangeState::Materialized { .. }
+            ),
+            terminal
+        );
+        assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+        s.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn staged_b_c_survive_reopen_without_execution_and_materialize_after_a() {
     let (s, path, turn) = setup(config()).await;
     let m = Arc::new(Model {
