@@ -159,6 +159,29 @@ fn replacement_rejects_admission_and_retains_old_quarantine() {
 }
 
 #[test]
+fn late_resolution_does_not_transfer_revision_into_replacement_subtree() {
+    let f = Fixture::new();
+    let mut r = f.open();
+    let b = f.bind(&mut r);
+    let k = key();
+    admit(&mut r, &b, k);
+    fs::rename(&f.root, f.home.join("old-checkout")).unwrap();
+    fs::create_dir_all(f.root.join("nested")).unwrap();
+    let replacement = r
+        .bind("replacement-child", f.root.join("nested"), "local-v1")
+        .unwrap();
+    assert_eq!(r.revision(&replacement).unwrap().files, 0);
+    r.resolve(k, evidence(EffectSummary::MayHaveMutated))
+        .unwrap();
+    assert_eq!(r.revision(&b).unwrap().files, 1);
+    assert_eq!(
+        r.revision(&replacement).unwrap().files,
+        0,
+        "path overlap does not make the new subtree part of the old object"
+    );
+}
+
+#[test]
 fn session_and_blob_loss_do_not_erase_orphan_or_receipts() {
     let f = Fixture::new();
     let mut r = f.open();
@@ -375,6 +398,15 @@ fn process_child() {
     }
 }
 
+struct OwnerProcess(std::process::Child);
+
+impl Drop for OwnerProcess {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 #[test]
 fn actual_process_death_retains_claim_and_cross_process_exclusion() {
     let f = Fixture::new();
@@ -382,20 +414,22 @@ fn actual_process_death_retains_claim_and_cross_process_exclusion() {
     let b = f.bind(&mut r);
     let k = key();
     fs::write(f.home.join("key"), serde_json::to_vec(&k).unwrap()).unwrap();
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", "process_child", "--nocapture"])
-        .env("ION_REGISTRY_CHILD", &f.home)
-        .stdout(Stdio::null())
-        .spawn()
-        .unwrap();
+    let mut child = OwnerProcess(
+        Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "process_child", "--nocapture"])
+            .env("ION_REGISTRY_CHILD", &f.home)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
     let deadline = Instant::now() + Duration::from_secs(10);
     while !f.home.join("ready").exists() {
         if Instant::now() >= deadline {
-            child.kill().unwrap();
-            child.wait().unwrap();
+            child.0.kill().unwrap();
+            child.0.wait().unwrap();
             panic!("child readiness timed out");
         }
-        assert!(child.try_wait().unwrap().is_none());
+        assert!(child.0.try_wait().unwrap().is_none());
         thread::sleep(Duration::from_millis(10));
     }
     assert!(matches!(
@@ -407,8 +441,8 @@ fn actual_process_death_retains_claim_and_cross_process_exclusion() {
         ),
         Err(RegistryError::Conflict)
     ));
-    child.kill().unwrap();
-    assert!(!child.wait().unwrap().success());
+    child.0.kill().unwrap();
+    assert!(!child.0.wait().unwrap().success());
     drop(r);
     let mut r = f.open();
     assert!(f.root.join("mutated").exists());

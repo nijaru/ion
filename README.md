@@ -33,7 +33,11 @@ R1B Session/provider foundation:
   monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
   step eligibility, and atomic predecessor-superseding provider fallback;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
-  provider-request fingerprint when adapters use them as idempotency material.
+  provider-request fingerprint when adapters use them as idempotency material;
+- a host-owned cross-process `workspace_registry` outside the checkout, with frozen Unix
+  filesystem/repository identity, durable mutation claims, revision checks, and orphan
+  quarantine that survives Session/blob deletion. Trusted hosts authenticate resolution
+  evidence; this coordinates cooperating writers, not confined execution.
 
 Opening and inspection are passive; explicit resume is the boundary that may reconcile a
 persisted provider attempt and start new provider work. Closing seals local effect admission,
@@ -44,14 +48,15 @@ Native tool execution is deliberately not connected yet. The replacement
 `ToolBinding`/`ToolInvocation`/`ToolAttempt` domain and schema exist, but an active tool
 loadout currently parks before provider dispatch. R1C will add deterministic PreparedAction
 admission, immutable physical tool attempts, source-order result materialization, execution
-receipts, and the host-owned WorkspaceRegistry. The deleted `.ion/claims.sqlite` workspace
-wrapper is not part of the replacement runtime.
+receipts, and integration with the host-owned WorkspaceRegistry. The registry is available
+independently; native tool execution does not use it yet. The deleted `.ion/claims.sqlite`
+workspace wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Schema v1 is refused rather than
 migrated; Git retains the prototype and its useful failure scenarios are being restored against
 the replacement owners.
 
-Still missing: native read/edit/exec tools, the host-owned workspace registry, BlobStore,
+Still missing: native read/edit/exec tools, tool/registry integration, BlobStore,
 context compaction/forking, real provider adapters, a runnable `ion` binary, the terminal UI,
 and workers. No live-provider effectiveness has been measured.
 
@@ -75,6 +80,7 @@ The replacement runtime regressions currently live here:
 ```sh
 cargo test --locked -p ion-core --test r1b_storage  # admission/config/Turn/store/watch
 cargo test --locked -p ion-core --test r1b_drive    # provider drive/cancellation/recovery/fallback
+cargo test --locked -p ion-core --test r1c_workspace_registry # claims/identity/process loss
 cargo test --locked -p ion-core --lib               # domain/schema/request/observation contracts
 ```
 

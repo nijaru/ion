@@ -118,6 +118,9 @@ struct Object {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 struct Descriptor {
     root: Object,
+    // Frozen physical ancestry distinguishes an overlapping original subtree
+    // from a new object later installed under the same pathname.
+    parents: Vec<Object>,
     git: Option<Object>,
     common: Option<Object>,
 }
@@ -162,8 +165,8 @@ impl WorkspaceRegistry {
                 CREATE TABLE repositories(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE claims(key TEXT PRIMARY KEY, session TEXT NOT NULL, invocation INTEGER NOT NULL, active INTEGER NOT NULL, record TEXT NOT NULL);
                 CREATE INDEX active_claims ON claims(active);
-                PRAGMA application_id=1229934162; PRAGMA user_version=1;")?;
-        } else if version != 1 || application != 1229934162 {
+                PRAGMA application_id=1229934162; PRAGMA user_version=2;")?;
+        } else if version != 2 || application != 1229934162 {
             return Err(RegistryError::Unsupported);
         }
         tx.commit()?;
@@ -379,8 +382,16 @@ impl WorkspaceRegistry {
             for value in records {
                 let other: BindingRecord = decode(&value)?;
                 if same_object(&record.descriptor.root, &other.descriptor.root)
-                    || (overlaps(&record.descriptor.root.path, &other.descriptor.root.path)
-                        && record.descriptor.root.path != other.descriptor.root.path)
+                    || record
+                        .descriptor
+                        .parents
+                        .iter()
+                        .any(|parent| same_object(parent, &other.descriptor.root))
+                    || other
+                        .descriptor
+                        .parents
+                        .iter()
+                        .any(|parent| same_object(parent, &record.descriptor.root))
                 {
                     advance(&tx, "bindings", &other.binding.id)?;
                 }
@@ -556,6 +567,12 @@ fn small_file(path: &Path) -> Result<String> {
 }
 fn describe(root: &Path) -> Result<Descriptor> {
     let root = object(root)?;
+    let parents = root
+        .path
+        .ancestors()
+        .skip(1)
+        .map(object)
+        .collect::<Result<Vec<_>>>()?;
     let mut git = None;
     for ancestor in root.path.ancestors() {
         let marker = ancestor.join(".git");
@@ -589,5 +606,10 @@ fn describe(root: &Path) -> Result<Descriptor> {
     } else {
         None
     };
-    Ok(Descriptor { root, git, common })
+    Ok(Descriptor {
+        root,
+        parents,
+        git,
+        common,
+    })
 }
