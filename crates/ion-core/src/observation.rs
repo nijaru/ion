@@ -156,6 +156,8 @@ pub struct SessionSnapshot {
     pub unfinished_turn: Option<Turn>,
     pub current_model_step: Option<ModelStep>,
     pub model_attempts: Vec<ModelAttempt>,
+    pub tool_invocations: Vec<crate::ToolInvocation>,
+    pub tool_attempts: Vec<crate::ToolAttempt>,
     pub queued_inputs: Vec<Input>,
     pub has_more_inputs: bool,
     pub transcript_tail: Vec<Entry>,

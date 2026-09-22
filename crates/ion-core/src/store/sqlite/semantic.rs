@@ -646,6 +646,14 @@ pub(super) fn snapshot(
         .transpose()?
         .unwrap_or_default();
 
+    let (tool_invocations, tool_attempts) = match unfinished_turn.as_ref().map(|turn| &turn.phase) {
+        Some(TurnPhase::Tools(step)) => {
+            let records = super::tool_state::records(&transaction, *step)?;
+            (records.invocations, records.attempts)
+        }
+        _ => (Vec::new(), Vec::new()),
+    };
+
     let input_limit = sql_limit_plus_one(request.max_inputs)?;
     let mut input_statement = transaction.prepare(
         "SELECT id FROM inputs
@@ -695,6 +703,8 @@ pub(super) fn snapshot(
         unfinished_turn,
         current_model_step,
         model_attempts,
+        tool_invocations,
+        tool_attempts,
         queued_inputs,
         has_more_inputs,
         transcript_tail,

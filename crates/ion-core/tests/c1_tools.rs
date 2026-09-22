@@ -11,6 +11,10 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[cfg(unix)]
+#[path = "c1_tools/process_loss.rs"]
+mod process_loss;
+
 fn id(s: &str) -> SemanticCompatibilityId {
     SemanticCompatibilityId::new(s).unwrap()
 }
@@ -120,6 +124,12 @@ impl ModelBoundary for Model {
         Box::pin(async move {
             self.starts.fetch_add(1, Ordering::SeqCst);
             let has_result = r.messages.iter().any(|m| m.role == TranscriptRole::Tool);
+            let name = r
+                .tools
+                .first()
+                .expect("scripted tool declaration")
+                .name
+                .clone();
             let content = if has_result {
                 vec![Content::Text("done".into())]
             } else {
@@ -127,7 +137,7 @@ impl ModelBoundary for Model {
                     .map(|i| {
                         Content::ToolCall(ToolCall {
                             id: format!("call-{i}"),
-                            name: "read".into(),
+                            name: name.clone(),
                             arguments: self.arguments.clone(),
                         })
                     })
@@ -674,6 +684,52 @@ async fn unknown_survives_passive_reopen_and_late_evidence_does_not_rewrite_resu
         ToolAttemptState::Settled { .. }
     ));
     assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn active_tool_snapshot_and_watch_share_exact_commit_coverage() {
+    let (s, _path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(unknown()));
+    s.handle()
+        .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+        .await
+        .unwrap();
+    let step = tool_step(&s).await;
+    let records = s.handle().tool_records(step).await.unwrap();
+    let view = s
+        .handle()
+        .snapshot_and_watch(WatchRequest {
+            snapshot: SnapshotRequest {
+                conversation: s.primary_conversation(),
+                max_inputs: 0,
+                max_entries: 0,
+                max_bytes: 1024 * 1024,
+            },
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    let projected = serde_json::to_value(&view.snapshot).unwrap();
+    assert_eq!(
+        projected["tool_invocations"],
+        serde_json::to_value(&records.invocations).unwrap()
+    );
+    assert_eq!(
+        projected["tool_attempts"],
+        serde_json::to_value(&records.attempts).unwrap()
+    );
+    let receipt = s
+        .handle()
+        .accept_tool_unknown(step, records.invocations[0].id)
+        .await
+        .unwrap();
+    assert!(receipt.seq > view.snapshot.coverage);
+    assert_eq!(view.watch.try_recv().unwrap(), receipt);
     s.close().await.unwrap();
 }
 
