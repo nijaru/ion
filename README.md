@@ -17,7 +17,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v2 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v3 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -34,7 +34,8 @@ foundation, and an initial tool-execution boundary:
   step eligibility, and atomic predecessor-superseding provider fallback;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
   provider-request fingerprint when adapters use them as idempotency material;
-- frozen tool-schema validation and persisted `PreparedAction` admission; distinct physical
+- frozen tool-schema validation and persisted `PreparedAction` admission; digest-bound
+  action authority checked against the frozen ceiling before execution intent; distinct physical
   tool attempts, conservative receipt recovery, nonoverlapping retries, durable outcome staging,
   source-order results, and model-context/storage closure reserves before execution;
 - explicit unknown-result acceptance without rewriting execution evidence, late reconciliation,
@@ -60,7 +61,7 @@ without reexecution. These fixtures are not native tools or a confinement implem
 A host backend must enforce current authority, workspace claims, and stop/join behavior.
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
-There is no compatibility bridge or hybrid old/new runtime. Schema v1 is refused rather than
+There is no compatibility bridge or hybrid old/new runtime. Schemas v1 and v2 are refused rather than
 migrated; Git retains the prototype and its useful failure scenarios are being restored against
 the replacement owners.
 

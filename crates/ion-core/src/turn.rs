@@ -52,6 +52,7 @@ pub enum ParkReason {
     ProviderUnavailable,
     ToolUnavailable,
     AwaitingApproval,
+    AuthorityDenied,
     Capacity,
     ContextCapacity,
     RecoveryRequired,

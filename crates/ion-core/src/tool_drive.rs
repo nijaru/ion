@@ -299,8 +299,11 @@ pub(crate) async fn drive(
         let Some(boundary) = boundary else {
             return Ok(Some(ParkReason::ToolUnavailable));
         };
-        if !basis.turn.environment.authority.permits(&binding.egress) {
-            return Ok(Some(ParkReason::AwaitingApproval));
+        if !call
+            .prepared
+            .permitted_by(&basis.turn.environment.authority)
+        {
+            return Ok(Some(ParkReason::AuthorityDenied));
         }
         let created = inner.observe_store(
             inner

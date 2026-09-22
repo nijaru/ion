@@ -139,11 +139,17 @@ pub(crate) fn prepare_action(
         action.binding.clone(),
         action.arguments.clone(),
         action.egress.clone(),
+        action.authority,
         action.workspace_revision,
         action.base_facts.clone(),
     )
     .map_err(|_| ToolBoundaryError::InvalidAction)?;
-    if action != expected || action.binding != binding.id || action.egress != binding.egress {
+    if action != expected
+        || action.binding != binding.id
+        || action.egress != binding.egress
+        || (binding.concurrency == crate::ToolConcurrency::ParallelSafeReadOnly
+            && action.authority != crate::ToolAuthority::ReadOnly)
+    {
         return Err(ToolBoundaryError::InvalidAction);
     }
     Ok(action)
@@ -180,6 +186,58 @@ pub(crate) fn permits_retry(binding: &ToolBinding, attempts: &[ToolAttempt]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    struct Prepared(PreparedAction);
+    impl ToolBoundary for Prepared {
+        fn binding(&self) -> ToolBinding {
+            panic!("unused")
+        }
+        fn executor(&self) -> SemanticCompatibilityId {
+            panic!("unused")
+        }
+        fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
+            Ok(self.0.clone())
+        }
+        fn execute<'a>(
+            &'a self,
+            _: ToolExecution,
+            _: CancellationToken,
+        ) -> BoxFuture<'a, ToolAttemptState> {
+            panic!("preparation cannot execute")
+        }
+    }
+
+    #[test]
+    fn preparation_rejects_authority_tampering_and_false_parallel_class() {
+        let mut binding = crate::config::tests::config().tools.remove(0);
+        binding.spec.input_schema = serde_json::json!({});
+        binding.concurrency = crate::ToolConcurrency::ParallelSafeReadOnly;
+        let action = |authority| {
+            PreparedAction::new(
+                binding.id.clone(),
+                serde_json::json!({}),
+                binding.egress.clone(),
+                authority,
+                None,
+                vec![],
+            )
+            .unwrap()
+        };
+        let read = action(crate::ToolAuthority::ReadOnly);
+        let mutation = action(crate::ToolAuthority::WorkspaceMutation);
+        assert!(prepare_action(&Prepared(read.clone()), &binding, serde_json::json!({})).is_ok());
+        assert!(matches!(
+            prepare_action(&Prepared(mutation), &binding, serde_json::json!({})),
+            Err(ToolBoundaryError::InvalidAction)
+        ));
+        binding.concurrency = crate::ToolConcurrency::Serial;
+        let mut tampered = read;
+        tampered.authority = crate::ToolAuthority::WorkspaceMutation;
+        assert!(matches!(
+            prepare_action(&Prepared(tampered), &binding, serde_json::json!({})),
+            Err(ToolBoundaryError::InvalidAction)
+        ));
+    }
 
     struct NoRecovery;
     impl ToolBoundary for NoRecovery {
@@ -224,6 +282,7 @@ mod tests {
             binding.id.clone(),
             serde_json::json!({}),
             crate::EgressRealm::Local,
+            crate::ToolAuthority::ReadOnly,
             None,
             Vec::new(),
         )

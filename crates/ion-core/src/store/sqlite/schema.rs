@@ -1,13 +1,14 @@
 //! Fresh schema for the replacement coding-turn runtime.
 //!
-//! Version 1 belonged to the prototype turn runtime. R1 does not migrate it.
+//! Versions 1 (prototype) and 2 (actions without authority requirements) are
+//! refused. R1 does not infer missing authority or migrate prior schemas.
 
 use rusqlite::Connection;
 
 use super::super::StoreError;
 use crate::SessionId;
 
-pub(crate) const SCHEMA_VERSION: i64 = 2;
+pub(crate) const SCHEMA_VERSION: i64 = 3;
 
 const DDL: &str = r#"
 CREATE TABLE session_meta (
@@ -258,17 +259,21 @@ mod tests {
 
     #[test]
     fn old_schema_version_is_refused_not_migrated() {
-        let connection = Connection::open_in_memory().expect("sqlite");
-        connection
-            .pragma_update(None, "user_version", 1)
-            .expect("version");
-        let error = verify(&connection).expect_err("v1 must be refused");
-        assert!(matches!(
-            error,
-            StoreError::UnsupportedSchema {
-                found: 1,
-                expected: SCHEMA_VERSION
-            }
-        ));
+        for version in [1, 2] {
+            let connection = Connection::open_in_memory().expect("sqlite");
+            connection
+                .pragma_update(None, "user_version", version)
+                .expect("version");
+            let error = verify(&connection).expect_err("old schema must be refused");
+            assert!(matches!(error, StoreError::UnsupportedSchema {
+                found, expected: SCHEMA_VERSION
+            } if found == version));
+            assert_eq!(
+                connection
+                    .pragma_query_value(None, "user_version", |row| row.get::<_, i64>(0))
+                    .unwrap(),
+                version
+            );
+        }
     }
 }

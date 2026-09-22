@@ -295,6 +295,9 @@ pub(super) fn mutate(
             if call.exchange != ToolExchangeState::Pending {
                 return Err(invalid("tool outcome already staged"));
             }
+            if !call.prepared.permitted_by(&turn.environment.authority) {
+                return Err(invalid("prepared action exceeds frozen authority ceiling"));
+            }
             if executor.as_str() != turn.environment.workspace.backend {
                 return Err(invalid("executor mismatch"));
             }

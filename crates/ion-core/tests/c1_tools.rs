@@ -170,6 +170,7 @@ struct Tool {
     wait: bool,
     started: tokio::sync::Notify,
     denied: bool,
+    authority: ToolAuthority,
 }
 fn success() -> ToolAttemptState {
     ToolAttemptState::Settled {
@@ -201,19 +202,32 @@ impl Tool {
             wait: false,
             started: tokio::sync::Notify::new(),
             denied: false,
+            authority: ToolAuthority::ReadOnly,
         }
     }
 }
 impl ToolBoundary for Tool {
     fn binding(&self) -> ToolBinding {
-        binding()
+        let mut binding = binding();
+        if self.authority != ToolAuthority::ReadOnly {
+            binding.concurrency = ToolConcurrency::Serial;
+        }
+        binding
     }
     fn executor(&self) -> SemanticCompatibilityId {
         id("script-exec-v1")
     }
     fn prepare(&self, arguments: serde_json::Value) -> Result<PreparedAction, ToolBoundaryError> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
-        Ok(PreparedAction::new(binding().id, arguments, EgressRealm::Local, None, vec![]).unwrap())
+        Ok(PreparedAction::new(
+            binding().id,
+            arguments,
+            EgressRealm::Local,
+            self.authority,
+            None,
+            vec![],
+        )
+        .unwrap())
     }
     fn permits_retry(&self) -> bool {
         true
@@ -346,6 +360,55 @@ async fn authoritative_negative_recovery_creates_distinct_attempt_without_reprep
     assert_eq!(t.prepares.load(Ordering::SeqCst), 1);
     assert_eq!(t.executes.load(Ordering::SeqCst), 2);
     s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn frozen_authority_blocks_execution_intent_across_reopen() {
+    for authority in [
+        ToolAuthority::WorkspaceMutation,
+        ToolAuthority::UnconfinedExecution,
+    ] {
+        let mut cfg = config();
+        cfg.tools[0].concurrency = ToolConcurrency::Serial;
+        cfg.authority.workspace_mutation = authority == ToolAuthority::UnconfinedExecution;
+        cfg.authority.unconfined_execution = false;
+        let (s, path, turn) = setup(cfg).await;
+        let mut tool = Tool::new(success());
+        tool.authority = authority;
+        let t = Arc::new(tool);
+        let m = model();
+        assert_eq!(
+            s.handle()
+                .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::AuthorityDenied)
+        );
+        let step = tool_step(&s).await;
+        let before = s.handle().tool_records(step).await.unwrap();
+        assert!(before.attempts.is_empty());
+        assert_eq!(before.invocations[0].prepared.authority, authority);
+        s.close().await.unwrap();
+        let s = Session::open(&path).await.unwrap();
+        assert_eq!(
+            s.handle()
+                .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::AuthorityDenied)
+        );
+        assert!(
+            s.handle()
+                .tool_records(step)
+                .await
+                .unwrap()
+                .attempts
+                .is_empty()
+        );
+        assert_eq!(t.prepares.load(Ordering::SeqCst), 1);
+        assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+        s.close().await.unwrap();
+    }
 }
 
 #[tokio::test]

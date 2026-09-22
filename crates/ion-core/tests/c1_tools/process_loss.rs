@@ -59,6 +59,7 @@ impl ToolBoundary for RegistryTool {
             mutation_binding().id,
             arguments,
             EgressRealm::Local,
+            ToolAuthority::UnconfinedExecution,
             Some(0),
             vec![],
         )

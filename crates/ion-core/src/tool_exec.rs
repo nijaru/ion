@@ -8,12 +8,23 @@ use crate::{
     StepId, ToolBindingId,
 };
 
+/// Required authority, not proof of confinement. The trusted executor must
+/// enforce the declared class and recheck live policy at physical admission.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolAuthority {
+    ReadOnly,
+    WorkspaceMutation,
+    /// Unconfined execution necessarily also requires mutation authority.
+    UnconfinedExecution,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreparedAction {
     pub binding: ToolBindingId,
     pub arguments: Value,
     pub digest: ContentDigest,
     pub egress: EgressRealm,
+    pub authority: ToolAuthority,
     pub workspace_revision: Option<u64>,
     pub base_facts: Vec<BaseFact>,
 }
@@ -23,6 +34,7 @@ impl PreparedAction {
         binding: ToolBindingId,
         arguments: Value,
         egress: EgressRealm,
+        authority: ToolAuthority,
         workspace_revision: Option<u64>,
         base_facts: Vec<BaseFact>,
     ) -> Result<Self, serde_json::Error> {
@@ -30,6 +42,7 @@ impl PreparedAction {
             &binding,
             &arguments,
             &egress,
+            authority,
             workspace_revision,
             &base_facts,
         ))?;
@@ -38,9 +51,102 @@ impl PreparedAction {
             arguments,
             digest,
             egress,
+            authority,
             workspace_revision,
             base_facts,
         })
+    }
+    /// Approval can satisfy live policy, but cannot widen this frozen ceiling.
+    #[must_use]
+    pub fn permitted_by(&self, ceiling: &crate::AuthorityCeiling) -> bool {
+        ceiling.permits(&self.egress)
+            && (matches!(self.egress, EgressRealm::Local) || ceiling.remote_tools)
+            && match self.authority {
+                ToolAuthority::ReadOnly => true,
+                ToolAuthority::WorkspaceMutation => ceiling.workspace_mutation,
+                ToolAuthority::UnconfinedExecution => {
+                    ceiling.workspace_mutation && ceiling.unconfined_execution
+                }
+            }
+    }
+}
+
+#[cfg(test)]
+mod authority_tests {
+    use super::*;
+
+    #[test]
+    fn requirements_are_digest_bound_and_never_defaulted() {
+        let action = |authority| {
+            PreparedAction::new(
+                ToolBindingId::new("tool").unwrap(),
+                serde_json::json!({}),
+                EgressRealm::Local,
+                authority,
+                None,
+                vec![],
+            )
+            .unwrap()
+        };
+        let read = action(ToolAuthority::ReadOnly);
+        let mutation = action(ToolAuthority::WorkspaceMutation);
+        let exec = action(ToolAuthority::UnconfinedExecution);
+        assert_ne!(read.digest, mutation.digest);
+        assert_ne!(mutation.digest, exec.digest);
+        assert_ne!(read.digest, exec.digest);
+        let mut encoded = serde_json::to_value(read).unwrap();
+        encoded.as_object_mut().unwrap().remove("authority");
+        assert!(serde_json::from_value::<PreparedAction>(encoded).is_err());
+    }
+
+    #[test]
+    fn every_required_permission_and_realm_must_be_inside_ceiling() {
+        for mutation in [false, true] {
+            for unconfined in [false, true] {
+                for remote in [false, true] {
+                    for allowed_realm in [false, true] {
+                        for realm in [EgressRealm::Local, EgressRealm::Remote("service".into())] {
+                            let ceiling = crate::AuthorityCeiling {
+                                workspace_mutation: mutation,
+                                unconfined_execution: unconfined,
+                                remote_tools: remote,
+                                egress_realms: if allowed_realm {
+                                    vec![realm.clone()]
+                                } else {
+                                    vec![]
+                                },
+                            };
+                            for authority in [
+                                ToolAuthority::ReadOnly,
+                                ToolAuthority::WorkspaceMutation,
+                                ToolAuthority::UnconfinedExecution,
+                            ] {
+                                let action = PreparedAction::new(
+                                    ToolBindingId::new("tool").unwrap(),
+                                    serde_json::json!({}),
+                                    realm.clone(),
+                                    authority,
+                                    None,
+                                    vec![],
+                                )
+                                .unwrap();
+                                let required = match authority {
+                                    ToolAuthority::ReadOnly => true,
+                                    ToolAuthority::WorkspaceMutation => mutation,
+                                    ToolAuthority::UnconfinedExecution => mutation && unconfined,
+                                };
+                                assert_eq!(
+                                    action.permitted_by(&ceiling),
+                                    required
+                                        && allowed_realm
+                                        && (realm == EgressRealm::Local || remote)
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

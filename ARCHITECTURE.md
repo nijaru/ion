@@ -491,6 +491,14 @@ intent; there is no durable Prepared-attempt state. Replay reuses the PreparedAc
 the exact preparer is unavailable, Ion does not reinterpret the call under a newer
 implementation.
 
+PreparedAction includes a digest-bound required authority class: read-only, workspace
+mutation, or unconfined execution. Unconfined execution requires both unconfined and
+workspace-mutation permission; remote actions additionally require remote-tool permission
+and their exact egress realm. These requirements are checked against the captured ceiling
+at execution-intent commit. A read-only parallel declaration cannot prepare a stronger
+action. The class declares requirements, not proof of confinement. Ceiling denial parks
+as `AuthorityDenied`, not an approval request that could imply permission to widen it.
+
 The host execution boundary separately owns live authority, approval, workspace claims,
 sandboxing, data-egress policy, effect admission, stop/join and reconciliation.
 PreparedAction identifies the execution/egress realm and bounded outbound resources for
