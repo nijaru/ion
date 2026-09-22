@@ -148,6 +148,11 @@ pub(super) fn mutate(
             if total > turn.environment.limits.max_tool_invocations {
                 return Err(StoreError::Limit("tool invocation limit".into()));
             }
+            // Every admitted call must remain closable even if cancellation
+            // wins before execution, or the backend outcome remains unknown.
+            for reason in [UNKNOWN_RESULT, CANCELLED_RESULT] {
+                validate_result(&error_result(reason), &turn)?;
+            }
             let entry_id = seq.next()?;
             let mut content = Vec::new();
             let mut invocations = Vec::new();
@@ -194,6 +199,7 @@ pub(super) fn mutate(
                     _ => return Err(invalid("unexpected provider tool result")),
                 }
             }
+            reserve_storage(&invocations, turn.environment.limits.max_tool_preview_bytes)?;
             let entry = Entry {
                 id: entry_id,
                 conversation: turn.conversation,
@@ -328,14 +334,6 @@ pub(super) fn mutate(
             let state = *state;
             crate::tool_boundary::bounded(&state).map_err(|e| invalid(&e.to_string()))?;
             let records = records(&tx, step)?;
-            let total_bytes =
-                json_to(&records.invocations)?.len() + json_to(&records.attempts)?.len();
-            if total_bytes
-                .checked_add(json_to(&state)?.len())
-                .is_none_or(|n| n > crate::tool_boundary::MAX_TOOL_BATCH_BYTES)
-            {
-                return Err(StoreError::Limit("tool batch evidence capacity".into()));
-            }
             let mut prior = records
                 .attempts
                 .into_iter()
@@ -349,10 +347,15 @@ pub(super) fn mutate(
                 validate_result(result, &turn)?;
             }
             prior.state = state;
+            crate::tool_boundary::bounded(&prior)
+                .map_err(|_| StoreError::Limit("physical tool attempt capacity".into()))?;
             tx.execute(
                 "UPDATE tool_attempts SET state=?2 WHERE id=?1",
                 params![attempt.get(), json_to(&prior.state)?],
             )?;
+            // Check the prospective committed representation, not a conservative
+            // sum that double-counts the prior state during reconciliation.
+            self::records(&tx, step)?;
             changes.push(SessionChange::ToolAttempt(prior));
         }
         ToolMutation::Stage {
@@ -372,7 +375,9 @@ pub(super) fn mutate(
             let turn = load_turn(&tx, load_step(&tx, step)?.turn)?;
             let result = match source {
                 OutcomeSource::Attempt(id) => {
-                    if turn.cancellation.requested || turn.is_terminal() {
+                    // Cancellation may close an already-admitted exchange with
+                    // known execution facts, but must never resume continuation.
+                    if turn.is_terminal() || turn.phase != TurnPhase::Tools(step) {
                         return Err(StoreError::Cancelled(turn.id));
                     }
                     let attempt = records
@@ -380,6 +385,11 @@ pub(super) fn mutate(
                         .iter()
                         .find(|a| a.id == id && a.invocation == invocation)
                         .ok_or_else(|| invalid("wrong result attempt"))?;
+                    if !turn.cancellation.requested
+                        && turn.cancellation.generation != attempt.generation
+                    {
+                        return Err(StoreError::Cancelled(turn.id));
+                    }
                     if records
                         .attempts
                         .iter()
@@ -404,9 +414,7 @@ pub(super) fn mutate(
                     }) {
                         return Err(invalid("no uncertain attempt"));
                     }
-                    error_result(
-                        "Execution outcome unknown; effects may have occurred and may still be live.",
-                    )
+                    error_result(UNKNOWN_RESULT)
                 }
                 OutcomeSource::CancelledBeforeStart => {
                     if !turn.cancellation.requested
@@ -417,12 +425,13 @@ pub(super) fn mutate(
                     {
                         return Err(invalid("execution not proven unstarted"));
                     }
-                    error_result("Cancelled before execution started.")
+                    error_result(CANCELLED_RESULT)
                 }
             };
             validate_result(&result, &turn)?;
             call.exchange = ToolExchangeState::OutcomeReady { source, result };
             update_call(&tx, &call)?;
+            self::records(&tx, step)?;
             changes.push(SessionChange::ToolInvocation(call));
         }
         ToolMutation::Materialize { step } => {
@@ -479,6 +488,28 @@ pub(super) fn mutate(
             update: SessionUpdate::new(changes),
         },
     })
+}
+
+fn reserve_storage(invocations: &[ToolInvocation], preview: u32) -> Result<(), StoreError> {
+    use crate::tool_boundary::{MAX_TOOL_ATTEMPTS, MAX_TOOL_BATCH_BYTES, MAX_TOOL_RECORD_BYTES};
+    // Reserve every retained physical attempt plus one complete staged result.
+    // 256 bytes per call covers the exchange/source/EntryId wrapper (IDs are at
+    // most 20 decimal digits) and separators in both record arrays. Prepared
+    // actions and provider IDs are counted exactly, rather than guessed here.
+    let per_call = MAX_TOOL_ATTEMPTS * MAX_TOOL_RECORD_BYTES
+        + (preview as usize).min(MAX_TOOL_RECORD_BYTES)
+        + 256;
+    let base = json_to(&invocations)?.len();
+    let reserved = invocations
+        .len()
+        .checked_mul(per_call)
+        .and_then(|extra| base.checked_add(extra));
+    if reserved.is_none_or(|bytes| bytes > MAX_TOOL_BATCH_BYTES) {
+        return Err(StoreError::Limit(
+            "tool batch storage closure reserve".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn eligible(turn: &Turn, step: StepId, generation: u64, tools: bool) -> Result<(), StoreError> {
@@ -550,6 +581,10 @@ fn validate_result(result: &ToolResult, turn: &Turn) -> Result<(), StoreError> {
     }
     Ok(())
 }
+const UNKNOWN_RESULT: &str =
+    "Execution outcome unknown; effects may have occurred and may still be live.";
+const CANCELLED_RESULT: &str = "Cancelled before execution started.";
+
 fn error_result(reason: &str) -> ToolResult {
     ToolResult {
         value: serde_json::Value::String(reason.into()),

@@ -159,6 +159,49 @@ pub(crate) async fn drive(
         .ok_or_else(|| StoreError::InvalidState("missing tool step".into()))?
         .id;
     let records = inner.observe_store(inner.store().tool_records(step).await)?;
+    if basis.turn.cancellation.requested {
+        // Close the model exchange without requiring an available backend or
+        // confusing cancellation with proof that external execution stopped.
+        for call in &records.invocations {
+            if !matches!(call.exchange, ToolExchangeState::Pending) {
+                continue;
+            }
+            let last = records
+                .attempts
+                .iter()
+                .rev()
+                .find(|a| a.invocation == call.id);
+            let source = match last.map(|attempt| &attempt.state) {
+                None | Some(ToolAttemptState::NotStarted { .. }) => {
+                    OutcomeSource::CancelledBeforeStart
+                }
+                Some(ToolAttemptState::Settled { .. }) => {
+                    OutcomeSource::Attempt(last.expect("matched attempt").id)
+                }
+                Some(
+                    ToolAttemptState::IntentCommitted { .. }
+                    | ToolAttemptState::Indeterminate { .. },
+                ) => OutcomeSource::AcceptedUnknown,
+            };
+            inner.observe_store(
+                inner
+                    .store()
+                    .tool_mutate(ToolMutation::Stage {
+                        step,
+                        invocation: call.id,
+                        source,
+                    })
+                    .await,
+            )?;
+        }
+        inner.observe_store(
+            inner
+                .store()
+                .tool_mutate(ToolMutation::Materialize { step })
+                .await,
+        )?;
+        return Ok(None);
+    }
     for call in &records.invocations {
         if !matches!(call.exchange, ToolExchangeState::Pending) {
             continue;

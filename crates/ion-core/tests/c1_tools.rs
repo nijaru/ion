@@ -496,6 +496,81 @@ async fn staged_b_c_survive_reopen_without_execution_and_materialize_after_a() {
 }
 
 #[tokio::test]
+async fn cancellation_closes_pending_known_and_staged_results_without_backends() {
+    for checkpoint in 0..3 {
+        let (s, path, turn) = setup(config()).await;
+        let m = Arc::new(Model {
+            starts: AtomicUsize::new(0),
+            arguments: json!({"path":"x"}),
+            calls: 3,
+        });
+        let t = Arc::new(Tool::new(unknown()));
+        assert_eq!(
+            s.handle()
+                .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::RecoveryRequired)
+        );
+        let step = tool_step(&s).await;
+        let before = s.handle().tool_records(step).await.unwrap();
+        if checkpoint == 2 {
+            s.handle()
+                .accept_tool_unknown(step, before.invocations[0].id)
+                .await
+                .unwrap();
+        }
+        s.close().await.unwrap();
+        if checkpoint == 1 {
+            // Crash window: terminal evidence committed, not yet staged.
+            let db = rusqlite::Connection::open(&path).unwrap();
+            db.execute(
+                "UPDATE tool_attempts SET state=?2 WHERE id=?1",
+                rusqlite::params![
+                    before.attempts[0].id.get(),
+                    serde_json::to_string(&success()).unwrap(),
+                ],
+            )
+            .unwrap();
+        }
+        let s = Session::open(&path).await.unwrap();
+        s.handle().cancel_turn(turn).await.unwrap();
+        assert!(matches!(
+            s.handle()
+                .resume(turn, ModelBoundaries::default())
+                .await
+                .unwrap(),
+            DriveExit::Settled(TurnOutcome::Cancelled { .. })
+        ));
+        let closed = s.handle().tool_records(step).await.unwrap();
+        assert!(
+            closed
+                .invocations
+                .iter()
+                .all(|call| matches!(call.exchange, ToolExchangeState::Materialized { .. }))
+        );
+        assert_eq!(closed.attempts.len(), 1);
+        assert_eq!(
+            closed.attempts[0].state,
+            if checkpoint == 1 {
+                success()
+            } else {
+                unknown()
+            }
+        );
+        assert!(closed.invocations[1..].iter().all(|call| matches!(
+            call.exchange,
+            ToolExchangeState::Materialized {
+                source: OutcomeSource::CancelledBeforeStart,
+                ..
+            }
+        )));
+        assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+        s.close().await.unwrap();
+    }
+}
+
+#[tokio::test]
 async fn complete_tool_exchange_prepares_once_and_continues() {
     let (s, _path, turn) = setup(config()).await;
     let m = model();
@@ -632,6 +707,46 @@ async fn actual_batch_closure_refuses_before_any_tool_attempt() {
 }
 
 #[tokio::test]
+async fn batch_reserves_durable_attempt_and_staging_capacity_before_effects() {
+    let mut cfg = config();
+    cfg.context.max_request_bytes = 32 * 1024 * 1024;
+    cfg.context.max_input_tokens = 32 * 1024 * 1024;
+    cfg.providers[0].capabilities.max_input_tokens = 32 * 1024 * 1024;
+    cfg.limits.max_response_bytes = 4 * 1024 * 1024;
+    cfg.limits.max_tool_invocations = 64;
+    cfg.limits.max_tool_preview_bytes = 64 * 1024;
+    let (s, _path, turn) = setup(cfg).await;
+    let m = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        arguments: json!({"path": "x".repeat(30_000)}),
+        calls: 64,
+    });
+    let t = Arc::new(Tool::new(success()));
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::Capacity)
+    );
+    assert_eq!(
+        t.executes.load(Ordering::SeqCst),
+        0,
+        "prepared actions, physical attempts and staged result copies must all remain readable"
+    );
+    assert_eq!(
+        s.handle()
+            .page_entries(s.primary_conversation(), None, 100)
+            .await
+            .unwrap()
+            .entries
+            .len(),
+        1
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn cancellation_signals_and_joins_execution_without_fabricating_termination() {
     let (s, _path, turn) = setup(config()).await;
     let m = model();
@@ -657,5 +772,40 @@ async fn cancellation_signals_and_joins_execution_without_fabricating_terminatio
         records.attempts[0].state,
         ToolAttemptState::Indeterminate { .. }
     ));
+    let h = s.handle();
+    let conversation = s.primary_conversation();
+    let admitted = h
+        .admit_input(
+            conversation,
+            AdmitInputRequest {
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: None,
+                body: InputBody::Text("continue after cancellation".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let successor = h
+        .start_turn(StartTurnRequest {
+            conversation,
+            input: admitted.input().id,
+            admitted_at_unix_ms: 1,
+            wall_deadline_unix_ms: None,
+        })
+        .await
+        .unwrap()
+        .turn
+        .id;
+    assert!(
+        matches!(
+            h.resume_with_tools(successor, models(&m), tools(&t), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Settled(TurnOutcome::Completed { .. })
+        ),
+        "cancellation must close the prior exchange truthfully"
+    );
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
     s.close().await.unwrap();
 }
