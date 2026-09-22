@@ -582,12 +582,18 @@ impl TurnSettings {
         }
 
         let mut active = BTreeSet::new();
+        let mut names = BTreeSet::new();
         for id in &self.active_tools {
             let binding = environment
                 .tool(id)
                 .ok_or_else(|| ConfigError::UnknownToolBinding(id.as_str().to_owned()))?;
             if !active.insert(id) {
                 return Err(ConfigError::DuplicateActiveTool(id.as_str().to_owned()));
+            }
+            if !names.insert(&binding.spec.name) {
+                return Err(ConfigError::AmbiguousActiveToolName(
+                    binding.spec.name.clone(),
+                ));
             }
             if !provider.capabilities.tools {
                 return Err(ConfigError::ProviderControlMismatch(
@@ -644,6 +650,8 @@ pub enum ConfigError {
     DuplicateToolBinding(String),
     #[error("active tool binding {0:?} is duplicated")]
     DuplicateActiveTool(String),
+    #[error("active tool name {0:?} identifies multiple frozen bindings")]
+    AmbiguousActiveToolName(String),
     #[error("tool declaration name must not be empty")]
     EmptyToolName,
     #[error("tool binding {binding:?} schema digest does not match its declaration")]
@@ -806,6 +814,33 @@ mod tests {
             cfg.validate(),
             Err(ConfigError::ToolSchemaDigestMismatch { .. })
         ));
+    }
+
+    #[test]
+    fn active_tool_names_resolve_to_exactly_one_frozen_binding() {
+        let mut cfg = config();
+        let mut replacement = tool();
+        replacement.id = ToolBindingId::new("read-next").expect("id");
+        replacement.implementation = SemanticCompatibilityId::new("read-v2").expect("id");
+        cfg.tools.push(replacement.clone());
+        // Alternative same-name implementations may be frozen but dormant.
+        let installed = InstalledConfig {
+            revision: CommitSeq::new(1).expect("revision"),
+            config: cfg.clone(),
+        };
+        let (environment, mut settings) = TurnEnvironment::capture(&installed).expect("capture");
+        settings.active_tools.push(replacement.id.clone());
+        assert!(
+            settings.validate(&environment).is_err(),
+            "a provider call name must not choose between two implementations"
+        );
+        cfg.initial_tools.push(replacement.id.clone());
+        assert!(
+            cfg.validate().is_err(),
+            "ambiguous initial loadout is rejected"
+        );
+        settings.active_tools = vec![replacement.id];
+        assert!(settings.validate(&environment).is_ok());
     }
 
     #[test]
