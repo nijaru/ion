@@ -265,7 +265,7 @@ impl WorkspaceRegistry {
             let claim: WorkspaceClaim = decode(&row?)?;
             let other = checked_binding(&tx, &claim.binding)?;
             if (claim.key.session == key.session && claim.key.invocation == key.invocation)
-                || same_object(&record.descriptor.root, &other.descriptor.root)
+                || physical_overlap(&record.descriptor, &other.descriptor)
                 || overlaps(&record.descriptor.root.path, &other.descriptor.root.path)
                 || (resources == WorkspaceResources::FilesAndRepository
                     && claim.resources == resources
@@ -274,7 +274,7 @@ impl WorkspaceRegistry {
                         .common
                         .as_ref()
                         .zip(other.descriptor.common.as_ref())
-                        .is_some_and(|(a, b)| same_object(a, b)))
+                        .is_some_and(|(a, b)| same_object(a, b) || overlaps(&a.path, &b.path)))
             {
                 return Err(RegistryError::Conflict);
             }
@@ -381,18 +381,7 @@ impl WorkspaceRegistry {
             drop(stmt);
             for value in records {
                 let other: BindingRecord = decode(&value)?;
-                if same_object(&record.descriptor.root, &other.descriptor.root)
-                    || record
-                        .descriptor
-                        .parents
-                        .iter()
-                        .any(|parent| same_object(parent, &other.descriptor.root))
-                    || other
-                        .descriptor
-                        .parents
-                        .iter()
-                        .any(|parent| same_object(parent, &record.descriptor.root))
-                {
+                if physical_overlap(&record.descriptor, &other.descriptor) {
                     advance(&tx, "bindings", &other.binding.id)?;
                 }
             }
@@ -509,6 +498,11 @@ fn validate_receipt(receipt: &RegistryReceipt, binding: &WorkspaceBinding) -> Re
         return Err(RegistryError::EvidenceConflict);
     }
     Ok(())
+}
+fn physical_overlap(a: &Descriptor, b: &Descriptor) -> bool {
+    same_object(&a.root, &b.root)
+        || a.parents.iter().any(|parent| same_object(parent, &b.root))
+        || b.parents.iter().any(|parent| same_object(parent, &a.root))
 }
 fn same_object(a: &Object, b: &Object) -> bool {
     (a.device, a.inode, a.created) == (b.device, b.inode, b.created)

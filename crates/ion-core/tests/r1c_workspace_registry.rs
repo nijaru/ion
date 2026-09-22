@@ -182,6 +182,42 @@ fn late_resolution_does_not_transfer_revision_into_replacement_subtree() {
 }
 
 #[test]
+fn renamed_physical_subtrees_keep_quarantine_in_both_directions() {
+    for claim_child in [false, true] {
+        let f = Fixture::new();
+        fs::create_dir(f.root.join("nested")).unwrap();
+        let mut r = f.open();
+        let source = if claim_child {
+            f.root.join("nested")
+        } else {
+            f.root.clone()
+        };
+        let original = r.bind("original", source, "local-v1").unwrap();
+        admit(&mut r, &original, key());
+        let moved = f.home.join("moved");
+        fs::rename(&f.root, &moved).unwrap();
+        let target = if claim_child {
+            moved
+        } else {
+            moved.join("nested")
+        };
+        let alias = r.bind("alias", target, "local-v1").unwrap();
+        assert!(
+            matches!(
+                r.admit(
+                    &alias,
+                    key(),
+                    WorkspaceResources::Files,
+                    r.revision(&alias).unwrap()
+                ),
+                Err(RegistryError::Conflict)
+            ),
+            "a rename cannot isolate a physically overlapping subtree"
+        );
+    }
+}
+
+#[test]
 fn session_and_blob_loss_do_not_erase_orphan_or_receipts() {
     let f = Fixture::new();
     let mut r = f.open();
@@ -309,6 +345,54 @@ fn shared_git_common_directory_conflicts_and_invalidates_other_worktree() {
         ),
         Err(RegistryError::BindingChanged)
     ));
+}
+
+#[test]
+fn replaced_repository_path_retains_quarantine_without_transferring_revision() {
+    let f = Fixture::new();
+    let common = f.home.join("common");
+    let other_root = f.home.join("other-checkout");
+    fs::create_dir_all(&other_root).unwrap();
+    fs::create_dir_all(&common).unwrap();
+    for root in [&f.root, &other_root] {
+        fs::write(root.join(".git"), format!("gitdir: {}", common.display())).unwrap();
+    }
+    let mut r = f.open();
+    let original = f.bind(&mut r);
+    let k = key();
+    r.admit(
+        &original,
+        k,
+        WorkspaceResources::FilesAndRepository,
+        r.revision(&original).unwrap(),
+    )
+    .unwrap();
+    fs::rename(&common, f.home.join("old-common")).unwrap();
+    fs::create_dir(&common).unwrap();
+    let replacement = r.bind("replacement", &other_root, "local-v1").unwrap();
+    assert!(
+        matches!(
+            r.admit(
+                &replacement,
+                key(),
+                WorkspaceResources::FilesAndRepository,
+                r.revision(&replacement).unwrap()
+            ),
+            Err(RegistryError::Conflict)
+        ),
+        "a live writer may still reach the reused repository pathname"
+    );
+    r.resolve(k, evidence(EffectSummary::MayHaveMutated))
+        .unwrap();
+    assert_eq!(r.revision(&original).unwrap().repository, 1);
+    assert_eq!(r.revision(&replacement).unwrap().repository, 0);
+    r.admit(
+        &replacement,
+        key(),
+        WorkspaceResources::FilesAndRepository,
+        r.revision(&replacement).unwrap(),
+    )
+    .unwrap();
 }
 
 #[test]
