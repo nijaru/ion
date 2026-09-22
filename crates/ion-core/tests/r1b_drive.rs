@@ -163,13 +163,43 @@ fn fingerprint(
 
 struct CompleteBoundary {
     starts: AtomicUsize,
+    stream_dropped: CancellationToken,
 }
 
 impl CompleteBoundary {
     fn new() -> Arc<Self> {
         Arc::new(Self {
             starts: AtomicUsize::new(0),
+            stream_dropped: CancellationToken::new(),
         })
+    }
+}
+
+/// Delivers one terminal event but deliberately never closes the transport.
+struct TerminalWithoutEof {
+    response: Option<ModelResponse>,
+    dropped: CancellationToken,
+}
+
+impl futures_util::Stream for TerminalWithoutEof {
+    type Item = Result<ModelStreamEvent, ProviderError>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        match self.response.take() {
+            Some(response) => {
+                std::task::Poll::Ready(Some(Ok(ModelStreamEvent::Completed(response))))
+            }
+            None => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl Drop for TerminalWithoutEof {
+    fn drop(&mut self) {
+        self.dropped.cancel();
     }
 }
 
@@ -204,9 +234,10 @@ impl ModelBoundary for CompleteBoundary {
                 usage: Usage::known(10, 4),
                 termination: ResponseTermination::Completed,
             };
-            let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
-                ModelStreamEvent::Completed(response),
-            )]));
+            let stream: ion_ai::ModelStream = Box::pin(TerminalWithoutEof {
+                response: Some(response),
+                dropped: self.stream_dropped.clone(),
+            });
             ModelStart::Started {
                 stream,
                 start_receipt: None,
@@ -273,7 +304,7 @@ impl ModelBoundary for WaitingBoundary {
 }
 
 #[tokio::test]
-async fn resume_dispatches_and_selects_one_final_response() {
+async fn resume_selects_terminal_response_without_waiting_for_transport_eof() {
     let (dir, path) = database("final");
     let created = Session::create(&path, config()).await.expect("create");
     let session = created.session;
@@ -282,12 +313,22 @@ async fn resume_dispatches_and_selects_one_final_response() {
     let boundaries =
         ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
 
-    let exit = handle.resume(turn, boundaries).await.expect("resume");
+    let exit = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        handle.resume(turn, boundaries),
+    )
+    .await
+    .expect("terminal event ends the attempt without EOF")
+    .expect("resume");
     assert!(matches!(
         exit,
         DriveExit::Settled(TurnOutcome::Completed { .. })
     ));
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    assert!(
+        boundary.stream_dropped.is_cancelled(),
+        "owned transport is released"
+    );
 
     let snapshot = handle
         .snapshot(SnapshotRequest {
