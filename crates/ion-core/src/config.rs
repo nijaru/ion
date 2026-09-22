@@ -685,7 +685,7 @@ pub enum ConfigError {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ion_ai::{Reasoning, ToolChoice};
 
@@ -730,7 +730,7 @@ mod tests {
         .expect("tool")
     }
 
-    fn config() -> ConversationConfig {
+    pub(crate) fn config() -> ConversationConfig {
         ConversationConfig {
             instructions: "be careful".to_owned(),
             project_context: Vec::new(),

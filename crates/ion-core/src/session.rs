@@ -60,6 +60,15 @@ pub(crate) struct SessionInner {
     effects: EffectGates,
     drives: Mutex<HashMap<TurnId, watch::Receiver<Option<DriveExit>>>>,
     joins: Mutex<Vec<JoinHandle<()>>>,
+    #[cfg(test)]
+    registration_pause: Mutex<Option<RegistrationPause>>,
+}
+
+#[cfg(test)]
+#[derive(Debug)]
+struct RegistrationPause {
+    reached: tokio::sync::oneshot::Sender<()>,
+    release: tokio::sync::oneshot::Receiver<()>,
 }
 
 #[derive(Debug)]
@@ -176,6 +185,8 @@ impl Session {
                 effects: EffectGates::default(),
                 drives: Mutex::new(HashMap::new()),
                 joins: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                registration_pause: Mutex::new(None),
             }),
             closed: false,
         };
@@ -195,6 +206,8 @@ impl Session {
                 effects: EffectGates::default(),
                 drives: Mutex::new(HashMap::new()),
                 joins: Mutex::new(Vec::new()),
+                #[cfg(test)]
+                registration_pause: Mutex::new(None),
             }),
             closed: false,
         })
@@ -242,6 +255,9 @@ impl Session {
             .map_err(|_| SessionError::Closed)?;
         signal(self.inner.effects.seal_all());
         let joins = {
+            // Registration holds drives through join-list insertion. Once health
+            // is Closing, this lock drains any registrar that already won admission.
+            let _drives = self.inner.drives.lock().expect("drive map poisoned");
             let mut joins = self.inner.joins.lock().expect("drive join list poisoned");
             std::mem::take(&mut *joins)
         };
@@ -440,9 +456,24 @@ impl SessionHandle {
         future: impl std::future::Future<Output = DriveExit> + Send + 'static,
     ) -> Result<DriveExit, SessionError> {
         self.ensure_mutable()?;
+        #[cfg(test)]
+        {
+            let pause = self
+                .inner
+                .registration_pause
+                .lock()
+                .expect("test pause lock")
+                .take();
+            if let Some(pause) = pause {
+                let _ = pause.reached.send(());
+                let _ = pause.release.await;
+            }
+        }
 
         let mut receiver = {
             let mut drives = self.inner.drives.lock().expect("drive map poisoned");
+            // Linearize registration with close's collection of owned joins.
+            self.ensure_mutable()?;
             if let Some(existing) = drives.get(&turn) {
                 if !join_existing {
                     return Err(SessionError::InvalidState(
@@ -585,6 +616,49 @@ impl SessionInner {
             signal(self.effects.seal_all());
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn close_rejects_a_drive_paused_before_registration() {
+        let root =
+            std::env::temp_dir().join(format!("ion-close-registration-{}", SessionId::new()));
+        std::fs::create_dir_all(&root).unwrap();
+        let session = Session::create(root.join("session.sqlite"), crate::config::tests::config())
+            .await
+            .unwrap()
+            .session;
+        let (reached, at_pause) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *session.inner.registration_pause.lock().unwrap() = Some(RegistrationPause {
+            reached,
+            release: released,
+        });
+        let handle = session.handle();
+        let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let probe = Arc::clone(&executed);
+        let drive = tokio::spawn(async move {
+            let turn = TurnId::new(1).unwrap();
+            handle
+                .drive_owned(turn, false, async move {
+                    probe.store(true, Ordering::SeqCst);
+                    DriveExit::Stopped { turn }
+                })
+                .await
+        });
+        at_pause.await.unwrap();
+        session.close().await.unwrap();
+        release.send(()).unwrap();
+        assert!(matches!(drive.await.unwrap(), Err(SessionError::Closed)));
+        assert!(
+            !executed.load(Ordering::SeqCst),
+            "no late backend reconciliation after ownership release"
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }
 
