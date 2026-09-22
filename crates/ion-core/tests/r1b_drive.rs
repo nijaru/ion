@@ -912,6 +912,200 @@ async fn close_joins_local_work_without_durable_turn_cancellation() {
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
+struct ProcessReceiptBoundary {
+    marker: PathBuf,
+    starts: AtomicUsize,
+    reconciles: AtomicUsize,
+}
+
+impl ModelBoundary for ProcessReceiptBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request, effect_key)
+    }
+
+    fn start_receipts(&self) -> StartReceiptCapability {
+        StartReceiptCapability::Authoritative
+    }
+
+    fn start<'a>(
+        &'a self,
+        attempt: ion_core::AttemptId,
+        effect_key: String,
+        _request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            use std::io::Write;
+            self.starts.fetch_add(1, Ordering::SeqCst);
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&self.marker)
+                .expect("one external start only");
+            let bytes = serde_json::to_vec(&(attempt, effect_key)).expect("receipt encoding");
+            file.write_all(&bytes).expect("external durable receipt");
+            file.sync_all().expect("receipt durability");
+            // Process loss occurs after the external start, before returning any
+            // receipt/evidence to the Session. No cooperative close is involved.
+            std::future::pending().await
+        })
+    }
+
+    fn reconcile_start<'a>(
+        &'a self,
+        attempt: ion_core::AttemptId,
+        effect_key: String,
+    ) -> BoxFuture<'a, StartReconciliation> {
+        Box::pin(async move {
+            self.reconciles.fetch_add(1, Ordering::SeqCst);
+            let bytes = std::fs::read(&self.marker).expect("external receipt survives owner");
+            let stored: (ion_core::AttemptId, String) =
+                serde_json::from_slice(&bytes).expect("complete receipt");
+            assert_eq!(stored, (attempt, effect_key));
+            StartReconciliation::Started(ProviderStartReceipt {
+                kind: "process-test-v1".to_owned(),
+                data: serde_json::json!({"attempt": attempt}),
+            })
+        })
+    }
+}
+
+#[tokio::test]
+async fn process_loss_child() {
+    let Some(dir) = std::env::var_os("ION_R1B_PROCESS_LOSS_CHILD") else {
+        return;
+    };
+    let dir = PathBuf::from(dir);
+    let mut cfg = config();
+    cfg.providers[0].start_receipts = StartReceiptCapability::Authoritative;
+    let session = Session::create(dir.join("session.sqlite"), cfg)
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = Arc::new(ProcessReceiptBoundary {
+        marker: dir.join("external-receipt.json"),
+        starts: AtomicUsize::new(0),
+        reconciles: AtomicUsize::new(0),
+    });
+    let boundaries =
+        ModelBoundaries::new([boundary as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let _ = handle.resume(turn, boundaries).await;
+    panic!("parent must kill owner before start returns");
+}
+
+#[tokio::test]
+async fn killed_owner_reopens_passively_then_reconciles_external_start() {
+    struct ChildGuard(std::process::Child);
+    impl Drop for ChildGuard {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let (dir, path) = database("process-loss");
+    let marker = dir.join("external-receipt.json");
+    let mut child = ChildGuard(
+        std::process::Command::new(std::env::current_exe().expect("test binary"))
+            .args(["--exact", "process_loss_child", "--nocapture"])
+            .env("ION_R1B_PROCESS_LOSS_CHILD", &dir)
+            .stdout(std::process::Stdio::null())
+            .spawn()
+            .expect("spawn owner"),
+    );
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            // Wait for a complete receipt, not merely create_new's directory entry.
+            if std::fs::read(&marker)
+                .ok()
+                .and_then(|bytes| {
+                    serde_json::from_slice::<(ion_core::AttemptId, String)>(&bytes).ok()
+                })
+                .is_some()
+            {
+                break;
+            }
+            assert!(
+                child.0.try_wait().expect("child status").is_none(),
+                "owner exited early"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("external start bounded");
+    child.0.kill().expect("kill owner");
+    let status = child.0.wait().expect("reap owner");
+    assert!(!status.success());
+
+    let boundary = Arc::new(ProcessReceiptBoundary {
+        marker,
+        starts: AtomicUsize::new(0),
+        reconciles: AtomicUsize::new(0),
+    });
+    let session = Session::open(&path)
+        .await
+        .expect("reopen after actual process loss");
+    let handle = session.handle();
+    let request = SnapshotRequest {
+        conversation: session.primary_conversation(),
+        max_inputs: 16,
+        max_entries: 16,
+        max_bytes: 1024 * 1024,
+    };
+    let before = handle.snapshot(request).await.expect("passive inspection");
+    let turn = before.unfinished_turn.as_ref().expect("unfinished").id;
+    assert_eq!(before.model_attempts.len(), 1);
+    assert!(matches!(
+        before.model_attempts[0].state,
+        ModelAttemptState::IntentCommitted {
+            start_receipt: None
+        }
+    ));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        handle
+            .snapshot(request)
+            .await
+            .expect("still passive")
+            .coverage,
+        before.coverage
+    );
+
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    assert_eq!(
+        handle
+            .resume(turn, boundaries)
+            .await
+            .expect("explicit reconcile"),
+        DriveExit::Parked(ParkReason::RecoveryRequired)
+    );
+    let after = handle.snapshot(request).await.expect("recovered evidence");
+    assert!(after.coverage > before.coverage);
+    assert_eq!(after.model_attempts.len(), 1);
+    assert!(matches!(
+        after.model_attempts[0].state,
+        ModelAttemptState::Indeterminate {
+            start_receipt: Some(_),
+            ..
+        }
+    ));
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
 struct NegativeThenCompleteBoundary {
     starts: AtomicUsize,
     reconciles: AtomicUsize,
