@@ -396,6 +396,48 @@ fn replaced_repository_path_retains_quarantine_without_transferring_revision() {
 }
 
 #[test]
+fn renamed_nested_repository_resources_remain_physically_shared() {
+    let f = Fixture::new();
+    let common = f.home.join("common");
+    let other_root = f.home.join("other-checkout");
+    fs::create_dir_all(common.join("nested-repo")).unwrap();
+    fs::create_dir(&other_root).unwrap();
+    fs::write(f.root.join(".git"), format!("gitdir: {}", common.display())).unwrap();
+    let mut r = f.open();
+    let original = f.bind(&mut r);
+    let k = key();
+    r.admit(
+        &original,
+        k,
+        WorkspaceResources::FilesAndRepository,
+        r.revision(&original).unwrap(),
+    )
+    .unwrap();
+    let moved = f.home.join("moved-common");
+    fs::rename(&common, &moved).unwrap();
+    fs::write(
+        other_root.join(".git"),
+        format!("gitdir: {}", moved.join("nested-repo").display()),
+    )
+    .unwrap();
+    let nested = r
+        .bind("nested-repository", &other_root, "local-v1")
+        .unwrap();
+    assert!(matches!(
+        r.admit(
+            &nested,
+            key(),
+            WorkspaceResources::FilesAndRepository,
+            r.revision(&nested).unwrap()
+        ),
+        Err(RegistryError::Conflict)
+    ));
+    r.resolve(k, evidence(EffectSummary::MayHaveMutated))
+        .unwrap();
+    assert_eq!(r.revision(&nested).unwrap().repository, 1);
+}
+
+#[test]
 fn symlink_retarget_backend_change_and_checkout_registry_are_refused() {
     use std::os::unix::fs::symlink;
     let f = Fixture::new();

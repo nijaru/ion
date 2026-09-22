@@ -22,6 +22,7 @@ use crate::{AttemptId, ContentDigest, EffectSummary, InvocationId, SessionId, Wo
 use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
+    collections::BTreeSet,
     fs,
     io::Read,
     path::{Path, PathBuf},
@@ -123,6 +124,7 @@ struct Descriptor {
     parents: Vec<Object>,
     git: Option<Object>,
     common: Option<Object>,
+    common_parents: Vec<Object>,
 }
 #[derive(Serialize, Deserialize)]
 struct BindingRecord {
@@ -165,8 +167,8 @@ impl WorkspaceRegistry {
                 CREATE TABLE repositories(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE claims(key TEXT PRIMARY KEY, session TEXT NOT NULL, invocation INTEGER NOT NULL, active INTEGER NOT NULL, record TEXT NOT NULL);
                 CREATE INDEX active_claims ON claims(active);
-                PRAGMA application_id=1229934162; PRAGMA user_version=2;")?;
-        } else if version != 2 || application != 1229934162 {
+                PRAGMA application_id=1229934162; PRAGMA user_version=3;")?;
+        } else if version != 3 || application != 1229934162 {
             return Err(RegistryError::Unsupported);
         }
         tx.commit()?;
@@ -274,7 +276,14 @@ impl WorkspaceRegistry {
                         .common
                         .as_ref()
                         .zip(other.descriptor.common.as_ref())
-                        .is_some_and(|(a, b)| same_object(a, b) || overlaps(&a.path, &b.path)))
+                        .is_some_and(|(a, b)| {
+                            objects_overlap(
+                                a,
+                                &record.descriptor.common_parents,
+                                b,
+                                &other.descriptor.common_parents,
+                            ) || overlaps(&a.path, &b.path)
+                        }))
             {
                 return Err(RegistryError::Conflict);
             }
@@ -379,15 +388,34 @@ impl WorkspaceRegistry {
                 .query_map([], |r| r.get::<_, String>(0))?
                 .collect::<std::result::Result<Vec<_>, _>>()?;
             drop(stmt);
+            let mut repositories = BTreeSet::new();
             for value in records {
                 let other: BindingRecord = decode(&value)?;
                 if physical_overlap(&record.descriptor, &other.descriptor) {
                     advance(&tx, "bindings", &other.binding.id)?;
                 }
+                if claim.resources == WorkspaceResources::FilesAndRepository {
+                    let common = record
+                        .descriptor
+                        .common
+                        .as_ref()
+                        .ok_or(RegistryError::Invalid)?;
+                    if let Some(other_common) = &other.descriptor.common
+                        && objects_overlap(
+                            common,
+                            &record.descriptor.common_parents,
+                            other_common,
+                            &other.descriptor.common_parents,
+                        )
+                    {
+                        repositories.insert(repository_key(other_common)?);
+                    }
+                }
             }
-            if claim.resources == WorkspaceResources::FilesAndRepository {
-                let common = record.descriptor.common.ok_or(RegistryError::Invalid)?;
-                advance(&tx, "repositories", &repository_key(&common)?)?;
+            // Several worktree bindings can name the same repository resource.
+            // Each physical resource advances exactly once per terminal claim.
+            for repository in repositories {
+                advance(&tx, "repositories", &repository)?;
             }
         }
         tx.execute(
@@ -500,9 +528,12 @@ fn validate_receipt(receipt: &RegistryReceipt, binding: &WorkspaceBinding) -> Re
     Ok(())
 }
 fn physical_overlap(a: &Descriptor, b: &Descriptor) -> bool {
-    same_object(&a.root, &b.root)
-        || a.parents.iter().any(|parent| same_object(parent, &b.root))
-        || b.parents.iter().any(|parent| same_object(parent, &a.root))
+    objects_overlap(&a.root, &a.parents, &b.root, &b.parents)
+}
+fn objects_overlap(a: &Object, a_parents: &[Object], b: &Object, b_parents: &[Object]) -> bool {
+    same_object(a, b)
+        || a_parents.iter().any(|parent| same_object(parent, b))
+        || b_parents.iter().any(|parent| same_object(parent, a))
 }
 fn same_object(a: &Object, b: &Object) -> bool {
     (a.device, a.inode, a.created) == (b.device, b.inode, b.created)
@@ -600,10 +631,23 @@ fn describe(root: &Path) -> Result<Descriptor> {
     } else {
         None
     };
+    let common_parents = common
+        .as_ref()
+        .map(|common| {
+            common
+                .path
+                .ancestors()
+                .skip(1)
+                .map(object)
+                .collect::<Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
     Ok(Descriptor {
         root,
         parents,
         git,
         common,
+        common_parents,
     })
 }
