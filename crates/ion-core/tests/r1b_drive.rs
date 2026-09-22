@@ -747,6 +747,171 @@ async fn safety_refusal_does_not_route_to_fallback_provider() {
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
+/// Host-controlled completion lets lifecycle tests distinguish a dropped client
+/// waiter from an explicit stop of the accepted provider work.
+struct ReleasedBoundary {
+    started: CancellationToken,
+    release: CancellationToken,
+    stopped: CancellationToken,
+}
+
+impl ModelBoundary for ReleasedBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request, effect_key)
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        _request: ion_core::SemanticRequest,
+        stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            self.started.cancel();
+            tokio::select! {
+                () = stop.cancelled() => {
+                    self.stopped.cancel();
+                    ModelStart::Indeterminate {
+                        reason: "host stop".to_owned(),
+                        usage: Usage::unknown(),
+                        start_receipt: None,
+                    }
+                }
+                () = self.release.cancelled() => {
+                    let response = ModelResponse {
+                        message: Message {
+                            role: Role::Assistant,
+                            content: vec![Content::Text("completed without a waiter".to_owned())],
+                            provider_replay: None,
+                        },
+                        usage: Usage::known(1, 1),
+                        termination: ResponseTermination::Completed,
+                    };
+                    let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([
+                        Ok(ModelStreamEvent::Completed(response)),
+                    ]));
+                    ModelStart::Started { stream, start_receipt: None }
+                }
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn dropped_resume_waiter_does_not_cancel_accepted_work_or_close_session() {
+    let (dir, path) = database("dropped-waiter");
+    let session = Session::create(&path, config())
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = Arc::new(ReleasedBoundary {
+        started: CancellationToken::new(),
+        release: CancellationToken::new(),
+        stopped: CancellationToken::new(),
+    });
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let waiter_handle = handle.clone();
+    let waiter = tokio::spawn(async move { waiter_handle.resume(turn, boundaries).await });
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        boundary.started.cancelled(),
+    )
+    .await
+    .expect("effect started");
+    waiter.abort();
+    assert!(waiter.await.expect_err("waiter aborted").is_cancelled());
+    assert!(!boundary.stopped.is_cancelled());
+
+    boundary.release.cancel();
+    // Reattaching joins the same drive, or inspects its committed terminal result.
+    let exit = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        handle.resume(turn, ModelBoundaries::default()),
+    )
+    .await
+    .expect("completion bounded")
+    .expect("reattach");
+    assert!(matches!(
+        exit,
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    assert!(!boundary.stopped.is_cancelled());
+    assert_eq!(session.health(), ion_core::SessionHealth::Open);
+    let snapshot = handle
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .expect("session remains readable");
+    assert_eq!(snapshot.transcript_tail.len(), 2);
+    // A terminal Turn does not consume the Session's admission lifetime.
+    let (_, successor) = started_turn(&session, "two", "next request").await;
+    assert_ne!(turn, successor);
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn close_joins_local_work_without_durable_turn_cancellation() {
+    let (dir, path) = database("close-suspends");
+    let session = Session::create(&path, config())
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = WaitingBoundary::new();
+    let boundaries =
+        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let waiter_handle = handle.clone();
+    let waiter = tokio::spawn(async move { waiter_handle.resume(turn, boundaries).await });
+    tokio::time::timeout(std::time::Duration::from_secs(5), boundary.wait_started())
+        .await
+        .expect("effect started");
+    tokio::time::timeout(std::time::Duration::from_secs(5), session.close())
+        .await
+        .expect("close bounded")
+        .expect("close");
+    assert!(matches!(
+        waiter.await.expect("joined waiter").expect("drive"),
+        DriveExit::Stopped { .. }
+    ));
+    let reopened = Session::open(&path)
+        .await
+        .expect("ownership released after join");
+    let snapshot = reopened
+        .handle()
+        .snapshot(SnapshotRequest {
+            conversation: reopened.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .expect("passive snapshot");
+    let active = snapshot.unfinished_turn.expect("unfinished turn preserved");
+    assert_eq!(active.id, turn);
+    assert!(!active.cancellation.requested);
+    assert_eq!(active.cancellation.generation, 0);
+    assert!(active.outcome.is_none());
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    reopened.close().await.expect("close reopened");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
 struct NegativeThenCompleteBoundary {
     starts: AtomicUsize,
     reconciles: AtomicUsize,

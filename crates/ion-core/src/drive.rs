@@ -660,7 +660,14 @@ async fn dispatch(
             {
                 return DispatchAction::Exit(store_exit(basis.turn.id, error));
             }
-            DispatchAction::Exit(DriveExit::Parked(ParkReason::RecoveryRequired))
+            // The backend's stop reply may win select! against the stop token.
+            // Persist its evidence first, but do not let that race bypass durable
+            // cancellation settlement (or turn close into a recovery-only exit).
+            if stop.is_cancelled() {
+                DispatchAction::Exit(after_local_stop(inner, basis.turn.id).await)
+            } else {
+                DispatchAction::Exit(DriveExit::Parked(ParkReason::RecoveryRequired))
+            }
         }
         ModelStart::Started {
             mut stream,
