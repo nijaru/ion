@@ -22,6 +22,8 @@ mod tool_exec;
 mod transcript;
 mod turn;
 
+pub mod workspace_registry;
+
 pub use blob::BlobRef;
 pub use config::{
     AuthorityCeiling, ConfigError, ContextPolicy, ControlCeiling, ConversationConfig, EgressRealm,
