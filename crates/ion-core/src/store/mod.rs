@@ -21,6 +21,44 @@ use crate::{
 
 const COMMAND_CAPACITY: usize = 64;
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRecords {
+    pub turn: Turn,
+    pub invocations: Vec<crate::ToolInvocation>,
+    pub attempts: Vec<crate::ToolAttempt>,
+}
+
+pub(crate) enum ToolMutation {
+    Admit {
+        attempt: crate::AttemptId,
+        actions: Vec<crate::PreparedAction>,
+    },
+    Intent {
+        step: StepId,
+        invocation: crate::InvocationId,
+        generation: u64,
+        executor: crate::SemanticCompatibilityId,
+    },
+    Evidence {
+        step: StepId,
+        attempt: crate::AttemptId,
+        state: Box<crate::ToolAttemptState>,
+    },
+    Stage {
+        step: StepId,
+        invocation: crate::InvocationId,
+        source: crate::OutcomeSource,
+    },
+    Materialize {
+        step: StepId,
+    },
+}
+
+pub(crate) struct ToolMutationResult {
+    pub(crate) attempt: Option<crate::ToolAttempt>,
+    pub(crate) receipt: CommitReceipt,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct StoreMetadata {
     pub(crate) session_id: SessionId,
@@ -347,6 +385,19 @@ impl SessionStore {
         receive.await.map_err(|_| StoreError::Closed)
     }
 
+    pub(crate) async fn tool_records(&self, step: StepId) -> Result<ToolRecords, StoreError> {
+        self.call(|reply| Command::ToolRecords { step, reply })
+            .await
+    }
+
+    pub(crate) async fn tool_mutate(
+        &self,
+        operation: ToolMutation,
+    ) -> Result<ToolMutationResult, StoreError> {
+        self.call(|reply| Command::ToolMutate { operation, reply })
+            .await
+    }
+
     async fn call<T>(
         &self,
         build: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> Command,
@@ -361,6 +412,14 @@ impl SessionStore {
 }
 
 enum Command {
+    ToolRecords {
+        step: StepId,
+        reply: oneshot::Sender<Result<ToolRecords, StoreError>>,
+    },
+    ToolMutate {
+        operation: ToolMutation,
+        reply: oneshot::Sender<Result<ToolMutationResult, StoreError>>,
+    },
     CreateConversation {
         config: ConversationConfig,
         reply: oneshot::Sender<Result<CreatedConversation, StoreError>>,
@@ -455,6 +514,12 @@ enum Command {
 fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
     while let Some(command) = rx.blocking_recv() {
         match command {
+            Command::ToolRecords { step, reply } => {
+                let _ = reply.send(database.tool_records(step));
+            }
+            Command::ToolMutate { operation, reply } => {
+                let _ = reply.send(database.tool_mutate(operation));
+            }
             Command::CreateConversation { config, reply } => {
                 let _ = reply.send(database.create_conversation(config));
             }

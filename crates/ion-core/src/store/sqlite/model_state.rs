@@ -616,6 +616,14 @@ pub(super) fn finish_cancelled_turn(
     }
     drop(statement);
 
+    let mut statement = transaction.prepare(
+        "SELECT ta.id FROM tool_attempts ta JOIN tool_invocations ti ON ti.id=ta.invocation_id JOIN model_steps ms ON ms.id=ti.step_id WHERE ms.turn_id=?1 AND (json_type(ta.state, '$.IntentCommitted') IS NOT NULL OR json_type(ta.state, '$.Indeterminate') IS NOT NULL) ORDER BY ta.id",
+    )?;
+    let rows = statement.query_map([turn_id.get()], |row| row.get::<_, i64>(0))?;
+    for row in rows {
+        unresolved_attempts.push(id::<AttemptId>(row?, "cancelled tool attempt")?);
+    }
+    drop(statement);
     turn.outcome = Some(TurnOutcome::Cancelled {
         unresolved_attempts,
     });
@@ -817,7 +825,7 @@ fn validate_manifest_basis(
     Ok(())
 }
 
-fn load_turn_entries(
+pub(super) fn load_turn_entries(
     connection: &Connection,
     turn: &crate::Turn,
 ) -> Result<Vec<Entry>, StoreError> {
@@ -974,7 +982,10 @@ fn update_attempt_state(connection: &Connection, attempt: &ModelAttempt) -> Resu
     Ok(())
 }
 
-fn update_step_disposition(connection: &Connection, step: &ModelStep) -> Result<(), StoreError> {
+pub(super) fn update_step_disposition(
+    connection: &Connection,
+    step: &ModelStep,
+) -> Result<(), StoreError> {
     let updated = connection.execute(
         "UPDATE model_steps SET disposition = ?2 WHERE id = ?1",
         params![step.id.get(), json_to(&step.disposition)?],
@@ -988,7 +999,10 @@ fn update_step_disposition(connection: &Connection, step: &ModelStep) -> Result<
     Ok(())
 }
 
-fn update_turn_runtime(connection: &Connection, turn: &crate::Turn) -> Result<(), StoreError> {
+pub(super) fn update_turn_runtime(
+    connection: &Connection,
+    turn: &crate::Turn,
+) -> Result<(), StoreError> {
     let updated = connection.execute(
         "UPDATE turns
          SET settings_revision = ?2, settings = ?3, phase = ?4, budget = ?5, outcome = ?6
@@ -1040,7 +1054,7 @@ fn final_response_projection(
     })
 }
 
-fn id<T>(value: i64, label: &str) -> Result<T, StoreError>
+pub(super) fn id<T>(value: i64, label: &str) -> Result<T, StoreError>
 where
     T: TryFrom<i64>,
     <T as TryFrom<i64>>::Error: std::fmt::Display,

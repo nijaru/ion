@@ -58,6 +58,8 @@ pub enum SessionChange {
     Turn(Turn),
     ModelStep(ModelStep),
     ModelAttempt(ModelAttempt),
+    ToolInvocation(crate::ToolInvocation),
+    ToolAttempt(crate::ToolAttempt),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

@@ -364,11 +364,91 @@ impl SessionHandle {
         boundaries: ModelBoundaries,
         policy: DrivePolicy,
     ) -> Result<DriveExit, SessionError> {
+        self.resume_with_tools(turn, boundaries, crate::ToolBoundaries::default(), policy)
+            .await
+    }
+
+    pub async fn tool_records(
+        &self,
+        step: crate::StepId,
+    ) -> Result<crate::ToolRecords, SessionError> {
+        self.ensure_readable()?;
+        self.observe(self.inner.store.tool_records(step).await)
+    }
+
+    /// Recover execution evidence even after exchange/Turn settlement. Never starts work.
+    pub async fn reconcile_tools(
+        &self,
+        step: crate::StepId,
+        tools: crate::ToolBoundaries,
+    ) -> Result<DriveExit, SessionError> {
+        self.ensure_mutable()?;
+        let turn = self.tool_records(step).await?.turn.id;
+        let inner = Arc::clone(&self.inner);
+        self.drive_owned(turn, false, async move {
+            match crate::tool_drive::reconcile(&inner, step, &tools).await {
+                Ok(()) => DriveExit::Stopped { turn },
+                Err(error) => DriveExit::Faulted {
+                    turn,
+                    message: error.to_string(),
+                },
+            }
+        })
+        .await
+    }
+
+    /// Explicitly settle the exchange as unknown without changing execution truth.
+    pub async fn accept_tool_unknown(
+        &self,
+        step: crate::StepId,
+        invocation: crate::InvocationId,
+    ) -> Result<CommitReceipt, SessionError> {
+        self.ensure_mutable()?;
+        let result = self.observe(
+            self.inner
+                .store
+                .tool_mutate(crate::store::ToolMutation::Stage {
+                    step,
+                    invocation,
+                    source: crate::OutcomeSource::AcceptedUnknown,
+                })
+                .await,
+        )?;
+        Ok(result.receipt)
+    }
+
+    pub async fn resume_with_tools(
+        &self,
+        turn: TurnId,
+        boundaries: ModelBoundaries,
+        tools: crate::ToolBoundaries,
+        policy: DrivePolicy,
+    ) -> Result<DriveExit, SessionError> {
+        let inner = Arc::clone(&self.inner);
+        self.drive_owned(
+            turn,
+            true,
+            crate::drive::run(inner, turn, boundaries, tools, policy),
+        )
+        .await
+    }
+
+    async fn drive_owned(
+        &self,
+        turn: TurnId,
+        join_existing: bool,
+        future: impl std::future::Future<Output = DriveExit> + Send + 'static,
+    ) -> Result<DriveExit, SessionError> {
         self.ensure_mutable()?;
 
         let mut receiver = {
             let mut drives = self.inner.drives.lock().expect("drive map poisoned");
             if let Some(existing) = drives.get(&turn) {
+                if !join_existing {
+                    return Err(SessionError::InvalidState(
+                        "turn drive is already active".into(),
+                    ));
+                }
                 existing.clone()
             } else {
                 let (sender, receiver) = watch::channel(None);
@@ -377,18 +457,13 @@ impl SessionHandle {
                 let inner = Arc::clone(&self.inner);
                 let task_inner = Arc::clone(&inner);
                 let join = tokio::spawn(async move {
-                    let exit = std::panic::AssertUnwindSafe(crate::drive::run(
-                        Arc::clone(&task_inner),
-                        turn,
-                        boundaries,
-                        policy,
-                    ))
-                    .catch_unwind()
-                    .await
-                    .unwrap_or_else(|_| DriveExit::Faulted {
-                        turn,
-                        message: "drive task panicked".to_owned(),
-                    });
+                    let exit = std::panic::AssertUnwindSafe(future)
+                        .catch_unwind()
+                        .await
+                        .unwrap_or_else(|_| DriveExit::Faulted {
+                            turn,
+                            message: "drive task panicked".to_owned(),
+                        });
                     let _ = sender.send(Some(exit));
                     task_inner
                         .drives

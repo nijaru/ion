@@ -18,6 +18,8 @@ mod provider;
 mod request;
 mod session;
 mod store;
+mod tool_boundary;
+mod tool_drive;
 mod tool_exec;
 mod transcript;
 mod turn;
@@ -67,6 +69,11 @@ pub use session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
     CreatedConversation, CreatedSession, Session, SessionError, SessionHandle, SessionHealth,
     StartTurnRequest, StartedTurn,
+};
+pub use store::ToolRecords;
+pub use tool_boundary::{
+    MAX_TOOL_ATTEMPTS, MAX_TOOL_RECORD_BYTES, ToolBoundaries, ToolBoundary, ToolBoundaryError,
+    ToolExecution,
 };
 pub use tool_exec::{
     ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction, ProgressCheckpoint,

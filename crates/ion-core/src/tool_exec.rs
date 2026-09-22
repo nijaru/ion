@@ -80,13 +80,15 @@ pub enum ToolExchangeState {
     },
     Materialized {
         entry: EntryId,
+        source: OutcomeSource,
     },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum OutcomeSource {
     Attempt(AttemptId),
-    Synthetic,
+    CancelledBeforeStart,
+    AcceptedUnknown,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -112,6 +114,8 @@ pub enum ToolAttemptState {
         result: ToolResult,
         effect: EffectSummary,
         receipt: Option<StartReceipt>,
+        /// Explicit backend classification, independent of model-visible failure.
+        retryable: bool,
     },
     Indeterminate {
         reason: String,

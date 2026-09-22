@@ -5,6 +5,7 @@ mod model_state;
 mod ownership;
 pub(crate) mod schema;
 mod semantic;
+mod tool_state;
 
 use std::path::Path;
 
@@ -33,6 +34,18 @@ pub(crate) struct SqliteDatabase {
 }
 
 impl SqliteDatabase {
+    pub(crate) fn tool_records(&self, step: StepId) -> Result<super::ToolRecords, StoreError> {
+        tool_state::records(&self.connection, step)
+    }
+
+    pub(crate) fn tool_mutate(
+        &mut self,
+        operation: super::ToolMutation,
+    ) -> Result<super::ToolMutationResult, StoreError> {
+        let result = self.mutate(|connection| tool_state::mutate(connection, operation))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
     pub(crate) fn create(
         path: &Path,
         session_id: SessionId,

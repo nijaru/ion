@@ -49,6 +49,7 @@ pub(crate) async fn run(
     inner: Arc<SessionInner>,
     turn_id: TurnId,
     boundaries: ModelBoundaries,
+    tools: crate::ToolBoundaries,
     policy: DrivePolicy,
 ) -> DriveExit {
     loop {
@@ -63,14 +64,21 @@ pub(crate) async fn run(
         if let Some(outcome) = &basis.turn.outcome {
             return DriveExit::Settled(outcome.clone());
         }
+        if matches!(basis.turn.phase, crate::TurnPhase::Tools(_)) {
+            match crate::tool_drive::drive(&inner, &basis, &tools).await {
+                Ok(_) if basis.turn.cancellation.requested => {
+                    return finish_cancelled(&inner, turn_id).await;
+                }
+                Ok(Some(reason)) => return DriveExit::Parked(reason),
+                Ok(None) => continue,
+                Err(error) => return store_exit(turn_id, error),
+            }
+        }
         if basis.turn.cancellation.requested {
             return finish_cancelled(&inner, turn_id).await;
         }
 
-        if !basis.turn.settings.active_tools.is_empty() {
-            // R1C supplies the exact frozen tool execution boundary. Until then,
-            // advertising a tool without an executable compatible binding would
-            // violate the TurnEnvironment contract, so stop before provider I/O.
+        if !crate::tool_drive::compatible(&basis, &tools) {
             return DriveExit::Parked(ParkReason::ToolUnavailable);
         }
 
@@ -128,6 +136,19 @@ pub(crate) async fn run(
                             }
                         }
                         ModelAttemptState::ResponseReady { response, .. } => {
+                            if response
+                                .message
+                                .content
+                                .iter()
+                                .any(|c| matches!(c, Content::ToolCall(_)))
+                            {
+                                if let Err(error) =
+                                    crate::tool_drive::admit(&inner, &basis, attempt, &tools).await
+                                {
+                                    return store_exit(turn_id, error);
+                                }
+                                continue;
+                            }
                             return select_ready(&inner, turn_id, attempt, response).await;
                         }
                         ModelAttemptState::Failed { failure, .. } => {
@@ -180,6 +201,9 @@ pub(crate) async fn run(
 
                 match dispatch(&inner, &basis, &prepared, policy.model_timing.clone()).await {
                     DispatchAction::Continue => {}
+                    DispatchAction::Exit(DriveExit::Parked(ParkReason::ToolUnavailable)) => {
+                        continue;
+                    }
                     DispatchAction::Exit(exit) => return exit,
                 }
             }
