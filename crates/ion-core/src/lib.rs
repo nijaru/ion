@@ -76,9 +76,9 @@ pub use tool_boundary::{
     ToolBoundaryError, ToolExecution,
 };
 pub use tool_exec::{
-    ApprovalDecision, ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction,
-    ProgressCheckpoint, StartReceipt, ToolAttempt, ToolAttemptState, ToolAuthority,
-    ToolExchangeState, ToolInvocation, ToolPreparation, ToolResult,
+    ApprovalDecision, ApprovalState, BaseFact, EffectSummary, OutcomeSource, OutputCapture,
+    OutputLoss, PreparedAction, ProgressCheckpoint, StartReceipt, ToolAttempt, ToolAttemptState,
+    ToolAuthority, ToolExchangeState, ToolInvocation, ToolPreparation, ToolResult,
 };
 pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
 pub use turn::{Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase};

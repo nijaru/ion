@@ -11,19 +11,23 @@ provider-side R1B foundation now implement the replacement durable vocabulary/sc
 inline immutable TurnEnvironment, frozen provider/tool bindings, semantic request
 manifests, passive Session open, exact-commit observations, typed provider drive/effect
 admission, cancellation generation fencing, physical ModelAttempt evidence, provider
-start-receipt reconciliation and atomic ModelStep fallback supersession. The old
+start-receipt reconciliation, atomic ModelStep fallback supersession, exact provider realm
+matching and live host credential/egress admission before intent and adapter start. The old
 Session/task/tool/workspace runtime is not a compatibility layer underneath them.
 
 The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
 physical attempt evidence, conservative reconciliation, closure reserves, source-order
 result materialization, exact durable per-invocation approval decisions, and truthful
 unavailable settlement of already-returned provider calls through sequential host-supplied
-tools. A bounded immutable BlobStore foundation is not yet Session-integrated. Active tool state
+tools. Tool results now distinguish complete inline, complete artifact and incomplete
+capture; oversized backend values preserve settled effects with explicit output loss rather
+than stranding the attempt. A bounded immutable BlobStore foundation is not yet Session-integrated. Active tool state
 participates in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
 workspace/repository identity and orphan quarantine; a scripted integration test kills the
 owner after mutation and recovers through the registry without replay.
 
-R1C acceptance is not complete: there is no user-facing authenticated approval client,
+R1C acceptance is not complete: the provider preflight is not network confinement or a
+production adapter; there is no user-facing authenticated approval client,
 native read/edit/exec, bounded artifact publication or real parallel dispatch. The scripted
 approval store/drive boundary does not implement the host's live policy or confinement. Context
 compaction/reset/forks, real provider adapters, a client binary and workers also remain

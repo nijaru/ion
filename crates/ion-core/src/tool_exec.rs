@@ -302,12 +302,35 @@ pub struct ProgressCheckpoint {
     pub dropped_bytes: u64,
 }
 
+/// A bounded model-visible value is never silently presented as complete output.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputCapture {
+    CompleteInline,
+    CompleteArtifact {
+        full_output: BlobRef,
+    },
+    Incomplete {
+        reason: OutputLoss,
+        retained_bytes: u64,
+        /// None means the total observed output size is unknown.
+        observed_bytes: Option<u64>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OutputLoss {
+    Quota,
+    Stopped,
+    BackendCapacity,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolResult {
+    /// Complete inline content or a bounded preview, as specified by capture.
     pub value: Value,
+    /// Model-visible tool failure, independent of execution/effect certainty.
     pub is_error: bool,
-    pub truncated: bool,
-    pub full_output: Option<BlobRef>,
+    pub capture: OutputCapture,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

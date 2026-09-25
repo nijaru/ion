@@ -17,7 +17,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v4 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v5 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -34,7 +34,9 @@ foundation, and an initial tool-execution boundary:
   monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
   step eligibility, and atomic predecessor-superseding provider fallback;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
-  provider-request fingerprint when adapters use them as idempotency material;
+  provider-request fingerprint when adapters use them as idempotency material; exact frozen
+  service-realm matching and host-owned credential/egress preflight before intent, with a
+  second live check before adapter start;
 - frozen tool-schema validation and persisted `PreparedAction` admission; digest-bound
   action authority checked against the frozen ceiling before execution intent; distinct physical
   tool attempts, conservative receipt recovery, nonoverlapping retries, durable outcome staging,
@@ -73,7 +75,7 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v3) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v4) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 Still missing: native read/edit/exec backends, a user-facing approval client and
@@ -82,12 +84,17 @@ parallel tool dispatch,
 context compaction/forking, atomic Submit/Steer/InteractionReply control placement,
 real provider adapters, a runnable `ion` binary, the terminal UI, and workers.
 Unimplemented Steer/InteractionReply inputs now reject at admission rather than
-acknowledge requests that will never be consumed. Oversized tool results park rather than fabricate
-truncated success; an immutable bounded BlobStore foundation exists but is not wired to
+acknowledge requests that will never be consumed. A bounded tool result now records complete-inline, complete-artifact or incomplete-capture
+provenance rather than a boolean truncation flag. An oversized backend value is replaced
+with an explicit incomplete output warning while preserving its terminal effect evidence
+and suppressing replay; complete artifacts remain unavailable until publication is wired.
+An immutable bounded BlobStore foundation exists but is not wired to
 Session settlement, publication evidence, artifact paging, or GC. It cannot yet back large
 native output. Its host-owned namespace must be outside agent-writable workspace state and
 protected from untrusted same-user processes; a BlobStore owner lock excludes a second
 handle, while the host still owns namespace ancestry and filesystem trust.
+Provider admission is a local host callback, not network confinement or a production
+credential policy; real adapters must enforce realm/credential validity at actual I/O.
 No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy

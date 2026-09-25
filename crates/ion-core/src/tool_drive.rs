@@ -18,6 +18,63 @@ pub(crate) fn now_unix_ms() -> Result<i64, StoreError> {
         .map_err(|_| StoreError::InvalidState("clock exceeds Unix millisecond range".into()))
 }
 
+// Backend output limits are a host contract, but a bad backend must not erase
+// known terminal effect truth merely because its result cannot fit the Session.
+fn bounded_effect(state: ToolAttemptState, preview_cap: u32) -> ToolAttemptState {
+    let ToolAttemptState::Settled {
+        result,
+        effect,
+        receipt,
+        retryable,
+    } = state
+    else {
+        return state;
+    };
+    let limit = (preview_cap as usize).min(MAX_TOOL_RECORD_BYTES / 2);
+    let capture_valid = match &result.capture {
+        OutputCapture::CompleteInline => true,
+        OutputCapture::CompleteArtifact { .. } => false, // no publication authority yet
+        OutputCapture::Incomplete {
+            retained_bytes,
+            observed_bytes,
+            ..
+        } => *retained_bytes <= limit as u64 && observed_bytes.is_none_or(|n| n >= *retained_bytes),
+    };
+    let proposed = ToolAttemptState::Settled {
+        result: result.clone(),
+        effect: effect.clone(),
+        receipt: receipt.clone(),
+        retryable,
+    };
+    if capture_valid
+        && crate::tool_boundary::bounded_to(&result, limit).is_ok()
+        && crate::tool_boundary::bounded(&proposed).is_ok()
+    {
+        return proposed;
+    }
+    let message = "Tool output exceeded bounded retention; execution evidence is preserved.";
+    let fallback = ToolResult {
+        value: serde_json::Value::String(message.into()),
+        is_error: true,
+        capture: OutputCapture::Incomplete {
+            reason: OutputLoss::BackendCapacity,
+            retained_bytes: 0,
+            observed_bytes: None,
+        },
+    };
+    let effect = if crate::tool_boundary::bounded_to(&effect, MAX_TOOL_RECORD_BYTES / 4).is_ok() {
+        effect
+    } else {
+        EffectSummary::MayHaveMutated
+    };
+    ToolAttemptState::Settled {
+        result: fallback,
+        effect,
+        receipt,
+        retryable: false,
+    }
+}
+
 pub(crate) fn compatible(basis: &DriveBasis, tools: &ToolBoundaries) -> bool {
     basis.turn.settings.active_tools.iter().all(|id| {
         basis
@@ -143,12 +200,15 @@ pub(crate) async fn reconcile(
         let boundary = tools
             .resolve(binding, &records.turn.environment.workspace)
             .map_err(|_| StoreError::ToolsPending)?;
-        let state = boundary
-            .reconcile(
-                execution(inner, &records.turn, call, attempt),
-                attempt.clone(),
-            )
-            .await;
+        let state = bounded_effect(
+            boundary
+                .reconcile(
+                    execution(inner, &records.turn, call, attempt),
+                    attempt.clone(),
+                )
+                .await,
+            records.turn.environment.limits.max_tool_preview_bytes,
+        );
         if matches!(state, ToolAttemptState::NotStarted { .. })
             && binding.start_receipts != StartReceiptCapability::Authoritative
         {
@@ -247,12 +307,15 @@ pub(crate) async fn drive(
                     let Some(boundary) = boundary else {
                         return Ok(Some(ParkReason::ToolUnavailable));
                     };
-                    let state = boundary
-                        .reconcile(
-                            execution(inner, &basis.turn, call, attempt),
-                            attempt.clone(),
-                        )
-                        .await;
+                    let state = bounded_effect(
+                        boundary
+                            .reconcile(
+                                execution(inner, &basis.turn, call, attempt),
+                                attempt.clone(),
+                            )
+                            .await,
+                        basis.turn.environment.limits.max_tool_preview_bytes,
+                    );
                     let state = if matches!(state, ToolAttemptState::NotStarted { .. })
                         && binding.start_receipts != StartReceiptCapability::Authoritative
                     {
@@ -384,7 +447,7 @@ pub(crate) async fn drive(
                 .execute(execution(inner, &basis.turn, call, &attempt), permit.stop())
                 .await;
             drop(permit);
-            state
+            bounded_effect(state, basis.turn.environment.limits.max_tool_preview_bytes)
         } else {
             ToolAttemptState::NotStarted {
                 reason: "effect gate closed before admission".into(),

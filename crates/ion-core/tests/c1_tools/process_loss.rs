@@ -154,8 +154,7 @@ impl ToolBoundary for RegistryTool {
                 result: ToolResult {
                     value: json!("mutation completed"),
                     is_error: false,
-                    truncated: false,
-                    full_output: None,
+                    capture: OutputCapture::CompleteInline,
                 },
                 effect,
                 retryable: false,

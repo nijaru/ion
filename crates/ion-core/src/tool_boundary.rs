@@ -176,16 +176,24 @@ pub(crate) fn prepare_action(
 }
 
 pub(crate) fn bounded(value: &impl serde::Serialize) -> Result<(), ToolBoundaryError> {
+    bounded_to(value, MAX_TOOL_RECORD_BYTES)
+}
+
+pub(crate) fn bounded_to(
+    value: &impl serde::Serialize,
+    limit: usize,
+) -> Result<(), ToolBoundaryError> {
     // A backend may still return an oversized Value after an external effect.
     // Never allocate a second unbounded encoded copy just to reject it.
     struct Counted {
         length: usize,
+        limit: usize,
         exceeded: bool,
     }
     impl Write for Counted {
         fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
             self.length = self.length.saturating_add(bytes.len());
-            if self.length > MAX_TOOL_RECORD_BYTES {
+            if self.length > self.limit {
                 self.exceeded = true;
                 return Err(std::io::Error::other("tool record capacity"));
             }
@@ -197,6 +205,7 @@ pub(crate) fn bounded(value: &impl serde::Serialize) -> Result<(), ToolBoundaryE
     }
     let mut counter = Counted {
         length: 0,
+        limit,
         exceeded: false,
     };
     match serde_json::to_writer(&mut counter, value) {

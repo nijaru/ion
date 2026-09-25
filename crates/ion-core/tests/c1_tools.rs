@@ -180,8 +180,7 @@ fn success() -> ToolAttemptState {
         result: ToolResult {
             value: json!("ok"),
             is_error: false,
-            truncated: false,
-            full_output: None,
+            capture: OutputCapture::CompleteInline,
         },
         effect: EffectSummary::NoMutation,
         receipt: None,
@@ -1075,7 +1074,7 @@ async fn known_mutation_never_retries_even_when_error_is_classified_retryable() 
 }
 
 #[tokio::test]
-async fn oversized_success_is_refused_without_truncation_or_reexecution() {
+async fn oversized_backend_output_preserves_terminal_effect_without_reexecution() {
     let (s, path, turn) = setup(config()).await;
     let m = model();
     let mut state = success();
@@ -1083,28 +1082,44 @@ async fn oversized_success_is_refused_without_truncation_or_reexecution() {
         result.value = json!("x".repeat(2048));
     }
     let t = Arc::new(Tool::new(state));
-    assert_eq!(
+    assert!(matches!(
         s.handle()
             .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
             .await
             .unwrap(),
-        DriveExit::Parked(ParkReason::Capacity)
-    );
+        DriveExit::Settled(_)
+    ));
     let step = tool_step(&s).await;
     let records = s.handle().tool_records(step).await.unwrap();
+    assert_eq!(records.attempts.len(), 1);
+    assert!(matches!(
+        &records.attempts[0].state,
+        ToolAttemptState::Settled {
+            result: ToolResult {
+                capture: OutputCapture::Incomplete {
+                    reason: OutputLoss::BackendCapacity,
+                    ..
+                },
+                ..
+            },
+            effect: EffectSummary::NoMutation,
+            retryable: false,
+            ..
+        }
+    ));
     assert!(matches!(
         records.invocations[0].exchange,
-        ToolExchangeState::Pending
+        ToolExchangeState::Materialized { .. }
     ));
     s.close().await.unwrap();
     let s = Session::open(&path).await.unwrap();
-    assert_eq!(
+    assert!(matches!(
         s.handle()
             .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
             .await
             .unwrap(),
-        DriveExit::Parked(ParkReason::RecoveryRequired)
-    );
+        DriveExit::Settled(_)
+    ));
     assert_eq!(t.executes.load(Ordering::SeqCst), 1);
     s.close().await.unwrap();
 }

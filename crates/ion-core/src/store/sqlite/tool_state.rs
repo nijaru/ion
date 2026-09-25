@@ -248,8 +248,7 @@ pub(super) fn mutate(
                 let result = ToolResult {
                     value: serde_json::Value::String("x".repeat(preview)),
                     is_error: true,
-                    truncated: false,
-                    full_output: None,
+                    capture: OutputCapture::CompleteInline,
                 };
                 closure.push(result_entry(
                     seq.next()?,
@@ -767,17 +766,28 @@ fn result_entry(
     })
 }
 fn validate_result(result: &ToolResult, turn: &Turn) -> Result<(), StoreError> {
-    // Blob publication is not connected: never publish a truncated success or
-    // a reference that this Session has not durably verified.
-    if result.truncated
-        || result.full_output.is_some()
-        || json_to(result)?.len() > turn.environment.limits.max_tool_preview_bytes as usize
-    {
-        return Err(StoreError::Limit(
-            "tool result requires BlobStore or larger preview reserve".into(),
+    // Artifact-bearing results still require Session-bound publication evidence.
+    if matches!(&result.capture, OutputCapture::CompleteArtifact { .. }) {
+        return Err(StoreError::InvalidRequest(
+            "artifact publication is not yet wired".into(),
         ));
     }
-    Ok(())
+    let limit = (turn.environment.limits.max_tool_preview_bytes as usize)
+        .min(crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2);
+    if let OutputCapture::Incomplete {
+        retained_bytes,
+        observed_bytes,
+        ..
+    } = &result.capture
+        && (*retained_bytes > limit as u64
+            || observed_bytes.is_some_and(|observed| observed < *retained_bytes))
+    {
+        return Err(invalid(
+            "incomplete output metadata exceeds the retained preview",
+        ));
+    }
+    crate::tool_boundary::bounded_to(result, limit)
+        .map_err(|_| StoreError::Limit("tool result preview capacity".into()))
 }
 const UNKNOWN_RESULT: &str =
     "Execution outcome unknown; effects may have occurred and may still be live.";
@@ -787,8 +797,7 @@ fn error_result(reason: &str) -> ToolResult {
     ToolResult {
         value: serde_json::Value::String(reason.into()),
         is_error: true,
-        truncated: false,
-        full_output: None,
+        capture: OutputCapture::CompleteInline,
     }
 }
 fn receipt(state: &ToolAttemptState) -> Option<&StartReceipt> {
