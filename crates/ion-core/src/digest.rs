@@ -10,6 +10,11 @@ pub struct ContentDigest([u8; 32]);
 
 impl ContentDigest {
     #[must_use]
+    pub(crate) const fn from_bytes(bytes: [u8; 32]) -> Self {
+        Self(bytes)
+    }
+
+    #[must_use]
     pub fn of_bytes(bytes: &[u8]) -> Self {
         let digest = Sha256::digest(bytes);
         let mut value = [0_u8; 32];

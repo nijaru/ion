@@ -19,6 +19,7 @@ use uuid::Uuid;
 use crate::ContentDigest;
 
 const IO_BUFFER_BYTES: usize = 64 * 1024;
+const MAX_METADATA_BYTES: usize = 256;
 const MAX_TEMP_NAME_ATTEMPTS: usize = 8;
 const OBJECTS_DIRECTORY: &str = "objects";
 const STAGING_DIRECTORY: &str = "staging";
@@ -85,6 +86,7 @@ pub enum BlobQuota {
     SpoolBytes,
     PageBytes,
     ObjectCount,
+    MetadataBytes,
 }
 
 impl std::fmt::Display for BlobQuota {
@@ -95,6 +97,7 @@ impl std::fmt::Display for BlobQuota {
             Self::SpoolBytes => "spool bytes",
             Self::PageBytes => "read-page bytes",
             Self::ObjectCount => "object count",
+            Self::MetadataBytes => "reference metadata bytes",
         };
         formatter.write_str(label)
     }
@@ -212,6 +215,18 @@ impl BlobStore {
         media_type: Option<String>,
         encoding: Option<String>,
     ) -> Result<BlobRef, BlobStoreError> {
+        if media_type
+            .as_ref()
+            .is_some_and(|s| s.len() > MAX_METADATA_BYTES)
+            || encoding
+                .as_ref()
+                .is_some_and(|s| s.len() > MAX_METADATA_BYTES)
+        {
+            return Err(BlobStoreError::QuotaExceeded {
+                quota: BlobQuota::MetadataBytes,
+                limit: MAX_METADATA_BYTES as u64,
+            });
+        }
         let _publish_guard = self
             .publish_lock
             .lock()
@@ -741,10 +756,7 @@ fn hash_matches(hasher: Sha256, expected: ContentDigest) -> bool {
 }
 
 fn digest_from_sha256(bytes: [u8; 32]) -> ContentDigest {
-    // ContentDigest's public serde representation is [u8; 32]. Reconstruct through that
-    // stable boundary so publication can hash incrementally without retaining source bytes.
-    let encoded = serde_json::to_vec(&bytes).expect("serializing a fixed byte array is infallible");
-    serde_json::from_slice(&encoded).expect("ContentDigest serializes as [u8; 32]")
+    ContentDigest::from_bytes(bytes)
 }
 
 fn sync_directory(path: &Path, operation: &'static str) -> Result<(), BlobStoreError> {
@@ -856,6 +868,24 @@ mod tests {
                 .count(),
             1
         );
+    }
+
+    #[test]
+    fn oversized_reference_metadata_is_rejected_before_spooling() {
+        let namespace = TestNamespace::new();
+        let store = store(&namespace, limits());
+        assert!(matches!(
+            store.publish_with_metadata(
+                Cursor::new(b"x"),
+                Some("x".repeat(MAX_METADATA_BYTES + 1)),
+                None
+            ),
+            Err(BlobStoreError::QuotaExceeded {
+                quota: BlobQuota::MetadataBytes,
+                ..
+            })
+        ));
+        assert_eq!(store.usage().unwrap().object_count, 0);
     }
 
     #[test]
