@@ -140,8 +140,11 @@ cargo run --locked -p ion -- run \
 ```
 
 Replace the example endpoint and capacity placeholders with values for your provider.
-`OPENAI_API_KEY` is read at dispatch and is not stored in the Session. A missing key
-parks without sending a request. `ion inspect --state ...` shows a bounded snapshot;
+The default `--wire chat-completions` reads `OPENAI_API_KEY`. For Anthropic's
+`/v1/messages`, use `--wire anthropic-messages`, an exact Anthropic endpoint/model,
+and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint; use a new
+state directory to switch. Keys are read at dispatch and are not stored. A missing
+key parks without sending a request. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
 resumes a persisted Turn. The host currently allows only bounded serial file reads;
 it cannot edit files or execute commands. It does not sandbox workspace access or

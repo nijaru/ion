@@ -58,6 +58,25 @@ a, b = (json.load(open(path)) for path in sys.argv[1:])
 assert a == b, 'passive reopen, idempotent submit, or blocked resume changed durable state'
 PY
 
+# The second wire API must pass through the same Session and credential preflight.
+mkdir "$WORK/anthropic-state"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/anthropic-state" \
+    --workspace "$WORK/workspace" --wire anthropic-messages \
+    --endpoint https://api.anthropic.com/v1/messages \
+    --api-key-env ION_SMOKE_ABSENT_KEY --model claude-test \
+    --model-input-limit 8192 --model-output-limit 2048 \
+    'synthetic, no network' > "$WORK/anthropic.json" 2> "$WORK/anthropic.err"; then
+    echo 'FAIL: absent Anthropic credentials allowed dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/anthropic.err"
+"$BIN" inspect --state "$WORK/anthropic-state" > "$WORK/anthropic-snapshot.json"
+python3 - "$WORK/anthropic-snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['model_attempts'] == [], 'Anthropic preflight consumed a provider attempt'
+assert s['config']['config']['providers'][0]['id'] == 'anthropic-messages'
+PY
+
 mkdir "$WORK/workspace/state"
 if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/workspace/state" \
     --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \

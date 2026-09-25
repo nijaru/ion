@@ -54,9 +54,10 @@ result cannot evict known terminal effect truth. The scripted
 approval store/drive boundary does not implement the host's live policy or confinement.
 The headless `ion` binary hosts the same Session and bounded read tool for
 submit/inspect/resume; its offline smoke tests no-credential preflight and passive
-reopen, not live-provider or terminal behavior. Context compaction/reset/forks,
-a terminal client and workers remain future work. The headless executable currently
-wires only the OpenAI-compatible adapter. Preserve useful prototype leaf behavior and failure scenarios as replacement
+reopen, not live-provider or terminal behavior. The headless executable selects
+one of the two frozen wire APIs at Session creation; it does not silently change
+an existing Session's provider. Context compaction/reset/forks, a terminal client
+and workers remain future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
 tests, not obsolete owners or schema/API compatibility.
 
 ## Product and boundaries
