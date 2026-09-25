@@ -14,6 +14,7 @@ mod entry;
 mod id;
 mod input;
 mod model;
+mod native_read;
 mod observation;
 mod provider;
 mod request;
@@ -52,6 +53,9 @@ pub use model::{
     CostQuote, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
     ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt, RequestManifest,
     StepDisposition, StepPurpose,
+};
+pub use native_read::{
+    MAX_NATIVE_READ_BYTES, NativeReadBoundary, NativeReadError, native_read_binding,
 };
 pub use observation::{
     CommitReceipt, EntryPage, MAX_SNAPSHOT_BYTES, MAX_SNAPSHOT_ENTRIES, MAX_SNAPSHOT_INPUTS,

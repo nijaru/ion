@@ -34,7 +34,11 @@ owner after mutation and recovers through the registry without replay.
 
 R1C acceptance is not complete: the provider preflight is not network confinement or a
 production adapter; there is no user-facing authenticated approval client,
-native read/edit/exec, bounded artifact publication or real parallel dispatch. The scripted
+native edit/exec, bounded artifact publication or real parallel dispatch. A native bounded
+read boundary exists, but its descriptor-relative walk is not a race-free beneath-root
+primitive: the host must protect the workspace namespace from concurrent renames. It does
+not provide an OS sandbox, and callers must source bindings from WorkspaceRegistry; the
+boundary cannot independently authenticate arbitrary WorkspaceBinding values. The scripted
 approval store/drive boundary does not implement the host's live policy or confinement. Context
 compaction/reset/forks, real provider adapters, a client binary and workers also remain
 future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
