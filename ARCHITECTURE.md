@@ -37,7 +37,10 @@ registry without replay.
 
 R1C acceptance is not complete: provider preflight is not network confinement; the
 OpenAI-compatible and Anthropic Messages streaming adapters have mock-HTTP tests and
-Session/native-read loopback exchanges, but no live credential/model qualification. Returned-model identity and frozen tool-choice/parallel controls now
+Session/native-read loopback exchanges. One synthetic OpenRouter Chat Completions
+headless read-and-answer run succeeded, while direct OpenAI returned HTTP 429; neither
+wire adapter has broad live qualification. Returned-model identity and frozen
+tool-choice/parallel controls now
 gate selection and tool admission, including persisted responses after reopen. There is no user-facing
 authenticated approval client, native edit/exec, native large-output capture or real
 parallel dispatch. A native bounded

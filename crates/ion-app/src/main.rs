@@ -69,6 +69,12 @@ struct RunArgs {
     model_output_limit: u32,
     #[arg(long, default_value_t = 1024)]
     max_output_tokens: u32,
+    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..=32))]
+    max_model_steps: u32,
+    #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=4))]
+    max_model_attempts_per_step: u32,
+    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=32))]
+    max_tool_invocations: u32,
     #[arg(long)]
     request_key: Option<String>,
     prompt: String,
@@ -206,8 +212,10 @@ fn initial_config(
             remote_tools: false, egress_realms: vec![EgressRealm::Local, realm],
         },
         limits: TurnLimits {
-            max_model_steps: 16, max_model_attempts_per_step: 3,
-            max_tool_invocations: 32, max_parallel_read_tools: 1,
+            max_model_steps: args.max_model_steps,
+            max_model_attempts_per_step: args.max_model_attempts_per_step,
+            max_tool_invocations: args.max_tool_invocations,
+            max_parallel_read_tools: 1,
             max_response_bytes: 1024 * 1024, max_tool_preview_bytes: 64 * 1024,
             max_cost_microusd: None,
         },

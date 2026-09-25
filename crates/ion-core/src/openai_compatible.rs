@@ -358,14 +358,23 @@ where
                     usage = Usage::known(input, output);
                     yield Ok(ModelStreamEvent::Usage(usage));
                 }
+                if value["choices"].as_array().is_some_and(|choices| choices.len() > 1) {
+                    yield Err(err("multiple response choices are unsupported", ProviderErrorKind::InvalidRequest));
+                    return;
+                }
                 if let Some(choice) = value["choices"].get(0) {
-                    if finish.is_some() {
-                        yield Err(err("provider sent a choice after finish_reason", ProviderErrorKind::InvalidRequest));
-                        return;
-                    }
                     if choice["index"].as_u64().is_some_and(|index| index != 0) {
                         yield Err(err("unexpected response choice index", ProviderErrorKind::InvalidRequest));
                         return;
+                    }
+                    if finish.is_some() {
+                        if !terminal_usage_trailer(choice, value.get("usage"), finish.as_deref()) {
+                            yield Err(err("provider sent a contradictory choice after finish_reason", ProviderErrorKind::InvalidRequest));
+                            return;
+                        }
+                        // Some compatible services repeat the exact terminal reason
+                        // in a usage-bearing frame. No content or calls may follow.
+                        continue;
                     }
                     if let Some(delta) = choice.get("delta") {
                         if let Some(part) = delta["content"].as_str() {
@@ -430,6 +439,23 @@ where
             returned_model: model,
         };
         yield Ok(ModelStreamEvent::Completed(response));
+    })
+}
+
+fn terminal_usage_trailer(choice: &Value, usage: Option<&Value>, finish: Option<&str>) -> bool {
+    if usage.is_none_or(Value::is_null) || choice["finish_reason"].as_str() != finish {
+        return false;
+    }
+    choice.get("delta").is_none_or(|delta| {
+        delta.as_object().is_some_and(|fields| {
+            fields.iter().all(|(key, value)| match key.as_str() {
+                "role" => value.is_null() || value.as_str() == Some("assistant"),
+                "content" => value.is_null() || value.as_str() == Some(""),
+                "tool_calls" => value.is_null() || value.as_array().is_some_and(Vec::is_empty),
+                "function_call" | "refusal" => value.is_null(),
+                _ => false,
+            })
+        })
     })
 }
 
@@ -750,6 +776,52 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
                 ..
             }))
         ));
+    }
+
+    #[tokio::test]
+    async fn usage_trailer_may_repeat_the_same_finish_without_new_content() {
+        let body = [
+            json!({"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[
+                {"index":0,"id":"call_1","function":{"name":"read","arguments":"{}"}}
+            ]},"finish_reason":"tool_calls"}]}),
+            json!({"model":"gpt-test","choices":[{"index":0,
+                "delta":{"content":"","role":"assistant"},"finish_reason":"tool_calls"}],
+                "usage":{"prompt_tokens":11,"completion_tokens":7}}),
+        ]
+        .into_iter()
+        .map(|value| format!("data: {value}\n\n"))
+        .collect::<String>()
+            + "data: [DONE]\n\n";
+        let url = server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ));
+        let boundary = OpenAiCompatible::test_local(
+            identity(url.clone()),
+            &url,
+            Arc::new(|| Some("synthetic".into())),
+        )
+        .unwrap();
+        let ModelStart::Started { mut stream, .. } = boundary
+            .start(
+                crate::AttemptId::new(1).unwrap(),
+                "effect".into(),
+                request(),
+                CancellationToken::new(),
+            )
+            .await
+        else {
+            panic!("dispatch did not begin")
+        };
+        let mut completed = None;
+        while let Some(event) = stream.next().await {
+            if let ModelStreamEvent::Completed(response) = event.unwrap() {
+                completed = Some(response);
+            }
+        }
+        let response = completed.expect("repeated terminal usage trailer is valid");
+        assert_eq!(response.usage, Usage::known(11, 7));
+        assert_eq!(response.message.content.len(), 1);
     }
 
     #[tokio::test]

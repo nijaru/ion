@@ -146,9 +146,11 @@ parks without sending a request. `ion inspect --state ...` shows a bounded snaps
 resumes a persisted Turn. The host currently allows only bounded serial file reads;
 it cannot edit files or execute commands. It does not sandbox workspace access or
 enforce a monetary ceiling. Provider calls can send workspace content and incur charges.
-This path has passed a loopback provider/native-read exchange, **not** a live-provider
-qualification. The excluded legacy `crates/ion/` remains reference material, not
-an alternative maintained runtime.
+This path passed a synthetic OpenRouter Chat Completions read-and-answer exchange
+(two model attempts and one native read) on 2026-09-25. A direct OpenAI attempt
+returned HTTP 429; the Anthropic adapter has only loopback tests. This is **not**
+broad provider, native-mutation or terminal qualification. The excluded legacy
+`crates/ion/` remains reference material, not an alternative maintained runtime.
 
 ## Development
 
