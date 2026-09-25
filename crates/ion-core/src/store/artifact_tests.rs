@@ -274,6 +274,16 @@ async fn artifact_dropped_publication_waiter_keeps_scope_until_worker_finishes()
         ));
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            let alias = fixture.root.join("alias.sqlite");
+            symlink(fixture.root.join("session.sqlite"), &alias).unwrap();
+            assert!(matches!(
+                Session::open(&alias).await,
+                Err(SessionError::Storage(_))
+            ));
+        }
         if abandon_scope {
             drop(scope);
             let mut close = Box::pin(fixture.store.shutdown());

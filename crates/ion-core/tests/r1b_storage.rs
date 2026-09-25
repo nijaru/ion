@@ -653,6 +653,24 @@ async fn cancellation_generation_is_durable() {
     cleanup(reopened, dir).await;
 }
 
+#[cfg(unix)]
+#[tokio::test]
+async fn database_path_alias_cannot_open_a_second_writable_session() {
+    use std::os::unix::fs::symlink;
+    let (dir, path) = database("alias-lock");
+    let session = Session::create(&path, config("v1")).await.unwrap().session;
+    let alias = dir.join("alias.sqlite");
+    symlink(&path, &alias).unwrap();
+    assert!(matches!(
+        Session::open(&alias).await,
+        Err(SessionError::Storage(_))
+    ));
+    session.close().await.unwrap();
+    let reopened = Session::open(&alias).await.unwrap();
+    reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
 #[tokio::test]
 async fn failed_semantic_commit_publishes_nothing_and_fences_mutation() {
     let (dir, path) = database("commit-fault");
