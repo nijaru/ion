@@ -125,20 +125,18 @@ impl ModelBoundary for Model {
         Box::pin(async move {
             self.starts.fetch_add(1, Ordering::SeqCst);
             let has_result = r.messages.iter().any(|m| m.role == TranscriptRole::Tool);
-            let name = r
-                .tools
-                .first()
-                .expect("scripted tool declaration")
-                .name
-                .clone();
             let content = if has_result {
                 vec![Content::Text("done".into())]
             } else {
                 (0..self.calls)
                     .map(|i| {
                         Content::ToolCall(ToolCall {
-                            id: format!("call-{i}"),
-                            name: name.clone(),
+                            id: if self.arguments == json!({"path":"duplicate-ids"}) {
+                                "duplicate".into()
+                            } else {
+                                format!("call-{i}")
+                            },
+                            name: r.tools[i % r.tools.len()].name.clone(),
                             arguments: self.arguments.clone(),
                         })
                     })
@@ -173,6 +171,7 @@ struct Tool {
     denied: AtomicBool,
     ask: AtomicBool,
     revoke_after_preflight: AtomicBool,
+    fail_prepare: AtomicBool,
     authority: ToolAuthority,
 }
 fn success() -> ToolAttemptState {
@@ -207,6 +206,7 @@ impl Tool {
             denied: AtomicBool::new(false),
             ask: AtomicBool::new(false),
             revoke_after_preflight: AtomicBool::new(false),
+            fail_prepare: AtomicBool::new(false),
             authority: ToolAuthority::ReadOnly,
         }
     }
@@ -224,6 +224,9 @@ impl ToolBoundary for Tool {
     }
     fn prepare(&self, arguments: serde_json::Value) -> Result<PreparedAction, ToolBoundaryError> {
         self.prepares.fetch_add(1, Ordering::SeqCst);
+        if self.fail_prepare.load(Ordering::SeqCst) {
+            return Err(ToolBoundaryError::InvalidAction);
+        }
         Ok(PreparedAction::new(
             binding().id,
             arguments,
@@ -296,6 +299,43 @@ impl ToolBoundary for Tool {
             self.reconciles.fetch_add(1, Ordering::SeqCst);
             self.recovery.lock().unwrap().clone()
         })
+    }
+}
+fn alternate_binding() -> ToolBinding {
+    let mut b = binding();
+    b.id = ToolBindingId::new("other").unwrap();
+    b.spec.name = "other".into();
+    b.implementation = id("other-v1");
+    b
+}
+struct AlternateTool;
+impl ToolBoundary for AlternateTool {
+    fn binding(&self) -> ToolBinding {
+        alternate_binding()
+    }
+    fn executor(&self) -> SemanticCompatibilityId {
+        id("script-exec-v1")
+    }
+    fn prepare(&self, arguments: serde_json::Value) -> Result<PreparedAction, ToolBoundaryError> {
+        Ok(PreparedAction::new(
+            alternate_binding().id,
+            arguments,
+            EgressRealm::Local,
+            ToolAuthority::ReadOnly,
+            None,
+            vec![],
+        )
+        .unwrap())
+    }
+    fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> LiveToolAuthority {
+        LiveToolAuthority::Allow
+    }
+    fn execute<'a>(
+        &'a self,
+        _: ToolExecution,
+        _: CancellationToken,
+    ) -> BoxFuture<'a, ToolAttemptState> {
+        Box::pin(async { panic!("alternate backend must disappear before selection") })
     }
 }
 fn models(m: &Arc<Model>) -> ModelBoundaries {
@@ -423,7 +463,10 @@ async fn frozen_authority_blocks_execution_intent_across_reopen() {
         let step = tool_step(&s).await;
         let before = s.handle().tool_records(step).await.unwrap();
         assert!(before.attempts.is_empty());
-        assert_eq!(before.invocations[0].prepared.authority, authority);
+        assert_eq!(
+            before.invocations[0].preparation.ready().unwrap().authority,
+            authority
+        );
         s.close().await.unwrap();
         let s = Session::open(&path).await.unwrap();
         assert_eq!(
@@ -556,7 +599,7 @@ async fn exact_approval_survives_passive_reopen_and_rejects_stale_decisions() {
     assert_eq!(call.approval, ApprovalState::Pending);
     assert!(before.attempts.is_empty());
     assert_eq!(t.executes.load(Ordering::SeqCst), 0);
-    let digest = call.prepared.digest;
+    let digest = call.preparation.ready().unwrap().digest;
     let invocation = call.id;
     s.close().await.unwrap();
 
@@ -717,7 +760,7 @@ async fn expired_approval_reopens_pending_without_an_attempt() {
         .decide_tool_approval(
             step,
             call.id,
-            call.prepared.digest,
+            call.preparation.ready().unwrap().digest,
             ApprovalDecision::Approve {
                 expires_at_unix_ms: now + 60_000,
             },
@@ -790,7 +833,7 @@ async fn cancellation_and_live_denial_override_a_saved_grant() {
         .decide_tool_approval(
             step,
             call.id,
-            call.prepared.digest,
+            call.preparation.ready().unwrap().digest,
             grant.clone(),
             t.executor(),
         )
@@ -819,7 +862,7 @@ async fn cancellation_and_live_denial_override_a_saved_grant() {
             .decide_tool_approval(
                 step,
                 call.id,
-                call.prepared.digest,
+                call.preparation.ready().unwrap().digest,
                 ApprovalDecision::Deny {
                     reason: "too late".into()
                 },
@@ -897,7 +940,7 @@ async fn approval_commit_failure_publishes_nothing_and_fences() {
             .decide_tool_approval(
                 step,
                 call.id,
-                call.prepared.digest,
+                call.preparation.ready().unwrap().digest,
                 ApprovalDecision::Approve {
                     expires_at_unix_ms: expiry
                 },
@@ -950,7 +993,7 @@ async fn denial_stages_one_source_order_result_without_a_tool_attempt() {
             .decide_tool_approval(
                 step,
                 call.id,
-                call.prepared.digest,
+                call.preparation.ready().unwrap().digest,
                 decision.clone(),
                 t.executor()
             )
@@ -960,7 +1003,13 @@ async fn denial_stages_one_source_order_result_without_a_tool_attempt() {
     );
     assert!(
         s.handle()
-            .decide_tool_approval(step, call.id, call.prepared.digest, decision, t.executor())
+            .decide_tool_approval(
+                step,
+                call.id,
+                call.preparation.ready().unwrap().digest,
+                decision,
+                t.executor()
+            )
             .await
             .unwrap()
             .is_none()
@@ -1311,6 +1360,248 @@ async fn complete_tool_exchange_prepares_once_and_continues() {
     assert_eq!(t.prepares.load(Ordering::SeqCst), 1);
     assert_eq!(t.executes.load(Ordering::SeqCst), 1);
     assert_eq!(m.starts.load(Ordering::SeqCst), 2);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_ready_settles_mixed_unavailable_calls_without_inventing_actions() {
+    let mut c = config();
+    c.tools.push(alternate_binding());
+    c.initial_tools.push(alternate_binding().id);
+    let (s, path, turn) = setup(c).await;
+    let m = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        arguments: json!({"path":"x"}),
+        calls: 2,
+    });
+    let t = Arc::new(Tool::new(success()));
+    t.fail_prepare.store(true, Ordering::SeqCst);
+    let both = ToolBoundaries::new([
+        Arc::clone(&t) as Arc<dyn ToolBoundary>,
+        Arc::new(AlternateTool) as Arc<dyn ToolBoundary>,
+    ])
+    .unwrap();
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), both, DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    s.close().await.unwrap();
+
+    t.fail_prepare.store(false, Ordering::SeqCst);
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ToolUnavailable)
+    );
+    let step = tool_step(&s).await;
+    let records = s.handle().tool_records(step).await.unwrap();
+    assert_eq!(records.invocations.len(), 2);
+    assert!(matches!(
+        records.invocations[0].preparation,
+        ToolPreparation::Ready(_)
+    ));
+    assert_eq!(
+        records.invocations[1].preparation,
+        ToolPreparation::Unavailable
+    );
+    assert_eq!(records.attempts.len(), 1);
+    assert_eq!(records.attempts[0].invocation, records.invocations[0].id);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        records.invocations[0].exchange,
+        ToolExchangeState::Materialized {
+            source: OutcomeSource::Attempt(_),
+            ..
+        }
+    ));
+    assert!(matches!(
+        records.invocations[1].exchange,
+        ToolExchangeState::Materialized {
+            source: OutcomeSource::Unavailable,
+            ..
+        }
+    ));
+    let entries = s
+        .handle()
+        .page_entries(s.primary_conversation(), None, 100)
+        .await
+        .unwrap();
+    let results: Vec<_> = entries
+        .entries
+        .iter()
+        .filter_map(|e| match e.data {
+            EntryData::ToolResult { invocation } => Some(invocation),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        results,
+        records.invocations.iter().map(|c| c.id).collect::<Vec<_>>()
+    );
+    s.close().await.unwrap();
+
+    // A second passive reopen does not resurrect, prepare or execute the missing action.
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(s.handle().tool_records(step).await.unwrap(), records);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ToolUnavailable)
+    );
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn unavailable_admission_fault_rolls_back_response_selection_and_can_recover() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.fail_prepare.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    s.close().await.unwrap();
+    let injector = rusqlite::Connection::open(&path).unwrap();
+    injector
+        .execute_batch(
+            "CREATE TRIGGER fail_unavailable BEFORE INSERT ON tool_invocations
+        BEGIN SELECT RAISE(ABORT, 'injected unavailable admission fault'); END;",
+        )
+        .unwrap();
+    let s = Session::open(&path).await.unwrap();
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(
+                turn,
+                models(&m),
+                ToolBoundaries::default(),
+                DrivePolicy::default()
+            )
+            .await
+            .unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    assert_eq!(s.handle().health(), SessionHealth::Fenced);
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert!(
+        s.handle()
+            .page_entries(s.primary_conversation(), None, 100)
+            .await
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| !matches!(e.data, EntryData::Assistant { .. }))
+    );
+    s.close().await.unwrap();
+    injector
+        .execute_batch("DROP TRIGGER fail_unavailable;")
+        .unwrap();
+    drop(injector);
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(
+                turn,
+                models(&m),
+                ToolBoundaries::default(),
+                DrivePolicy::default()
+            )
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ToolUnavailable)
+    );
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert!(
+        s.handle()
+            .tool_records(tool_step(&s).await)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn duplicate_provider_tool_ids_cannot_admit_or_execute_a_batch() {
+    let (s, _path, turn) = setup(config()).await;
+    let m = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        arguments: json!({"path":"duplicate-ids"}),
+        calls: 2,
+    });
+    let t = Arc::new(Tool::new(success()));
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    assert!(
+        s.handle()
+            .page_entries(s.primary_conversation(), None, 100)
+            .await
+            .unwrap()
+            .entries
+            .iter()
+            .all(|e| !matches!(e.data, EntryData::Assistant { .. }))
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn response_ready_without_any_backend_stages_only_unavailable_results() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.fail_prepare.store(true, Ordering::SeqCst);
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    s.close().await.unwrap();
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(
+                turn,
+                models(&m),
+                ToolBoundaries::default(),
+                DrivePolicy::default()
+            )
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ToolUnavailable)
+    );
+    let records = s.handle().tool_records(tool_step(&s).await).await.unwrap();
+    assert_eq!(
+        records.invocations[0].preparation,
+        ToolPreparation::Unavailable
+    );
+    assert!(records.attempts.is_empty());
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
     s.close().await.unwrap();
 }
 

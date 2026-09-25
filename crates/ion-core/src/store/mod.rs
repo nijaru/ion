@@ -31,7 +31,7 @@ pub struct ToolRecords {
 pub(crate) enum ToolMutation {
     Admit {
         attempt: crate::AttemptId,
-        actions: Vec<crate::PreparedAction>,
+        preparations: Vec<crate::ToolPreparation>,
     },
     RequestApproval {
         step: StepId,

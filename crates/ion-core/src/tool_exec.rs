@@ -156,6 +156,24 @@ pub struct BaseFact {
     pub digest: ContentDigest,
 }
 
+/// Immutable admission disposition for one provider tool call. An unavailable
+/// preparer cannot supply a PreparedAction, and no attempt may be derived from it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum ToolPreparation {
+    Ready(PreparedAction),
+    Unavailable,
+}
+
+impl ToolPreparation {
+    #[must_use]
+    pub fn ready(&self) -> Option<&PreparedAction> {
+        match self {
+            Self::Ready(action) => Some(action),
+            Self::Unavailable => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolInvocation {
     pub id: InvocationId,
@@ -164,7 +182,7 @@ pub struct ToolInvocation {
     pub source_index: u32,
     pub origin_provider_call_id: Option<String>,
     pub binding: ToolBindingId,
-    pub prepared: PreparedAction,
+    pub preparation: ToolPreparation,
     pub approval: ApprovalState,
     pub exchange: ToolExchangeState,
 }
@@ -235,6 +253,7 @@ pub enum OutcomeSource {
     Attempt(AttemptId),
     CancelledBeforeStart,
     DeniedApproval,
+    Unavailable,
     AcceptedUnknown,
 }
 

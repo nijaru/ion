@@ -78,6 +78,27 @@ pub(crate) async fn run(
             return finish_cancelled(&inner, turn_id).await;
         }
 
+        // A completed provider response is durable evidence. Consume it before
+        // checking live bindings for any new request: code can disappear after the
+        // network reply without erasing or indefinitely stranding that reply.
+        if let (Some(step), Some(attempt)) = (&basis.current_step, basis.attempts.last())
+            && matches!(step.disposition, StepDisposition::Open)
+            && let ModelAttemptState::ResponseReady { response, .. } = &attempt.state
+        {
+            if response
+                .message
+                .content
+                .iter()
+                .any(|c| matches!(c, Content::ToolCall(_)))
+            {
+                if let Err(error) = crate::tool_drive::admit(&inner, &basis, attempt, &tools).await
+                {
+                    return store_exit(turn_id, error);
+                }
+                continue;
+            }
+            return select_ready(&inner, turn_id, attempt, response).await;
+        }
         if !crate::tool_drive::compatible(&basis, &tools) {
             return DriveExit::Parked(ParkReason::ToolUnavailable);
         }
@@ -135,21 +156,8 @@ pub(crate) async fn run(
                                 ReconcileAction::Exit(exit) => return exit,
                             }
                         }
-                        ModelAttemptState::ResponseReady { response, .. } => {
-                            if response
-                                .message
-                                .content
-                                .iter()
-                                .any(|c| matches!(c, Content::ToolCall(_)))
-                            {
-                                if let Err(error) =
-                                    crate::tool_drive::admit(&inner, &basis, attempt, &tools).await
-                                {
-                                    return store_exit(turn_id, error);
-                                }
-                                continue;
-                            }
-                            return select_ready(&inner, turn_id, attempt, response).await;
+                        ModelAttemptState::ResponseReady { .. } => {
+                            unreachable!("ready response selected before new-request preflight")
                         }
                         ModelAttemptState::Failed { failure, .. } => {
                             let retry_exhausted = basis.attempts.len()

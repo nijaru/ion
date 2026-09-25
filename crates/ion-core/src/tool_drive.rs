@@ -47,7 +47,7 @@ pub(crate) async fn admit(
     {
         return Err(StoreError::Limit("tool batch count".into()));
     }
-    let mut actions = Vec::new();
+    let mut preparations = Vec::new();
     for item in &response.message.content {
         if let Content::ToolCall(call) = item {
             let binding = basis
@@ -59,17 +59,21 @@ pub(crate) async fn admit(
                     b.spec.name == call.name && basis.turn.settings.active_tools.contains(&b.id)
                 })
                 .ok_or(StoreError::ToolsPending)?;
-            let boundary = tools
-                .resolve(binding, &basis.turn.environment.workspace)
-                .map_err(|_| StoreError::ToolsPending)?;
-            actions.push(
-                crate::tool_boundary::prepare_action(
+            let preparation = match tools.resolve(binding, &basis.turn.environment.workspace) {
+                Ok(boundary) => match crate::tool_boundary::prepare_action(
                     boundary.as_ref(),
                     binding,
                     call.arguments.clone(),
-                )
-                .map_err(|e| StoreError::InvalidState(e.to_string()))?,
-            );
+                ) {
+                    Ok(action) => ToolPreparation::Ready(action),
+                    Err(ToolBoundaryError::Unavailable | ToolBoundaryError::Incompatible) => {
+                        ToolPreparation::Unavailable
+                    }
+                    Err(error) => return Err(StoreError::InvalidState(error.to_string())),
+                },
+                Err(_) => ToolPreparation::Unavailable,
+            };
+            preparations.push(preparation);
         }
     }
     inner.observe_store(
@@ -77,7 +81,7 @@ pub(crate) async fn admit(
             .store()
             .tool_mutate(ToolMutation::Admit {
                 attempt: attempt.id,
-                actions,
+                preparations,
             })
             .await,
     )?;
@@ -100,7 +104,11 @@ fn execution(
             .tool(&call.binding)
             .expect("validated frozen invocation")
             .clone(),
-        action: call.prepared.clone(),
+        action: call
+            .preparation
+            .ready()
+            .expect("attempt requires a prepared action")
+            .clone(),
         workspace: turn.environment.workspace.clone(),
         ceiling: turn.environment.authority.clone(),
         approval: call.approval.clone(),
@@ -311,20 +319,21 @@ pub(crate) async fn drive(
         let Some(boundary) = boundary else {
             return Ok(Some(ParkReason::ToolUnavailable));
         };
-        if !call
-            .prepared
-            .permitted_by(&basis.turn.environment.authority)
-        {
+        let action = call
+            .preparation
+            .ready()
+            .ok_or_else(|| StoreError::Corrupt("unavailable invocation left pending".into()))?;
+        if !action.permitted_by(&basis.turn.environment.authority) {
             return Ok(Some(ParkReason::AuthorityDenied));
         }
-        let policy = boundary.live_authority(&call.prepared, &basis.turn.environment.workspace);
+        let policy = boundary.live_authority(action, &basis.turn.environment.workspace);
         if policy == crate::LiveToolAuthority::Deny {
             return Ok(Some(ParkReason::AuthorityDenied));
         }
         let now = now_unix_ms()?;
         if policy == crate::LiveToolAuthority::Ask {
             let grant_valid = call.approval.permits(
-                &call.prepared,
+                action,
                 &binding.implementation,
                 &boundary.executor(),
                 &basis.turn.environment.workspace,

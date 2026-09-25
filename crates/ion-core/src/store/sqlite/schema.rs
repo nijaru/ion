@@ -1,6 +1,6 @@
 //! Fresh schema for the replacement coding-turn runtime.
 //!
-//! Versions 1 (prototype) and 2 (actions without authority requirements) are
+//! Earlier unreleased schemas (including v3's mandatory prepared action) are
 //! refused. R1 does not infer missing authority or migrate prior schemas.
 
 use rusqlite::Connection;
@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::super::StoreError;
 use crate::SessionId;
 
-pub(crate) const SCHEMA_VERSION: i64 = 3;
+pub(crate) const SCHEMA_VERSION: i64 = 4;
 
 const DDL: &str = r#"
 CREATE TABLE session_meta (

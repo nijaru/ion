@@ -57,7 +57,7 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
             source_index,
             origin_provider_call_id,
             binding: ToolBindingId::new(binding).map_err(|e| invalid(&e.to_string()))?,
-            prepared: json_from(&prepared)?,
+            preparation: json_from(&prepared)?,
             approval: json_from(&approval)?,
             exchange: json_from(&exchange)?,
         };
@@ -115,7 +115,10 @@ pub(super) fn mutate(
     let mut changes = Vec::new();
     let mut created = None;
     match operation {
-        ToolMutation::Admit { attempt, actions } => {
+        ToolMutation::Admit {
+            attempt,
+            preparations,
+        } => {
             let model_attempt = load_attempt(&tx, attempt)?;
             let ModelAttemptState::ResponseReady { response, .. } = &model_attempt.state else {
                 return Err(invalid("model response not ready"));
@@ -135,7 +138,9 @@ pub(super) fn mutate(
                 .iter()
                 .filter(|c| matches!(c, Content::ToolCall(_)))
                 .count();
-            if count == 0 || count != actions.len() || count > crate::tool_boundary::MAX_TOOL_BATCH
+            if count == 0
+                || count != preparations.len()
+                || count > crate::tool_boundary::MAX_TOOL_BATCH
             {
                 return Err(invalid("tool preparation count mismatch"));
             }
@@ -150,32 +155,47 @@ pub(super) fn mutate(
             }
             // Every admitted call must remain closable even if cancellation
             // wins before execution, or the backend outcome remains unknown.
-            for reason in [UNKNOWN_RESULT, CANCELLED_RESULT] {
+            for reason in [UNKNOWN_RESULT, CANCELLED_RESULT, UNAVAILABLE_RESULT] {
                 validate_result(&error_result(reason), &turn)?;
             }
             let entry_id = seq.next()?;
             let mut content = Vec::new();
             let mut invocations = Vec::new();
-            let mut actions = actions.into_iter();
+            let mut preparations = preparations.into_iter();
+            let mut provider_ids = std::collections::HashSet::new();
             for item in &response.message.content {
                 match item {
                     Content::Text(text) => content.push(TranscriptContent::Text(text.clone())),
                     Content::ToolCall(call) => {
-                        let action = actions
+                        if !provider_ids.insert(&call.id) {
+                            return Err(invalid("duplicate provider tool call ID"));
+                        }
+                        let preparation = preparations
                             .next()
-                            .ok_or_else(|| invalid("missing prepared action"))?;
+                            .ok_or_else(|| invalid("missing tool preparation"))?;
                         let binding = turn
                             .environment
-                            .tool(&action.binding)
-                            .ok_or_else(|| invalid("unknown frozen tool"))?;
-                        if !turn.settings.active_tools.contains(&binding.id)
-                            || binding.spec.name != call.name
-                            || action.egress != binding.egress
-                        {
-                            return Err(invalid("prepared binding mismatch"));
-                        }
-                        crate::tool_boundary::bounded(&action)
-                            .map_err(|e| invalid(&e.to_string()))?;
+                            .tools
+                            .iter()
+                            .find(|b| {
+                                b.spec.name == call.name
+                                    && turn.settings.active_tools.contains(&b.id)
+                            })
+                            .ok_or_else(|| invalid("unknown active frozen tool"))?;
+                        let exchange = match &preparation {
+                            ToolPreparation::Ready(action) => {
+                                if action.binding != binding.id || action.egress != binding.egress {
+                                    return Err(invalid("prepared binding mismatch"));
+                                }
+                                crate::tool_boundary::bounded(action)
+                                    .map_err(|e| invalid(&e.to_string()))?;
+                                ToolExchangeState::Pending
+                            }
+                            ToolPreparation::Unavailable => ToolExchangeState::OutcomeReady {
+                                source: OutcomeSource::Unavailable,
+                                result: error_result(UNAVAILABLE_RESULT),
+                            },
+                        };
                         let invocation_id = seq.next()?;
                         content.push(TranscriptContent::ToolCall {
                             invocation: invocation_id,
@@ -191,9 +211,9 @@ pub(super) fn mutate(
                                 .map_err(|_| invalid("source index"))?,
                             origin_provider_call_id: Some(call.id.clone()),
                             binding: binding.id.clone(),
-                            prepared: action,
+                            preparation,
                             approval: ApprovalState::NotRequired,
-                            exchange: ToolExchangeState::Pending,
+                            exchange,
                         });
                     }
                     _ => return Err(invalid("unexpected provider tool result")),
@@ -259,7 +279,7 @@ pub(super) fn mutate(
             insert_entry(&tx, &entry, commit)?;
             changes.push(SessionChange::Entry(entry));
             for invocation in invocations {
-                tx.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,origin_provider_call_id,binding_id,prepared_action,approval,exchange_state) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![invocation.id.get(),invocation.step.get(),invocation.assistant_entry.get(),invocation.source_index,invocation.origin_provider_call_id,invocation.binding.as_str(),json_to(&invocation.prepared)?,json_to(&invocation.approval)?,json_to(&invocation.exchange)?])?;
+                tx.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,origin_provider_call_id,binding_id,prepared_action,approval,exchange_state) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![invocation.id.get(),invocation.step.get(),invocation.assistant_entry.get(),invocation.source_index,invocation.origin_provider_call_id,invocation.binding.as_str(),json_to(&invocation.preparation)?,json_to(&invocation.approval)?,json_to(&invocation.exchange)?])?;
                 changes.push(SessionChange::ToolInvocation(invocation));
             }
             step.disposition = StepDisposition::Selected(attempt);
@@ -297,8 +317,9 @@ pub(super) fn mutate(
             )?;
             if call.exchange != ToolExchangeState::Pending
                 || !call
-                    .prepared
-                    .permitted_by(&records.turn.environment.authority)
+                    .preparation
+                    .ready()
+                    .is_some_and(|action| action.permitted_by(&records.turn.environment.authority))
             {
                 return Err(invalid(
                     "approval cannot widen authority or settled exchange",
@@ -335,7 +356,10 @@ pub(super) fn mutate(
                 .environment
                 .tool(&call.binding)
                 .ok_or_else(|| invalid("missing frozen binding"))?;
-            let same_decision = call.prepared.digest == action_digest
+            let same_decision = call
+                .preparation
+                .ready()
+                .is_some_and(|action| action.digest == action_digest)
                 && executor.as_str() == records.turn.environment.workspace.backend
                 && match (&call.approval, &decision) {
                     (
@@ -374,11 +398,15 @@ pub(super) fn mutate(
             )?;
             if call.exchange != ToolExchangeState::Pending
                 || call.approval != ApprovalState::Pending
-                || call.prepared.digest != action_digest
+                || !call
+                    .preparation
+                    .ready()
+                    .is_some_and(|action| action.digest == action_digest)
                 || executor.as_str() != records.turn.environment.workspace.backend
                 || !call
-                    .prepared
-                    .permitted_by(&records.turn.environment.authority)
+                    .preparation
+                    .ready()
+                    .is_some_and(|action| action.permitted_by(&records.turn.environment.authority))
             {
                 return Err(invalid("approval does not match pending prepared action"));
             }
@@ -434,7 +462,11 @@ pub(super) fn mutate(
             if call.exchange != ToolExchangeState::Pending {
                 return Err(invalid("tool outcome already staged"));
             }
-            if !call.prepared.permitted_by(&turn.environment.authority) {
+            let action = call
+                .preparation
+                .ready()
+                .ok_or_else(|| invalid("unavailable tool cannot admit an attempt"))?;
+            if !action.permitted_by(&turn.environment.authority) {
                 return Err(invalid("prepared action exceeds frozen authority ceiling"));
             }
             if executor.as_str() != turn.environment.workspace.backend {
@@ -452,7 +484,7 @@ pub(super) fn mutate(
             if matches!(call.approval, ApprovalState::Denied { .. })
                 || (approval_required
                     && !call.approval.permits(
-                        &call.prepared,
+                        action,
                         &binding.implementation,
                         &executor,
                         &turn.environment.workspace,
@@ -570,8 +602,8 @@ pub(super) fn mutate(
                     }
                     error_result(UNKNOWN_RESULT)
                 }
-                OutcomeSource::DeniedApproval => {
-                    return Err(invalid("approval denial is staged with its decision"));
+                OutcomeSource::DeniedApproval | OutcomeSource::Unavailable => {
+                    return Err(invalid("non-execution outcome is staged at admission"));
                 }
                 OutcomeSource::CancelledBeforeStart => {
                     if !turn.cancellation.requested
@@ -646,6 +678,8 @@ pub(super) fn mutate(
         }),
     })
 }
+
+const UNAVAILABLE_RESULT: &str = "Exact tool implementation unavailable for this response.";
 
 fn reserve_storage(invocations: &[ToolInvocation], preview: u32) -> Result<(), StoreError> {
     use crate::tool_boundary::{MAX_TOOL_ATTEMPTS, MAX_TOOL_BATCH_BYTES, MAX_TOOL_RECORD_BYTES};

@@ -17,7 +17,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v3 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v4 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -52,7 +52,10 @@ signals and joins locally owned drive work, then releases storage ownership with
 turning suspended work into user cancellation.
 
 `resume_with_tools` accepts exact compatible host tool implementations; missing bindings
-park before provider dispatch. The host tool boundary checks live authority before
+park before a new provider dispatch. After a completed provider response is durable, a
+missing exact preparer instead records an unavailable invocation and a source-order error
+result without fabricating an action or physical attempt; subsequent requests still park
+until the selected loadout resolves. The host tool boundary checks live authority before
 execution intent; denial parks without spending a physical attempt. It must recheck at
 actual effect admission because permission can change between those points. `tool_records`
 inspects attempts, `accept_tool_unknown` settles an uncertain exchange, and
@@ -69,15 +72,19 @@ without reexecution. These fixtures are not native tools or a confinement implem
 A host backend must enforce current authority, workspace claims, and stop/join behavior.
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
-There is no compatibility bridge or hybrid old/new runtime. Schemas v1 and v2 are refused rather than
-migrated; Git retains the prototype and its useful failure scenarios are being restored against
-the replacement owners.
+There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
+(v1–v3) are refused rather than migrated; Git retains the prototype and its useful failure
+scenarios are being restored against the replacement owners.
 
 Still missing: native read/edit/exec backends, a user-facing approval client and
-host authentication/policy backend, BlobStore, parallel tool dispatch,
+host authentication/policy backend, Session-integrated artifact publication and GC,
+parallel tool dispatch,
 context compaction/forking, real provider adapters, a runnable `ion`
 binary, the terminal UI, and workers. Oversized tool results park rather than fabricate
-truncated success; bounded artifact publication is required before large native output.
+truncated success; an immutable bounded BlobStore foundation exists but is not wired to
+Session settlement, publication evidence, artifact paging, or GC. It cannot yet back large
+native output. Its host-owned namespace must be outside agent-writable workspace state and
+exclusively owned; it does not enforce that trust boundary itself.
 No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy

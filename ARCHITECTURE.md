@@ -16,8 +16,10 @@ Session/task/tool/workspace runtime is not a compatibility layer underneath them
 
 The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
 physical attempt evidence, conservative reconciliation, closure reserves, source-order
-result materialization and exact durable per-invocation approval decisions through sequential
-host-supplied tools. Active tool state participates in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
+result materialization, exact durable per-invocation approval decisions, and truthful
+unavailable settlement of already-returned provider calls through sequential host-supplied
+tools. A bounded immutable BlobStore foundation is not yet Session-integrated. Active tool state
+participates in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
 workspace/repository identity and orphan quarantine; a scripted integration test kills the
 owner after mutation and recovers through the registry without replay.
 
@@ -63,7 +65,7 @@ ordinary functions and payload-bearing enums, not a generic workflow framework.
 | Turn | A coding request's continuation, inline immutable TurnEnvironment, limits, cancellation and terminal outcome. |
 | Model step | Versioned semantic request plus `open | selected(AttemptId) | superseded` disposition, exact ProviderBinding, context/input provenance, assembly revision and digest. |
 | Model attempt | One physical provider dispatch with immutable failure/result/usage evidence. |
-| Tool invocation | One assistant call, frozen binding/prepared action, source index and one exchange result. |
+| Tool invocation | One assistant call, frozen binding, ready prepared action or unavailable disposition, source index and one exchange result. Unavailable cannot create a physical attempt. |
 | Tool attempt | One physical execution/replay with intent, executor receipt, optional progress checkpoint and monotonic external outcome evidence. |
 
 A turn replaces the former distributed root-task/membership/closure representation;
@@ -489,8 +491,10 @@ live only inside that realm, while a different remote backend is a new binding/t
 invocation under that binding revision and persists the PreparedAction before physical
 execution. A ToolAttempt is created only by the transaction that commits execution
 intent; there is no durable Prepared-attempt state. Replay reuses the PreparedAction. If
-the exact preparer is unavailable, Ion does not reinterpret the call under a newer
-implementation.
+the exact preparer is unavailable *after a provider response has already arrived*, Ion
+persists an unavailable disposition instead of inventing a PreparedAction or reinterpreting
+the call under newer code. It closes that invocation with a source-ordered unavailable
+result and no ToolAttempt; missing code before a new provider request parks.
 
 PreparedAction includes a digest-bound required authority class: read-only, workspace
 mutation, or unconfined execution. Unconfined execution requires both unconfined and
@@ -512,7 +516,7 @@ already-started action. Ordinary text is never approval.
 A ToolInvocation owns one assistant call and at most one model-visible result.
 Its `outcome_ready` state records provenance: the exact eligible ToolAttemptId that
 supplied the canonical result, or an explicit synthetic source such as
-cancelled-before-start/accepted-unknown. Every physical run or replay begins at an
+cancelled-before-start/accepted-unknown/unavailable. Every physical run or replay begins at an
 execution-intent commit and has a distinct AttemptId
 with monotonic ToolAttempt evidence: ordinal, cancellation generation,
 implementation/executor binding, optional start receipt/progress checkpoint and
