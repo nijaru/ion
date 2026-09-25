@@ -116,7 +116,8 @@ their frozen limits rather than allocating complete oversized JSON copies. A sep
 Anthropic Messages adapter supports streamed text and client tools, with strict
 index/terminal/usage checks and stable logical tool-result pairing. Unsupported thinking,
 opaque replay, provider-hosted tools and explicit sampling/reasoning controls fail closed.
-Neither wire API has been qualified with a live provider.
+One synthetic OpenRouter Chat Completions exchange passed; neither official
+provider API has been qualified live.
 
 ## Headless use (experimental)
 
@@ -124,6 +125,8 @@ Neither wire API has been qualified with a live provider.
 Create a host-state directory outside the writable workspace, then supply an exact
 HTTPS Chat Completions endpoint and a model ID. The host must assert the model's
 input and output token capacities; the client cannot discover or verify them.
+The current request admission enforces a serialized-byte ceiling, **not** an
+exact tokenizer-backed input-token bound; a provider may reject an oversized context.
 The endpoint's returned model ID must match the supplied ID. `run` supports
 `--request-key` for idempotent resubmission after a lost reply.
 
