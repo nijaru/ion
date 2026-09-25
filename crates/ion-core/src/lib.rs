@@ -68,7 +68,7 @@ pub use request::{
 pub use session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
     CreatedConversation, CreatedSession, Session, SessionError, SessionHandle, SessionHealth,
-    StartTurnRequest, StartedTurn,
+    StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
 };
 pub use store::ToolRecords;
 pub use tool_boundary::{

@@ -8,7 +8,7 @@ use super::super::{StoreError, StoreMetadata};
 use crate::id::LocalSeq;
 use crate::session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
-    CreatedConversation, StartTurnRequest, StartedTurn,
+    CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
 };
 use crate::{
     Cancellation, CommitReceipt, CommitSeq, Conversation, ConversationConfig, ConversationId,
@@ -299,18 +299,55 @@ pub(super) fn configure(
     })
 }
 
+const MAX_INPUT_TEXT_BYTES: usize = 1024 * 1024;
+
+fn prior_input(
+    connection: &Connection,
+    conversation: ConversationId,
+    request: &AdmitInputRequest,
+) -> Result<Option<(Input, CommitSeq)>, StoreError> {
+    let Some(key) = &request.request_key else {
+        return Ok(None);
+    };
+    let existing: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM inputs WHERE conversation_id=?1 AND request_key=?2",
+            params![conversation.get(), key.as_str()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let Some(existing) = existing else {
+        return Ok(None);
+    };
+    let (input, admitted_at) = load_input(connection, id::<InputId>(existing, "input")?)?;
+    if input.sender == request.sender && input.mode == request.mode && input.body == request.body {
+        Ok(Some((input, admitted_at)))
+    } else {
+        Err(StoreError::RequestKeyConflict {
+            conversation,
+            request_key: key.as_str().to_owned(),
+        })
+    }
+}
+
 pub(super) fn admit_input(
     connection: &mut Connection,
     conversation_id: ConversationId,
     request: AdmitInputRequest,
 ) -> Result<Admission, StoreError> {
     // Do not acknowledge controls that have no placement/consumption owner yet.
-    if matches!(request.mode, InputMode::Steer | InputMode::InteractionReply)
-        || !matches!(request.body, InputBody::Text(_))
-    {
+    let InputBody::Text(text) = &request.body else {
         return Err(StoreError::InvalidRequest(
-            "steering and targeted interaction replies are not implemented".into(),
+            "targeted interaction replies are not implemented".into(),
         ));
+    };
+    if matches!(request.mode, InputMode::Steer | InputMode::InteractionReply) {
+        return Err(StoreError::InvalidRequest(
+            "steering is not implemented".into(),
+        ));
+    }
+    if text.len() > MAX_INPUT_TEXT_BYTES {
+        return Err(StoreError::Limit("input text bytes".into()));
     }
     let transaction = connection.transaction()?;
     let conversation = load_conversation(&transaction, conversation_id)?;
@@ -320,32 +357,8 @@ pub(super) fn admit_input(
         )));
     }
 
-    if let Some(request_key) = &request.request_key {
-        let existing_id: Option<i64> = transaction
-            .query_row(
-                "SELECT id FROM inputs
-                 WHERE conversation_id = ?1 AND request_key = ?2",
-                params![conversation_id.get(), request_key.as_str()],
-                |row| row.get(0),
-            )
-            .optional()?;
-        if let Some(existing_id) = existing_id {
-            let (existing, admitted_at) =
-                load_input(&transaction, id::<InputId>(existing_id, "input")?)?;
-            if existing.sender == request.sender
-                && existing.mode == request.mode
-                && existing.body == request.body
-            {
-                return Ok(Admission::Replayed {
-                    input: existing,
-                    admitted_at,
-                });
-            }
-            return Err(StoreError::RequestKeyConflict {
-                conversation: conversation_id,
-                request_key: request_key.as_str().to_owned(),
-            });
-        }
+    if let Some((input, admitted_at)) = prior_input(&transaction, conversation_id, &request)? {
+        return Ok(Admission::Replayed { input, admitted_at });
     }
 
     let mut sequence = Sequence::load(&transaction)?;
@@ -381,55 +394,123 @@ pub(super) fn start_turn(
 ) -> Result<StartedTurn, StoreError> {
     let transaction = connection.transaction()?;
     let conversation = load_conversation(&transaction, request.conversation)?;
-    if conversation.retired {
-        return Err(StoreError::InvalidState(format!(
-            "conversation {} is retired",
-            request.conversation
-        )));
-    }
-
-    let active: Option<i64> = transaction
-        .query_row(
-            "SELECT id FROM turns
-             WHERE conversation_id = ?1 AND outcome IS NULL
-             LIMIT 1",
-            [request.conversation.get()],
-            |row| row.get(0),
-        )
-        .optional()?;
-    if active.is_some() {
-        return Err(StoreError::ConversationBusy(request.conversation));
-    }
-
-    let (mut input, _) = load_input(&transaction, request.input)?;
+    let (input, _) = load_input(&transaction, request.input)?;
     if input.conversation != request.conversation {
         return Err(StoreError::InvalidState(format!(
             "input {} belongs to conversation {}, not {}",
             input.id, input.conversation, request.conversation
         )));
     }
-    if !matches!(input.mode, InputMode::Submit | InputMode::FollowUp) {
+    let mut sequence = Sequence::load(&transaction)?;
+    let started = place_turn(
+        &transaction,
+        &conversation,
+        input,
+        false,
+        request.admitted_at_unix_ms,
+        request.wall_deadline_unix_ms,
+        &mut sequence,
+    )?;
+    transaction.commit()?;
+    Ok(started)
+}
+
+pub(super) fn submit_turn(
+    connection: &mut Connection,
+    request: SubmitTurnRequest,
+) -> Result<SubmittedTurn, StoreError> {
+    if request.text.len() > MAX_INPUT_TEXT_BYTES {
+        return Err(StoreError::Limit("input text bytes".into()));
+    }
+    let transaction = connection.transaction()?;
+    let conversation = load_conversation(&transaction, request.conversation)?;
+    if conversation.retired {
+        return Err(StoreError::InvalidState("conversation is retired".into()));
+    }
+    let submission = AdmitInputRequest {
+        sender: request.sender,
+        mode: InputMode::Submit,
+        request_key: request.request_key,
+        body: InputBody::Text(request.text),
+    };
+    if let Some((input, admitted_at)) = prior_input(&transaction, conversation.id, &submission)? {
+        let turn_id = match &input.disposition {
+            InputDisposition::Consumed { turn, .. }
+            | InputDisposition::Abandoned {
+                turn: Some(turn), ..
+            } => *turn,
+            _ => {
+                return Err(StoreError::InvalidState(
+                    "request key belongs to an unplaced input".into(),
+                ));
+            }
+        };
+        let turn = load_turn(&transaction, turn_id)?;
+        return Ok(SubmittedTurn::Replayed {
+            input,
+            turn,
+            admitted_at,
+        });
+    }
+    let mut sequence = Sequence::load(&transaction)?;
+    let input = Input {
+        id: sequence.next()?,
+        conversation: conversation.id,
+        sender: submission.sender,
+        mode: InputMode::Submit,
+        request_key: submission.request_key,
+        body: submission.body,
+        disposition: InputDisposition::Queued,
+    };
+    let started = place_turn(
+        &transaction,
+        &conversation,
+        input,
+        true,
+        request.admitted_at_unix_ms,
+        request.wall_deadline_unix_ms,
+        &mut sequence,
+    )?;
+    transaction.commit()?;
+    Ok(SubmittedTurn::Created(started))
+}
+
+fn place_turn(
+    transaction: &Transaction<'_>,
+    conversation: &Conversation,
+    mut input: Input,
+    fresh_input: bool,
+    admitted_at_unix_ms: i64,
+    wall_deadline_unix_ms: Option<i64>,
+    sequence: &mut Sequence,
+) -> Result<StartedTurn, StoreError> {
+    if conversation.retired {
+        return Err(StoreError::InvalidState("conversation is retired".into()));
+    }
+    let active: Option<i64> = transaction
+        .query_row(
+            "SELECT id FROM turns WHERE conversation_id=?1 AND outcome IS NULL LIMIT 1",
+            [conversation.id.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if active.is_some() {
+        return Err(StoreError::ConversationBusy(conversation.id));
+    }
+    if !matches!(input.mode, InputMode::Submit | InputMode::FollowUp)
+        || !matches!(input.disposition, InputDisposition::Queued)
+    {
         return Err(StoreError::InvalidRequest(
-            "only submit or follow-up text can start a turn".into(),
+            "only queued submit/follow-up text can start a turn".into(),
         ));
     }
-    if !matches!(input.disposition, InputDisposition::Queued) {
-        return Err(StoreError::InvalidState(format!(
-            "input {} is not queued",
-            input.id
-        )));
-    }
-    let text = match &input.body {
-        InputBody::Text(text) => text.clone(),
-        InputBody::InteractionReply { .. } => {
-            return Err(StoreError::InvalidState(
-                "an interaction reply cannot start an ordinary turn".to_owned(),
-            ));
-        }
+    let InputBody::Text(text) = &input.body else {
+        return Err(StoreError::InvalidRequest(
+            "interaction reply cannot start a turn".into(),
+        ));
     };
-
     let installed = load_config_revision(
-        &transaction,
+        transaction,
         conversation.id,
         conversation.current_config_revision,
     )?;
@@ -438,41 +519,38 @@ pub(super) fn start_turn(
             "persisted conversation config cannot capture a turn: {error}"
         ))
     })?;
-
-    let mut sequence = Sequence::load(&transaction)?;
     let entry_id: EntryId = sequence.next()?;
     let turn_id: TurnId = sequence.next()?;
     let commit: CommitSeq = sequence.next()?;
-
     let entry = Entry {
         id: entry_id,
-        conversation: request.conversation,
+        conversation: conversation.id,
         data: EntryData::UserInput { input: input.id },
-        projection: vec![TranscriptMessage::user_text(text)],
+        projection: vec![TranscriptMessage::user_text(text.clone())],
     };
     let turn = Turn {
         id: turn_id,
-        conversation: request.conversation,
+        conversation: conversation.id,
         environment,
         settings,
         phase: TurnPhase::Ready,
         cancellation: Cancellation::default(),
         budget: TurnBudget::default(),
-        admitted_at_unix_ms: request.admitted_at_unix_ms,
-        wall_deadline_unix_ms: request.wall_deadline_unix_ms,
+        admitted_at_unix_ms,
+        wall_deadline_unix_ms,
         outcome: None,
     };
+    if fresh_input {
+        insert_input(transaction, &input, commit)?;
+    }
     input.disposition = InputDisposition::Consumed {
         turn: turn_id,
         entry: Some(entry_id),
     };
-
-    insert_turn(&transaction, &turn)?;
-    insert_entry(&transaction, &entry, commit)?;
-    update_input_disposition(&transaction, &input)?;
-    advance_metadata(&transaction, &sequence, commit, None)?;
-    transaction.commit()?;
-
+    insert_turn(transaction, &turn)?;
+    insert_entry(transaction, &entry, commit)?;
+    update_input_disposition(transaction, &input)?;
+    advance_metadata(transaction, sequence, commit, None)?;
     Ok(StartedTurn {
         turn: turn.clone(),
         input: input.clone(),

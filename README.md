@@ -81,10 +81,12 @@ scenarios are being restored against the replacement owners.
 Still missing: native read/edit/exec backends, a user-facing approval client and
 host authentication/policy backend, Session-integrated artifact publication and GC,
 parallel tool dispatch,
-context compaction/forking, atomic Submit/Steer/InteractionReply control placement,
-real provider adapters, a runnable `ion` binary, the terminal UI, and workers.
-Unimplemented Steer/InteractionReply inputs now reject at admission rather than
-acknowledge requests that will never be consumed. A bounded tool result now records complete-inline, complete-artifact or incomplete-capture
+context compaction/forking, Steer/InteractionReply placement, real provider adapters,
+a runnable `ion` binary, the terminal UI, and workers. `submit_turn` now atomically
+admits text and places its Turn with one watch receipt; request-key replay is idempotent
+and an insertion fault rolls the entire submission back. Unimplemented
+Steer/InteractionReply inputs reject at admission rather than acknowledge requests
+that will never be consumed. A bounded tool result now records complete-inline, complete-artifact or incomplete-capture
 provenance rather than a boolean truncation flag. An oversized backend value is replaced
 with an explicit incomplete output warning while preserving its terminal effect evidence
 and suppressing replay; complete artifacts remain unavailable until publication is wired.

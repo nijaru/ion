@@ -15,6 +15,9 @@ start-receipt reconciliation, atomic ModelStep fallback supersession, exact prov
 matching and live host credential/egress admission before intent and adapter start. The old
 Session/task/tool/workspace runtime is not a compatibility layer underneath them.
 
+Atomic `submit_turn` now admits an Input and places its Turn in one Session commit; the
+remaining steering and targeted interaction controls still lack placement owners.
+
 The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
 physical attempt evidence, conservative reconciliation, closure reserves, source-order
 result materialization, exact durable per-invocation approval decisions, and truthful

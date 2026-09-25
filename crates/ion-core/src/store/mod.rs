@@ -10,7 +10,7 @@ use tokio::sync::{mpsc, oneshot};
 use crate::observation::ObservationHub;
 use crate::session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
-    CreatedConversation, StartTurnRequest, StartedTurn,
+    CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
 };
 use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, Entry, EntryId, EntryPage,
@@ -261,6 +261,14 @@ impl SessionStore {
         .await
     }
 
+    pub(crate) async fn submit_turn(
+        &self,
+        request: SubmitTurnRequest,
+    ) -> Result<SubmittedTurn, StoreError> {
+        self.call(|reply| Command::SubmitTurn { request, reply })
+            .await
+    }
+
     pub(crate) async fn start_turn(
         &self,
         request: StartTurnRequest,
@@ -464,6 +472,10 @@ enum Command {
         request: StartTurnRequest,
         reply: oneshot::Sender<Result<StartedTurn, StoreError>>,
     },
+    SubmitTurn {
+        request: SubmitTurnRequest,
+        reply: oneshot::Sender<Result<SubmittedTurn, StoreError>>,
+    },
     CancelTurn {
         turn: TurnId,
         reply: oneshot::Sender<Result<CancellationResult, StoreError>>,
@@ -569,6 +581,9 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
             }
             Command::StartTurn { request, reply } => {
                 let _ = reply.send(database.start_turn(request));
+            }
+            Command::SubmitTurn { request, reply } => {
+                let _ = reply.send(database.submit_turn(request));
             }
             Command::CancelTurn { turn, reply } => {
                 let _ = reply.send(database.cancel_turn(turn));

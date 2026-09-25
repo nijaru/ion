@@ -5,8 +5,8 @@ use ion_core::{
     AbandonResult, Admission, AuthorityCeiling, ContextPolicy, ControlCeiling, ConversationConfig,
     EgressRealm, InputBody, InputMode, InputSender, ProviderBinding, ProviderBindingId,
     ProviderCapabilities, RequestKey, ReturnedModelPolicy, SemanticCompatibilityId, Session,
-    SessionError, SessionHealth, SessionId, SnapshotRequest, StartTurnRequest, TurnLimits,
-    WatchQueueLimits, WatchRequest, WorkspaceBinding,
+    SessionError, SessionHealth, SessionId, SnapshotRequest, StartTurnRequest, SubmitTurnRequest,
+    SubmittedTurn, TurnLimits, WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
 
 fn database(name: &str) -> (PathBuf, PathBuf) {
@@ -173,6 +173,167 @@ async fn unimplemented_control_modes_are_rejected_without_a_durable_queue_entry(
         .unwrap();
     assert_eq!(snapshot.coverage, coverage);
     assert!(snapshot.queued_inputs.is_empty());
+    cleanup(session, dir).await;
+}
+
+fn submission(conversation: ion_core::ConversationId, key: &str, text: &str) -> SubmitTurnRequest {
+    SubmitTurnRequest {
+        conversation,
+        sender: InputSender::User,
+        request_key: Some(RequestKey::new(key).unwrap()),
+        text: text.into(),
+        admitted_at_unix_ms: 42,
+        wall_deadline_unix_ms: None,
+    }
+}
+
+#[tokio::test]
+async fn atomic_submit_places_one_turn_with_exact_watch_coverage_and_idempotent_replay() {
+    let (dir, path) = database("atomic-submit");
+    let session = Session::create(&path, config("v1")).await.unwrap().session;
+    let handle = session.handle();
+    let conversation = session.primary_conversation();
+    let watch = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: snapshot_request(conversation),
+            queue: WatchQueueLimits {
+                max_receipts: 8,
+                max_bytes: 64 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    let started = match handle
+        .submit_turn(submission(conversation, "same", "hello"))
+        .await
+        .unwrap()
+    {
+        SubmittedTurn::Created(started) => started,
+        SubmittedTurn::Replayed { .. } => panic!("first submission cannot replay"),
+    };
+    assert!(started.receipt.seq > watch.snapshot.coverage);
+    assert_eq!(watch.watch.try_recv().unwrap(), started.receipt);
+    assert_eq!(
+        started.input.disposition,
+        ion_core::InputDisposition::Consumed {
+            turn: started.turn.id,
+            entry: Some(started.entry.id)
+        }
+    );
+    let view = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    assert_eq!(view.coverage, started.receipt.seq);
+    assert!(view.queued_inputs.is_empty());
+    assert_eq!(view.unfinished_turn.unwrap().id, started.turn.id);
+    assert_eq!(view.transcript_tail.last().unwrap().id, started.entry.id);
+    match handle
+        .submit_turn(submission(conversation, "same", "hello"))
+        .await
+        .unwrap()
+    {
+        SubmittedTurn::Replayed {
+            input,
+            turn,
+            admitted_at,
+        } => {
+            assert_eq!(input.id, started.input.id);
+            assert_eq!(turn.id, started.turn.id);
+            assert_eq!(admitted_at, started.receipt.seq);
+        }
+        SubmittedTurn::Created(_) => panic!("replay must not commit"),
+    }
+    assert!(matches!(
+        watch.watch.try_recv(),
+        Err(ion_core::ObservationError::Empty)
+    ));
+    assert!(matches!(
+        handle
+            .submit_turn(submission(conversation, "same", "different"))
+            .await,
+        Err(SessionError::RequestKeyConflict { .. })
+    ));
+    assert!(matches!(
+        handle
+            .submit_turn(submission(conversation, "new", "later"))
+            .await,
+        Err(SessionError::ConversationBusy(_))
+    ));
+    assert_eq!(
+        handle
+            .snapshot(snapshot_request(conversation))
+            .await
+            .unwrap()
+            .coverage,
+        started.receipt.seq
+    );
+    session.close().await.unwrap();
+    let session = Session::open(&path).await.unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .submit_turn(submission(conversation, "same", "hello"))
+            .await
+            .unwrap(),
+        SubmittedTurn::Replayed { .. }
+    ));
+    cleanup(session, dir).await;
+}
+
+#[tokio::test]
+async fn atomic_submit_fault_after_input_insert_rolls_back_everything() {
+    let (dir, path) = database("atomic-submit-fault");
+    let session = Session::create(&path, config("v1")).await.unwrap().session;
+    let handle = session.handle();
+    let conversation = session.primary_conversation();
+    let watch = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: snapshot_request(conversation),
+            queue: WatchQueueLimits {
+                max_receipts: 8,
+                max_bytes: 64 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    let db = rusqlite::Connection::open(&path).unwrap();
+    db.execute_batch(
+        "CREATE TRIGGER fail_turn BEFORE INSERT ON turns
+        BEGIN SELECT RAISE(ABORT, 'injected turn failure'); END;",
+    )
+    .unwrap();
+    assert!(matches!(
+        handle
+            .submit_turn(submission(conversation, "same", "hello"))
+            .await,
+        Err(SessionError::Fenced(_))
+    ));
+    assert_eq!(handle.health(), SessionHealth::Fenced);
+    assert!(matches!(
+        watch.watch.try_recv(),
+        Err(ion_core::ObservationError::Empty)
+    ));
+    let view = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    assert_eq!(view.coverage, watch.snapshot.coverage);
+    assert!(view.queued_inputs.is_empty());
+    assert!(view.unfinished_turn.is_none());
+    assert!(view.transcript_tail.is_empty());
+    session.close().await.unwrap();
+    db.execute_batch("DROP TRIGGER fail_turn").unwrap();
+    drop(db);
+    let session = Session::open(&path).await.unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .submit_turn(submission(conversation, "same", "hello"))
+            .await
+            .unwrap(),
+        SubmittedTurn::Created(_)
+    ));
     cleanup(session, dir).await;
 }
 

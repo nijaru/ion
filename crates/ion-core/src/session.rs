@@ -130,6 +130,27 @@ pub struct StartTurnRequest {
     pub wall_deadline_unix_ms: Option<i64>,
 }
 
+/// Atomic text submission: one durable commit admits the Input and places its Turn.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SubmitTurnRequest {
+    pub conversation: ConversationId,
+    pub sender: InputSender,
+    pub request_key: Option<RequestKey>,
+    pub text: String,
+    pub admitted_at_unix_ms: i64,
+    pub wall_deadline_unix_ms: Option<i64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum SubmittedTurn {
+    Created(StartedTurn),
+    Replayed {
+        input: Input,
+        turn: Turn,
+        admitted_at: CommitSeq,
+    },
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct StartedTurn {
     pub turn: Turn,
@@ -350,6 +371,14 @@ impl SessionHandle {
     ) -> Result<Admission, SessionError> {
         self.ensure_mutable()?;
         self.observe(self.inner.store.admit_input(conversation, request).await)
+    }
+
+    pub async fn submit_turn(
+        &self,
+        request: SubmitTurnRequest,
+    ) -> Result<SubmittedTurn, SessionError> {
+        self.ensure_mutable()?;
+        self.observe(self.inner.store.submit_turn(request).await)
     }
 
     pub async fn start_turn(&self, request: StartTurnRequest) -> Result<StartedTurn, SessionError> {

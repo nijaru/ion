@@ -18,7 +18,7 @@ use super::{
 use crate::observation::ObservationHub;
 use crate::session::{
     AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
-    CreatedConversation, StartTurnRequest, StartedTurn,
+    CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
 };
 use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, EntryId, EntryPage,
@@ -142,6 +142,17 @@ impl SqliteDatabase {
             self.mutate(|connection| semantic::admit_input(connection, conversation, request))?;
         if let Admission::Created { receipt, .. } = &result {
             self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn submit_turn(
+        &mut self,
+        request: SubmitTurnRequest,
+    ) -> Result<SubmittedTurn, StoreError> {
+        let result = self.mutate(|connection| semantic::submit_turn(connection, request))?;
+        if let SubmittedTurn::Created(started) = &result {
+            self.observations.publish(started.receipt.clone());
         }
         Ok(result)
     }
