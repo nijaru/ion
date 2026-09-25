@@ -170,6 +170,7 @@ fn fingerprint(
 
 struct CompleteBoundary {
     egress: EgressRealm,
+    response_text: String,
     starts: AtomicUsize,
     stream_dropped: CancellationToken,
 }
@@ -182,6 +183,16 @@ impl CompleteBoundary {
     fn in_realm(egress: EgressRealm) -> Arc<Self> {
         Arc::new(Self {
             egress,
+            response_text: "done".into(),
+            starts: AtomicUsize::new(0),
+            stream_dropped: CancellationToken::new(),
+        })
+    }
+
+    fn with_text(text: String) -> Arc<Self> {
+        Arc::new(Self {
+            egress: EgressRealm::Local,
+            response_text: text,
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
         })
@@ -244,7 +255,7 @@ impl ModelBoundary for CompleteBoundary {
             let response = ModelResponse {
                 message: Message {
                     role: Role::Assistant,
-                    content: vec![Content::Text("done".to_owned())],
+                    content: vec![Content::Text(self.response_text.clone())],
                     provider_replay: None,
                 },
                 usage: Usage::known(10, 4),
@@ -515,6 +526,47 @@ async fn wrong_service_realm_never_reaches_admission_or_provider_start() {
         session.close().await.expect("close");
         std::fs::remove_dir_all(dir).expect("cleanup");
     }
+}
+
+#[tokio::test]
+async fn oversized_provider_response_settles_failure_without_reexecuting() {
+    let (dir, path) = database("oversized-response");
+    let mut configured = config();
+    configured.limits.max_response_bytes = 256;
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::with_text("x".repeat(100_000));
+    let boundaries = ModelBoundaries::new(
+        [boundary.clone() as Arc<dyn ModelBoundary>],
+        Arc::new(|_: &ProviderBinding| Ok(())),
+    )
+    .unwrap();
+    assert_eq!(
+        handle.resume(turn, boundaries.clone()).await.unwrap(),
+        DriveExit::Parked(ParkReason::Capacity)
+    );
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert_eq!(snapshot.model_attempts.len(), 1);
+    assert!(matches!(&snapshot.model_attempts[0].state,
+        ModelAttemptState::Failed { failure, .. }
+            if failure.kind == ProviderErrorKind::InvalidRequest && failure.usage == Usage::known(10, 4)));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+    let reopened = Session::open(&path).await.unwrap();
+    assert_eq!(
+        reopened
+            .handle()
+            .snapshot(snapshot_request(&reopened))
+            .await
+            .unwrap()
+            .model_attempts
+            .len(),
+        1
+    );
+    let _ = reopened.handle().resume(turn, boundaries).await.unwrap();
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]

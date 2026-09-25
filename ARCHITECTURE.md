@@ -27,8 +27,8 @@ capture; oversized backend values preserve settled effects with explicit output 
 than stranding the attempt. A bounded immutable BlobStore foundation is not yet
 Session-integrated. Active tool state participates in snapshot/watch coverage.
 Configured monetary ceilings currently park before dispatch because host CostQuote
-admission has not been implemented; request JSON encoding stops at its frozen byte cap
-rather than materializing an oversized buffer. A separate host-owned WorkspaceRegistry preserves physical
+admission has not been implemented; request and terminal-response JSON capacity checks
+stop encoding at their frozen caps rather than materializing oversized buffers. A separate host-owned WorkspaceRegistry preserves physical
 workspace/repository identity and orphan quarantine; a scripted integration test kills the
 owner after mutation and recovers through the registry without replay.
 

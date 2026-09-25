@@ -4,6 +4,7 @@
 //! bounded commit-addressed observation. Provider/tool drive remains a later R1B slice.
 
 mod blob;
+mod bounded_json;
 mod config;
 mod conversation;
 mod digest;

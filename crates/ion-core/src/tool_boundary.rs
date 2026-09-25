@@ -1,6 +1,6 @@
 //! Deterministic tool preparation and the separate host execution boundary.
 
-use std::{collections::BTreeMap, io::Write, sync::Arc};
+use std::{collections::BTreeMap, sync::Arc};
 
 use ion_ai::BoxFuture;
 use serde_json::Value;
@@ -185,33 +185,12 @@ pub(crate) fn bounded_to(
 ) -> Result<(), ToolBoundaryError> {
     // A backend may still return an oversized Value after an external effect.
     // Never allocate a second unbounded encoded copy just to reject it.
-    struct Counted {
-        length: usize,
-        limit: usize,
-        exceeded: bool,
-    }
-    impl Write for Counted {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            self.length = self.length.saturating_add(bytes.len());
-            if self.length > self.limit {
-                self.exceeded = true;
-                return Err(std::io::Error::other("tool record capacity"));
-            }
-            Ok(bytes.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut counter = Counted {
-        length: 0,
-        limit,
-        exceeded: false,
-    };
-    match serde_json::to_writer(&mut counter, value) {
+    match crate::bounded_json::check(value, limit) {
         Ok(()) => Ok(()),
-        Err(_) if counter.exceeded => Err(ToolBoundaryError::Capacity),
-        Err(_) => Err(ToolBoundaryError::InvalidAction),
+        Err(crate::bounded_json::CheckError::Capacity) => Err(ToolBoundaryError::Capacity),
+        Err(crate::bounded_json::CheckError::Serialization(_)) => {
+            Err(ToolBoundaryError::InvalidAction)
+        }
     }
 }
 

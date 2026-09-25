@@ -838,9 +838,15 @@ async fn dispatch(
                     ModelStreamEvent::Usage(value) => usage = value,
                     ModelStreamEvent::TextDelta(_) | ModelStreamEvent::ToolCall(_) => {}
                     ModelStreamEvent::Completed(response) => {
-                        let encoded = match serde_json::to_vec(&response) {
-                            Ok(encoded) => encoded,
-                            Err(error) => {
+                        // The provider may hand us a large already-materialized response.
+                        // Do not create a second unbounded JSON allocation merely to
+                        // discover that durable response capacity was exceeded.
+                        match crate::bounded_json::check(
+                            &response,
+                            prepared.response_limit as usize,
+                        ) {
+                            Ok(()) => {}
+                            Err(crate::bounded_json::CheckError::Serialization(error)) => {
                                 return DispatchAction::Exit(DriveExit::Faulted {
                                     turn: basis.turn.id,
                                     message: format!(
@@ -848,27 +854,29 @@ async fn dispatch(
                                     ),
                                 });
                             }
-                        };
-                        if encoded.len() > prepared.response_limit as usize {
-                            let failure = ProviderFailureEvidence {
-                                kind: ProviderErrorKind::InvalidRequest,
-                                message: format!(
-                                    "provider response exceeded the {} byte durable limit",
-                                    prepared.response_limit
-                                ),
-                                usage: response.usage,
-                                provider_reported_cost_microusd: None,
-                            };
-                            let state = ModelAttemptState::Failed {
-                                failure,
-                                start_receipt: start_receipt.clone(),
-                            };
-                            if let Err(error) =
-                                persist_attempt(inner, created.attempt.id, state).await
-                            {
-                                return DispatchAction::Exit(store_exit(basis.turn.id, error));
+                            Err(crate::bounded_json::CheckError::Capacity) => {
+                                let failure = ProviderFailureEvidence {
+                                    kind: ProviderErrorKind::InvalidRequest,
+                                    message: format!(
+                                        "provider response exceeded the {} byte durable limit",
+                                        prepared.response_limit
+                                    ),
+                                    usage: response.usage,
+                                    provider_reported_cost_microusd: None,
+                                };
+                                let state = ModelAttemptState::Failed {
+                                    failure,
+                                    start_receipt: start_receipt.clone(),
+                                };
+                                if let Err(error) =
+                                    persist_attempt(inner, created.attempt.id, state).await
+                                {
+                                    return DispatchAction::Exit(store_exit(basis.turn.id, error));
+                                }
+                                return DispatchAction::Exit(DriveExit::Parked(
+                                    ParkReason::Capacity,
+                                ));
                             }
-                            return DispatchAction::Exit(DriveExit::Parked(ParkReason::Capacity));
                         }
 
                         let state = ModelAttemptState::ResponseReady {

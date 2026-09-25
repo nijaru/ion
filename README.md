@@ -97,8 +97,8 @@ handle, while the host still owns namespace ancestry and filesystem trust.
 Provider admission is a local host callback, not network confinement or a production
 credential policy; real adapters must enforce realm/credential validity at actual I/O.
 A configured monetary cap parks before physical attempt intent until a host can supply
-a conservative cost quote. Request encoding stops at the frozen byte cap without
-allocating a complete oversized serialization. No live-provider effectiveness has been
+a conservative cost quote. Request and terminal provider-response capacity checks stop
+encoding at their frozen limits rather than allocating complete oversized JSON copies. No live-provider effectiveness has been
 measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
