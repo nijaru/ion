@@ -272,17 +272,156 @@ pub(super) fn mutate(
             tx.commit()?;
             return Ok(ToolMutationResult {
                 attempt: None,
-                receipt: CommitReceipt {
+                receipt: Some(CommitReceipt {
                     seq: commit,
                     update: SessionUpdate::new(changes),
-                },
+                }),
             });
+        }
+        ToolMutation::RequestApproval {
+            step,
+            invocation,
+            now_unix_ms,
+        } => {
+            let records = records(&tx, step)?;
+            let mut call = records
+                .invocations
+                .into_iter()
+                .find(|i| i.id == invocation)
+                .ok_or_else(|| invalid("unknown approval invocation"))?;
+            eligible(
+                &records.turn,
+                step,
+                records.turn.cancellation.generation,
+                true,
+            )?;
+            if call.exchange != ToolExchangeState::Pending
+                || !call
+                    .prepared
+                    .permitted_by(&records.turn.environment.authority)
+            {
+                return Err(invalid(
+                    "approval cannot widen authority or settled exchange",
+                ));
+            }
+            match &call.approval {
+                ApprovalState::NotRequired => {}
+                ApprovalState::Approved {
+                    expires_at_unix_ms, ..
+                } if *expires_at_unix_ms <= now_unix_ms => {}
+                _ => return Err(invalid("approval already decided or pending")),
+            }
+            call.approval = ApprovalState::Pending;
+            update_approval(&tx, &call)?;
+            self::records(&tx, step)?;
+            changes.push(SessionChange::ToolInvocation(call));
+        }
+        ToolMutation::DecideApproval {
+            step,
+            invocation,
+            action_digest,
+            decision,
+            executor,
+            now_unix_ms,
+        } => {
+            let records = records(&tx, step)?;
+            let mut call = records
+                .invocations
+                .into_iter()
+                .find(|i| i.id == invocation)
+                .ok_or_else(|| invalid("unknown approval invocation"))?;
+            let binding = records
+                .turn
+                .environment
+                .tool(&call.binding)
+                .ok_or_else(|| invalid("missing frozen binding"))?;
+            let same_decision = call.prepared.digest == action_digest
+                && executor.as_str() == records.turn.environment.workspace.backend
+                && match (&call.approval, &decision) {
+                    (
+                        ApprovalState::Approved {
+                            action_digest: approved_digest,
+                            executor: approved_executor,
+                            implementation: approved_implementation,
+                            workspace: approved_workspace,
+                            expires_at_unix_ms: approved_expiry,
+                        },
+                        ApprovalDecision::Approve { expires_at_unix_ms },
+                    ) => {
+                        approved_digest == &action_digest
+                            && approved_executor == &executor
+                            && approved_implementation == &binding.implementation
+                            && approved_workspace == &records.turn.environment.workspace
+                            && approved_expiry == expires_at_unix_ms
+                    }
+                    (
+                        ApprovalState::Denied { reason: saved },
+                        ApprovalDecision::Deny { reason },
+                    ) => saved == reason,
+                    _ => false,
+                };
+            if same_decision {
+                return Ok(ToolMutationResult {
+                    attempt: None,
+                    receipt: None,
+                });
+            }
+            eligible(
+                &records.turn,
+                step,
+                records.turn.cancellation.generation,
+                true,
+            )?;
+            if call.exchange != ToolExchangeState::Pending
+                || call.approval != ApprovalState::Pending
+                || call.prepared.digest != action_digest
+                || executor.as_str() != records.turn.environment.workspace.backend
+                || !call
+                    .prepared
+                    .permitted_by(&records.turn.environment.authority)
+            {
+                return Err(invalid("approval does not match pending prepared action"));
+            }
+            match decision {
+                ApprovalDecision::Approve { expires_at_unix_ms } => {
+                    if expires_at_unix_ms <= now_unix_ms
+                        || expires_at_unix_ms > now_unix_ms.saturating_add(24 * 60 * 60 * 1000)
+                    {
+                        return Err(invalid("approval expiry must be within 24 hours"));
+                    }
+                    call.approval = ApprovalState::Approved {
+                        action_digest,
+                        implementation: binding.implementation.clone(),
+                        executor,
+                        workspace: records.turn.environment.workspace.clone(),
+                        expires_at_unix_ms,
+                    };
+                }
+                ApprovalDecision::Deny { reason } => {
+                    if reason.len() > 1024 {
+                        return Err(StoreError::Limit("approval denial reason".into()));
+                    }
+                    call.approval = ApprovalState::Denied { reason };
+                    call.exchange = ToolExchangeState::OutcomeReady {
+                        source: OutcomeSource::DeniedApproval,
+                        result: error_result("User denied this tool action before execution."),
+                    };
+                }
+            }
+            crate::tool_boundary::bounded(&call.approval)
+                .map_err(|_| StoreError::Limit("approval evidence capacity".into()))?;
+            update_approval(&tx, &call)?;
+            update_call(&tx, &call)?;
+            self::records(&tx, step)?;
+            changes.push(SessionChange::ToolInvocation(call));
         }
         ToolMutation::Intent {
             step,
             invocation,
             generation,
             executor,
+            approval_required,
+            now_unix_ms,
         } => {
             let records = records(&tx, step)?;
             let call = records
@@ -310,6 +449,18 @@ pub(super) fn mutate(
                 .environment
                 .tool(&call.binding)
                 .ok_or_else(|| invalid("missing binding"))?;
+            if matches!(call.approval, ApprovalState::Denied { .. })
+                || (approval_required
+                    && !call.approval.permits(
+                        &call.prepared,
+                        &binding.implementation,
+                        &executor,
+                        &turn.environment.workspace,
+                        now_unix_ms,
+                    ))
+            {
+                return Err(StoreError::ApprovalRequired);
+            }
             if !crate::tool_boundary::permits_retry(binding, &predecessors) {
                 return Err(invalid("prior execution does not permit retry"));
             }
@@ -419,6 +570,9 @@ pub(super) fn mutate(
                     }
                     error_result(UNKNOWN_RESULT)
                 }
+                OutcomeSource::DeniedApproval => {
+                    return Err(invalid("approval denial is staged with its decision"));
+                }
                 OutcomeSource::CancelledBeforeStart => {
                     if !turn.cancellation.requested
                         || records.attempts.iter().any(|a| {
@@ -474,10 +628,10 @@ pub(super) fn mutate(
             tx.commit()?;
             return Ok(ToolMutationResult {
                 attempt: None,
-                receipt: CommitReceipt {
+                receipt: Some(CommitReceipt {
                     seq: commit,
                     update: SessionUpdate::new(changes),
-                },
+                }),
             });
         }
     }
@@ -486,10 +640,10 @@ pub(super) fn mutate(
     tx.commit()?;
     Ok(ToolMutationResult {
         attempt: created,
-        receipt: CommitReceipt {
+        receipt: Some(CommitReceipt {
             seq: commit,
             update: SessionUpdate::new(changes),
-        },
+        }),
     })
 }
 
@@ -531,6 +685,13 @@ fn eligible(turn: &Turn, step: StepId, generation: u64, tools: bool) -> Result<(
     {
         return Err(invalid("step no longer current"));
     }
+    Ok(())
+}
+fn update_approval(connection: &Connection, call: &ToolInvocation) -> Result<(), StoreError> {
+    connection.execute(
+        "UPDATE tool_invocations SET approval=?2 WHERE id=?1",
+        params![call.id.get(), json_to(&call.approval)?],
+    )?;
     Ok(())
 }
 fn update_call(connection: &Connection, call: &ToolInvocation) -> Result<(), StoreError> {

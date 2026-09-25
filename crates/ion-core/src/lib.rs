@@ -72,13 +72,13 @@ pub use session::{
 };
 pub use store::ToolRecords;
 pub use tool_boundary::{
-    MAX_TOOL_ATTEMPTS, MAX_TOOL_RECORD_BYTES, ToolBoundaries, ToolBoundary, ToolBoundaryError,
-    ToolExecution,
+    LiveToolAuthority, MAX_TOOL_ATTEMPTS, MAX_TOOL_RECORD_BYTES, ToolBoundaries, ToolBoundary,
+    ToolBoundaryError, ToolExecution,
 };
 pub use tool_exec::{
-    ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction, ProgressCheckpoint,
-    StartReceipt, ToolAttempt, ToolAttemptState, ToolAuthority, ToolExchangeState, ToolInvocation,
-    ToolResult,
+    ApprovalDecision, ApprovalState, BaseFact, EffectSummary, OutcomeSource, PreparedAction,
+    ProgressCheckpoint, StartReceipt, ToolAttempt, ToolAttemptState, ToolAuthority,
+    ToolExchangeState, ToolInvocation, ToolResult,
 };
 pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
 pub use turn::{Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase};

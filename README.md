@@ -56,8 +56,12 @@ park before provider dispatch. The host tool boundary checks live authority befo
 execution intent; denial parks without spending a physical attempt. It must recheck at
 actual effect admission because permission can change between those points. `tool_records`
 inspects attempts, `accept_tool_unknown` settles an uncertain exchange, and
-`reconcile_tools` recovers evidence without dispatching.
-Active tool records are included in bounded snapshot/watch hydration.
+`reconcile_tools` recovers evidence without dispatching. Live host policy returns
+`Allow`, `Ask` or `Deny`: `Ask` parks on a durable per-invocation approval bound to its
+exact action, executor, workspace and expiry. An authenticated host can call
+`decide_tool_approval`; explicit denial stages a truthful result without an attempt.
+Duplicate decisions do not advance the commit cursor. Active tool records are included
+in bounded snapshot/watch hydration.
 
 Tool execution is sequential. Scripted tests cover an actual owner-process kill after a
 filesystem mutation and host receipt, followed by passive reopen and explicit reconciliation
@@ -69,8 +73,9 @@ There is no compatibility bridge or hybrid old/new runtime. Schemas v1 and v2 ar
 migrated; Git retains the prototype and its useful failure scenarios are being restored against
 the replacement owners.
 
-Still missing: native read/edit/exec backends, durable approval interaction, BlobStore,
-parallel tool dispatch, context compaction/forking, real provider adapters, a runnable `ion`
+Still missing: native read/edit/exec backends, a user-facing approval client and
+host authentication/policy backend, BlobStore, parallel tool dispatch,
+context compaction/forking, real provider adapters, a runnable `ion`
 binary, the terminal UI, and workers. Oversized tool results park rather than fabricate
 truncated success; bounded artifact publication is required before large native output.
 No live-provider effectiveness has been measured.

@@ -43,7 +43,9 @@ impl SqliteDatabase {
         operation: super::ToolMutation,
     ) -> Result<super::ToolMutationResult, StoreError> {
         let result = self.mutate(|connection| tool_state::mutate(connection, operation))?;
-        self.observations.publish(result.receipt.clone());
+        if let Some(receipt) = &result.receipt {
+            self.observations.publish(receipt.clone());
+        }
         Ok(result)
     }
     pub(crate) fn create(

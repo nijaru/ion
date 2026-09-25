@@ -5,7 +5,7 @@ use serde_json::Value;
 
 use crate::{
     AttemptId, BlobRef, ContentDigest, EgressRealm, EntryId, InvocationId, SemanticCompatibilityId,
-    StepId, ToolBindingId,
+    StepId, ToolBindingId, WorkspaceBinding,
 };
 
 /// Required authority, not proof of confinement. The trusted executor must
@@ -173,8 +173,48 @@ pub struct ToolInvocation {
 pub enum ApprovalState {
     NotRequired,
     Pending,
-    Approved { expires_at_unix_ms: Option<i64> },
-    Denied { reason: String },
+    Approved {
+        action_digest: ContentDigest,
+        implementation: SemanticCompatibilityId,
+        executor: SemanticCompatibilityId,
+        workspace: WorkspaceBinding,
+        expires_at_unix_ms: i64,
+    },
+    Denied {
+        reason: String,
+    },
+}
+
+impl ApprovalState {
+    #[must_use]
+    pub fn permits(
+        &self,
+        action: &PreparedAction,
+        implementation: &SemanticCompatibilityId,
+        executor: &SemanticCompatibilityId,
+        workspace: &WorkspaceBinding,
+        now_unix_ms: i64,
+    ) -> bool {
+        matches!(self, Self::Approved {
+            action_digest,
+            implementation: approved_implementation,
+            executor: approved_executor,
+            workspace: approved_workspace,
+            expires_at_unix_ms,
+        } if action_digest == &action.digest
+            && approved_implementation == implementation
+            && approved_executor == executor
+            && approved_workspace == workspace
+            && now_unix_ms < *expires_at_unix_ms)
+    }
+}
+
+/// Authenticated host/user control, never model or ordinary message content.
+/// An approval can satisfy an `ask` only for the exact frozen action and executor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ApprovalDecision {
+    Approve { expires_at_unix_ms: i64 },
+    Deny { reason: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -194,6 +234,7 @@ pub enum ToolExchangeState {
 pub enum OutcomeSource {
     Attempt(AttemptId),
     CancelledBeforeStart,
+    DeniedApproval,
     AcceptedUnknown,
 }
 

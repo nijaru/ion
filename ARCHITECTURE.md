@@ -15,14 +15,15 @@ start-receipt reconciliation and atomic ModelStep fallback supersession. The old
 Session/task/tool/workspace runtime is not a compatibility layer underneath them.
 
 The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
-physical attempt evidence, conservative reconciliation, closure reserves, and source-order
-result materialization through sequential host-supplied tools. Active tool state participates
-in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
+physical attempt evidence, conservative reconciliation, closure reserves, source-order
+result materialization and exact durable per-invocation approval decisions through sequential
+host-supplied tools. Active tool state participates in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
 workspace/repository identity and orphan quarantine; a scripted integration test kills the
 owner after mutation and recovers through the registry without replay.
 
-R1C acceptance is not complete: durable approval interaction, native read/edit/exec,
-bounded artifact publication, and real parallel dispatch remain unimplemented. Context
+R1C acceptance is not complete: there is no user-facing authenticated approval client,
+native read/edit/exec, bounded artifact publication or real parallel dispatch. The scripted
+approval store/drive boundary does not implement the host's live policy or confinement. Context
 compaction/reset/forks, real provider adapters, a client binary and workers also remain
 future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
 tests, not obsolete owners or schema/API compatibility.

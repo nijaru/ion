@@ -8,9 +8,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AttemptId, AuthorityCeiling, InvocationId, PreparedAction, SemanticCompatibilityId, SessionId,
-    ToolAttempt, ToolAttemptState, ToolBinding, ToolBindingId, ToolRecoveryPolicy,
-    WorkspaceBinding,
+    ApprovalState, AttemptId, AuthorityCeiling, InvocationId, PreparedAction,
+    SemanticCompatibilityId, SessionId, ToolAttempt, ToolAttemptState, ToolBinding, ToolBindingId,
+    ToolRecoveryPolicy, WorkspaceBinding,
 };
 
 /// Hard bounds apply even when a host configures larger model-facing limits.
@@ -29,7 +29,18 @@ pub struct ToolExecution {
     pub action: PreparedAction,
     pub workspace: WorkspaceBinding,
     pub ceiling: AuthorityCeiling,
+    /// Exact persisted decision, not an exemption from the backend's live recheck.
+    pub approval: ApprovalState,
     pub output_limit: usize,
+}
+
+/// Current host policy. `Ask` requires an exact durable approval before intent;
+/// `Deny` cannot be overridden by an earlier approval.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LiveToolAuthority {
+    Allow,
+    Ask,
+    Deny,
 }
 
 /// Trusted host code. Preparation is pure; execution owns live policy, claims,
@@ -52,7 +63,11 @@ pub trait ToolBoundary: Send + Sync {
     /// Check current host policy before committing physical intent. Denial parks
     /// without consuming an attempt; a later explicit resume may try again.
     /// This is not a permission lease: execute must recheck at effect admission.
-    fn live_authority(&self, action: &PreparedAction, workspace: &WorkspaceBinding) -> bool;
+    fn live_authority(
+        &self,
+        action: &PreparedAction,
+        workspace: &WorkspaceBinding,
+    ) -> LiveToolAuthority;
 
     /// Recheck current live authority and workspace identity/claims immediately
     /// before effects, inside the frozen ceiling. A cancelled token must prevent
@@ -203,7 +218,7 @@ mod tests {
         fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
             Ok(self.0.clone())
         }
-        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> LiveToolAuthority {
             panic!("preparation cannot authorize")
         }
         fn execute<'a>(
@@ -258,7 +273,7 @@ mod tests {
         fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
             panic!("unused")
         }
-        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> LiveToolAuthority {
             panic!("reconciliation must not authorize")
         }
         fn execute<'a>(
@@ -329,6 +344,7 @@ mod tests {
                 remote_tools: false,
                 egress_realms: vec![crate::EgressRealm::Local],
             },
+            approval: ApprovalState::NotRequired,
             output_limit: 1024,
         };
         let new = NoRecovery.reconcile(execution, attempt).await;

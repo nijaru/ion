@@ -8,6 +8,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio_util::sync::CancellationToken;
 
@@ -170,6 +171,7 @@ struct Tool {
     wait: bool,
     started: tokio::sync::Notify,
     denied: AtomicBool,
+    ask: AtomicBool,
     revoke_after_preflight: AtomicBool,
     authority: ToolAuthority,
 }
@@ -203,6 +205,7 @@ impl Tool {
             wait: false,
             started: tokio::sync::Notify::new(),
             denied: AtomicBool::new(false),
+            ask: AtomicBool::new(false),
             revoke_after_preflight: AtomicBool::new(false),
             authority: ToolAuthority::ReadOnly,
         }
@@ -234,20 +237,44 @@ impl ToolBoundary for Tool {
     fn permits_retry(&self) -> bool {
         true
     }
-    fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
-        let allowed = !self.denied.load(Ordering::SeqCst);
-        if allowed && self.revoke_after_preflight.swap(false, Ordering::SeqCst) {
+    fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> LiveToolAuthority {
+        let policy = if self.denied.load(Ordering::SeqCst) {
+            LiveToolAuthority::Deny
+        } else if self.ask.load(Ordering::SeqCst) {
+            LiveToolAuthority::Ask
+        } else {
+            LiveToolAuthority::Allow
+        };
+        if policy != LiveToolAuthority::Deny
+            && self.revoke_after_preflight.swap(false, Ordering::SeqCst)
+        {
             self.denied.store(true, Ordering::SeqCst);
         }
-        allowed
+        policy
     }
     fn execute<'a>(
         &'a self,
-        _: ToolExecution,
+        execution: ToolExecution,
         stop: CancellationToken,
     ) -> BoxFuture<'a, ToolAttemptState> {
         Box::pin(async move {
-            if self.denied.load(Ordering::SeqCst) || stop.is_cancelled() {
+            let approved = execution.approval.permits(
+                &execution.action,
+                &execution.binding.implementation,
+                &self.executor(),
+                &execution.workspace,
+                i64::try_from(
+                    SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis(),
+                )
+                .unwrap(),
+            );
+            if self.denied.load(Ordering::SeqCst)
+                || (self.ask.load(Ordering::SeqCst) && !approved)
+                || stop.is_cancelled()
+            {
                 return ToolAttemptState::NotStarted {
                     reason: "live policy denied".into(),
                 };
@@ -507,6 +534,461 @@ async fn revocation_after_preflight_does_not_burn_retry_attempts() {
         2
     );
     assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn exact_approval_survives_passive_reopen_and_rejects_stale_decisions() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&s).await;
+    let before = s.handle().tool_records(step).await.unwrap();
+    let call = &before.invocations[0];
+    assert_eq!(call.approval, ApprovalState::Pending);
+    assert!(before.attempts.is_empty());
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    let digest = call.prepared.digest;
+    let invocation = call.id;
+    s.close().await.unwrap();
+
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(s.handle().tool_records(step).await.unwrap(), before);
+    let watch = s
+        .handle()
+        .snapshot_and_watch(WatchRequest {
+            snapshot: SnapshotRequest {
+                conversation: s.primary_conversation(),
+                max_inputs: 0,
+                max_entries: 0,
+                max_bytes: 1024 * 1024,
+            },
+            queue: WatchQueueLimits {
+                max_receipts: 8,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        watch.snapshot.tool_invocations[0].approval,
+        ApprovalState::Pending
+    );
+    let expiry = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 60_000;
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                invocation,
+                ContentDigest::of(&"different action").unwrap(),
+                ApprovalDecision::Approve {
+                    expires_at_unix_ms: expiry
+                },
+                t.executor(),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(s.handle().tool_records(step).await.unwrap(), before);
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                invocation,
+                digest,
+                ApprovalDecision::Approve {
+                    expires_at_unix_ms: 0
+                },
+                t.executor(),
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(s.handle().tool_records(step).await.unwrap(), before);
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                invocation,
+                digest,
+                ApprovalDecision::Approve {
+                    expires_at_unix_ms: expiry
+                },
+                id("different-executor")
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(s.handle().tool_records(step).await.unwrap(), before);
+    let grant = ApprovalDecision::Approve {
+        expires_at_unix_ms: expiry,
+    };
+    let receipt = s
+        .handle()
+        .decide_tool_approval(step, invocation, digest, grant.clone(), t.executor())
+        .await
+        .unwrap()
+        .expect("new approval commit");
+    assert!(receipt.seq > watch.snapshot.coverage);
+    assert_eq!(watch.watch.try_recv().unwrap(), receipt);
+    assert!(
+        s.handle()
+            .decide_tool_approval(step, invocation, digest, grant.clone(), t.executor())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        watch.watch.try_recv(),
+        Err(ObservationError::Empty)
+    ));
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                invocation,
+                digest,
+                ApprovalDecision::Deny {
+                    reason: "conflict".into()
+                },
+                t.executor()
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        s.handle().tool_records(step).await.unwrap().invocations[0].approval,
+        ApprovalState::Approved { .. }
+    ));
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(_)
+    ));
+    assert_eq!(t.prepares.load(Ordering::SeqCst), 1);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        s.handle().tool_records(step).await.unwrap().attempts.len(),
+        1
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn expired_approval_reopens_pending_without_an_attempt() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&s).await;
+    let call = s.handle().tool_records(step).await.unwrap().invocations[0].clone();
+    let now = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap();
+    s.handle()
+        .decide_tool_approval(
+            step,
+            call.id,
+            call.prepared.digest,
+            ApprovalDecision::Approve {
+                expires_at_unix_ms: now + 60_000,
+            },
+            t.executor(),
+        )
+        .await
+        .unwrap();
+    s.close().await.unwrap();
+
+    // Exact persisted pre-state for an expiry after the approving process exits.
+    let db = rusqlite::Connection::open(&path).unwrap();
+    let raw: String = db
+        .query_row(
+            "SELECT approval FROM tool_invocations WHERE id=?1",
+            [call.id.get()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let mut saved: serde_json::Value = serde_json::from_str(&raw).unwrap();
+    saved["Approved"]["expires_at_unix_ms"] = json!(0);
+    db.execute(
+        "UPDATE tool_invocations SET approval=?2 WHERE id=?1",
+        rusqlite::params![call.id.get(), saved.to_string()],
+    )
+    .unwrap();
+    drop(db);
+
+    let s = Session::open(&path).await.unwrap();
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let after = s.handle().tool_records(step).await.unwrap();
+    assert!(after.attempts.is_empty());
+    assert_eq!(after.invocations[0].approval, ApprovalState::Pending);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn cancellation_and_live_denial_override_a_saved_grant() {
+    let (s, _path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&s).await;
+    let call = s.handle().tool_records(step).await.unwrap().invocations[0].clone();
+    let expiry = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 60_000;
+    let grant = ApprovalDecision::Approve {
+        expires_at_unix_ms: expiry,
+    };
+    s.handle()
+        .decide_tool_approval(
+            step,
+            call.id,
+            call.prepared.digest,
+            grant.clone(),
+            t.executor(),
+        )
+        .await
+        .unwrap();
+    t.denied.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AuthorityDenied)
+    );
+    assert!(
+        s.handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    s.handle().cancel_turn(turn).await.unwrap();
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                call.id,
+                call.prepared.digest,
+                ApprovalDecision::Deny {
+                    reason: "too late".into()
+                },
+                t.executor()
+            )
+            .await
+            .is_err()
+    );
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Cancelled { .. })
+    ));
+    assert!(
+        s.handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn approval_commit_failure_publishes_nothing_and_fences() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&s).await;
+    let call = s.handle().tool_records(step).await.unwrap().invocations[0].clone();
+    let view = s
+        .handle()
+        .snapshot_and_watch(WatchRequest {
+            snapshot: SnapshotRequest {
+                conversation: s.primary_conversation(),
+                max_inputs: 0,
+                max_entries: 0,
+                max_bytes: 1024 * 1024,
+            },
+            queue: WatchQueueLimits {
+                max_receipts: 8,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    let injector = rusqlite::Connection::open(&path).unwrap();
+    injector
+        .execute_batch(
+            "CREATE TRIGGER fail_approval BEFORE UPDATE OF approval ON tool_invocations
+        BEGIN SELECT RAISE(ABORT, 'injected approval failure'); END;",
+        )
+        .unwrap();
+    let expiry = i64::try_from(
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis(),
+    )
+    .unwrap()
+        + 60_000;
+    assert!(matches!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                call.id,
+                call.prepared.digest,
+                ApprovalDecision::Approve {
+                    expires_at_unix_ms: expiry
+                },
+                t.executor()
+            )
+            .await,
+        Err(SessionError::Fenced(_))
+    ));
+    assert_eq!(s.handle().health(), SessionHealth::Fenced);
+    assert_eq!(
+        s.handle().tool_records(step).await.unwrap().invocations[0].approval,
+        ApprovalState::Pending
+    );
+    assert!(matches!(
+        view.watch.try_recv(),
+        Err(ObservationError::Empty)
+    ));
+    assert!(
+        s.handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    drop(injector);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn denial_stages_one_source_order_result_without_a_tool_attempt() {
+    let (s, _path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&s).await;
+    let call = &s.handle().tool_records(step).await.unwrap().invocations[0];
+    let decision = ApprovalDecision::Deny {
+        reason: "no".into(),
+    };
+    assert!(
+        s.handle()
+            .decide_tool_approval(
+                step,
+                call.id,
+                call.prepared.digest,
+                decision.clone(),
+                t.executor()
+            )
+            .await
+            .unwrap()
+            .is_some()
+    );
+    assert!(
+        s.handle()
+            .decide_tool_approval(step, call.id, call.prepared.digest, decision, t.executor())
+            .await
+            .unwrap()
+            .is_none()
+    );
+    assert!(matches!(
+        s.handle().tool_records(step).await.unwrap().invocations[0].exchange,
+        ToolExchangeState::OutcomeReady {
+            source: OutcomeSource::DeniedApproval,
+            ..
+        }
+    ));
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(_)
+    ));
+    let records = s.handle().tool_records(step).await.unwrap();
+    assert!(records.attempts.is_empty());
+    assert!(matches!(
+        records.invocations[0].exchange,
+        ToolExchangeState::Materialized {
+            source: OutcomeSource::DeniedApproval,
+            ..
+        }
+    ));
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
     s.close().await.unwrap();
 }
 

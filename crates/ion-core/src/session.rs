@@ -416,6 +416,34 @@ impl SessionHandle {
         .await
     }
 
+    /// Record an explicit, targeted approval decision. The application must
+    /// authenticate the user/host caller; ordinary text is never an approval.
+    /// The digest identifies the exact saved action shown for inspection.
+    pub async fn decide_tool_approval(
+        &self,
+        step: crate::StepId,
+        invocation: crate::InvocationId,
+        action_digest: crate::ContentDigest,
+        decision: crate::ApprovalDecision,
+        executor: crate::SemanticCompatibilityId,
+    ) -> Result<Option<CommitReceipt>, SessionError> {
+        self.ensure_mutable()?;
+        let result = self.observe(
+            self.inner
+                .store
+                .tool_mutate(crate::store::ToolMutation::DecideApproval {
+                    step,
+                    invocation,
+                    action_digest,
+                    decision,
+                    executor,
+                    now_unix_ms: crate::tool_drive::now_unix_ms()?,
+                })
+                .await,
+        )?;
+        Ok(result.receipt)
+    }
+
     /// Explicitly settle the exchange as unknown without changing execution truth.
     pub async fn accept_tool_unknown(
         &self,
@@ -433,7 +461,9 @@ impl SessionHandle {
                 })
                 .await,
         )?;
-        Ok(result.receipt)
+        result
+            .receipt
+            .ok_or_else(|| SessionError::InvalidState("tool settlement returned no commit".into()))
     }
 
     pub async fn resume_with_tools(
@@ -771,6 +801,7 @@ impl From<StoreError> for SessionError {
             StoreError::InvalidState(message) | StoreError::InvalidRequest(message) => {
                 Self::InvalidState(message)
             }
+            StoreError::ApprovalRequired => Self::InvalidState("tool approval required".into()),
             StoreError::SnapshotTooLarge { maximum } => {
                 Self::Observation(ObservationError::SnapshotTooLarge { maximum })
             }

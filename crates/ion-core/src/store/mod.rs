@@ -33,11 +33,26 @@ pub(crate) enum ToolMutation {
         attempt: crate::AttemptId,
         actions: Vec<crate::PreparedAction>,
     },
+    RequestApproval {
+        step: StepId,
+        invocation: crate::InvocationId,
+        now_unix_ms: i64,
+    },
+    DecideApproval {
+        step: StepId,
+        invocation: crate::InvocationId,
+        action_digest: crate::ContentDigest,
+        decision: crate::ApprovalDecision,
+        executor: crate::SemanticCompatibilityId,
+        now_unix_ms: i64,
+    },
     Intent {
         step: StepId,
         invocation: crate::InvocationId,
         generation: u64,
         executor: crate::SemanticCompatibilityId,
+        approval_required: bool,
+        now_unix_ms: i64,
     },
     Evidence {
         step: StepId,
@@ -56,7 +71,8 @@ pub(crate) enum ToolMutation {
 
 pub(crate) struct ToolMutationResult {
     pub(crate) attempt: Option<crate::ToolAttempt>,
-    pub(crate) receipt: CommitReceipt,
+    /// An exact duplicate approval decision changes no durable state or cursor.
+    pub(crate) receipt: Option<CommitReceipt>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -671,6 +687,8 @@ pub(crate) enum StoreError {
     ContextCapacity(String),
     #[error("turn reached a configured limit: {0}")]
     Limit(String),
+    #[error("tool approval is missing, expired or does not match the frozen action")]
+    ApprovalRequired,
     #[error("model response contains tool calls awaiting tool admission")]
     ToolsPending,
     #[error("snapshot mandatory state exceeds the requested {maximum}-byte bound")]
@@ -705,6 +723,7 @@ impl StoreError {
                 | Self::ContextCapacity(_)
                 | Self::Limit(_)
                 | Self::ToolsPending
+                | Self::ApprovalRequired
                 | Self::SnapshotTooLarge { .. }
         )
     }

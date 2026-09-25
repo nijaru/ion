@@ -5,7 +5,18 @@ use crate::{
     *,
 };
 use ion_ai::Content;
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
+
+pub(crate) fn now_unix_ms() -> Result<i64, StoreError> {
+    let elapsed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_err(|_| StoreError::InvalidState("clock before Unix epoch".into()))?;
+    i64::try_from(elapsed.as_millis())
+        .map_err(|_| StoreError::InvalidState("clock exceeds Unix millisecond range".into()))
+}
 
 pub(crate) fn compatible(basis: &DriveBasis, tools: &ToolBoundaries) -> bool {
     basis.turn.settings.active_tools.iter().all(|id| {
@@ -92,6 +103,7 @@ fn execution(
         action: call.prepared.clone(),
         workspace: turn.environment.workspace.clone(),
         ceiling: turn.environment.authority.clone(),
+        approval: call.approval.clone(),
         output_limit: (turn.environment.limits.max_tool_preview_bytes as usize)
             .min(MAX_TOOL_RECORD_BYTES),
     }
@@ -302,11 +314,39 @@ pub(crate) async fn drive(
         if !call
             .prepared
             .permitted_by(&basis.turn.environment.authority)
-            || !boundary.live_authority(&call.prepared, &basis.turn.environment.workspace)
         {
             return Ok(Some(ParkReason::AuthorityDenied));
         }
-        let created = inner.observe_store(
+        let policy = boundary.live_authority(&call.prepared, &basis.turn.environment.workspace);
+        if policy == crate::LiveToolAuthority::Deny {
+            return Ok(Some(ParkReason::AuthorityDenied));
+        }
+        let now = now_unix_ms()?;
+        if policy == crate::LiveToolAuthority::Ask {
+            let grant_valid = call.approval.permits(
+                &call.prepared,
+                &binding.implementation,
+                &boundary.executor(),
+                &basis.turn.environment.workspace,
+                now,
+            );
+            if !grant_valid {
+                if call.approval != ApprovalState::Pending {
+                    inner.observe_store(
+                        inner
+                            .store()
+                            .tool_mutate(ToolMutation::RequestApproval {
+                                step,
+                                invocation: call.id,
+                                now_unix_ms: now,
+                            })
+                            .await,
+                    )?;
+                }
+                return Ok(Some(ParkReason::AwaitingApproval));
+            }
+        }
+        let created = match inner.observe_store(
             inner
                 .store()
                 .tool_mutate(ToolMutation::Intent {
@@ -314,9 +354,15 @@ pub(crate) async fn drive(
                     invocation: call.id,
                     generation: basis.turn.cancellation.generation,
                     executor: boundary.executor(),
+                    approval_required: policy == crate::LiveToolAuthority::Ask,
+                    now_unix_ms: now_unix_ms()?,
                 })
                 .await,
-        )?;
+        ) {
+            Ok(created) => created,
+            Err(StoreError::ApprovalRequired) => return Ok(Some(ParkReason::AwaitingApproval)),
+            Err(error) => return Err(error),
+        };
         let attempt = created
             .attempt
             .ok_or_else(|| StoreError::Corrupt("intent missing attempt".into()))?;
