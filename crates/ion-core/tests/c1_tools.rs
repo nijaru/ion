@@ -403,6 +403,62 @@ async fn tool_step(s: &Session) -> StepId {
 }
 
 #[tokio::test]
+async fn native_read_settles_a_durable_tool_exchange_and_reopens_without_rereading() {
+    let dir = std::env::temp_dir().join(format!("ion-native-exchange-{}", SessionId::new()));
+    let workspace = dir.join("workspace");
+    let host_state = dir.join("host");
+    std::fs::create_dir_all(&workspace).unwrap();
+    std::fs::create_dir_all(&host_state).unwrap();
+    std::fs::write(workspace.join("x"), "native data").unwrap();
+    let mut registry = workspace_registry::WorkspaceRegistry::open(&host_state).unwrap();
+    let binding = registry.bind("w", &workspace, "native-v1").unwrap();
+    let reader = Arc::new(NativeReadBoundary::new(&registry, binding.clone(), 64).unwrap());
+    reader.set_live_authority(LiveToolAuthority::Allow);
+    let mut cfg = config();
+    cfg.workspace = binding;
+    cfg.tools = vec![reader.tool_binding().clone()];
+    cfg.initial_tools = vec![reader.tool_binding().id.clone()];
+    let (session, db, turn) = setup(cfg).await;
+    let model = model();
+    let tools = ToolBoundaries::new([reader as Arc<dyn ToolBoundary>]).unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools.clone(), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let step = tool_step(&session).await;
+    let before = session.handle().tool_records(step).await.unwrap();
+    assert_eq!(before.attempts.len(), 1);
+    match &before.attempts[0].state {
+        ToolAttemptState::Settled { result, effect, .. } => {
+            assert_eq!(result.value["content"], "native data");
+            assert!(matches!(result.capture, OutputCapture::CompleteInline));
+            assert_eq!(*effect, EffectSummary::NoMutation);
+        }
+        other => panic!("native read not settled: {other:?}"),
+    }
+    session.close().await.unwrap();
+    std::fs::remove_file(workspace.join("x")).unwrap();
+    let reopened = Session::open(&db).await.unwrap();
+    assert_eq!(reopened.handle().tool_records(step).await.unwrap(), before);
+    assert!(matches!(
+        reopened
+            .handle()
+            .resume(turn, models(&model))
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    reopened.close().await.unwrap();
+    drop(registry);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_file(db).unwrap();
+}
+
+#[tokio::test]
 async fn authoritative_negative_recovery_creates_distinct_attempt_without_repreparing() {
     let (s, path, turn) = setup(config()).await;
     let m = model();

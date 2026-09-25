@@ -27,6 +27,7 @@ use crate::{
     ApprovalState, EgressRealm, LiveToolAuthority, PreparedAction, SemanticCompatibilityId,
     ToolAttemptState, ToolAuthority, ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError,
     ToolConcurrency, ToolExecution, ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
+    workspace_registry::{RegistryError, WorkspaceRegistry},
 };
 
 /// Hard maximum for one configured file range before the smaller inline-result limit.
@@ -63,9 +64,11 @@ impl std::fmt::Debug for NativeReadBoundary {
 }
 
 impl NativeReadBoundary {
-    /// Pin the configured canonical root and freeze the built-in read binding.
-    /// Live authority starts denied; the host must explicitly set its current policy.
+    /// Authenticate a registry-owned frozen binding, then pin its root descriptor.
+    /// The host must still protect the namespace from concurrent renames; this is
+    /// not an OS confinement primitive. Live authority starts denied.
     pub fn new(
+        registry: &WorkspaceRegistry,
         workspace: WorkspaceBinding,
         max_read_bytes: usize,
     ) -> Result<Self, NativeReadError> {
@@ -78,13 +81,14 @@ impl NativeReadBoundary {
         {
             return Err(NativeReadError::InvalidWorkspace);
         }
+        registry.verify_current(&workspace)?;
         let executor = SemanticCompatibilityId::new(workspace.backend.clone())
             .map_err(|_| NativeReadError::InvalidWorkspace)?;
         let binding = native_read_binding().map_err(NativeReadError::InvalidBinding)?;
         let root = open_absolute_directory(&workspace.canonical_root)?;
         let root_identity = identity(&root)?;
-        // A caller-supplied identity is not independently verifiable here. Hosts must
-        // obtain bindings from WorkspaceRegistry and protect the namespace from rename.
+        registry.verify_current(&workspace)?;
+        // The namespace must remain protected from concurrent renames after pinning.
 
         Ok(Self {
             binding,
@@ -326,6 +330,8 @@ pub enum NativeReadError {
     InvalidReadLimit,
     #[error("failed to construct the native read binding: {0}")]
     InvalidBinding(#[source] crate::ConfigError),
+    #[error("workspace registry binding is not current: {0}")]
+    Registry(#[from] RegistryError),
     #[error("failed to open canonical workspace root: {0}")]
     Io(#[from] std::io::Error),
 }
@@ -409,6 +415,7 @@ fn content_budget(output_limit: usize, offset: u64) -> Option<usize> {
         String::new(),
         offset,
         u64::MAX,
+        false,
         crate::OutputCapture::CompleteInline,
     );
     let baseline_size = serde_json::to_vec(&baseline).ok()?.len();
@@ -451,10 +458,12 @@ fn read_result(
     content: String,
     offset: u64,
     bytes_read: u64,
+    has_more: bool,
     capture: crate::OutputCapture,
 ) -> ToolResult {
     ToolResult {
-        value: json!({"content": content, "offset": offset, "bytes_read": bytes_read}),
+        value: json!({"content": content, "offset": offset, "bytes_read": bytes_read,
+            "has_more": has_more}),
         is_error: false,
         capture,
     }
@@ -548,6 +557,12 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
             );
         }
     };
+    if file
+        .metadata()
+        .is_ok_and(|meta| job.arguments.offset > meta.len())
+    {
+        return settled_error("read offset exceeds file size", job.output_limit);
+    }
     if file.seek(SeekFrom::Start(job.arguments.offset)).is_err() {
         return settled_error("file range could not be read", job.output_limit);
     }
@@ -605,7 +620,13 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
     } else {
         crate::OutputCapture::CompleteInline
     };
-    let result = read_result(content, job.arguments.offset, bytes_read, capture);
+    let result = read_result(
+        content,
+        job.arguments.offset,
+        bytes_read,
+        truncated,
+        capture,
+    );
     if serde_json::to_vec(&result).map_or(true, |encoded| {
         encoded.len() > job.output_limit.min(crate::MAX_TOOL_RECORD_BYTES)
     }) {
@@ -735,17 +756,11 @@ mod tests {
         }
     }
 
-    fn workspace(root: &Path) -> WorkspaceBinding {
-        WorkspaceBinding {
-            id: "test-workspace".into(),
-            canonical_root: root.to_string_lossy().into_owned(),
-            backend: "local-v1".into(),
-            object_identity: "test-object".into(),
-        }
-    }
-
     fn boundary(root: &Path, max_read_bytes: usize) -> NativeReadBoundary {
-        let boundary = NativeReadBoundary::new(workspace(root), max_read_bytes).unwrap();
+        let registry_root = TestRoot::new();
+        let mut registry = WorkspaceRegistry::open(registry_root.path()).unwrap();
+        let workspace = registry.bind("test-workspace", root, "local-v1").unwrap();
+        let boundary = NativeReadBoundary::new(&registry, workspace, max_read_bytes).unwrap();
         boundary.set_live_authority(LiveToolAuthority::Allow);
         boundary
     }
@@ -813,6 +828,7 @@ mod tests {
         assert_eq!(exact.capture, crate::OutputCapture::CompleteInline);
         assert_eq!(exact.value["content"], "one\n");
         assert_eq!(exact.value["bytes_read"], 4);
+        assert_eq!(exact.value["has_more"], false);
 
         let truncated = result(
             read(
@@ -825,6 +841,11 @@ mod tests {
         assert!(!truncated.is_error);
         assert_eq!(truncated.capture, crate::OutputCapture::CompleteInline);
         assert_eq!(truncated.value["content"], "one");
+        assert_eq!(truncated.value["has_more"], true);
+        let beyond =
+            result(read(&boundary, json!({"path":"source.txt", "offset":999}), 4096).await);
+        assert!(beyond.is_error);
+        assert_eq!(beyond.value["error"], "read offset exceeds file size");
     }
 
     #[tokio::test]
@@ -890,6 +911,24 @@ mod tests {
                 .await,
             ToolAttemptState::NotStarted { .. }
         ));
+    }
+
+    #[test]
+    fn stale_registry_binding_cannot_adopt_a_replaced_root_at_construction() {
+        let root = TestRoot::new();
+        let registry_root = TestRoot::new();
+        let mut registry = WorkspaceRegistry::open(registry_root.path()).unwrap();
+        let binding = registry
+            .bind("test-workspace", root.path(), "local-v1")
+            .unwrap();
+        let moved = root.path().with_extension("prior");
+        fs::rename(root.path(), &moved).unwrap();
+        fs::create_dir(root.path()).unwrap();
+        assert!(matches!(
+            NativeReadBoundary::new(&registry, binding, 32),
+            Err(NativeReadError::Registry(RegistryError::BindingChanged))
+        ));
+        fs::remove_dir_all(moved).unwrap();
     }
 
     #[tokio::test]

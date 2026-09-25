@@ -229,6 +229,19 @@ impl WorkspaceRegistry {
         Ok(binding)
     }
 
+    /// Authenticate a frozen binding against the registry and its current physical
+    /// descriptor without admitting a mutation. This is a preflight, not a filesystem
+    /// sandbox or a guarantee against later same-user namespace changes.
+    pub fn verify_current(&self, binding: &WorkspaceBinding) -> Result<()> {
+        let record = checked_binding(&self.connection, binding)?;
+        let current = describe(Path::new(&binding.canonical_root))?;
+        if current != record.descriptor {
+            return Err(RegistryError::BindingChanged);
+        }
+        outside(&self.directory, &record.descriptor)?;
+        Ok(())
+    }
+
     pub fn revision(&self, binding: &WorkspaceBinding) -> Result<WorkspaceRevision> {
         let tx = self.connection.unchecked_transaction()?;
         let record = checked_binding(&tx, binding)?;
