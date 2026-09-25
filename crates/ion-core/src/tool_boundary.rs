@@ -1,6 +1,6 @@
 //! Deterministic tool preparation and the separate host execution boundary.
 
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, io::Write, sync::Arc};
 
 use ion_ai::BoxFuture;
 use serde_json::Value;
@@ -176,15 +176,34 @@ pub(crate) fn prepare_action(
 }
 
 pub(crate) fn bounded(value: &impl serde::Serialize) -> Result<(), ToolBoundaryError> {
-    // Values originate in already-bounded model responses or trusted host boundaries.
-    if serde_json::to_vec(value)
-        .map_err(|_| ToolBoundaryError::InvalidAction)?
-        .len()
-        > MAX_TOOL_RECORD_BYTES
-    {
-        return Err(ToolBoundaryError::Capacity);
+    // A backend may still return an oversized Value after an external effect.
+    // Never allocate a second unbounded encoded copy just to reject it.
+    struct Counted {
+        length: usize,
+        exceeded: bool,
     }
-    Ok(())
+    impl Write for Counted {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.length = self.length.saturating_add(bytes.len());
+            if self.length > MAX_TOOL_RECORD_BYTES {
+                self.exceeded = true;
+                return Err(std::io::Error::other("tool record capacity"));
+            }
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+    let mut counter = Counted {
+        length: 0,
+        exceeded: false,
+    };
+    match serde_json::to_writer(&mut counter, value) {
+        Ok(()) => Ok(()),
+        Err(_) if counter.exceeded => Err(ToolBoundaryError::Capacity),
+        Err(_) => Err(ToolBoundaryError::InvalidAction),
+    }
 }
 
 pub(crate) fn permits_retry(binding: &ToolBinding, attempts: &[ToolAttempt]) -> bool {
@@ -228,6 +247,15 @@ mod tests {
         ) -> BoxFuture<'a, ToolAttemptState> {
             panic!("preparation cannot execute")
         }
+    }
+
+    #[test]
+    fn serialization_refuses_large_backend_records_without_a_large_encoded_copy() {
+        assert_eq!(
+            bounded(&"x".repeat(MAX_TOOL_RECORD_BYTES * 4)),
+            Err(ToolBoundaryError::Capacity)
+        );
+        assert!(bounded(&serde_json::json!({"ok": true})).is_ok());
     }
 
     #[test]
