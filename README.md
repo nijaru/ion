@@ -79,8 +79,10 @@ scenarios are being restored against the replacement owners.
 Still missing: native read/edit/exec backends, a user-facing approval client and
 host authentication/policy backend, Session-integrated artifact publication and GC,
 parallel tool dispatch,
-context compaction/forking, real provider adapters, a runnable `ion`
-binary, the terminal UI, and workers. Oversized tool results park rather than fabricate
+context compaction/forking, atomic Submit/Steer/InteractionReply control placement,
+real provider adapters, a runnable `ion` binary, the terminal UI, and workers.
+Unimplemented Steer/InteractionReply inputs now reject at admission rather than
+acknowledge requests that will never be consumed. Oversized tool results park rather than fabricate
 truncated success; an immutable bounded BlobStore foundation exists but is not wired to
 Session settlement, publication evidence, artifact paging, or GC. It cannot yet back large
 native output. Its host-owned namespace must be outside agent-writable workspace state and

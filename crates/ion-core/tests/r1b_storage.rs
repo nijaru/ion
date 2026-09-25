@@ -140,6 +140,43 @@ async fn cleanup(session: Session, dir: PathBuf) {
 }
 
 #[tokio::test]
+async fn unimplemented_control_modes_are_rejected_without_a_durable_queue_entry() {
+    let (dir, path) = database("unsupported-controls");
+    let session = Session::create(&path, config("v1")).await.unwrap().session;
+    let handle = session.handle();
+    let conversation = session.primary_conversation();
+    let coverage = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap()
+        .coverage;
+    for mode in [InputMode::Steer, InputMode::InteractionReply] {
+        let mut request = input("unsupported", "do not accept");
+        request.mode = mode;
+        assert!(matches!(
+            handle.admit_input(conversation, request).await,
+            Err(SessionError::InvalidState(_))
+        ));
+    }
+    let mut wrong_body = input("unsupported", "do not accept");
+    wrong_body.body = InputBody::InteractionReply {
+        invocation: ion_core::InvocationId::new(1).unwrap(),
+        answer: serde_json::json!("yes"),
+    };
+    assert!(matches!(
+        handle.admit_input(conversation, wrong_body).await,
+        Err(SessionError::InvalidState(_))
+    ));
+    let snapshot = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    assert_eq!(snapshot.coverage, coverage);
+    assert!(snapshot.queued_inputs.is_empty());
+    cleanup(session, dir).await;
+}
+
+#[tokio::test]
 async fn same_request_key_and_payload_replays_original_admission() {
     let (dir, path) = database("replay");
     let created = Session::create(&path, config("v1")).await.expect("create");

@@ -1,4 +1,4 @@
-//! Typed semantic transactions and bounded reads for schema v2.
+//! Typed semantic transactions and bounded reads for the current Session schema.
 
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::Serialize;
@@ -13,9 +13,9 @@ use crate::session::{
 use crate::{
     Cancellation, CommitReceipt, CommitSeq, Conversation, ConversationConfig, ConversationId,
     Entry, EntryData, EntryId, EntryPage, HistoryParent, Input, InputBody, InputDisposition,
-    InputId, InstalledConfig, RequestKey, SessionChange, SessionId, SessionSnapshot, SessionUpdate,
-    SnapshotRequest, TranscriptMessage, Turn, TurnBudget, TurnEnvironment, TurnId, TurnOutcome,
-    TurnPhase,
+    InputId, InputMode, InstalledConfig, RequestKey, SessionChange, SessionId, SessionSnapshot,
+    SessionUpdate, SnapshotRequest, TranscriptMessage, Turn, TurnBudget, TurnEnvironment, TurnId,
+    TurnOutcome, TurnPhase,
 };
 
 pub(super) struct Sequence {
@@ -304,6 +304,14 @@ pub(super) fn admit_input(
     conversation_id: ConversationId,
     request: AdmitInputRequest,
 ) -> Result<Admission, StoreError> {
+    // Do not acknowledge controls that have no placement/consumption owner yet.
+    if matches!(request.mode, InputMode::Steer | InputMode::InteractionReply)
+        || !matches!(request.body, InputBody::Text(_))
+    {
+        return Err(StoreError::InvalidRequest(
+            "steering and targeted interaction replies are not implemented".into(),
+        ));
+    }
     let transaction = connection.transaction()?;
     let conversation = load_conversation(&transaction, conversation_id)?;
     if conversation.retired {
@@ -399,6 +407,11 @@ pub(super) fn start_turn(
             "input {} belongs to conversation {}, not {}",
             input.id, input.conversation, request.conversation
         )));
+    }
+    if !matches!(input.mode, InputMode::Submit | InputMode::FollowUp) {
+        return Err(StoreError::InvalidRequest(
+            "only submit or follow-up text can start a turn".into(),
+        ));
     }
     if !matches!(input.disposition, InputDisposition::Queued) {
         return Err(StoreError::InvalidState(format!(
