@@ -1,5 +1,6 @@
 //! Ion's durable coding-turn domain, Session storage and provider/tool boundaries.
 
+pub mod anthropic;
 mod artifact;
 mod blob;
 mod bounded_json;
@@ -63,8 +64,8 @@ pub use observation::{
     SessionUpdate, SessionWatch, SnapshotRequest, SnapshotWatch, WatchQueueLimits, WatchRequest,
 };
 pub use provider::{
-    ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity, ModelStart,
-    ProviderAdmission, ProviderAdmissionError, StartReconciliation,
+    ApiKeySource, ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity,
+    ModelStart, ProviderAdmission, ProviderAdmissionError, StartReconciliation,
 };
 pub use request::{
     AssembledRequest, RequestError, SEMANTIC_REQUEST_ASSEMBLY_REVISION, SemanticRequest, assemble,

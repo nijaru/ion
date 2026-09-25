@@ -11,26 +11,12 @@ use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AttemptId, ContentDigest, EgressRealm, ModelBoundary, ModelBoundaryIdentity, ModelStart,
-    SemanticRequest, TranscriptContent, TranscriptRole,
+    ApiKeySource, AttemptId, ContentDigest, EgressRealm, ModelBoundary, ModelBoundaryIdentity,
+    ModelStart, SemanticRequest, TranscriptContent, TranscriptRole,
 };
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
-
-/// Host-owned, live credential lookup. The returned secret is used only to build the
-/// Authorization header for the immediate request and is never included in fingerprints.
-pub trait ApiKeySource: Send + Sync {
-    fn api_key(&self) -> Option<String>;
-}
-impl<F> ApiKeySource for F
-where
-    F: Fn() -> Option<String> + Send + Sync,
-{
-    fn api_key(&self) -> Option<String> {
-        self()
-    }
-}
 
 pub struct OpenAiCompatible {
     identity: ModelBoundaryIdentity,

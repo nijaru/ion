@@ -18,6 +18,20 @@ use crate::{
     ProviderStartReceipt, SemanticCompatibilityId, SemanticRequest, StartReceiptCapability,
 };
 
+/// Host-owned, synchronous live credential lookup at actual provider I/O. Secrets
+/// belong only in authentication headers, never request fingerprints or diagnostics.
+pub trait ApiKeySource: Send + Sync {
+    fn api_key(&self) -> Option<String>;
+}
+impl<F> ApiKeySource for F
+where
+    F: Fn() -> Option<String> + Send + Sync,
+{
+    fn api_key(&self) -> Option<String> {
+        self()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ModelBoundaryIdentity {
     pub binding: ProviderBindingId,
