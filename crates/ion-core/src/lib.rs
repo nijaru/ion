@@ -1,8 +1,3 @@
-//! Ion's durable coding-turn domain.
-//!
-//! R1B adds the passive replacement Session owner, semantic SQLite transactions and
-//! bounded commit-addressed observation. Provider/tool drive remains a later R1B slice.
-
 mod blob;
 mod bounded_json;
 mod config;
@@ -28,6 +23,7 @@ mod turn;
 
 pub mod workspace_registry;
 
+pub use artifact::{ArtifactError, ArtifactPublisher, ArtifactRead};
 pub use blob::{BlobQuota, BlobRef, BlobStore, BlobStoreError, BlobStoreLimits, BlobStoreUsage};
 pub use config::{
     AuthorityCeiling, ConfigError, ContextPolicy, ControlCeiling, ConversationConfig, EgressRealm,
@@ -87,3 +83,10 @@ pub use tool_exec::{
 };
 pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
 pub use turn::{Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase};
+
+//! Ion's durable coding-turn domain.
+//!
+//! R1B adds the passive replacement Session owner, semantic SQLite transactions and
+//! bounded commit-addressed observation. Provider/tool drive remains a later R1B slice.
+
+mod artifact;

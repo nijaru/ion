@@ -109,6 +109,8 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
 pub(super) fn mutate(
     connection: &mut Connection,
     operation: ToolMutation,
+    artifacts: &std::sync::Arc<crate::artifact::SessionArtifacts>,
+    publication: Option<&crate::artifact::PublishedBlob>,
 ) -> Result<ToolMutationResult, StoreError> {
     let tx = connection.transaction()?;
     let mut seq = Sequence::load(&tx)?;
@@ -515,6 +517,7 @@ pub(super) fn mutate(
             step,
             attempt,
             state,
+            publication: _,
         } => {
             let state = *state;
             crate::tool_boundary::bounded(&state).map_err(|e| invalid(&e.to_string()))?;
@@ -530,6 +533,16 @@ pub(super) fn mutate(
             if let ToolAttemptState::Settled { result, .. } = &state {
                 let turn = load_turn(&tx, load_step(&tx, step)?.turn)?;
                 validate_result(result, &turn)?;
+                if let OutputCapture::CompleteArtifact { full_output } = &result.capture {
+                    if !publication
+                        .is_some_and(|proof| proof.matches(artifacts, attempt, full_output))
+                    {
+                        return Err(invalid(
+                            "artifact requires exact Session/attempt publication evidence",
+                        ));
+                    }
+                    super::artifacts::link(&tx, attempt, full_output)?;
+                }
             }
             prior.state = state;
             crate::tool_boundary::bounded(&prior)
@@ -766,12 +779,6 @@ fn result_entry(
     })
 }
 fn validate_result(result: &ToolResult, turn: &Turn) -> Result<(), StoreError> {
-    // Artifact-bearing results still require Session-bound publication evidence.
-    if matches!(&result.capture, OutputCapture::CompleteArtifact { .. }) {
-        return Err(StoreError::InvalidRequest(
-            "artifact publication is not yet wired".into(),
-        ));
-    }
     let limit = (turn.environment.limits.max_tool_preview_bytes as usize)
         .min(crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2);
     if let OutputCapture::Incomplete {

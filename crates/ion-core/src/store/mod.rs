@@ -1,5 +1,3 @@
-//! Dedicated SQLite database-thread ownership for one Session.
-
 mod sqlite;
 
 use std::path::{Path, PathBuf};
@@ -58,6 +56,7 @@ pub(crate) enum ToolMutation {
         step: StepId,
         attempt: crate::AttemptId,
         state: Box<crate::ToolAttemptState>,
+        publication: Option<PublishedBlob>,
     },
     Stage {
         step: StepId,
@@ -131,6 +130,7 @@ pub(crate) struct FinishedTurn {
 #[derive(Clone)]
 pub(crate) struct SessionStore {
     tx: mpsc::Sender<Command>,
+    artifacts: Weak<SessionArtifacts>,
 }
 
 impl std::fmt::Debug for SessionStore {
@@ -147,6 +147,7 @@ impl SessionStore {
         session_id: SessionId,
         config: ConversationConfig,
         observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
     ) -> Result<(Self, StoreMetadata, CommitReceipt), StoreError> {
         let path = path.to_path_buf();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
@@ -156,10 +157,14 @@ impl SessionStore {
             .name(format!("ion-db-{session_id}"))
             .spawn(move || {
                 let startup =
-                    sqlite::SqliteDatabase::create(&path, session_id, config, observations);
+                    sqlite::SqliteDatabase::create(&path, session_id, config, observations, limits);
                 match startup {
                     Ok((database, metadata, receipt)) => {
-                        let _ = startup_tx.send(Ok((metadata, receipt)));
+                        let _ = startup_tx.send(Ok((
+                            metadata,
+                            receipt,
+                            Arc::downgrade(&database.artifacts),
+                        )));
                         run(database, rx);
                     }
                     Err(error) => {
@@ -169,13 +174,14 @@ impl SessionStore {
             })
             .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
 
-        let (metadata, receipt) = startup_rx.await.map_err(|_| StoreError::Closed)??;
-        Ok((Self { tx }, metadata, receipt))
+        let (metadata, receipt, artifacts) = startup_rx.await.map_err(|_| StoreError::Closed)??;
+        Ok((Self { tx, artifacts }, metadata, receipt))
     }
 
     pub(crate) async fn open(
         path: &Path,
         observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
     ) -> Result<(Self, StoreMetadata), StoreError> {
         let path = path.to_path_buf();
         let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
@@ -184,10 +190,11 @@ impl SessionStore {
         std::thread::Builder::new()
             .name("ion-db-open".to_owned())
             .spawn(move || {
-                let startup = sqlite::SqliteDatabase::open(&path, observations);
+                let startup = sqlite::SqliteDatabase::open(&path, observations, limits);
                 match startup {
                     Ok((database, metadata)) => {
-                        let _ = startup_tx.send(Ok(metadata));
+                        let _ =
+                            startup_tx.send(Ok((metadata, Arc::downgrade(&database.artifacts))));
                         run(database, rx);
                     }
                     Err(error) => {
@@ -197,8 +204,8 @@ impl SessionStore {
             })
             .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
 
-        let metadata = startup_rx.await.map_err(|_| StoreError::Closed)??;
-        Ok((Self { tx }, metadata))
+        let (metadata, artifacts) = startup_rx.await.map_err(|_| StoreError::Closed)??;
+        Ok((Self { tx, artifacts }, metadata))
     }
 
     pub(crate) async fn create_conversation(
@@ -401,6 +408,9 @@ impl SessionStore {
     }
 
     pub(crate) async fn shutdown(&self) -> Result<(), StoreError> {
+        // Drain already-admitted artifact workers before releasing Session ownership.
+        // Waiters hold only the gate, not a namespace/ownership lease.
+        let _guard = self.artifact_gate()?.write_owned().await;
         let (reply, receive) = oneshot::channel();
         self.tx
             .send(Command::Shutdown { reply: Some(reply) })
@@ -422,6 +432,49 @@ impl SessionStore {
             .await
     }
 
+    pub(crate) async fn publication_scope(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<PublicationScope, StoreError> {
+        let guard = self.artifact_gate()?.read_owned().await;
+        let artifacts = self.artifacts.upgrade().ok_or(StoreError::Closed)?;
+        Ok(artifacts.scope(attempt, guard))
+    }
+
+    pub(crate) async fn read_artifact(
+        &self,
+        attempt: crate::AttemptId,
+        offset: u64,
+        max_length: usize,
+    ) -> Result<crate::ArtifactRead, StoreError> {
+        let guard = self.artifact_gate()?.read_owned().await;
+        let artifacts = self.artifacts.upgrade().ok_or(StoreError::Closed)?;
+        let reference = self
+            .call(|reply| Command::ArtifactReference { attempt, reply })
+            .await?;
+        // Verification hashes the whole bounded object, away from the database
+        // thread. The worker retains ownership/gating if its caller is dropped.
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            artifacts.read(reference, offset, max_length)
+        })
+        .await
+        .map_err(|error| StoreError::Io(format!("artifact read task failed: {error}")))?
+    }
+
+    pub(crate) async fn collect_artifacts(&self) -> Result<crate::BlobStoreUsage, StoreError> {
+        let guard = self.artifact_gate()?.write_owned().await;
+        self.call(|reply| Command::CollectArtifacts { guard, reply })
+            .await
+    }
+
+    fn artifact_gate(&self) -> Result<Arc<tokio::sync::RwLock<()>>, StoreError> {
+        self.artifacts
+            .upgrade()
+            .map(|owner| Arc::clone(&owner.gate))
+            .ok_or(StoreError::Closed)
+    }
+
     async fn call<T>(
         &self,
         build: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> Command,
@@ -436,6 +489,19 @@ impl SessionStore {
 }
 
 enum Command {
+    #[cfg(test)]
+    Pause {
+        reached: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    },
+    ArtifactReference {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<crate::BlobRef, StoreError>>,
+    },
+    CollectArtifacts {
+        guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+        reply: oneshot::Sender<Result<crate::BlobStoreUsage, StoreError>>,
+    },
     ToolRecords {
         step: StepId,
         reply: oneshot::Sender<Result<ToolRecords, StoreError>>,
@@ -542,6 +608,19 @@ enum Command {
 fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
     while let Some(command) = rx.blocking_recv() {
         match command {
+            #[cfg(test)]
+            Command::Pause { reached, release } => {
+                let _ = reached.send(());
+                let _ = release.recv();
+            }
+            Command::ArtifactReference { attempt, reply } => {
+                let _ = reply.send(database.artifact_reference(attempt));
+            }
+            Command::CollectArtifacts { guard, reply } => {
+                let result = database.collect_artifacts();
+                drop(guard);
+                let _ = reply.send(result);
+            }
             Command::ToolRecords { step, reply } => {
                 let _ = reply.send(database.tool_records(step));
             }
@@ -718,6 +797,8 @@ pub(crate) enum StoreError {
     Sqlite(String),
     #[error("filesystem failure: {0}")]
     Io(String),
+    #[error(transparent)]
+    Blob(#[from] crate::BlobStoreError),
 }
 
 impl StoreError {
@@ -749,3 +830,5 @@ impl From<rusqlite::Error> for StoreError {
         Self::Sqlite(error.to_string())
     }
 }
+
+mod artifact_tests;

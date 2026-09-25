@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::super::StoreError;
 use crate::SessionId;
 
-pub(crate) const SCHEMA_VERSION: i64 = 5;
+pub(crate) const SCHEMA_VERSION: i64 = 6;
 
 const DDL: &str = r#"
 CREATE TABLE session_meta (
@@ -136,13 +136,15 @@ CREATE TABLE tool_attempts (
 );
 CREATE INDEX tool_attempts_by_invocation ON tool_attempts (invocation_id, ordinal);
 
-CREATE TABLE blobs (
-    digest            TEXT PRIMARY KEY,
-    length            INTEGER NOT NULL CHECK (length >= 0),
-    media_type        TEXT,
-    encoding          TEXT,
-    semantic_required INTEGER NOT NULL CHECK (semantic_required IN (0, 1))
+-- Complete tool output is auxiliary, owned forever by its immutable attempt.
+-- Every retained transcript/staged copy derives from this link. Future blob-bearing
+-- owners must join reachability before adding new durable reference fields.
+CREATE TABLE tool_artifacts (
+    attempt_id INTEGER PRIMARY KEY REFERENCES tool_attempts(id),
+    digest     TEXT NOT NULL,
+    reference  TEXT NOT NULL CHECK (length(reference) <= 4096)
 );
+CREATE INDEX tool_artifacts_by_digest ON tool_artifacts (digest);
 "#;
 
 pub(super) fn initialize(connection: &Connection, session_id: SessionId) -> Result<(), StoreError> {
@@ -191,6 +193,11 @@ pub(super) fn verify(connection: &Connection) -> Result<(), StoreError> {
             "data",
             "projection",
         ],
+    )?;
+    verify_columns(
+        connection,
+        "tool_artifacts",
+        &["attempt_id", "digest", "reference"],
     )?;
     verify_columns(
         connection,

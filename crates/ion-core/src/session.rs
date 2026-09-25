@@ -191,11 +191,27 @@ impl Session {
         path: impl AsRef<Path>,
         config: ConversationConfig,
     ) -> Result<CreatedSession, SessionError> {
+        Self::create_with_blob_limits(path, config, crate::BlobStoreLimits::default()).await
+    }
+
+    /// The database and its adjacent `.blobs-<SessionId>` namespace must be kept
+    /// outside agent-writable workspace state. Limits govern auxiliary output only.
+    pub async fn create_with_blob_limits(
+        path: impl AsRef<Path>,
+        config: ConversationConfig,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<CreatedSession, SessionError> {
         config.validate()?;
         let observations = ObservationHub::new();
         let session_id = SessionId::new();
-        let (store, metadata, receipt) =
-            SessionStore::create(path.as_ref(), session_id, config, observations.clone()).await?;
+        let (store, metadata, receipt) = SessionStore::create(
+            path.as_ref(),
+            session_id,
+            config,
+            observations.clone(),
+            limits,
+        )
+        .await?;
         let session = Self {
             inner: Arc::new(SessionInner {
                 session_id: metadata.session_id,
@@ -215,8 +231,17 @@ impl Session {
     }
 
     pub async fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
+        Self::open_with_blob_limits(path, crate::BlobStoreLimits::default()).await
+    }
+
+    /// Passive: does not create, hash, clean, or repair the auxiliary blob namespace.
+    pub async fn open_with_blob_limits(
+        path: impl AsRef<Path>,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<Self, SessionError> {
         let observations = ObservationHub::new();
-        let (store, metadata) = SessionStore::open(path.as_ref(), observations.clone()).await?;
+        let (store, metadata) =
+            SessionStore::open(path.as_ref(), observations.clone(), limits).await?;
         Ok(Self {
             inner: Arc::new(SessionInner {
                 session_id: metadata.session_id,
@@ -422,6 +447,30 @@ impl SessionHandle {
     ) -> Result<crate::ToolRecords, SessionError> {
         self.ensure_readable()?;
         self.observe(self.inner.store.tool_records(step).await)
+    }
+
+    /// Read only a committed physical attempt's complete output, never an arbitrary
+    /// caller-created BlobRef. The full object is verified before a bounded page returns.
+    pub async fn read_artifact(
+        &self,
+        attempt: crate::AttemptId,
+        offset: u64,
+        max_length: usize,
+    ) -> Result<crate::ArtifactRead, SessionError> {
+        self.ensure_readable()?;
+        self.observe(
+            self.inner
+                .store
+                .read_artifact(attempt, offset, max_length)
+                .await,
+        )
+    }
+
+    /// Explicit Session-local GC. Waits for publication THROUGH queued evidence commit,
+    /// including commands whose waiters were dropped. Returns reclaimed logical usage.
+    pub async fn collect_artifacts(&self) -> Result<crate::BlobStoreUsage, SessionError> {
+        self.ensure_mutable()?;
+        self.observe(self.inner.store.collect_artifacts().await)
     }
 
     /// Recover execution evidence even after exchange/Turn settlement. Never starts work.

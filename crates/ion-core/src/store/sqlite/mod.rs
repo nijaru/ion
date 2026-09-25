@@ -1,5 +1,3 @@
-//! SQLite connection owner for the replacement Session runtime.
-
 mod connection;
 mod model_state;
 mod ownership;
@@ -7,7 +5,6 @@ pub(crate) mod schema;
 mod semantic;
 mod tool_state;
 
-use std::path::Path;
 
 use rusqlite::Connection;
 
@@ -28,7 +25,7 @@ use crate::{
 
 pub(crate) struct SqliteDatabase {
     connection: Connection,
-    _ownership: ownership::Ownership,
+    pub(crate) artifacts: Arc<SessionArtifacts>,
     observations: ObservationHub,
     fenced: bool,
 }
@@ -40,9 +37,18 @@ impl SqliteDatabase {
 
     pub(crate) fn tool_mutate(
         &mut self,
-        operation: super::ToolMutation,
+        mut operation: super::ToolMutation,
     ) -> Result<super::ToolMutationResult, StoreError> {
-        let result = self.mutate(|connection| tool_state::mutate(connection, operation))?;
+        // Retain proof and its GC gate outside the transaction closure through
+        // commit/rollback, even if the queued command's waiter was dropped.
+        let publication = match &mut operation {
+            super::ToolMutation::Evidence { publication, .. } => publication.take(),
+            _ => None,
+        };
+        let artifacts = Arc::clone(&self.artifacts);
+        let result = self.mutate(|connection| {
+            tool_state::mutate(connection, operation, &artifacts, publication.as_ref())
+        })?;
         if let Some(receipt) = &result.receipt {
             self.observations.publish(receipt.clone());
         }
@@ -53,6 +59,7 @@ impl SqliteDatabase {
         session_id: SessionId,
         config: ConversationConfig,
         observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
     ) -> Result<(Self, StoreMetadata, CommitReceipt), StoreError> {
         if path.exists() {
             return Err(StoreError::AlreadyExists(path.to_path_buf()));
@@ -65,7 +72,7 @@ impl SqliteDatabase {
         Ok((
             Self {
                 connection,
-                _ownership: ownership,
+                artifacts: SessionArtifacts::new(path, session_id, limits, ownership)?,
                 observations,
                 fenced: false,
             },
@@ -77,6 +84,7 @@ impl SqliteDatabase {
     pub(crate) fn open(
         path: &Path,
         observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
     ) -> Result<(Self, StoreMetadata), StoreError> {
         if !path.exists() {
             return Err(StoreError::Unknown(path.to_path_buf()));
@@ -88,7 +96,7 @@ impl SqliteDatabase {
         Ok((
             Self {
                 connection,
-                _ownership: ownership,
+                artifacts: SessionArtifacts::new(path, metadata.session_id, limits, ownership)?,
                 observations,
                 fenced: false,
             },
@@ -308,3 +316,7 @@ impl SqliteDatabase {
         }
     }
 }
+
+//! SQLite connection owner for the replacement Session runtime.
+
+mod artifacts;

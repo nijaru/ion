@@ -62,6 +62,18 @@ pub struct BlobStoreLimits {
     pub max_object_count: u64,
 }
 
+impl Default for BlobStoreLimits {
+    fn default() -> Self {
+        Self::new(
+            64 * 1024 * 1024,
+            1024 * 1024 * 1024,
+            64 * 1024 * 1024,
+            64 * 1024,
+            100_000,
+        )
+    }
+}
+
 impl BlobStoreLimits {
     #[must_use]
     pub const fn new(
@@ -339,6 +351,45 @@ impl BlobStore {
         })
     }
 
+    /// Only the Session owner calls this, under its exclusive publication/GC gate.
+    /// Reachability is queried from committed indexed links, without hydrating history.
+    pub(crate) fn collect_garbage<E: From<BlobStoreError>>(
+        &self,
+        mut reachable: impl FnMut(&str) -> Result<bool, E>,
+    ) -> Result<BlobStoreUsage, E> {
+        let _publish = self
+            .publish_lock
+            .lock()
+            .map_err(|_| BlobStoreError::StatePoisoned)?;
+        let mut state = self
+            .state
+            .lock()
+            .map_err(|_| BlobStoreError::StatePoisoned)?;
+        let mut removed = BlobStoreUsage {
+            content_bytes: 0,
+            object_count: 0,
+        };
+        // Bounded by the namespace object-count limit; do not scan all Session history.
+        let names: Vec<_> = state.objects.keys().cloned().collect();
+        for name in names {
+            if reachable(&name)? {
+                continue;
+            }
+            match fs::remove_file(self.objects_dir.join(&name)) {
+                Ok(()) => {}
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Err(source) => return Err(io_error("remove unreferenced blob", source).into()),
+            }
+            let length = state.objects.remove(&name).expect("scanned object");
+            state.content_bytes -= length;
+            removed.content_bytes += length;
+            removed.object_count += 1;
+            sync_directory(&self.objects_dir, "sync blob collection")?;
+        }
+        clean_staging(&self.staging_dir)?;
+        Ok(removed)
+    }
+
     fn publish_inner<R: Read>(
         &self,
         source: &mut R,
@@ -501,10 +552,11 @@ impl BlobStore {
     fn ensure_object_capacity(&self, state: &StoreState) -> Result<(), BlobStoreError> {
         let count =
             u64::try_from(state.objects.len()).map_err(|_| BlobStoreError::LengthOverflow)?;
-        if count >= self.limits.max_object_count {
+        let limit = self.limits.max_object_count.min(MAX_SCAN_ENTRIES as u64);
+        if count >= limit {
             return Err(BlobStoreError::QuotaExceeded {
                 quota: BlobQuota::ObjectCount,
-                limit: self.limits.max_object_count,
+                limit,
             });
         }
         Ok(())
@@ -610,6 +662,15 @@ fn acquire_owner(root: &Path) -> Result<File, BlobStoreError> {
         Err(TryLockError::WouldBlock) => Err(BlobStoreError::InUse(root.to_path_buf())),
         Err(TryLockError::Error(source)) => Err(io_error("lock blob namespace", source)),
     }
+}
+
+pub(crate) fn ensure_session_namespace(path: &Path) -> Result<(), BlobStoreError> {
+    let parent = path
+        .parent()
+        .ok_or_else(|| BlobStoreError::InvalidNamespace(path.to_path_buf()))?;
+    ensure_child_directory(parent, path)?;
+    // Retry the parent sync even after a previous creation/sync failure.
+    sync_directory(parent, "sync blob namespace creation")
 }
 
 fn ensure_child_directory(root: &Path, child: &Path) -> Result<(), BlobStoreError> {

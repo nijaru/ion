@@ -32,6 +32,8 @@ pub struct ToolExecution {
     /// Exact persisted decision, not an exemption from the backend's live recheck.
     pub approval: ApprovalState,
     pub output_limit: usize,
+    /// Attempt-scoped publication capability, revoked when this backend call returns.
+    pub artifacts: crate::ArtifactPublisher,
 }
 
 /// Current host policy. `Ask` requires an exact durable approval before intent;
@@ -362,6 +364,7 @@ mod tests {
             },
             approval: ApprovalState::NotRequired,
             output_limit: 1024,
+            artifacts: crate::ArtifactPublisher::closed(),
         };
         let new = NoRecovery.reconcile(execution, attempt).await;
         assert!(

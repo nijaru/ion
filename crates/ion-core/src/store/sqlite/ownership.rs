@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use super::super::StoreError;
 
 #[derive(Debug)]
-pub(super) struct Ownership {
+pub(crate) struct Ownership {
     _file: File,
 }
 

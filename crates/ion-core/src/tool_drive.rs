@@ -20,7 +20,11 @@ pub(crate) fn now_unix_ms() -> Result<i64, StoreError> {
 
 // Backend output limits are a host contract, but a bad backend must not erase
 // known terminal effect truth merely because its result cannot fit the Session.
-fn bounded_effect(state: ToolAttemptState, preview_cap: u32) -> ToolAttemptState {
+fn bounded_effect(
+    state: ToolAttemptState,
+    preview_cap: u32,
+    publication: Option<&crate::artifact::PublishedBlob>,
+) -> ToolAttemptState {
     let ToolAttemptState::Settled {
         result,
         effect,
@@ -33,7 +37,9 @@ fn bounded_effect(state: ToolAttemptState, preview_cap: u32) -> ToolAttemptState
     let limit = (preview_cap as usize).min(MAX_TOOL_RECORD_BYTES / 2);
     let capture_valid = match &result.capture {
         OutputCapture::CompleteInline => true,
-        OutputCapture::CompleteArtifact { .. } => false, // no publication authority yet
+        OutputCapture::CompleteArtifact { full_output } => {
+            publication.is_some_and(|proof| proof.reference() == full_output)
+        }
         OutputCapture::Incomplete {
             retained_bytes,
             observed_bytes,
@@ -73,6 +79,30 @@ fn bounded_effect(state: ToolAttemptState, preview_cap: u32) -> ToolAttemptState
         receipt,
         retryable: false,
     }
+}
+
+async fn record_evidence(
+    inner: &SessionInner,
+    step: StepId,
+    attempt: AttemptId,
+    state: ToolAttemptState,
+    preview_cap: u32,
+    scope: crate::artifact::PublicationScope,
+) -> Result<(), StoreError> {
+    let publication = scope.finish().await;
+    let state = bounded_effect(state, preview_cap, publication.as_ref());
+    inner.observe_store(
+        inner
+            .store()
+            .tool_mutate(ToolMutation::Evidence {
+                step,
+                attempt,
+                state: Box::new(state),
+                publication,
+            })
+            .await,
+    )?;
+    Ok(())
 }
 
 pub(crate) fn compatible(basis: &DriveBasis, tools: &ToolBoundaries) -> bool {
@@ -150,6 +180,7 @@ fn execution(
     turn: &Turn,
     call: &ToolInvocation,
     attempt: &ToolAttempt,
+    scope: &crate::artifact::PublicationScope,
 ) -> ToolExecution {
     ToolExecution {
         session: inner.session_id(),
@@ -171,6 +202,7 @@ fn execution(
         approval: call.approval.clone(),
         output_limit: (turn.environment.limits.max_tool_preview_bytes as usize)
             .min(MAX_TOOL_RECORD_BYTES),
+        artifacts: scope.publisher(),
     }
 }
 
@@ -200,30 +232,27 @@ pub(crate) async fn reconcile(
         let boundary = tools
             .resolve(binding, &records.turn.environment.workspace)
             .map_err(|_| StoreError::ToolsPending)?;
-        let state = bounded_effect(
-            boundary
-                .reconcile(
-                    execution(inner, &records.turn, call, attempt),
-                    attempt.clone(),
-                )
-                .await,
-            records.turn.environment.limits.max_tool_preview_bytes,
-        );
+        let scope = inner.store().publication_scope(attempt.id).await?;
+        let state = boundary
+            .reconcile(
+                execution(inner, &records.turn, call, attempt, &scope),
+                attempt.clone(),
+            )
+            .await;
         if matches!(state, ToolAttemptState::NotStarted { .. })
             && binding.start_receipts != StartReceiptCapability::Authoritative
         {
             continue;
         }
-        inner.observe_store(
-            inner
-                .store()
-                .tool_mutate(ToolMutation::Evidence {
-                    step,
-                    attempt: attempt.id,
-                    state: Box::new(state),
-                })
-                .await,
-        )?;
+        record_evidence(
+            inner,
+            step,
+            attempt.id,
+            state,
+            records.turn.environment.limits.max_tool_preview_bytes,
+            scope,
+        )
+        .await?;
     }
     Ok(())
 }
@@ -307,15 +336,13 @@ pub(crate) async fn drive(
                     let Some(boundary) = boundary else {
                         return Ok(Some(ParkReason::ToolUnavailable));
                     };
-                    let state = bounded_effect(
-                        boundary
-                            .reconcile(
-                                execution(inner, &basis.turn, call, attempt),
-                                attempt.clone(),
-                            )
-                            .await,
-                        basis.turn.environment.limits.max_tool_preview_bytes,
-                    );
+                    let scope = inner.store().publication_scope(attempt.id).await?;
+                    let state = boundary
+                        .reconcile(
+                            execution(inner, &basis.turn, call, attempt, &scope),
+                            attempt.clone(),
+                        )
+                        .await;
                     let state = if matches!(state, ToolAttemptState::NotStarted { .. })
                         && binding.start_receipts != StartReceiptCapability::Authoritative
                     {
@@ -337,16 +364,15 @@ pub(crate) async fn drive(
                         ToolAttemptState::IntentCommitted { .. }
                             | ToolAttemptState::Indeterminate { .. }
                     );
-                    inner.observe_store(
-                        inner
-                            .store()
-                            .tool_mutate(ToolMutation::Evidence {
-                                step,
-                                attempt: attempt.id,
-                                state: Box::new(state),
-                            })
-                            .await,
-                    )?;
+                    record_evidence(
+                        inner,
+                        step,
+                        attempt.id,
+                        state,
+                        basis.turn.environment.limits.max_tool_preview_bytes,
+                        scope,
+                    )
+                    .await?;
                     if unresolved {
                         return Ok(Some(ParkReason::RecoveryRequired));
                     }
@@ -438,31 +464,34 @@ pub(crate) async fn drive(
         let attempt = created
             .attempt
             .ok_or_else(|| StoreError::Corrupt("intent missing attempt".into()))?;
+        let scope = inner.store().publication_scope(attempt.id).await?;
         let gate = inner.effect_gate(basis.turn.id);
         let permit = gate.admit();
         let state = if let Some(permit) = permit {
             // The backend rechecks live policy and claims, and joins before returning.
             // Keep this permit through that join; cancellation never drops the future.
             let state = boundary
-                .execute(execution(inner, &basis.turn, call, &attempt), permit.stop())
+                .execute(
+                    execution(inner, &basis.turn, call, &attempt, &scope),
+                    permit.stop(),
+                )
                 .await;
             drop(permit);
-            bounded_effect(state, basis.turn.environment.limits.max_tool_preview_bytes)
+            state
         } else {
             ToolAttemptState::NotStarted {
                 reason: "effect gate closed before admission".into(),
             }
         };
-        inner.observe_store(
-            inner
-                .store()
-                .tool_mutate(ToolMutation::Evidence {
-                    step,
-                    attempt: attempt.id,
-                    state: Box::new(state),
-                })
-                .await,
-        )?;
+        record_evidence(
+            inner,
+            step,
+            attempt.id,
+            state,
+            basis.turn.environment.limits.max_tool_preview_bytes,
+            scope,
+        )
+        .await?;
         return Ok(None);
     }
     if !basis.turn.cancellation.requested {
