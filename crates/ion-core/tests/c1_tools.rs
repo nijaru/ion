@@ -110,6 +110,7 @@ impl ModelBoundary for Model {
             binding: ProviderBindingId::new("script").unwrap(),
             adapter: id("v1"),
             request_encoding: id("v1"),
+            egress: EgressRealm::Local,
         }
     }
     fn fingerprint(&self, r: &SemanticRequest, k: &str) -> Result<ContentDigest, ProviderError> {
@@ -339,7 +340,11 @@ impl ToolBoundary for AlternateTool {
     }
 }
 fn models(m: &Arc<Model>) -> ModelBoundaries {
-    ModelBoundaries::new([Arc::clone(m) as Arc<dyn ModelBoundary>]).unwrap()
+    ModelBoundaries::new(
+        [Arc::clone(m) as Arc<dyn ModelBoundary>],
+        Arc::new(|_: &ProviderBinding| Ok(())),
+    )
+    .unwrap()
 }
 fn tools(t: &Arc<Tool>) -> ToolBoundaries {
     ToolBoundaries::new([Arc::clone(t) as Arc<dyn ToolBoundary>]).unwrap()

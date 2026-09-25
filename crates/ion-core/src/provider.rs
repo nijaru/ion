@@ -14,8 +14,8 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AttemptId, ContentDigest, ProviderBinding, ProviderBindingId, ProviderStartReceipt,
-    SemanticCompatibilityId, SemanticRequest, StartReceiptCapability,
+    AttemptId, ContentDigest, EgressRealm, ProviderBinding, ProviderBindingId,
+    ProviderStartReceipt, SemanticCompatibilityId, SemanticRequest, StartReceiptCapability,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -23,6 +23,36 @@ pub struct ModelBoundaryIdentity {
     pub binding: ProviderBindingId,
     pub adapter: SemanticCompatibilityId,
     pub request_encoding: SemanticCompatibilityId,
+    /// Semantic service/data-egress realm, not a refreshable transport endpoint.
+    pub egress: EgressRealm,
+}
+
+/// Live host authorization, independent of adapter compatibility and request encoding.
+/// Checks must be bounded, synchronous and free of network effects: resolve local
+/// credential availability/capacity and current egress policy for the exact binding.
+/// No credentials or arbitrary diagnostic strings cross this interface into storage.
+/// This is a preflight, not a capacity reservation or a network confinement primitive.
+pub trait ProviderAdmission: Send + Sync {
+    fn check(&self, binding: &ProviderBinding) -> Result<(), ProviderAdmissionError>;
+}
+
+impl<F> ProviderAdmission for F
+where
+    F: Fn(&ProviderBinding) -> Result<(), ProviderAdmissionError> + Send + Sync,
+{
+    fn check(&self, binding: &ProviderBinding) -> Result<(), ProviderAdmissionError> {
+        self(binding)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ProviderAdmissionError {
+    #[error("provider credentials are unavailable")]
+    MissingCredentials,
+    #[error("provider is currently unavailable")]
+    Unavailable,
+    #[error("provider service realm is denied by live host policy")]
+    EgressDenied,
 }
 
 pub enum ModelStart {
@@ -48,6 +78,8 @@ pub enum StartReconciliation {
 }
 
 pub trait ModelBoundary: Send + Sync {
+    /// Immutable semantic identity for this boundary's lifetime. Transport/auth
+    /// refresh must never switch the declared service realm.
     fn identity(&self) -> ModelBoundaryIdentity;
 
     /// Hash the exact provider-specific canonical request representation produced by
@@ -61,6 +93,9 @@ pub trait ModelBoundary: Send + Sync {
     ) -> Result<ContentDigest, ProviderError>;
 
     /// Cross the provider start boundary for one already-durable AttemptId.
+    /// Core rechecks host admission immediately before calling this method. The
+    /// adapter must stay inside its declared realm and enforce credential/transport
+    /// validity at actual I/O; a preflight cannot revoke an already-started effect.
     fn start<'a>(
         &'a self,
         attempt: AttemptId,
@@ -89,9 +124,19 @@ pub trait ModelBoundary: Send + Sync {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct ModelBoundaries {
     inner: Arc<BTreeMap<ProviderBindingId, Arc<dyn ModelBoundary>>>,
+    admission: Arc<dyn ProviderAdmission>,
+}
+
+impl Default for ModelBoundaries {
+    fn default() -> Self {
+        Self {
+            inner: Arc::new(BTreeMap::new()),
+            admission: Arc::new(|_: &ProviderBinding| Err(ProviderAdmissionError::Unavailable)),
+        }
+    }
 }
 
 impl fmt::Debug for ModelBoundaries {
@@ -106,6 +151,7 @@ impl fmt::Debug for ModelBoundaries {
 impl ModelBoundaries {
     pub fn new(
         boundaries: impl IntoIterator<Item = Arc<dyn ModelBoundary>>,
+        admission: Arc<dyn ProviderAdmission>,
     ) -> Result<Self, ModelBoundaryError> {
         let mut inner = BTreeMap::new();
         for boundary in boundaries {
@@ -118,7 +164,15 @@ impl ModelBoundaries {
         }
         Ok(Self {
             inner: Arc::new(inner),
+            admission,
         })
+    }
+
+    pub(crate) fn preflight(
+        &self,
+        binding: &ProviderBinding,
+    ) -> Result<(), ProviderAdmissionError> {
+        self.admission.check(binding)
     }
 
     #[must_use]
@@ -134,6 +188,18 @@ impl ModelBoundaries {
             .get(&binding.id)
             .ok_or_else(|| ModelBoundaryError::Missing(binding.id.as_str().to_owned()))?;
         let identity = boundary.identity();
+        if identity.binding != binding.id {
+            return Err(ModelBoundaryError::Incompatible {
+                binding: binding.id.as_str().to_owned(),
+                fact: "binding identity",
+            });
+        }
+        if identity.egress != binding.egress {
+            return Err(ModelBoundaryError::Incompatible {
+                binding: binding.id.as_str().to_owned(),
+                fact: "service realm",
+            });
+        }
         if identity.adapter != binding.adapter {
             return Err(ModelBoundaryError::Incompatible {
                 binding: binding.id.as_str().to_owned(),

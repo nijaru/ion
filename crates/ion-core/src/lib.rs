@@ -59,7 +59,7 @@ pub use observation::{
 };
 pub use provider::{
     ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity, ModelStart,
-    StartReconciliation,
+    ProviderAdmission, ProviderAdmissionError, StartReconciliation,
 };
 pub use request::{
     AssembledRequest, RequestError, SEMANTIC_REQUEST_ASSEMBLY_REVISION, SemanticRequest, assemble,

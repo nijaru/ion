@@ -14,10 +14,10 @@ use crate::session::SessionInner;
 use crate::store::{DriveBasis, FinishedTurn, RecordedModelAttempt, StoreError};
 use crate::{
     ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries, ModelBoundary,
-    ModelStart, ParkReason, ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt,
-    RequestManifest, SemanticRequest, SessionHealth, SessionId, StartReceiptCapability,
-    StartReconciliation, StepDisposition, TurnId, TurnOutcome, TurnSettings, assemble,
-    semantic_request_assembly_revision,
+    ModelStart, ParkReason, ProviderAdmissionError, ProviderFailureEvidence, ProviderFingerprint,
+    ProviderStartReceipt, RequestManifest, SemanticRequest, SessionHealth, SessionId,
+    StartReceiptCapability, StartReconciliation, StepDisposition, TurnId, TurnOutcome,
+    TurnSettings, assemble, semantic_request_assembly_revision,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -151,7 +151,9 @@ pub(crate) async fn run(
                     match &attempt.state {
                         ModelAttemptState::IntentCommitted { .. }
                         | ModelAttemptState::Indeterminate { .. } => {
-                            match reconcile_intent(&inner, &basis, attempt, &prepared).await {
+                            match reconcile_intent(&inner, &basis, attempt, &prepared, &boundaries)
+                                .await
+                            {
                                 ReconcileAction::Continue => continue,
                                 ReconcileAction::Exit(exit) => return exit,
                             }
@@ -207,7 +209,15 @@ pub(crate) async fn run(
                     }
                 }
 
-                match dispatch(&inner, &basis, &prepared, policy.model_timing.clone()).await {
+                match dispatch(
+                    &inner,
+                    &basis,
+                    &prepared,
+                    &boundaries,
+                    policy.model_timing.clone(),
+                )
+                .await
+                {
                     DispatchAction::Continue => {}
                     DispatchAction::Exit(DriveExit::Parked(ParkReason::ToolUnavailable)) => {
                         continue;
@@ -485,6 +495,7 @@ async fn reconcile_intent(
     basis: &DriveBasis,
     attempt: &ModelAttempt,
     prepared: &PreparedDrive,
+    boundaries: &ModelBoundaries,
 ) -> ReconcileAction {
     let (existing_receipt, existing_usage, was_intent) = match &attempt.state {
         ModelAttemptState::IntentCommitted { start_receipt } => {
@@ -515,6 +526,11 @@ async fn reconcile_intent(
         return ReconcileAction::Exit(DriveExit::Parked(ParkReason::RecoveryRequired));
     }
 
+    // Reconciliation can itself contact the service. Denial must not relabel an
+    // uncertain prior effect as NotStarted, nor authorize a substitute provider.
+    if let Err(error) = preflight(basis, prepared, boundaries) {
+        return ReconcileAction::Exit(DriveExit::Parked(admission_park_reason(error)));
+    }
     let reconciliation = prepared
         .boundary
         .reconcile_start(attempt.id, effect_key)
@@ -563,6 +579,27 @@ async fn reconcile_intent(
     }
 }
 
+fn preflight(
+    basis: &DriveBasis,
+    prepared: &PreparedDrive,
+    boundaries: &ModelBoundaries,
+) -> Result<(), ProviderAdmissionError> {
+    let binding = basis
+        .turn
+        .environment
+        .provider(&prepared.manifest.settings.provider)
+        .ok_or(ProviderAdmissionError::Unavailable)?;
+    boundaries.preflight(binding)
+}
+
+fn admission_park_reason(error: ProviderAdmissionError) -> ParkReason {
+    match error {
+        ProviderAdmissionError::MissingCredentials => ParkReason::MissingCredentials,
+        ProviderAdmissionError::Unavailable => ParkReason::ProviderUnavailable,
+        ProviderAdmissionError::EgressDenied => ParkReason::AuthorityDenied,
+    }
+}
+
 enum DispatchAction {
     Continue,
     Exit(DriveExit),
@@ -572,8 +609,13 @@ async fn dispatch(
     inner: &Arc<SessionInner>,
     basis: &DriveBasis,
     prepared: &PreparedDrive,
+    boundaries: &ModelBoundaries,
     timing: ModelAttemptTiming,
 ) -> DispatchAction {
+    // Availability failures are not physical attempts and consume no attempt budget.
+    if let Err(error) = preflight(basis, prepared, boundaries) {
+        return DispatchAction::Exit(DriveExit::Parked(admission_park_reason(error)));
+    }
     let step = basis
         .current_step
         .as_ref()
@@ -617,6 +659,23 @@ async fn dispatch(
     }
 
     let effect_key = prepared.effect_key.clone();
+    let request = prepared.request.clone();
+    // The intent commit is an async boundary: host credentials/policy may have
+    // changed meanwhile. Recheck after effect admission, before calling start.
+    if let Err(error) = preflight(basis, prepared, boundaries) {
+        let state = ModelAttemptState::NotStarted {
+            reason: error.to_string(),
+        };
+        if let Err(error) = persist_attempt(inner, created.attempt.id, state).await {
+            return DispatchAction::Exit(store_exit(basis.turn.id, error));
+        }
+        return DispatchAction::Exit(if stop.is_cancelled() {
+            after_local_stop(inner, basis.turn.id).await
+        } else {
+            DriveExit::Parked(admission_park_reason(error))
+        });
+    }
+
     let start = tokio::select! {
         () = stop.cancelled() => {
             let state = ModelAttemptState::Indeterminate {
@@ -634,7 +693,7 @@ async fn dispatch(
             prepared.boundary.start(
                 created.attempt.id,
                 effect_key,
-                prepared.request.clone(),
+                request,
                 stop.clone(),
             ),
         ) => result,

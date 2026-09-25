@@ -10,11 +10,11 @@ use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
     ConversationConfig, DriveExit, EgressRealm, InputBody, InputMode, InputSender,
     ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelStart,
-    ObservationError, ParkReason, ProviderBinding, ProviderBindingId, ProviderCapabilities,
-    ProviderStartReceipt, RequestKey, ReturnedModelPolicy, SemanticCompatibilityId, Session,
-    SessionChange, SessionId, SnapshotRequest, StartReceiptCapability, StartReconciliation,
-    StartTurnRequest, StepDisposition, StepPurpose, TurnLimits, TurnOutcome, WatchQueueLimits,
-    WatchRequest, WorkspaceBinding,
+    ObservationError, ParkReason, ProviderAdmissionError, ProviderBinding, ProviderBindingId,
+    ProviderCapabilities, ProviderStartReceipt, RequestKey, ReturnedModelPolicy,
+    SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
+    StartReceiptCapability, StartReconciliation, StartTurnRequest, StepDisposition, StepPurpose,
+    TurnLimits, TurnOutcome, WatchQueueLimits, WatchRequest, WorkspaceBinding,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -148,7 +148,14 @@ fn identity() -> ModelBoundaryIdentity {
         binding: ProviderBindingId::new("scripted").expect("binding"),
         adapter: SemanticCompatibilityId::new("scripted-adapter-v1").expect("adapter"),
         request_encoding: SemanticCompatibilityId::new("scripted-request-v1").expect("encoding"),
+        egress: EgressRealm::Local,
     }
+}
+
+fn allowed_boundaries(
+    boundaries: impl IntoIterator<Item = Arc<dyn ModelBoundary>>,
+) -> ModelBoundaries {
+    ModelBoundaries::new(boundaries, Arc::new(|_: &ProviderBinding| Ok(()))).expect("boundaries")
 }
 
 fn fingerprint(
@@ -162,13 +169,19 @@ fn fingerprint(
 }
 
 struct CompleteBoundary {
+    egress: EgressRealm,
     starts: AtomicUsize,
     stream_dropped: CancellationToken,
 }
 
 impl CompleteBoundary {
     fn new() -> Arc<Self> {
+        Self::in_realm(EgressRealm::Local)
+    }
+
+    fn in_realm(egress: EgressRealm) -> Arc<Self> {
         Arc::new(Self {
+            egress,
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
         })
@@ -205,7 +218,10 @@ impl Drop for TerminalWithoutEof {
 
 impl ModelBoundary for CompleteBoundary {
     fn identity(&self) -> ModelBoundaryIdentity {
-        identity()
+        ModelBoundaryIdentity {
+            egress: self.egress.clone(),
+            ..identity()
+        }
     }
 
     fn fingerprint(
@@ -310,8 +326,7 @@ async fn resume_selects_terminal_response_without_waiting_for_transport_eof() {
     let session = created.session;
     let (handle, turn) = started_turn(&session, "one", "hello").await;
     let boundary = CompleteBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
 
     let exit = tokio::time::timeout(
         std::time::Duration::from_secs(5),
@@ -353,8 +368,7 @@ async fn cancelled_before_resume_never_calls_provider() {
     let session = created.session;
     let (handle, turn) = started_turn(&session, "one", "hello").await;
     let boundary = CompleteBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
 
     handle.cancel_turn(turn).await.expect("cancel");
     let exit = handle.resume(turn, boundaries).await.expect("resume");
@@ -375,8 +389,7 @@ async fn cancellation_signals_an_already_admitted_provider_effect() {
     let session = created.session;
     let (handle, turn) = started_turn(&session, "one", "hello").await;
     let boundary = WaitingBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
 
     let drive_handle = handle.clone();
     let drive = tokio::spawn(async move { drive_handle.resume(turn, boundaries).await });
@@ -422,6 +435,379 @@ async fn missing_provider_boundary_parks_before_dispatch_intent() {
     assert!(snapshot.model_attempts.is_empty());
 
     session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+struct AdmissionControl {
+    checks: AtomicUsize,
+    deny_at: AtomicUsize,
+    error: ProviderAdmissionError,
+}
+
+impl ion_core::ProviderAdmission for AdmissionControl {
+    fn check(&self, binding: &ProviderBinding) -> Result<(), ProviderAdmissionError> {
+        assert_eq!(binding.egress, EgressRealm::Local);
+        let check = self.checks.fetch_add(1, Ordering::SeqCst) + 1;
+        if check >= self.deny_at.load(Ordering::SeqCst) {
+            Err(self.error)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+fn snapshot_request(session: &Session) -> SnapshotRequest {
+    SnapshotRequest {
+        conversation: session.primary_conversation(),
+        max_inputs: 16,
+        max_entries: 16,
+        max_bytes: 1024 * 1024,
+    }
+}
+
+#[tokio::test]
+async fn wrong_service_realm_never_reaches_admission_or_provider_start() {
+    for (frozen, actual) in [
+        (
+            EgressRealm::Local,
+            EgressRealm::Remote("cloud-a".to_owned()),
+        ),
+        (
+            EgressRealm::Remote("cloud-a".to_owned()),
+            EgressRealm::Local,
+        ),
+        (
+            EgressRealm::Remote("cloud-a".to_owned()),
+            EgressRealm::Remote("cloud-b".to_owned()),
+        ),
+    ] {
+        let (dir, path) = database("wrong-realm");
+        let mut cfg = config();
+        cfg.providers[0].egress = frozen.clone();
+        cfg.authority.egress_realms = vec![frozen];
+        let boundary = CompleteBoundary::in_realm(actual);
+        let boundaries = ModelBoundaries::new(
+            [boundary.clone() as Arc<dyn ModelBoundary>],
+            Arc::new(|_: &ProviderBinding| panic!("wrong realm must fail before live admission")),
+        )
+        .expect("boundaries");
+        assert!(matches!(
+            boundaries.resolve(&cfg.providers[0]),
+            Err(ion_core::ModelBoundaryError::Incompatible {
+                fact: "service realm",
+                ..
+            })
+        ));
+        let session = Session::create(&path, cfg).await.expect("create").session;
+        let (handle, turn) = started_turn(&session, "one", "private prompt").await;
+        assert_eq!(
+            handle.resume(turn, boundaries).await.expect("resume"),
+            DriveExit::Parked(ParkReason::ProviderUnavailable)
+        );
+        let snapshot = handle
+            .snapshot(snapshot_request(&session))
+            .await
+            .expect("snapshot");
+        assert!(snapshot.model_attempts.is_empty());
+        assert!(snapshot.current_model_step.is_none());
+        assert_eq!(snapshot.unfinished_turn.unwrap().budget.model_attempts, 0);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        session.close().await.expect("close");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+}
+
+#[tokio::test]
+async fn preflight_denial_consumes_no_attempt_and_restoration_requires_explicit_resume() {
+    for (error, reason) in [
+        (
+            ProviderAdmissionError::MissingCredentials,
+            ParkReason::MissingCredentials,
+        ),
+        (
+            ProviderAdmissionError::Unavailable,
+            ParkReason::ProviderUnavailable,
+        ),
+        (
+            ProviderAdmissionError::EgressDenied,
+            ParkReason::AuthorityDenied,
+        ),
+    ] {
+        let (dir, path) = database("preflight-denied");
+        let session = Session::create(&path, config())
+            .await
+            .expect("create")
+            .session;
+        let (handle, turn) = started_turn(&session, "one", "private prompt").await;
+        let boundary = CompleteBoundary::new();
+        let admission = Arc::new(AdmissionControl {
+            checks: AtomicUsize::new(0),
+            deny_at: AtomicUsize::new(1),
+            error,
+        });
+        let boundaries = ModelBoundaries::new(
+            [boundary.clone() as Arc<dyn ModelBoundary>],
+            admission.clone(),
+        )
+        .expect("boundaries");
+        assert_eq!(
+            handle
+                .resume(turn, boundaries.clone())
+                .await
+                .expect("resume"),
+            DriveExit::Parked(reason.clone())
+        );
+        let before = handle
+            .snapshot(snapshot_request(&session))
+            .await
+            .expect("snapshot");
+        assert!(before.model_attempts.is_empty());
+        assert_eq!(
+            before
+                .unfinished_turn
+                .as_ref()
+                .unwrap()
+                .budget
+                .model_attempts,
+            0
+        );
+        assert_eq!(admission.checks.load(Ordering::SeqCst), 1);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        session.close().await.expect("close");
+
+        let reopened = Session::open(&path).await.expect("passive open");
+        let handle = reopened.handle();
+        let request = snapshot_request(&reopened);
+        let after = handle.snapshot(request).await.expect("passive snapshot");
+        assert_eq!(after.coverage, before.coverage);
+        assert_eq!(after.current_model_step, before.current_model_step);
+        assert_eq!(admission.checks.load(Ordering::SeqCst), 1);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            handle
+                .resume(turn, boundaries.clone())
+                .await
+                .expect("still denied"),
+            DriveExit::Parked(reason)
+        );
+        assert_eq!(
+            handle.snapshot(request).await.unwrap().coverage,
+            before.coverage
+        );
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+
+        admission.deny_at.store(usize::MAX, Ordering::SeqCst);
+        // Restoring credentials/policy is live state, not a durable request change.
+        assert_eq!(
+            handle.snapshot(request).await.unwrap().coverage,
+            before.coverage
+        );
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            handle
+                .resume(turn, boundaries)
+                .await
+                .expect("restored explicit resume"),
+            DriveExit::Settled(TurnOutcome::Completed { .. })
+        ));
+        assert_eq!(admission.checks.load(Ordering::SeqCst), 4);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+        reopened.close().await.expect("close");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+}
+
+#[tokio::test]
+async fn revocation_after_intent_records_one_not_started_attempt_without_network_start() {
+    for (error, reason) in [
+        (
+            ProviderAdmissionError::MissingCredentials,
+            ParkReason::MissingCredentials,
+        ),
+        (
+            ProviderAdmissionError::Unavailable,
+            ParkReason::ProviderUnavailable,
+        ),
+        (
+            ProviderAdmissionError::EgressDenied,
+            ParkReason::AuthorityDenied,
+        ),
+    ] {
+        let (dir, path) = database("second-check-denied");
+        let session = Session::create(&path, config())
+            .await
+            .expect("create")
+            .session;
+        let (handle, turn) = started_turn(&session, "one", "private prompt").await;
+        let boundary = CompleteBoundary::new();
+        let admission = Arc::new(AdmissionControl {
+            checks: AtomicUsize::new(0),
+            deny_at: AtomicUsize::new(2),
+            error,
+        });
+        let boundaries = ModelBoundaries::new(
+            [boundary.clone() as Arc<dyn ModelBoundary>],
+            admission.clone(),
+        )
+        .expect("boundaries");
+        assert_eq!(
+            handle
+                .resume(turn, boundaries.clone())
+                .await
+                .expect("resume"),
+            DriveExit::Parked(reason)
+        );
+        let before = handle
+            .snapshot(snapshot_request(&session))
+            .await
+            .expect("snapshot");
+        assert_eq!(before.model_attempts.len(), 1);
+        assert_eq!(
+            before
+                .unfinished_turn
+                .as_ref()
+                .unwrap()
+                .budget
+                .model_attempts,
+            1
+        );
+        assert_eq!(
+            before.model_attempts[0].state,
+            ModelAttemptState::NotStarted {
+                reason: error.to_string(),
+            }
+        );
+        assert_eq!(admission.checks.load(Ordering::SeqCst), 2);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        session.close().await.expect("close");
+
+        let reopened = Session::open(&path).await.expect("passive open");
+        let handle = reopened.handle();
+        let watched = handle
+            .snapshot_and_watch(WatchRequest {
+                snapshot: snapshot_request(&reopened),
+                queue: WatchQueueLimits {
+                    max_receipts: 32,
+                    max_bytes: 1024 * 1024,
+                },
+            })
+            .await
+            .expect("watch");
+        assert_eq!(watched.snapshot.coverage, before.coverage);
+        assert_eq!(watched.snapshot.model_attempts, before.model_attempts);
+        assert_eq!(admission.checks.load(Ordering::SeqCst), 2);
+        admission.deny_at.store(usize::MAX, Ordering::SeqCst);
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        assert!(matches!(
+            handle
+                .resume(turn, boundaries)
+                .await
+                .expect("restored explicit resume"),
+            DriveExit::Settled(TurnOutcome::Completed { .. })
+        ));
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+        let mut retry_seen = false;
+        while let Ok(receipt) = watched.watch.try_recv() {
+            for change in receipt.update.changes {
+                match change {
+                    SessionChange::ModelAttempt(attempt) => {
+                        assert_ne!(
+                            attempt.id, before.model_attempts[0].id,
+                            "old evidence is immutable"
+                        );
+                        assert_eq!(attempt.ordinal, 2);
+                        retry_seen = true;
+                    }
+                    SessionChange::ModelStep(step) => assert_eq!(
+                        step.manifest,
+                        before.current_model_step.as_ref().unwrap().manifest,
+                        "live auth/policy is excluded from durable fingerprints"
+                    ),
+                    _ => {}
+                }
+            }
+        }
+        assert!(retry_seen);
+        reopened.close().await.expect("close");
+        std::fs::remove_dir_all(dir).expect("cleanup");
+    }
+}
+
+#[tokio::test]
+async fn failed_not_started_commit_fences_without_starting_or_erasing_intent() {
+    let (dir, path) = database("revocation-evidence-fault");
+    let session = Session::create(&path, config())
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::new();
+    let admission = Arc::new(AdmissionControl {
+        checks: AtomicUsize::new(0),
+        deny_at: AtomicUsize::new(2),
+        error: ProviderAdmissionError::EgressDenied,
+    });
+    let boundaries = ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>], admission)
+        .expect("boundaries");
+    let injector = rusqlite::Connection::open(&path).expect("injector");
+    injector
+        .execute_batch(
+            "CREATE TRIGGER fail_not_started BEFORE UPDATE ON model_attempts
+         BEGIN SELECT RAISE(ABORT, 'injected evidence failure'); END;",
+        )
+        .expect("inject fault");
+    assert!(matches!(
+        handle.resume(turn, boundaries).await.expect("drive"),
+        DriveExit::Faulted { .. }
+    ));
+    assert_eq!(handle.health(), ion_core::SessionHealth::Fenced);
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    let before = handle
+        .snapshot(snapshot_request(&session))
+        .await
+        .expect("snapshot");
+    assert_eq!(before.model_attempts.len(), 1);
+    assert!(matches!(
+        before.model_attempts[0].state,
+        ModelAttemptState::IntentCommitted { .. }
+    ));
+    injector
+        .execute_batch("DROP TRIGGER fail_not_started;")
+        .expect("remove fault");
+    drop(injector);
+    session.close().await.expect("close");
+
+    let reopened = Session::open(&path).await.expect("passive open");
+    let handle = reopened.handle();
+    let after = handle
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .expect("snapshot");
+    assert_eq!(after.coverage, before.coverage);
+    assert_eq!(after.model_attempts, before.model_attempts);
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    // Lost negative evidence is not reconstructible from current availability.
+    assert_eq!(
+        handle
+            .resume(
+                turn,
+                allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+            )
+            .await
+            .expect("explicit recovery"),
+        DriveExit::Parked(ParkReason::RecoveryRequired)
+    );
+    let recovered = handle
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .expect("snapshot");
+    assert_eq!(recovered.model_attempts.len(), 1);
+    assert!(matches!(
+        recovered.model_attempts[0].state,
+        ModelAttemptState::Indeterminate { .. }
+    ));
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    reopened.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
 
@@ -508,6 +894,7 @@ impl ModelBoundary for FallbackBoundary {
             adapter: SemanticCompatibilityId::new("fallback-adapter-v1").expect("adapter"),
             request_encoding: SemanticCompatibilityId::new("fallback-request-v1")
                 .expect("encoding"),
+            egress: EgressRealm::Local,
         }
     }
 
@@ -575,11 +962,10 @@ async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
 
     let primary = FailingBoundary::new(ProviderErrorKind::Authentication);
     let fallback = FallbackBoundary::new();
-    let boundaries = ModelBoundaries::new([
+    let boundaries = allowed_boundaries([
         primary.clone() as Arc<dyn ModelBoundary>,
         fallback.clone() as Arc<dyn ModelBoundary>,
-    ])
-    .expect("boundaries");
+    ]);
 
     let exit = handle.resume(turn, boundaries).await.expect("resume");
     assert!(matches!(
@@ -636,6 +1022,75 @@ async fn provider_fallback_supersedes_predecessor_in_one_atomic_commit() {
         "supersession, successor creation and TurnSettings update must share one commit"
     );
 
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn frozen_fallback_still_requires_live_egress_admission() {
+    let (dir, path) = database("fallback-live-denial");
+    let session = Session::create(&path, fallback_config())
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let primary = FailingBoundary::new(ProviderErrorKind::Authentication);
+    let fallback = FallbackBoundary::new();
+    let boundaries = ModelBoundaries::new(
+        [
+            primary.clone() as Arc<dyn ModelBoundary>,
+            fallback.clone() as Arc<dyn ModelBoundary>,
+        ],
+        Arc::new(|binding: &ProviderBinding| {
+            if binding.id.as_str() == "fallback" {
+                Err(ProviderAdmissionError::EgressDenied)
+            } else {
+                Ok(())
+            }
+        }),
+    )
+    .expect("boundaries");
+    assert_eq!(
+        handle.resume(turn, boundaries).await.expect("resume"),
+        DriveExit::Parked(ParkReason::AuthorityDenied)
+    );
+    assert_eq!(primary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.starts.load(Ordering::SeqCst), 0);
+    let snapshot = handle
+        .snapshot(snapshot_request(&session))
+        .await
+        .expect("snapshot");
+    assert_eq!(
+        snapshot
+            .current_model_step
+            .as_ref()
+            .unwrap()
+            .manifest
+            .settings
+            .provider
+            .as_str(),
+        "fallback"
+    );
+    assert!(
+        snapshot.model_attempts.is_empty(),
+        "denied fallback consumes no attempt"
+    );
+    assert_eq!(snapshot.unfinished_turn.unwrap().budget.model_attempts, 1);
+    assert!(matches!(
+        handle
+            .resume(
+                turn,
+                allowed_boundaries([
+                    primary.clone() as Arc<dyn ModelBoundary>,
+                    fallback.clone() as Arc<dyn ModelBoundary>,
+                ])
+            )
+            .await
+            .expect("restored explicit resume"),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    assert_eq!(primary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.starts.load(Ordering::SeqCst), 1);
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
 }
@@ -713,8 +1168,7 @@ async fn passive_open_does_not_reconcile_but_resume_reconciles_indeterminate_att
     let (handle, turn) = started_turn(&session, "one", "hello").await;
 
     let boundary = RecoveringBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let first = handle.resume(turn, boundaries).await.expect("first resume");
     assert_eq!(first, DriveExit::Parked(ParkReason::RecoveryRequired));
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
@@ -728,8 +1182,38 @@ async fn passive_open_does_not_reconcile_but_resume_reconciles_indeterminate_att
         "passive open must not reconcile provider state"
     );
 
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let before = reopened
+        .handle()
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .expect("snapshot");
+    let denied = ModelBoundaries::new(
+        [boundary.clone() as Arc<dyn ModelBoundary>],
+        Arc::new(|_: &ProviderBinding| Err(ProviderAdmissionError::EgressDenied)),
+    )
+    .expect("boundaries");
+    assert_eq!(
+        reopened
+            .handle()
+            .resume(turn, denied)
+            .await
+            .expect("denied reconciliation"),
+        DriveExit::Parked(ParkReason::AuthorityDenied)
+    );
+    let after = reopened
+        .handle()
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .expect("snapshot");
+    assert_eq!(before.coverage, after.coverage);
+    assert_eq!(
+        before.model_attempts, after.model_attempts,
+        "denial cannot prove an old effect never started"
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(boundary.reconciles.load(Ordering::SeqCst), 0);
+
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let second = reopened
         .handle()
         .resume(turn, boundaries)
@@ -773,11 +1257,10 @@ async fn safety_refusal_does_not_route_to_fallback_provider() {
 
     let primary = FailingBoundary::new(ProviderErrorKind::Safety);
     let fallback = FallbackBoundary::new();
-    let boundaries = ModelBoundaries::new([
+    let boundaries = allowed_boundaries([
         primary.clone() as Arc<dyn ModelBoundary>,
         fallback.clone() as Arc<dyn ModelBoundary>,
-    ])
-    .expect("boundaries");
+    ]);
 
     let exit = handle.resume(turn, boundaries).await.expect("resume");
     assert_eq!(exit, DriveExit::Parked(ParkReason::ProviderUnavailable));
@@ -860,8 +1343,7 @@ async fn dropped_resume_waiter_does_not_cancel_accepted_work_or_close_session() 
         release: CancellationToken::new(),
         stopped: CancellationToken::new(),
     });
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let waiter_handle = handle.clone();
     let waiter = tokio::spawn(async move { waiter_handle.resume(turn, boundaries).await });
     tokio::time::timeout(
@@ -915,8 +1397,7 @@ async fn close_joins_local_work_without_durable_turn_cancellation() {
         .session;
     let (handle, turn) = started_turn(&session, "one", "hello").await;
     let boundary = WaitingBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let waiter_handle = handle.clone();
     let waiter = tokio::spawn(async move { waiter_handle.resume(turn, boundaries).await });
     tokio::time::timeout(std::time::Duration::from_secs(5), boundary.wait_started())
@@ -1037,8 +1518,7 @@ async fn process_loss_child() {
         starts: AtomicUsize::new(0),
         reconciles: AtomicUsize::new(0),
     });
-    let boundaries =
-        ModelBoundaries::new([boundary as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary as Arc<dyn ModelBoundary>]);
     let _ = handle.resume(turn, boundaries).await;
     panic!("parent must kill owner before start returns");
 }
@@ -1122,8 +1602,7 @@ async fn killed_owner_reopens_passively_then_reconciles_external_start() {
         before.coverage
     );
 
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     assert_eq!(
         handle
             .resume(turn, boundaries)
@@ -1237,8 +1716,7 @@ async fn authoritative_negative_is_durable_before_retry_attempt() {
     let (handle, turn) = started_turn(&session, "one", "hello").await;
 
     let boundary = NegativeThenCompleteBoundary::new();
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let first = handle.resume(turn, boundaries).await.expect("first resume");
     assert_eq!(first, DriveExit::Parked(ParkReason::RecoveryRequired));
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
@@ -1267,8 +1745,7 @@ async fn authoritative_negative_is_durable_before_retry_attempt() {
         ModelAttemptState::Indeterminate { .. }
     ));
 
-    let boundaries =
-        ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>]).expect("boundaries");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     let second = handle
         .resume(turn, boundaries)
         .await
