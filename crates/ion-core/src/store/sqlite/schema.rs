@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::super::StoreError;
 use crate::SessionId;
 
-pub(crate) const SCHEMA_VERSION: i64 = 8;
+pub(crate) const SCHEMA_VERSION: i64 = 9;
 
 const DDL: &str = r#"
 CREATE TABLE session_meta (

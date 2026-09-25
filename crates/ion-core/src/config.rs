@@ -572,6 +572,21 @@ pub struct TurnSettings {
 }
 
 impl TurnSettings {
+    /// A complete response cannot widen the frozen tool-choice or parallel cap.
+    pub(crate) fn permits_tool_response(&self, response: &ion_ai::ModelResponse) -> bool {
+        self.controls
+            .permits_tool_calls(
+                response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|item| match item {
+                        ion_ai::Content::ToolCall(call) => Some(call.name.as_str()),
+                        _ => None,
+                    }),
+            )
+    }
+
     pub fn validate(&self, environment: &TurnEnvironment) -> Result<(), ConfigError> {
         let provider = environment.provider(&self.provider).ok_or_else(|| {
             ConfigError::UnknownProviderBinding(self.provider.as_str().to_owned())
@@ -618,6 +633,12 @@ impl TurnSettings {
             }
         }
 
+        if matches!(self.controls.tool_choice, ToolChoice::Required) && self.active_tools.is_empty()
+        {
+            return Err(ConfigError::ProviderControlMismatch(
+                "required tool choice needs an active tool".into(),
+            ));
+        }
         if let ToolChoice::Named(name) = &self.controls.tool_choice {
             let offered = self.active_tools.iter().any(|id| {
                 environment
@@ -801,6 +822,17 @@ pub(crate) mod tests {
                 max_cost_microusd: None,
             },
         }
+    }
+
+    #[test]
+    fn required_tool_choice_cannot_be_frozen_without_an_active_tool() {
+        let mut config = config();
+        config.initial_tools.clear();
+        config.controls.tool_choice = ToolChoice::Required;
+        assert!(matches!(
+            config.validate(),
+            Err(ConfigError::ProviderControlMismatch(_))
+        ));
     }
 
     #[test]

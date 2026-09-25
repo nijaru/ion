@@ -18,7 +18,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v8 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v9 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -76,12 +76,12 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v7) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v8) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 Still missing: native edit/exec backends, a user-facing approval client and host
 authentication/policy backend, parallel tool dispatch, context compaction/forking,
-Steer/InteractionReply placement, live provider qualification and additional adapters,
+Steer/InteractionReply placement, live qualification of both wire adapters,
 the terminal UI, and workers.
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
@@ -106,12 +106,17 @@ The OpenAI-compatible Chat Completions adapter streams text, function calls and 
 with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient
 proxies, and obtains an API key from a live host callback at dispatch. Returned-model IDs
 must match the exact binding or a frozen list of allowed route models; missing or unexpected
-IDs park without selecting a response or admitting tools. This callback and provider
+IDs park without selecting a response or admitting tools. Returned calls also must
+respect frozen tool choice and parallel-call controls, including after passive reopen.
+This callback and provider
 preflight are not network confinement or a production credential policy. A configured
 monetary cap parks before physical attempt intent until a host can supply a conservative
 cost quote. Request and terminal provider-response capacity checks stop encoding at
-their frozen limits rather than allocating complete oversized JSON copies. No live-provider
-effectiveness has been measured.
+their frozen limits rather than allocating complete oversized JSON copies. A separate
+Anthropic Messages adapter supports streamed text and client tools, with strict
+index/terminal/usage checks and stable logical tool-result pairing. Unsupported thinking,
+opaque replay, provider-hosted tools and explicit sampling/reasoning controls fail closed.
+Neither wire API has been qualified with a live provider.
 
 ## Headless use (experimental)
 

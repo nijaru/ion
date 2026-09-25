@@ -51,6 +51,7 @@ pub enum ParkReason {
     MissingCredentials,
     ProviderUnavailable,
     ReturnedModelMismatch,
+    ToolChoiceMismatch,
     ToolUnavailable,
     AwaitingApproval,
     AuthorityDenied,

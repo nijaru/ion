@@ -36,9 +36,9 @@ a scripted integration test kills the owner after mutation and recovers through 
 registry without replay.
 
 R1C acceptance is not complete: provider preflight is not network confinement; the
-OpenAI-compatible streaming adapter has mock-HTTP tests and a two-request
-Session/native-read loopback exchange, but no live credential/model qualification. Returned-model identity now gates selection and tool admission against
-exact frozen IDs, parking missing/unexpected identities. There is no user-facing
+OpenAI-compatible and Anthropic Messages streaming adapters have mock-HTTP tests and
+Session/native-read loopback exchanges, but no live credential/model qualification. Returned-model identity and frozen tool-choice/parallel controls now
+gate selection and tool admission, including persisted responses after reopen. There is no user-facing
 authenticated approval client, native edit/exec, native large-output capture or real
 parallel dispatch. A native bounded
 read boundary exists and checks its frozen binding against WorkspaceRegistry before
@@ -52,7 +52,8 @@ approval store/drive boundary does not implement the host's live policy or confi
 The headless `ion` binary hosts the same Session and bounded read tool for
 submit/inspect/resume; its offline smoke tests no-credential preflight and passive
 reopen, not live-provider or terminal behavior. Context compaction/reset/forks,
-a second provider wire API, a terminal client and workers remain future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
+a terminal client and workers remain future work. The headless executable currently
+wires only the OpenAI-compatible adapter. Preserve useful prototype leaf behavior and failure scenarios as replacement
 tests, not obsolete owners or schema/API compatibility.
 
 ## Product and boundaries

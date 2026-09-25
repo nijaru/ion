@@ -526,6 +526,11 @@ pub(super) fn select_final_response(
     let projection = final_response_projection(response)?;
 
     let mut step = load_step(&transaction, attempt.step)?;
+    if !step.manifest.settings.permits_tool_response(response) {
+        return Err(StoreError::InvalidState(
+            "response violates frozen tool-choice controls".into(),
+        ));
+    }
     if !matches!(step.disposition, StepDisposition::Open) {
         return Err(StoreError::InvalidState(format!(
             "model step {} is no longer open",

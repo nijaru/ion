@@ -92,6 +92,9 @@ pub(crate) async fn run(
             ) {
                 return DriveExit::Parked(ParkReason::ReturnedModelMismatch);
             }
+            if !step.manifest.settings.permits_tool_response(response) {
+                return DriveExit::Parked(ParkReason::ToolChoiceMismatch);
+            }
             if response
                 .message
                 .content
@@ -911,6 +914,11 @@ async fn dispatch(
                         ) {
                             return DispatchAction::Exit(DriveExit::Parked(
                                 ParkReason::ReturnedModelMismatch,
+                            ));
+                        }
+                        if !prepared.manifest.settings.permits_tool_response(&response) {
+                            return DispatchAction::Exit(DriveExit::Parked(
+                                ParkReason::ToolChoiceMismatch,
                             ));
                         }
                         return DispatchAction::Exit(

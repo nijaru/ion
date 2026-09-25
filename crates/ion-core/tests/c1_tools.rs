@@ -100,6 +100,13 @@ fn config() -> ConversationConfig {
         },
     }
 }
+fn parallel_config() -> ConversationConfig {
+    let mut cfg = config();
+    cfg.controls.parallel_tool_calls = true;
+    cfg.control_ceiling.parallel_tool_calls = true;
+    cfg.providers[0].capabilities.parallel_tool_calls = true;
+    cfg
+}
 struct Model {
     starts: AtomicUsize,
     arguments: serde_json::Value,
@@ -498,6 +505,63 @@ async fn unexpected_returned_model_never_admits_its_tool_calls() {
     );
     reopened.close().await.unwrap();
     std::fs::remove_file(path).unwrap();
+}
+
+#[tokio::test]
+async fn noncompliant_provider_cannot_widen_frozen_tool_choice_after_reopen() {
+    for (choice, calls) in [
+        (ToolChoice::None, 1),
+        (ToolChoice::Required, 0),
+        (ToolChoice::Auto, 2), // parallel_tool_calls is frozen false.
+    ] {
+        let mut cfg = config();
+        cfg.controls.tool_choice = choice;
+        let (session, path, turn) = setup(cfg).await;
+        let t = Arc::new(Tool::new(success()));
+        let m = Arc::new(Model {
+            starts: AtomicUsize::new(0),
+            arguments: json!({"path":"x"}),
+            calls,
+        });
+        assert_eq!(
+            session
+                .handle()
+                .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::ToolChoiceMismatch)
+        );
+        assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+        assert_eq!(t.prepares.load(Ordering::SeqCst), 0);
+        assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+        let step = session
+            .handle()
+            .snapshot(SnapshotRequest {
+                conversation: session.primary_conversation(),
+                max_inputs: 8,
+                max_entries: 8,
+                max_bytes: 64 * 1024,
+            })
+            .await
+            .unwrap()
+            .current_model_step
+            .unwrap();
+        let records = session.handle().tool_records(step.id).await.unwrap();
+        assert!(records.invocations.is_empty());
+        assert!(records.attempts.is_empty());
+        session.close().await.unwrap();
+        let reopened = Session::open(&path).await.unwrap();
+        assert_eq!(
+            reopened
+                .handle()
+                .resume(turn, ModelBoundaries::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::ToolChoiceMismatch)
+        );
+        reopened.close().await.unwrap();
+        std::fs::remove_file(path).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1351,7 +1415,7 @@ async fn terminal_evidence_materializes_without_an_executor_but_unknown_stays_pe
 
 #[tokio::test]
 async fn staged_b_c_survive_reopen_without_execution_and_materialize_after_a() {
-    let (s, path, turn) = setup(config()).await;
+    let (s, path, turn) = setup(parallel_config()).await;
     let m = Arc::new(Model {
         starts: AtomicUsize::new(0),
         arguments: json!({"path":"x"}),
@@ -1446,7 +1510,7 @@ async fn staged_b_c_survive_reopen_without_execution_and_materialize_after_a() {
 #[tokio::test]
 async fn cancellation_closes_pending_known_and_staged_results_without_backends() {
     for checkpoint in 0..3 {
-        let (s, path, turn) = setup(config()).await;
+        let (s, path, turn) = setup(parallel_config()).await;
         let m = Arc::new(Model {
             starts: AtomicUsize::new(0),
             arguments: json!({"path":"x"}),
@@ -1547,7 +1611,7 @@ async fn complete_tool_exchange_prepares_once_and_continues() {
 
 #[tokio::test]
 async fn response_ready_settles_mixed_unavailable_calls_without_inventing_actions() {
-    let mut c = config();
+    let mut c = parallel_config();
     c.tools.push(alternate_binding());
     c.initial_tools.push(alternate_binding().id);
     let (s, path, turn) = setup(c).await;
@@ -1722,7 +1786,7 @@ async fn unavailable_admission_fault_rolls_back_response_selection_and_can_recov
 
 #[tokio::test]
 async fn duplicate_provider_tool_ids_cannot_admit_or_execute_a_batch() {
-    let (s, _path, turn) = setup(config()).await;
+    let (s, _path, turn) = setup(parallel_config()).await;
     let m = Arc::new(Model {
         starts: AtomicUsize::new(0),
         arguments: json!({"path":"duplicate-ids"}),
@@ -1915,7 +1979,7 @@ async fn active_tool_snapshot_and_watch_share_exact_commit_coverage() {
 
 #[tokio::test]
 async fn actual_batch_closure_refuses_before_any_tool_attempt() {
-    let mut c = config();
+    let mut c = parallel_config();
     c.context.max_input_tokens = 2000;
     c.providers[0].capabilities.max_input_tokens = 2000;
     let (s, _path, turn) = setup(c).await;
@@ -1944,7 +2008,7 @@ async fn actual_batch_closure_refuses_before_any_tool_attempt() {
 
 #[tokio::test]
 async fn batch_reserves_durable_attempt_and_staging_capacity_before_effects() {
-    let mut cfg = config();
+    let mut cfg = parallel_config();
     cfg.context.max_request_bytes = 32 * 1024 * 1024;
     cfg.context.max_input_tokens = 32 * 1024 * 1024;
     cfg.providers[0].capabilities.max_input_tokens = 32 * 1024 * 1024;

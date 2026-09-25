@@ -139,6 +139,9 @@ pub(super) fn mutate(
             {
                 return Err(invalid("returned model is outside the frozen binding"));
             }
+            if !step.manifest.settings.permits_tool_response(response) {
+                return Err(invalid("response violates frozen tool-choice controls"));
+            }
             eligible(&turn, step.id, model_attempt.generation, false)?;
             if step.disposition != StepDisposition::Open {
                 return Err(invalid("model response already selected"));
