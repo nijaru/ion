@@ -594,9 +594,31 @@ fn object(path: &Path) -> Result<Object> {
     }
 }
 fn small_file(path: &Path) -> Result<String> {
+    // Git marker reads are host preflight, before a tool's own leaf checks. Never
+    // block on a static FIFO or follow a marker symlink into a device/host path.
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.file_type().is_file() {
+        return Err(RegistryError::Invalid);
+    }
+    #[cfg(unix)]
+    let file = fs::File::from(
+        rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY
+                | rustix::fs::OFlags::NOFOLLOW
+                | rustix::fs::OFlags::NONBLOCK
+                | rustix::fs::OFlags::CLOEXEC,
+            rustix::fs::Mode::empty(),
+        )
+        .map_err(std::io::Error::from)?,
+    );
+    #[cfg(not(unix))]
+    return Err(RegistryError::Unsupported);
+    if !file.metadata()?.is_file() {
+        return Err(RegistryError::Invalid);
+    }
     let mut value = String::new();
-    fs::File::open(path)?
-        .take((MAX_RECORD + 1) as u64)
+    file.take((MAX_RECORD + 1) as u64)
         .read_to_string(&mut value)?;
     if value.len() > MAX_RECORD {
         return Err(RegistryError::Capacity);
@@ -614,8 +636,11 @@ fn describe(root: &Path) -> Result<Descriptor> {
     let mut git = None;
     for ancestor in root.path.ancestors() {
         let marker = ancestor.join(".git");
-        match fs::metadata(&marker) {
+        match fs::symlink_metadata(&marker) {
             Ok(metadata) => {
+                if !metadata.is_dir() && !metadata.file_type().is_file() {
+                    return Err(RegistryError::Invalid);
+                }
                 git = Some(if metadata.is_dir() {
                     object(&marker)?
                 } else {

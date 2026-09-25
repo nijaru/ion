@@ -1,6 +1,70 @@
 use super::*;
 
 #[test]
+fn git_markers_reject_static_fifo_and_symlink_without_opening_them() {
+    if std::env::var_os("ION_GIT_MARKER_TEST_CHILD").is_none() {
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "workspace_registry::tests::git_markers_reject_static_fifo_and_symlink_without_opening_them"])
+            .env("ION_GIT_MARKER_TEST_CHILD", "1")
+            .spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                assert!(status.success(), "marker child failed: {status}");
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().unwrap();
+                child.wait().unwrap();
+                panic!("Git marker verification blocked on a special file");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    use std::os::unix::fs::symlink;
+    let home = std::env::temp_dir().join(format!("ion-registry-special-{}", SessionId::new()));
+    let root = home.join("root");
+    fs::create_dir_all(&root).unwrap();
+    let mut registry = WorkspaceRegistry::open(home.join("host")).unwrap();
+    let marker = root.join(".git");
+    let fifo = home.join("fifo");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    symlink(&fifo, &marker).unwrap();
+    assert!(matches!(
+        registry.bind("workspace", &root, "local"),
+        Err(RegistryError::Invalid)
+    ));
+    fs::remove_file(&marker).unwrap();
+    fs::rename(&fifo, &marker).unwrap();
+    assert!(matches!(
+        registry.bind("workspace", &root, "local"),
+        Err(RegistryError::Invalid)
+    ));
+    fs::remove_file(&marker).unwrap();
+    fs::create_dir(&marker).unwrap();
+    let common = marker.join("commondir");
+    assert!(
+        std::process::Command::new("mkfifo")
+            .arg(&common)
+            .status()
+            .unwrap()
+            .success()
+    );
+    assert!(matches!(
+        registry.bind("workspace", &root, "local"),
+        Err(RegistryError::Invalid)
+    ));
+    drop(registry);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn failed_resolution_and_revision_exhaustion_preserve_quarantine() {
     let home = std::env::temp_dir().join(format!("ion-registry-fault-{}", SessionId::new()));
     let root = home.join("root");
