@@ -12,10 +12,11 @@ use std::{
 };
 use tokio_util::sync::CancellationToken;
 
+#[path = "c1_tools/artifacts.rs"]
+mod artifacts;
 #[cfg(unix)]
 #[path = "c1_tools/process_loss.rs"]
 mod process_loss;
-mod artifacts;
 fn id(s: &str) -> SemanticCompatibilityId {
     SemanticCompatibilityId::new(s).unwrap()
 }

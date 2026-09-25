@@ -1,6 +1,12 @@
+//! Dedicated SQLite database-thread ownership for one Session.
+
 mod sqlite;
+pub(crate) use sqlite::Ownership;
 
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
+
+use crate::artifact::{PublicationScope, PublishedBlob, SessionArtifacts};
 
 use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
@@ -831,4 +837,5 @@ impl From<rusqlite::Error> for StoreError {
     }
 }
 
+#[cfg(test)]
 mod artifact_tests;

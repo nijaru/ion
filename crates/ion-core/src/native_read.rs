@@ -786,6 +786,7 @@ mod tests {
             },
             approval: ApprovalState::NotRequired,
             output_limit,
+            artifacts: crate::ArtifactPublisher::closed(),
         }
     }
 

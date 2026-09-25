@@ -78,22 +78,27 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v4) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: native read/edit/exec backends, a user-facing approval client and
-host authentication/policy backend, Session-integrated artifact publication and GC,
-parallel tool dispatch, context compaction/forking, Steer/InteractionReply placement,
-real provider adapters, a runnable `ion` binary, the terminal UI, and workers.
+Still missing: native edit/exec backends, a user-facing approval client and host
+authentication/policy backend, parallel tool dispatch, context compaction/forking,
+Steer/InteractionReply placement, real provider adapters, a runnable `ion` binary,
+the terminal UI, and workers.
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
 Unimplemented Steer/InteractionReply inputs reject at admission rather than queue
 unconsumable work. Tool results distinguish complete inline, complete artifact and
 incomplete capture. An oversized backend value becomes an explicit incomplete output
-warning, preserving its terminal effect evidence without permitting replay. Complete
-artifacts remain unavailable until publication is wired. An immutable bounded
-BlobStore foundation is not wired to Session settlement, publication evidence,
-artifact paging, or GC. It cannot yet back large
-native output. Its host-owned namespace must be outside agent-writable workspace state and
-protected from untrusted same-user processes; a BlobStore owner lock excludes a second
-handle, while the host still owns namespace ancestry and filesystem trust.
+warning, preserving its terminal effect evidence without permitting replay. A
+Session-owned bounded BlobStore now publishes auxiliary complete output through an
+attempt-scoped capability. Settlement atomically links the verified object to the
+physical attempt; Session reads page committed refs and return `ContentUnavailable`
+for missing/corrupt auxiliary bytes without rewriting the result. Explicit GC excludes
+publication through the queued SQLite commit. Only this auxiliary tool-output use is
+wired; there is no automatic Session-namespace deletion or native large-output producer.
+The host must keep that namespace outside agent-writable workspace state and protect
+its filesystem ancestry from untrusted same-user processes.
+A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
+persisted tool exchange. It is serial, not an OS sandbox: the host must protect the
+workspace namespace against concurrent renames and enforce its promised read authority.
 Provider admission is a local host callback, not network confinement or a production
 credential policy; real adapters must enforce realm/credential validity at actual I/O.
 A configured monetary cap parks before physical attempt intent until a host can supply

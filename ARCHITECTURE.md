@@ -24,21 +24,24 @@ result materialization, exact durable per-invocation approval decisions, and tru
 unavailable settlement of already-returned provider calls through sequential host-supplied
 tools. Tool results now distinguish complete inline, complete artifact and incomplete
 capture; oversized backend values preserve settled effects with explicit output loss rather
-than stranding the attempt. A bounded immutable BlobStore foundation is not yet
-Session-integrated. Active tool state participates in snapshot/watch coverage.
-Configured monetary ceilings currently park before dispatch because host CostQuote
-admission has not been implemented; request and terminal-response JSON capacity checks
-stop encoding at their frozen caps rather than materializing oversized buffers. A separate host-owned WorkspaceRegistry preserves physical
-workspace/repository identity and orphan quarantine; a scripted integration test kills the
-owner after mutation and recovers through the registry without replay.
+than stranding the attempt. Session-integrated bounded auxiliary output publication uses
+attempt-scoped evidence, atomic reference links, verified pages and explicit GC exclusion
+through queued settlement. Whole-Session deletion and required-content consumers remain
+unimplemented. Active tool state participates in snapshot/watch coverage. Configured
+monetary ceilings currently park before dispatch because host CostQuote admission has not
+been implemented; request and terminal-response JSON capacity checks stop encoding at
+their frozen caps rather than materializing oversized buffers. A separate host-owned
+WorkspaceRegistry preserves physical workspace/repository identity and orphan quarantine;
+a scripted integration test kills the owner after mutation and recovers through the
+registry without replay.
 
 R1C acceptance is not complete: the provider preflight is not network confinement or a
 production adapter; there is no user-facing authenticated approval client,
-native edit/exec, bounded artifact publication or real parallel dispatch. A native bounded
-read boundary exists, but its descriptor-relative walk is not a race-free beneath-root
-primitive: the host must protect the workspace namespace from concurrent renames. It does
-not provide an OS sandbox, and callers must source bindings from WorkspaceRegistry; the
-boundary cannot independently authenticate arbitrary WorkspaceBinding values. The scripted
+native edit/exec, native large-output capture or real parallel dispatch. A native bounded
+read boundary exists and checks its frozen binding against WorkspaceRegistry before
+pinning the root; its descriptor-relative walk is not a race-free beneath-root primitive.
+The host must protect the workspace namespace from concurrent renames. It does not
+provide an OS sandbox. The scripted
 approval store/drive boundary does not implement the host's live policy or confinement. Context
 compaction/reset/forks, real provider adapters, a client binary and workers also remain
 future work. Preserve useful prototype leaf behavior and failure scenarios as replacement

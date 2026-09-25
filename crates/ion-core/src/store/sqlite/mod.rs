@@ -1,11 +1,17 @@
+//! SQLite connection owner for the replacement Session runtime.
+
+mod artifacts;
 mod connection;
 mod model_state;
 mod ownership;
+pub(crate) use ownership::Ownership;
 pub(crate) mod schema;
 mod semantic;
 mod tool_state;
 
+use std::{path::Path, sync::Arc};
 
+use crate::artifact::SessionArtifacts;
 use rusqlite::Connection;
 
 use super::{
@@ -68,11 +74,12 @@ impl SqliteDatabase {
         let mut connection = connection::create(path)?;
         schema::initialize(&connection, session_id)?;
         let (metadata, receipt) = semantic::create_primary(&mut connection, session_id, config)?;
+        let artifacts = SessionArtifacts::new(path, session_id, limits, ownership)?;
         observations.publish(receipt.clone());
         Ok((
             Self {
                 connection,
-                artifacts: SessionArtifacts::new(path, session_id, limits, ownership)?,
+                artifacts,
                 observations,
                 fenced: false,
             },
@@ -316,7 +323,3 @@ impl SqliteDatabase {
         }
     }
 }
-
-//! SQLite connection owner for the replacement Session runtime.
-
-mod artifacts;

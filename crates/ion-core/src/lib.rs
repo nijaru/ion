@@ -1,3 +1,6 @@
+//! Ion's durable coding-turn domain, Session storage and provider/tool boundaries.
+
+mod artifact;
 mod blob;
 mod bounded_json;
 mod config;
@@ -83,10 +86,3 @@ pub use tool_exec::{
 };
 pub use transcript::{TranscriptContent, TranscriptMessage, TranscriptRole};
 pub use turn::{Cancellation, ParkReason, Turn, TurnBudget, TurnFailure, TurnOutcome, TurnPhase};
-
-//! Ion's durable coding-turn domain.
-//!
-//! R1B adds the passive replacement Session owner, semantic SQLite transactions and
-//! bounded commit-addressed observation. Provider/tool drive remains a later R1B slice.
-
-mod artifact;
