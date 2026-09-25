@@ -260,6 +260,7 @@ impl ModelBoundary for CompleteBoundary {
                 },
                 usage: Usage::known(10, 4),
                 termination: ResponseTermination::Completed,
+                returned_model: None,
             };
             let stream: ion_ai::ModelStream = Box::pin(TerminalWithoutEof {
                 response: Some(response),
@@ -1021,6 +1022,7 @@ impl ModelBoundary for FallbackBoundary {
                 },
                 usage: Usage::known(8, 3),
                 termination: ResponseTermination::Completed,
+                returned_model: None,
             };
             let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
                 ModelStreamEvent::Completed(response),
@@ -1417,6 +1419,7 @@ impl ModelBoundary for ReleasedBoundary {
                         },
                         usage: Usage::known(1, 1),
                         termination: ResponseTermination::Completed,
+                returned_model: None,
                     };
                     let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([
                         Ok(ModelStreamEvent::Completed(response)),
@@ -1779,6 +1782,7 @@ impl ModelBoundary for NegativeThenCompleteBoundary {
                 },
                 usage: Usage::known(9, 3),
                 termination: ResponseTermination::Completed,
+                returned_model: None,
             };
             let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
                 ModelStreamEvent::Completed(response),

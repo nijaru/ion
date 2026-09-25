@@ -14,6 +14,7 @@ mod input;
 mod model;
 mod native_read;
 mod observation;
+pub mod openai_compatible;
 mod provider;
 mod request;
 mod session;

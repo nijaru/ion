@@ -152,6 +152,7 @@ impl ModelBoundary for Model {
                 },
                 usage: Usage::known(10, 5),
                 termination: ResponseTermination::Completed,
+                returned_model: None,
             };
             ModelStart::Started {
                 stream: Box::pin(futures_util::stream::iter([Ok(

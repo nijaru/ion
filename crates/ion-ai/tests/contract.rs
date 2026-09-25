@@ -46,6 +46,7 @@ fn response(message: Message, usage: Usage, termination: ResponseTermination) ->
         message,
         usage,
         termination,
+        returned_model: None,
     }
 }
 
