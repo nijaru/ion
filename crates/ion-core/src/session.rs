@@ -362,6 +362,9 @@ impl SessionHandle {
         let tokens = self.inner.effects.begin_abort(turn);
         let result = self.observe(self.inner.store.cancel_turn(turn).await);
         signal(tokens);
+        if matches!(result, Ok(CancellationResult::Terminal(_))) {
+            self.inner.effects.retire(turn);
+        }
         result
     }
 
@@ -495,6 +498,9 @@ impl SessionHandle {
                             turn,
                             message: "drive task panicked".to_owned(),
                         });
+                    if matches!(exit, DriveExit::Settled(_)) {
+                        task_inner.effects.retire(turn);
+                    }
                     let _ = sender.send(Some(exit));
                     task_inner
                         .drives
@@ -520,7 +526,11 @@ impl SessionHandle {
 
     pub async fn abandon_turn(&self, turn: TurnId) -> Result<AbandonResult, SessionError> {
         self.ensure_mutable()?;
-        self.observe(self.inner.store.abandon_turn(turn).await)
+        let result = self.observe(self.inner.store.abandon_turn(turn).await);
+        if result.is_ok() {
+            self.inner.effects.retire(turn);
+        }
+        result
     }
 
     pub async fn snapshot(
@@ -622,6 +632,48 @@ impl SessionInner {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn abandoned_turn_retires_its_gate_without_reopening_old_references() {
+        let root = std::env::temp_dir().join(format!("ion-gate-retirement-{}", SessionId::new()));
+        std::fs::create_dir_all(&root).unwrap();
+        let session = Session::create(root.join("session.sqlite"), crate::config::tests::config())
+            .await
+            .unwrap()
+            .session;
+        let handle = session.handle();
+        for _ in 0..32 {
+            let input = handle
+                .admit_input(
+                    session.primary_conversation(),
+                    AdmitInputRequest {
+                        sender: crate::InputSender::User,
+                        mode: crate::InputMode::Submit,
+                        request_key: None,
+                        body: crate::InputBody::Text("test".into()),
+                    },
+                )
+                .await
+                .unwrap();
+            let turn = handle
+                .start_turn(StartTurnRequest {
+                    conversation: session.primary_conversation(),
+                    input: input.input().id,
+                    admitted_at_unix_ms: 0,
+                    wall_deadline_unix_ms: None,
+                })
+                .await
+                .unwrap()
+                .turn
+                .id;
+            let old = session.inner.effect_gate(turn);
+            handle.abandon_turn(turn).await.unwrap();
+            assert!(old.admit().is_none());
+        }
+        assert_eq!(session.inner.effects.len(), 0);
+        session.close().await.unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn close_rejects_a_drive_paused_before_registration() {

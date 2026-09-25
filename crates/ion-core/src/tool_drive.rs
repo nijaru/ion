@@ -302,6 +302,7 @@ pub(crate) async fn drive(
         if !call
             .prepared
             .permitted_by(&basis.turn.environment.authority)
+            || !boundary.live_authority(&call.prepared, &basis.turn.environment.workspace)
         {
             return Ok(Some(ParkReason::AuthorityDenied));
         }

@@ -28,7 +28,8 @@ foundation, and an initial tool-execution boundary:
 - exact `CommitReceipt { seq, update }` publication and bounded subscribe-before-snapshot
   observation with overflow/resnapshot semantics and paginated older history;
 - explicit supervised `resume()`, typed `DriveExit`, process-local `SessionHealth`,
-  per-Turn effect gates, and cancellation generation linearization;
+  per-Turn effect gates retired after terminal settlement, and cancellation generation
+  linearization;
 - logical `ModelStep` versus physical `ModelAttempt`, durable response-ready evidence,
   monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
   step eligibility, and atomic predecessor-superseding provider fallback;
@@ -51,8 +52,11 @@ signals and joins locally owned drive work, then releases storage ownership with
 turning suspended work into user cancellation.
 
 `resume_with_tools` accepts exact compatible host tool implementations; missing bindings
-park before provider dispatch. `tool_records` inspects attempts, `accept_tool_unknown`
-settles an uncertain exchange, and `reconcile_tools` recovers evidence without dispatching.
+park before provider dispatch. The host tool boundary checks live authority before
+execution intent; denial parks without spending a physical attempt. It must recheck at
+actual effect admission because permission can change between those points. `tool_records`
+inspects attempts, `accept_tool_unknown` settles an uncertain exchange, and
+`reconcile_tools` recovers evidence without dispatching.
 Active tool records are included in bounded snapshot/watch hydration.
 
 Tool execution is sequential. Scripted tests cover an actual owner-process kill after a

@@ -6,7 +6,7 @@ use std::{
     path::PathBuf,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
 };
 use tokio_util::sync::CancellationToken;
@@ -169,7 +169,8 @@ struct Tool {
     recovery: Mutex<ToolAttemptState>,
     wait: bool,
     started: tokio::sync::Notify,
-    denied: bool,
+    denied: AtomicBool,
+    revoke_after_preflight: AtomicBool,
     authority: ToolAuthority,
 }
 fn success() -> ToolAttemptState {
@@ -201,7 +202,8 @@ impl Tool {
             recovery: Mutex::new(unknown()),
             wait: false,
             started: tokio::sync::Notify::new(),
-            denied: false,
+            denied: AtomicBool::new(false),
+            revoke_after_preflight: AtomicBool::new(false),
             authority: ToolAuthority::ReadOnly,
         }
     }
@@ -232,13 +234,20 @@ impl ToolBoundary for Tool {
     fn permits_retry(&self) -> bool {
         true
     }
+    fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+        let allowed = !self.denied.load(Ordering::SeqCst);
+        if allowed && self.revoke_after_preflight.swap(false, Ordering::SeqCst) {
+            self.denied.store(true, Ordering::SeqCst);
+        }
+        allowed
+    }
     fn execute<'a>(
         &'a self,
         _: ToolExecution,
         stop: CancellationToken,
     ) -> BoxFuture<'a, ToolAttemptState> {
         Box::pin(async move {
-            if self.denied || stop.is_cancelled() {
+            if self.denied.load(Ordering::SeqCst) || stop.is_cancelled() {
                 return ToolAttemptState::NotStarted {
                     reason: "live policy denied".into(),
                 };
@@ -409,6 +418,96 @@ async fn frozen_authority_blocks_execution_intent_across_reopen() {
         assert_eq!(t.executes.load(Ordering::SeqCst), 0);
         s.close().await.unwrap();
     }
+}
+
+#[tokio::test]
+async fn revoked_live_authority_uses_no_attempt_until_restored() {
+    let (s, path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.denied.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AuthorityDenied)
+    );
+    let step = tool_step(&s).await;
+    assert!(
+        s.handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    s.close().await.unwrap();
+
+    // A passive reopen neither authorizes work nor re-prepares the saved action.
+    let s = Session::open(&path).await.unwrap();
+    assert!(
+        s.handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    t.denied.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(_)
+    ));
+    assert_eq!(t.prepares.load(Ordering::SeqCst), 1);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        s.handle().tool_records(step).await.unwrap().attempts.len(),
+        1
+    );
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
+async fn revocation_after_preflight_does_not_burn_retry_attempts() {
+    let (s, _path, turn) = setup(config()).await;
+    let m = model();
+    let t = Arc::new(Tool::new(success()));
+    t.revoke_after_preflight.store(true, Ordering::SeqCst);
+    assert_eq!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AuthorityDenied)
+    );
+    let step = tool_step(&s).await;
+    let records = s.handle().tool_records(step).await.unwrap();
+    assert_eq!(records.attempts.len(), 1);
+    assert!(matches!(
+        records.attempts[0].state,
+        ToolAttemptState::NotStarted { .. }
+    ));
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+
+    t.denied.store(false, Ordering::SeqCst);
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(_)
+    ));
+    assert_eq!(
+        s.handle().tool_records(step).await.unwrap().attempts.len(),
+        2
+    );
+    assert_eq!(t.executes.load(Ordering::SeqCst), 1);
+    s.close().await.unwrap();
 }
 
 #[tokio::test]

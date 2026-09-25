@@ -65,6 +65,9 @@ impl ToolBoundary for RegistryTool {
         )
         .unwrap())
     }
+    fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+        true
+    }
     fn execute<'a>(
         &'a self,
         execution: ToolExecution,

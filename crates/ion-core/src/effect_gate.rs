@@ -38,6 +38,20 @@ impl EffectGates {
         }
         tokens
     }
+
+    /// Retire only after durable terminal settlement. Seal before removal so a
+    /// drive holding an earlier gate reference cannot admit a late effect.
+    pub(crate) fn retire(&self, turn: TurnId) {
+        let mut gates = self.inner.lock().expect("effect-gate map poisoned");
+        if gates.get(&turn).is_some_and(|gate| gate.seal_if_idle()) {
+            gates.remove(&turn);
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.inner.lock().expect("effect-gate map poisoned").len()
+    }
 }
 
 #[derive(Debug)]
@@ -83,6 +97,15 @@ impl EffectGate {
         let mut state = self.state.lock().expect("effect gate poisoned");
         state.sealed = true;
         state.active.values().cloned().collect()
+    }
+
+    fn seal_if_idle(&self) -> bool {
+        let mut state = self.state.lock().expect("effect gate poisoned");
+        if !state.active.is_empty() {
+            return false;
+        }
+        state.sealed = true;
+        true
     }
 
     fn release(&self, id: u64) {
@@ -136,5 +159,27 @@ mod tests {
         assert!(gate.admit().is_none());
         signal(tokens);
         assert!(stop.is_cancelled());
+    }
+
+    #[test]
+    fn terminal_retirement_bounds_map_without_reopening_held_gates() {
+        let gates = EffectGates::default();
+        for value in 1..=10_000 {
+            let turn = TurnId::new(value).unwrap();
+            let old = gates.gate(turn);
+            gates.retire(turn);
+            assert!(old.admit().is_none());
+        }
+        assert!(gates.inner.lock().unwrap().is_empty());
+
+        let turn = TurnId::new(10_001).unwrap();
+        let gate = gates.gate(turn);
+        let permit = gate.admit().unwrap();
+        gates.retire(turn);
+        assert!(gates.inner.lock().unwrap().contains_key(&turn));
+        drop(permit);
+        gates.retire(turn);
+        assert!(gates.inner.lock().unwrap().is_empty());
+        assert!(gate.admit().is_none());
     }
 }

@@ -49,6 +49,11 @@ pub trait ToolBoundary: Send + Sync {
         false
     }
 
+    /// Check current host policy before committing physical intent. Denial parks
+    /// without consuming an attempt; a later explicit resume may try again.
+    /// This is not a permission lease: execute must recheck at effect admission.
+    fn live_authority(&self, action: &PreparedAction, workspace: &WorkspaceBinding) -> bool;
+
     /// Recheck current live authority and workspace identity/claims immediately
     /// before effects, inside the frozen ceiling. A cancelled token must prevent
     /// new admission. Return only after local execution is joined, or return explicit
@@ -198,6 +203,9 @@ mod tests {
         fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
             Ok(self.0.clone())
         }
+        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+            panic!("preparation cannot authorize")
+        }
         fn execute<'a>(
             &'a self,
             _: ToolExecution,
@@ -249,6 +257,9 @@ mod tests {
         }
         fn prepare(&self, _: Value) -> Result<PreparedAction, ToolBoundaryError> {
             panic!("unused")
+        }
+        fn live_authority(&self, _: &PreparedAction, _: &WorkspaceBinding) -> bool {
+            panic!("reconciliation must not authorize")
         }
         fn execute<'a>(
             &'a self,
