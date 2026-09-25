@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     os::{fd::OwnedFd, unix::fs::MetadataExt},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -49,6 +50,7 @@ pub struct NativeReadBoundary {
     root: File,
     root_identity: RootIdentity,
     max_read_bytes: usize,
+    registry_directory: PathBuf,
     live_authority: Arc<AtomicU8>,
     permits: Arc<Semaphore>,
 }
@@ -97,6 +99,7 @@ impl NativeReadBoundary {
             root,
             root_identity,
             max_read_bytes,
+            registry_directory: registry.directory().to_path_buf(),
             live_authority: Arc::new(AtomicU8::new(AUTHORITY_DENY)),
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_READS)),
         })
@@ -274,6 +277,7 @@ impl ToolBoundary for NativeReadBoundary {
                 root,
                 root_path: self.workspace.canonical_root.clone(),
                 root_identity: self.root_identity,
+                registry_directory: self.registry_directory.clone(),
                 live_authority: Arc::clone(&self.live_authority),
                 executor: self.executor.clone(),
                 binding: self.binding.clone(),
@@ -514,6 +518,7 @@ struct ReadJob {
     root: File,
     root_path: String,
     root_identity: RootIdentity,
+    registry_directory: PathBuf,
     live_authority: Arc<AtomicU8>,
     executor: SemanticCompatibilityId,
     binding: ToolBinding,
@@ -548,6 +553,14 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
         return not_started("read cancelled before admission");
     }
 
+    let registry = match WorkspaceRegistry::open(&job.registry_directory) {
+        Ok(registry) => registry,
+        Err(_) => return settled_error("workspace revision is unavailable", job.output_limit),
+    };
+    let workspace_revision = match registry.revision(&job.execution.workspace) {
+        Ok(revision) => revision,
+        Err(_) => return settled_error("workspace revision is unavailable", job.output_limit),
+    };
     let mut file = match open_relative_regular_file(&job.root, &job.arguments.path) {
         Ok(file) => file,
         Err(_) => {
@@ -620,13 +633,23 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
     } else {
         crate::OutputCapture::CompleteInline
     };
-    let result = read_result(
+    if !matches!(
+        registry.revision(&job.execution.workspace),
+        Ok(current) if current == workspace_revision
+    ) {
+        return settled_error("workspace changed during read", job.output_limit);
+    }
+    let mut result = read_result(
         content,
         job.arguments.offset,
         bytes_read,
         truncated,
         capture,
     );
+    result.value["workspace_revision"] = json!({
+        "files": workspace_revision.files,
+        "repository": workspace_revision.repository,
+    });
     if serde_json::to_vec(&result).map_or(true, |encoded| {
         encoded.len() > job.output_limit.min(crate::MAX_TOOL_RECORD_BYTES)
     }) {
@@ -753,12 +776,12 @@ mod tests {
     impl Drop for TestRoot {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(self.0.with_extension("host-registry"));
         }
     }
 
     fn boundary(root: &Path, max_read_bytes: usize) -> NativeReadBoundary {
-        let registry_root = TestRoot::new();
-        let mut registry = WorkspaceRegistry::open(registry_root.path()).unwrap();
+        let mut registry = WorkspaceRegistry::open(root.with_extension("host-registry")).unwrap();
         let workspace = registry.bind("test-workspace", root, "local-v1").unwrap();
         let boundary = NativeReadBoundary::new(&registry, workspace, max_read_bytes).unwrap();
         boundary.set_live_authority(LiveToolAuthority::Allow);

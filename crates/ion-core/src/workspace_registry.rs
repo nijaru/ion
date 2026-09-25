@@ -242,6 +242,35 @@ impl WorkspaceRegistry {
         Ok(())
     }
 
+    /// Resource scope required for a mutation: Git workspaces also claim their
+    /// shared repository metadata; non-Git roots claim only their files.
+    pub fn mutation_resources(&self, binding: &WorkspaceBinding) -> Result<WorkspaceResources> {
+        let record = checked_binding(&self.connection, binding)?;
+        Ok(if record.descriptor.common.is_some() {
+            WorkspaceResources::FilesAndRepository
+        } else {
+            WorkspaceResources::Files
+        })
+    }
+
+    /// Frozen physical Git administration roots, including redirected gitdir
+    /// and commondir. Ordinary workspace mutation must not target descendants;
+    /// claiming the repository resource does not grant metadata-edit authority.
+    pub fn protected_mutation_paths(&self, binding: &WorkspaceBinding) -> Result<Vec<PathBuf>> {
+        let record = checked_binding(&self.connection, binding)?;
+        Ok(record
+            .descriptor
+            .git
+            .iter()
+            .chain(record.descriptor.common.iter())
+            .map(|object| object.path.clone())
+            .collect())
+    }
+
+    pub(crate) fn directory(&self) -> &Path {
+        &self.directory
+    }
+
     pub fn revision(&self, binding: &WorkspaceBinding) -> Result<WorkspaceRevision> {
         let tx = self.connection.unchecked_transaction()?;
         let record = checked_binding(&tx, binding)?;
