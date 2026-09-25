@@ -59,8 +59,8 @@ pub struct NativeEditBoundary {
     binding: ToolBinding,
     workspace: WorkspaceBinding,
     executor: SemanticCompatibilityId,
-    root: File,
-    root_identity: PhysicalIdentity,
+    root: Option<File>,
+    root_identity: Option<PhysicalIdentity>,
     registry_directory: PathBuf,
     resources: WorkspaceResources,
     protected_paths: Vec<PathBuf>,
@@ -92,6 +92,25 @@ impl NativeEditBoundary {
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
     ) -> Result<Self, NativeEditError> {
+        Self::construct(registry, workspace, max_file_bytes, true)
+    }
+
+    /// Adopt already durable host evidence when the frozen workspace is gone.
+    /// This boundary can never admit new execution or infer an unresolved rename.
+    pub fn new_recovery(
+        registry: &WorkspaceRegistry,
+        workspace: WorkspaceBinding,
+        max_file_bytes: usize,
+    ) -> Result<Self, NativeEditError> {
+        Self::construct(registry, workspace, max_file_bytes, false)
+    }
+
+    fn construct(
+        registry: &WorkspaceRegistry,
+        workspace: WorkspaceBinding,
+        max_file_bytes: usize,
+        live: bool,
+    ) -> Result<Self, NativeEditError> {
         if !(1..=MAX_NATIVE_EDIT_BYTES).contains(&max_file_bytes) {
             return Err(NativeEditError::InvalidFileLimit);
         }
@@ -101,17 +120,22 @@ impl NativeEditBoundary {
         {
             return Err(NativeEditError::InvalidWorkspace);
         }
-        registry.verify_current(&workspace)?;
         let executor = SemanticCompatibilityId::new(workspace.backend.clone())
             .map_err(|_| NativeEditError::InvalidWorkspace)?;
-        let root = open_absolute_directory(&workspace.canonical_root)?;
-        let root_identity = physical_identity(&root).map_err(|error| {
-            if error.kind() == std::io::ErrorKind::Unsupported {
-                NativeEditError::UnsupportedIdentity
-            } else {
-                NativeEditError::Io(error)
-            }
-        })?;
+        let (root, root_identity) = if live {
+            registry.verify_current(&workspace)?;
+            let root = open_absolute_directory(&workspace.canonical_root)?;
+            let identity = physical_identity(&root).map_err(|error| {
+                if error.kind() == std::io::ErrorKind::Unsupported {
+                    NativeEditError::UnsupportedIdentity
+                } else {
+                    NativeEditError::Io(error)
+                }
+            })?;
+            (Some(root), Some(identity))
+        } else {
+            (None, None)
+        };
         let resources = registry.mutation_resources(&workspace)?;
         let protected_paths = registry.protected_mutation_paths(&workspace)?;
         if protected_paths
@@ -120,7 +144,9 @@ impl NativeEditBoundary {
         {
             return Err(NativeEditError::InvalidWorkspace);
         }
-        registry.verify_current(&workspace)?;
+        if live {
+            registry.verify_current(&workspace)?;
+        }
 
         Ok(Self {
             binding: native_edit_binding().map_err(NativeEditError::InvalidBinding)?,
@@ -229,11 +255,14 @@ impl NativeEditBoundary {
     }
 
     fn workspace_is_current(&self, workspace: &WorkspaceBinding) -> bool {
+        let Some(pinned) = self.root_identity else {
+            return false;
+        };
         if workspace != &self.workspace
             || !matches!(
                 open_absolute_directory(&self.workspace.canonical_root)
                     .and_then(|root| physical_identity(&root)),
-                Ok(identity) if identity == self.root_identity
+                Ok(identity) if identity == pinned
             )
         {
             return false;
@@ -334,7 +363,10 @@ impl ToolBoundary for NativeEditBoundary {
             if stop.is_cancelled() {
                 return not_started("edit cancelled before admission");
             }
-            let root = match self.root.try_clone() {
+            let Some(pinned_root) = self.root.as_ref() else {
+                return not_started("recovery-only edit boundary cannot execute");
+            };
+            let root = match pinned_root.try_clone() {
                 Ok(root) => root,
                 Err(_) => return not_started("workspace root is no longer available"),
             };
@@ -343,7 +375,7 @@ impl ToolBoundary for NativeEditBoundary {
                 execution,
                 arguments,
                 root,
-                root_identity: self.root_identity,
+                root_identity: self.root_identity.expect("live root has physical identity"),
                 registry_directory: self.registry_directory.clone(),
                 resources: self.resources,
                 live_authority: Arc::clone(&self.live_authority),
@@ -729,7 +761,13 @@ async fn reconcile_edit(
         // cooperating edit has changed the current target.
         return settled_edit(&arguments, &replacement, effect, &start);
     }
-    let (parent, leaf) = match open_relative_parent(&boundary.root, &arguments.path) {
+    let Some(root) = boundary.root.as_ref() else {
+        return indeterminate(
+            "workspace root is unavailable for unresolved edit",
+            Some(&start),
+        );
+    };
+    let (parent, leaf) = match open_relative_parent(root, &arguments.path) {
         Ok(parent) => parent,
         Err(_) => return indeterminate("edit target parent is unavailable", Some(&start)),
     };
@@ -1587,6 +1625,43 @@ mod tests {
             fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
             "alpha gamma alpha\n"
         );
+    }
+
+    #[tokio::test]
+    async fn committed_terminal_edit_reconciles_without_the_old_workspace() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(FAULT_AFTER_REGISTRY_COMMIT);
+        let lost_reply = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(lost_reply, ToolAttemptState::Indeterminate { .. }));
+        fs::remove_dir_all(fixture.root.path()).unwrap();
+        assert!(
+            NativeEditBoundary::new(&fixture.registry, execution.workspace.clone(), 1024,).is_err()
+        );
+        let recovery =
+            NativeEditBoundary::new_recovery(&fixture.registry, execution.workspace.clone(), 1024)
+                .unwrap();
+        recovery.set_live_authority(LiveToolAuthority::Allow);
+        assert_eq!(
+            recovery.live_authority(&execution.action, &execution.workspace),
+            LiveToolAuthority::Deny,
+        );
+        let settled = recovery
+            .reconcile(execution.clone(), attempt(&execution, lost_reply))
+            .await;
+        assert!(matches!(settled, ToolAttemptState::Settled { .. }));
+        assert!(matches!(
+            recovery.execute(execution, CancellationToken::new()).await,
+            ToolAttemptState::NotStarted { .. }
+        ));
     }
 
     #[tokio::test]
