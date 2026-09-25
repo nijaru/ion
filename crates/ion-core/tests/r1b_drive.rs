@@ -518,6 +518,52 @@ async fn wrong_service_realm_never_reaches_admission_or_provider_start() {
 }
 
 #[tokio::test]
+async fn monetary_ceiling_without_a_host_quote_never_dispatches() {
+    let (dir, path) = database("unpriced-cap");
+    let mut configured = config();
+    configured.limits.max_cost_microusd = Some(100);
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::new();
+    let boundaries = ModelBoundaries::new(
+        [boundary.clone() as Arc<dyn ModelBoundary>],
+        Arc::new(|_: &ProviderBinding| Ok(())),
+    )
+    .unwrap();
+    assert_eq!(
+        handle.resume(turn, boundaries.clone()).await.unwrap(),
+        DriveExit::Parked(ParkReason::Capacity)
+    );
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert!(snapshot.model_attempts.is_empty());
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        0
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    session.close().await.unwrap();
+    let reopened = Session::open(&path).await.unwrap();
+    let snapshot = reopened
+        .handle()
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .unwrap();
+    assert!(snapshot.model_attempts.is_empty());
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    assert_eq!(
+        reopened.handle().resume(turn, boundaries).await.unwrap(),
+        DriveExit::Parked(ParkReason::Capacity)
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
 async fn preflight_denial_consumes_no_attempt_and_restoration_requires_explicit_resume() {
     for (error, reason) in [
         (

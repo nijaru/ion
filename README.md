@@ -80,24 +80,26 @@ scenarios are being restored against the replacement owners.
 
 Still missing: native read/edit/exec backends, a user-facing approval client and
 host authentication/policy backend, Session-integrated artifact publication and GC,
-parallel tool dispatch,
-context compaction/forking, Steer/InteractionReply placement, real provider adapters,
-a runnable `ion` binary, the terminal UI, and workers. `submit_turn` now atomically
-admits text and places its Turn with one watch receipt; request-key replay is idempotent
-and an insertion fault rolls the entire submission back. Unimplemented
-Steer/InteractionReply inputs reject at admission rather than acknowledge requests
-that will never be consumed. A bounded tool result now records complete-inline, complete-artifact or incomplete-capture
-provenance rather than a boolean truncation flag. An oversized backend value is replaced
-with an explicit incomplete output warning while preserving its terminal effect evidence
-and suppressing replay; complete artifacts remain unavailable until publication is wired.
-An immutable bounded BlobStore foundation exists but is not wired to
-Session settlement, publication evidence, artifact paging, or GC. It cannot yet back large
+parallel tool dispatch, context compaction/forking, Steer/InteractionReply placement,
+real provider adapters, a runnable `ion` binary, the terminal UI, and workers.
+`submit_turn` atomically admits text and places its Turn with one watch receipt;
+request-key replay is idempotent and an insertion fault rolls back the submission.
+Unimplemented Steer/InteractionReply inputs reject at admission rather than queue
+unconsumable work. Tool results distinguish complete inline, complete artifact and
+incomplete capture. An oversized backend value becomes an explicit incomplete output
+warning, preserving its terminal effect evidence without permitting replay. Complete
+artifacts remain unavailable until publication is wired. An immutable bounded
+BlobStore foundation is not wired to Session settlement, publication evidence,
+artifact paging, or GC. It cannot yet back large
 native output. Its host-owned namespace must be outside agent-writable workspace state and
 protected from untrusted same-user processes; a BlobStore owner lock excludes a second
 handle, while the host still owns namespace ancestry and filesystem trust.
 Provider admission is a local host callback, not network confinement or a production
 credential policy; real adapters must enforce realm/credential validity at actual I/O.
-No live-provider effectiveness has been measured.
+A configured monetary cap parks before physical attempt intent until a host can supply
+a conservative cost quote. Request encoding stops at the frozen byte cap without
+allocating a complete oversized serialization. No live-provider effectiveness has been
+measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
 `crates/ion/` application source is reference material outside the workspace; its CLI,

@@ -616,6 +616,11 @@ async fn dispatch(
     if let Err(error) = preflight(basis, prepared, boundaries) {
         return DispatchAction::Exit(DriveExit::Parked(admission_park_reason(error)));
     }
+    // No host cost catalog/reservation is installed yet. A configured cap cannot
+    // safely dispatch on an unpriced physical attempt, even if the provider is live.
+    if basis.turn.environment.limits.max_cost_microusd.is_some() {
+        return DispatchAction::Exit(DriveExit::Parked(ParkReason::Capacity));
+    }
     let step = basis
         .current_step
         .as_ref()

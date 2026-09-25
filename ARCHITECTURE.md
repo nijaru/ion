@@ -24,8 +24,11 @@ result materialization, exact durable per-invocation approval decisions, and tru
 unavailable settlement of already-returned provider calls through sequential host-supplied
 tools. Tool results now distinguish complete inline, complete artifact and incomplete
 capture; oversized backend values preserve settled effects with explicit output loss rather
-than stranding the attempt. A bounded immutable BlobStore foundation is not yet Session-integrated. Active tool state
-participates in snapshot/watch coverage. A separate host-owned WorkspaceRegistry preserves physical
+than stranding the attempt. A bounded immutable BlobStore foundation is not yet
+Session-integrated. Active tool state participates in snapshot/watch coverage.
+Configured monetary ceilings currently park before dispatch because host CostQuote
+admission has not been implemented; request JSON encoding stops at its frozen byte cap
+rather than materializing an oversized buffer. A separate host-owned WorkspaceRegistry preserves physical
 workspace/repository identity and orphan quarantine; a scripted integration test kills the
 owner after mutation and recovers through the registry without replay.
 

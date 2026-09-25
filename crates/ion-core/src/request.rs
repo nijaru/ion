@@ -5,6 +5,7 @@
 //! bindings from TurnEnvironment + TurnSettings, and produces one semantic request digest.
 
 use std::collections::BTreeSet;
+use std::io::{self, Write};
 
 use ion_ai::{Content, GenerationControls, Message, ModelRef, Role, ToolSpec};
 use serde::{Deserialize, Serialize};
@@ -157,19 +158,55 @@ pub fn assemble(
         tools,
         controls: settings.controls.clone(),
     };
-    let encoded = serde_json::to_vec(&request).map_err(RequestError::Serialization)?;
-    let bytes = u64::try_from(encoded.len()).unwrap_or(u64::MAX);
-    if bytes > u64::from(environment.context.max_request_bytes) {
+    let limit = environment.context.max_request_bytes;
+    let mut encoded = BoundedRequest::new(limit);
+    let result = serde_json::to_writer(&mut encoded, &request);
+    if let Some(lower_bound) = encoded.exceeded_at {
         return Err(RequestError::TooLarge {
-            bytes,
-            limit: environment.context.max_request_bytes,
+            bytes: lower_bound,
+            limit,
         });
     }
+    result.map_err(RequestError::Serialization)?;
+    let bytes = encoded.bytes.len() as u64;
     Ok(AssembledRequest {
-        semantic_digest: ContentDigest::of_bytes(&encoded),
+        semantic_digest: ContentDigest::of_bytes(&encoded.bytes),
         request,
         bytes,
     })
+}
+
+/// Encode only up to the frozen request capacity. An oversized durable entry must not
+/// first produce an unbounded second serialized allocation just to discover overflow.
+struct BoundedRequest {
+    bytes: Vec<u8>,
+    limit: usize,
+    exceeded_at: Option<u64>,
+}
+
+impl BoundedRequest {
+    fn new(limit: u32) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit: limit as usize,
+            exceeded_at: None,
+        }
+    }
+}
+
+impl Write for BoundedRequest {
+    fn write(&mut self, chunk: &[u8]) -> io::Result<usize> {
+        if chunk.len() > self.limit.saturating_sub(self.bytes.len()) {
+            self.exceeded_at = Some((self.bytes.len() as u64).saturating_add(chunk.len() as u64));
+            return Err(io::Error::other("semantic request capacity exceeded"));
+        }
+        self.bytes.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
 }
 
 fn project_context(messages: &[Message]) -> Result<Vec<TranscriptMessage>, RequestError> {
@@ -227,7 +264,7 @@ pub enum RequestError {
     InvalidProjectContext,
     #[error("request needs an unsupported provider capability: {0}")]
     Unsupported(String),
-    #[error("semantic request is {bytes} bytes; maximum is {limit}")]
+    #[error("semantic request is at least {bytes} bytes; maximum is {limit}")]
     TooLarge { bytes: u64, limit: u32 },
     #[error("cannot encode semantic request: {0}")]
     Serialization(serde_json::Error),
@@ -335,6 +372,27 @@ mod tests {
             config,
         })
         .expect("capture")
+    }
+
+    #[test]
+    fn semantic_encoding_stops_at_the_frozen_byte_cap() {
+        let (mut environment, settings) = environment();
+        environment.context.max_request_bytes = 128;
+        let error = assemble(&environment, &settings, &[], None).unwrap_err();
+        assert!(matches!(error, RequestError::TooLarge { bytes, limit: 128 } if bytes > 128));
+        environment.context.max_request_bytes = 1_000_000;
+        let encoded = assemble(&environment, &settings, &[], None).unwrap();
+        let exact = encoded.bytes as u32;
+        environment.context.max_request_bytes = exact;
+        assert_eq!(
+            assemble(&environment, &settings, &[], None)
+                .unwrap()
+                .semantic_digest,
+            encoded.semantic_digest
+        );
+        environment.context.max_request_bytes = exact - 1;
+        assert!(matches!(assemble(&environment, &settings, &[], None),
+            Err(RequestError::TooLarge { limit, .. }) if limit == exact - 1));
     }
 
     #[test]
