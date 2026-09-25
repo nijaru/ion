@@ -40,8 +40,11 @@ production adapter; there is no user-facing authenticated approval client,
 native edit/exec, native large-output capture or real parallel dispatch. A native bounded
 read boundary exists and checks its frozen binding against WorkspaceRegistry before
 pinning the root; its descriptor-relative walk is not a race-free beneath-root primitive.
-The host must protect the workspace namespace from concurrent renames. It does not
-provide an OS sandbox. The scripted
+The host must protect the workspace namespace from concurrent renames; Git marker
+preflight rejects static symlinks and nonregular files. It does not provide an OS sandbox.
+Session ownership locks canonicalize database aliases and refuse hardlinks. Admitted
+start receipts reserve a bounded physical settlement envelope, so an oversized backend
+result cannot evict known terminal effect truth. The scripted
 approval store/drive boundary does not implement the host's live policy or confinement. Context
 compaction/reset/forks, real provider adapters, a client binary and workers also remain
 future work. Preserve useful prototype leaf behavior and failure scenarios as replacement

@@ -15,6 +15,8 @@ use crate::{
 
 /// Hard bounds apply even when a host configures larger model-facing limits.
 pub const MAX_TOOL_RECORD_BYTES: usize = 64 * 1024;
+/// Keep a complete settlement envelope available after any admitted start receipt.
+pub(crate) const MAX_TOOL_RECEIPT_BYTES: usize = 8 * 1024;
 pub const MAX_TOOL_ATTEMPTS: usize = 4;
 pub(crate) const MAX_TOOL_BATCH: usize = 128;
 pub(crate) const MAX_TOOL_BATCH_BYTES: usize = 16 * 1024 * 1024;

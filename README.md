@@ -17,7 +17,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v5 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v7 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -75,7 +75,7 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v4) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v6) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 Still missing: native edit/exec backends, a user-facing approval client and host
@@ -95,10 +95,12 @@ for missing/corrupt auxiliary bytes without rewriting the result. Explicit GC ex
 publication through the queued SQLite commit. Only this auxiliary tool-output use is
 wired; there is no automatic Session-namespace deletion or native large-output producer.
 The host must keep that namespace outside agent-writable workspace state and protect
-its filesystem ancestry from untrusted same-user processes.
+its filesystem ancestry from untrusted same-user processes. Session ownership locks
+resolve database symlink aliases; hard-linked database aliases are refused.
 A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
 persisted tool exchange. It is serial, not an OS sandbox: the host must protect the
 workspace namespace against concurrent renames and enforce its promised read authority.
+Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 Provider admission is a local host callback, not network confinement or a production
 credential policy; real adapters must enforce realm/credential validity at actual I/O.
 A configured monetary cap parks before physical attempt intent until a host can supply

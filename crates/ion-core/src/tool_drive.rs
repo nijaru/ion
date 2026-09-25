@@ -20,7 +20,33 @@ pub(crate) fn now_unix_ms() -> Result<i64, StoreError> {
 
 // Backend output limits are a host contract, but a bad backend must not erase
 // known terminal effect truth merely because its result cannot fit the Session.
+fn attempt_fits(attempt: &ToolAttempt, state: &ToolAttemptState) -> bool {
+    // Borrow the prospective physical envelope: cloning an unbounded backend Value
+    // before the capacity check would recreate the memory risk this gate prevents.
+    #[derive(serde::Serialize)]
+    struct Envelope<'a> {
+        id: crate::AttemptId,
+        invocation: crate::InvocationId,
+        ordinal: u32,
+        generation: u64,
+        executor: &'a crate::SemanticCompatibilityId,
+        progress: &'a Option<crate::ProgressCheckpoint>,
+        state: &'a ToolAttemptState,
+    }
+    crate::tool_boundary::bounded(&Envelope {
+        id: attempt.id,
+        invocation: attempt.invocation,
+        ordinal: attempt.ordinal,
+        generation: attempt.generation,
+        executor: &attempt.executor,
+        progress: &attempt.progress,
+        state,
+    })
+    .is_ok()
+}
+
 fn bounded_effect(
+    attempt: &ToolAttempt,
     state: ToolAttemptState,
     preview_cap: u32,
     publication: Option<&crate::artifact::PublishedBlob>,
@@ -46,18 +72,44 @@ fn bounded_effect(
             ..
         } => *retained_bytes <= limit as u64 && observed_bytes.is_none_or(|n| n >= *retained_bytes),
     };
+    let prior_receipt = match &attempt.state {
+        ToolAttemptState::IntentCommitted { start_receipt }
+        | ToolAttemptState::Indeterminate {
+            receipt: start_receipt,
+            ..
+        } => start_receipt.as_ref(),
+        _ => None,
+    };
+    let receipt_conflict =
+        prior_receipt.is_some_and(|prior| receipt.as_ref().is_some_and(|new| new != prior));
+    // A backend need not echo a previously committed receipt, but it may not
+    // replace one. Keep that immutable evidence even on malformed completion.
+    let receipt = prior_receipt.cloned().or(receipt);
+    let receipt_valid = receipt.as_ref().is_none_or(|receipt| {
+        crate::tool_boundary::bounded_to(receipt, crate::tool_boundary::MAX_TOOL_RECEIPT_BYTES)
+            .is_ok()
+    });
+    let result_valid = crate::tool_boundary::bounded_to(&result, limit).is_ok();
     let proposed = ToolAttemptState::Settled {
-        result: result.clone(),
-        effect: effect.clone(),
-        receipt: receipt.clone(),
+        result,
+        effect,
+        receipt,
         retryable,
     };
     if capture_valid
-        && crate::tool_boundary::bounded_to(&result, limit).is_ok()
-        && crate::tool_boundary::bounded(&proposed).is_ok()
+        && !receipt_conflict
+        && receipt_valid
+        && result_valid
+        && attempt_fits(attempt, &proposed)
     {
         return proposed;
     }
+    let ToolAttemptState::Settled {
+        effect, receipt, ..
+    } = proposed
+    else {
+        unreachable!()
+    };
     let message = "Tool output exceeded bounded retention; execution evidence is preserved.";
     let fallback = ToolResult {
         value: serde_json::Value::String(message.into()),
@@ -68,35 +120,68 @@ fn bounded_effect(
             observed_bytes: None,
         },
     };
-    let effect = if crate::tool_boundary::bounded_to(&effect, MAX_TOOL_RECORD_BYTES / 4).is_ok() {
+    let effect = if !receipt_conflict
+        && crate::tool_boundary::bounded_to(&effect, MAX_TOOL_RECORD_BYTES / 4).is_ok()
+    {
         effect
     } else {
         EffectSummary::MayHaveMutated
     };
-    ToolAttemptState::Settled {
+    // A receipt already committed is immutable. A newly returned oversized
+    // receipt cannot displace known terminal effects; omit it only when no prior
+    // receipt was durably admitted, and keep a conservative effect classification.
+    let receipt = if prior_receipt.is_none() && !receipt_valid {
+        None
+    } else {
+        receipt
+    };
+    let settled = ToolAttemptState::Settled {
         result: fallback,
         effect,
         receipt,
         retryable: false,
+    };
+    if attempt_fits(attempt, &settled) {
+        settled
+    } else {
+        // A backend-provided exact effect payload can itself exhaust capacity.
+        // Preserve settled status and conservatively prohibit repetition.
+        if let ToolAttemptState::Settled {
+            result, receipt, ..
+        } = settled
+        {
+            ToolAttemptState::Settled {
+                result,
+                effect: EffectSummary::MayHaveMutated,
+                receipt: if prior_receipt.is_none() {
+                    None
+                } else {
+                    receipt
+                },
+                retryable: false,
+            }
+        } else {
+            unreachable!()
+        }
     }
 }
 
 async fn record_evidence(
     inner: &SessionInner,
     step: StepId,
-    attempt: AttemptId,
+    attempt: &ToolAttempt,
     state: ToolAttemptState,
     preview_cap: u32,
     scope: crate::artifact::PublicationScope,
 ) -> Result<(), StoreError> {
     let publication = scope.finish().await;
-    let state = bounded_effect(state, preview_cap, publication.as_ref());
+    let state = bounded_effect(attempt, state, preview_cap, publication.as_ref());
     inner.observe_store(
         inner
             .store()
             .tool_mutate(ToolMutation::Evidence {
                 step,
-                attempt,
+                attempt: attempt.id,
                 state: Box::new(state),
                 publication,
             })
@@ -247,7 +332,7 @@ pub(crate) async fn reconcile(
         record_evidence(
             inner,
             step,
-            attempt.id,
+            attempt,
             state,
             records.turn.environment.limits.max_tool_preview_bytes,
             scope,
@@ -367,7 +452,7 @@ pub(crate) async fn drive(
                     record_evidence(
                         inner,
                         step,
-                        attempt.id,
+                        attempt,
                         state,
                         basis.turn.environment.limits.max_tool_preview_bytes,
                         scope,
@@ -486,7 +571,7 @@ pub(crate) async fn drive(
         record_evidence(
             inner,
             step,
-            attempt.id,
+            &attempt,
             state,
             basis.turn.environment.limits.max_tool_preview_bytes,
             scope,
@@ -504,3 +589,6 @@ pub(crate) async fn drive(
     }
     Ok(None)
 }
+
+#[cfg(test)]
+mod settlement_tests;

@@ -1135,8 +1135,15 @@ async fn oversized_backend_output_preserves_terminal_effect_without_reexecution(
     let (s, path, turn) = setup(config()).await;
     let m = model();
     let mut state = success();
-    if let ToolAttemptState::Settled { result, .. } = &mut state {
+    if let ToolAttemptState::Settled {
+        result, receipt, ..
+    } = &mut state
+    {
         result.value = json!("x".repeat(2048));
+        *receipt = Some(StartReceipt {
+            kind: "oversized".into(),
+            data: json!("r".repeat(MAX_TOOL_RECORD_BYTES)),
+        });
     }
     let t = Arc::new(Tool::new(state));
     assert!(matches!(
@@ -1160,6 +1167,7 @@ async fn oversized_backend_output_preserves_terminal_effect_without_reexecution(
                 ..
             },
             effect: EffectSummary::NoMutation,
+            receipt: None,
             retryable: false,
             ..
         }

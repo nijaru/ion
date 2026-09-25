@@ -520,6 +520,15 @@ pub(super) fn mutate(
             publication: _,
         } => {
             let state = *state;
+            if receipt(&state).is_some_and(|receipt| {
+                crate::tool_boundary::bounded_to(
+                    receipt,
+                    crate::tool_boundary::MAX_TOOL_RECEIPT_BYTES,
+                )
+                .is_err()
+            }) {
+                return Err(StoreError::Limit("start receipt settlement reserve".into()));
+            }
             crate::tool_boundary::bounded(&state).map_err(|e| invalid(&e.to_string()))?;
             let records = records(&tx, step)?;
             let mut prior = records
