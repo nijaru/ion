@@ -120,6 +120,19 @@ pub struct ProviderBinding {
 }
 
 impl ProviderBinding {
+    /// Returned model names are exact frozen identities, not prefix/pattern grants.
+    /// Missing identity is not proof that a routed or explicitly selected model ran.
+    #[must_use]
+    pub fn permits_returned_model(&self, actual: Option<&str>) -> bool {
+        match (&self.returned_model, actual) {
+            (ReturnedModelPolicy::Exact, Some(model)) => model == self.model.model,
+            (ReturnedModelPolicy::ServerRoute { allowed_family }, Some(model)) => {
+                allowed_family.iter().any(|allowed| allowed == model)
+            }
+            (_, None) => false,
+        }
+    }
+
     fn validate(&self) -> Result<(), ConfigError> {
         if self.model.provider.is_empty() || self.model.model.is_empty() {
             return Err(ConfigError::EmptyModel);

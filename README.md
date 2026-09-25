@@ -17,7 +17,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v7 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v8 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -75,13 +75,13 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v6) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v7) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 Still missing: native edit/exec backends, a user-facing approval client and host
 authentication/policy backend, parallel tool dispatch, context compaction/forking,
-Steer/InteractionReply placement, real provider adapters, a runnable `ion` binary,
-the terminal UI, and workers.
+Steer/InteractionReply placement, live provider qualification and additional adapters,
+a runnable `ion` binary, the terminal UI, and workers.
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
 Unimplemented Steer/InteractionReply inputs reject at admission rather than queue
@@ -101,12 +101,16 @@ A registry-authenticated native `read` ToolBoundary supports bounded file ranges
 persisted tool exchange. It is serial, not an OS sandbox: the host must protect the
 workspace namespace against concurrent renames and enforce its promised read authority.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
-Provider admission is a local host callback, not network confinement or a production
-credential policy; real adapters must enforce realm/credential validity at actual I/O.
-A configured monetary cap parks before physical attempt intent until a host can supply
-a conservative cost quote. Request and terminal provider-response capacity checks stop
-encoding at their frozen limits rather than allocating complete oversized JSON copies. No live-provider effectiveness has been
-measured.
+The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
+with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient
+proxies, and obtains an API key from a live host callback at dispatch. Returned-model IDs
+must match the exact binding or a frozen list of allowed route models; missing or unexpected
+IDs park without selecting a response or admitting tools. This callback and provider
+preflight are not network confinement or a production credential policy. A configured
+monetary cap parks before physical attempt intent until a host can supply a conservative
+cost quote. Request and terminal provider-response capacity checks stop encoding at
+their frozen limits rather than allocating complete oversized JSON copies. No live-provider
+effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy
 `crates/ion/` application source is reference material outside the workspace; its CLI,

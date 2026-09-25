@@ -85,6 +85,13 @@ pub(crate) async fn run(
             && matches!(step.disposition, StepDisposition::Open)
             && let ModelAttemptState::ResponseReady { response, .. } = &attempt.state
         {
+            if !response_model_allowed(
+                &basis.turn.environment,
+                &step.manifest.settings.provider,
+                response,
+            ) {
+                return DriveExit::Parked(ParkReason::ReturnedModelMismatch);
+            }
             if response
                 .message
                 .content
@@ -579,6 +586,16 @@ async fn reconcile_intent(
     }
 }
 
+fn response_model_allowed(
+    environment: &crate::TurnEnvironment,
+    provider: &crate::ProviderBindingId,
+    response: &ion_ai::ModelResponse,
+) -> bool {
+    environment
+        .provider(provider)
+        .is_some_and(|binding| binding.permits_returned_model(response.returned_model.as_deref()))
+}
+
 fn preflight(
     basis: &DriveBasis,
     prepared: &PreparedDrive,
@@ -886,6 +903,15 @@ async fn dispatch(
                         if let Err(error) = persist_attempt(inner, created.attempt.id, state).await
                         {
                             return DispatchAction::Exit(store_exit(basis.turn.id, error));
+                        }
+                        if !response_model_allowed(
+                            &basis.turn.environment,
+                            &prepared.manifest.settings.provider,
+                            &response,
+                        ) {
+                            return DispatchAction::Exit(DriveExit::Parked(
+                                ParkReason::ReturnedModelMismatch,
+                            ));
                         }
                         return DispatchAction::Exit(
                             select_ready(inner, basis.turn.id, &created.attempt, &response).await,

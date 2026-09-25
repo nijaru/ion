@@ -152,7 +152,7 @@ impl ModelBoundary for Model {
                 },
                 usage: Usage::known(10, 5),
                 termination: ResponseTermination::Completed,
-                returned_model: None,
+                returned_model: Some("test".into()),
             };
             ModelStart::Started {
                 stream: Box::pin(futures_util::stream::iter([Ok(
@@ -402,6 +402,102 @@ async fn tool_step(s: &Session) -> StepId {
             _ => None,
         })
         .unwrap()
+}
+
+struct UnexpectedModel;
+impl ModelBoundary for UnexpectedModel {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        ModelBoundaryIdentity {
+            binding: ProviderBindingId::new("script").unwrap(),
+            adapter: id("v1"),
+            request_encoding: id("v1"),
+            egress: EgressRealm::Local,
+        }
+    }
+    fn fingerprint(
+        &self,
+        request: &SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError> {
+        Ok(ContentDigest::of(&(request, effect_key)).unwrap())
+    }
+    fn start<'a>(
+        &'a self,
+        _: AttemptId,
+        _: String,
+        _: SemanticRequest,
+        _: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async {
+            let response = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call-x".into(),
+                        name: "read".into(),
+                        arguments: json!({"path":"x"}),
+                    })],
+                    provider_replay: None,
+                },
+                usage: Usage::known(1, 1),
+                termination: ResponseTermination::Completed,
+                returned_model: Some("unexpected".into()),
+            };
+            ModelStart::Started {
+                stream: Box::pin(futures_util::stream::iter([Ok(
+                    ModelStreamEvent::Completed(response),
+                )])),
+                start_receipt: None,
+            }
+        })
+    }
+}
+
+#[tokio::test]
+async fn unexpected_returned_model_never_admits_its_tool_calls() {
+    let (session, path, turn) = setup(config()).await;
+    let t = Arc::new(Tool::new(success()));
+    let boundaries = ModelBoundaries::new(
+        [Arc::new(UnexpectedModel) as Arc<dyn ModelBoundary>],
+        Arc::new(|_: &ProviderBinding| Ok(())),
+    )
+    .unwrap();
+    assert_eq!(
+        session
+            .handle()
+            .resume_with_tools(turn, boundaries, tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ReturnedModelMismatch)
+    );
+    let step = session
+        .handle()
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 8,
+            max_entries: 8,
+            max_bytes: 64 * 1024,
+        })
+        .await
+        .unwrap()
+        .current_model_step
+        .unwrap();
+    let records = session.handle().tool_records(step.id).await.unwrap();
+    assert!(records.invocations.is_empty());
+    assert!(records.attempts.is_empty());
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    session.close().await.unwrap();
+    let reopened = Session::open(&path).await.unwrap();
+    assert_eq!(
+        reopened
+            .handle()
+            .resume(turn, ModelBoundaries::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::ReturnedModelMismatch)
+    );
+    reopened.close().await.unwrap();
+    std::fs::remove_file(path).unwrap();
 }
 
 #[tokio::test]

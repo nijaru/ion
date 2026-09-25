@@ -130,6 +130,15 @@ pub(super) fn mutate(
             }
             let mut step = load_step(&tx, model_attempt.step)?;
             let mut turn = load_turn(&tx, step.turn)?;
+            if !turn
+                .environment
+                .provider(&step.manifest.settings.provider)
+                .is_some_and(|binding| {
+                    binding.permits_returned_model(response.returned_model.as_deref())
+                })
+            {
+                return Err(invalid("returned model is outside the frozen binding"));
+            }
             eligible(&turn, step.id, model_attempt.generation, false)?;
             if step.disposition != StepDisposition::Open {
                 return Err(invalid("model response already selected"));

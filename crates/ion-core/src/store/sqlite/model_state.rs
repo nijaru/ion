@@ -533,6 +533,15 @@ pub(super) fn select_final_response(
         )));
     }
     let mut turn = load_turn(&transaction, step.turn)?;
+    if !turn
+        .environment
+        .provider(&step.manifest.settings.provider)
+        .is_some_and(|binding| binding.permits_returned_model(response.returned_model.as_deref()))
+    {
+        return Err(StoreError::InvalidState(
+            "returned model is outside the frozen binding".into(),
+        ));
+    }
     if turn.is_terminal()
         || turn.cancellation.requested
         || turn.cancellation.generation != attempt.generation

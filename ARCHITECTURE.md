@@ -35,9 +35,12 @@ WorkspaceRegistry preserves physical workspace/repository identity and orphan qu
 a scripted integration test kills the owner after mutation and recovers through the
 registry without replay.
 
-R1C acceptance is not complete: the provider preflight is not network confinement or a
-production adapter; there is no user-facing authenticated approval client,
-native edit/exec, native large-output capture or real parallel dispatch. A native bounded
+R1C acceptance is not complete: provider preflight is not network confinement; the
+OpenAI-compatible streaming adapter has mock-HTTP tests but no live credential/model
+qualification. Returned-model identity now gates selection and tool admission against
+exact frozen IDs, parking missing/unexpected identities. There is no user-facing
+authenticated approval client, native edit/exec, native large-output capture or real
+parallel dispatch. A native bounded
 read boundary exists and checks its frozen binding against WorkspaceRegistry before
 pinning the root; its descriptor-relative walk is not a race-free beneath-root primitive.
 The host must protect the workspace namespace from concurrent renames; Git marker
@@ -493,7 +496,8 @@ provider-hosted computer/action tools do not bypass execution authority.
 
 ProviderBinding also freezes model-routing semantics. Default `ExactModel` rejects an
 unexpected returned semantic model when the protocol exposes one. Explicit
-`ServerRoute` bindings may name a bounded allowed returned-model/replay family, but their
+`ServerRoute` bindings may name a bounded list of exact allowed returned-model IDs (not
+prefix/pattern grants) and a compatible replay family, but their
 capability snapshot is the conservative guarantee common to **all** members: required
 features intersect, context/output limits use safe minima, and monetary-cap admission
 uses a route-wide worst-case CostQuote. Request preparation may rely only on those

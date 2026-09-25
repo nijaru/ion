@@ -50,6 +50,7 @@ pub enum TurnPhase {
 pub enum ParkReason {
     MissingCredentials,
     ProviderUnavailable,
+    ReturnedModelMismatch,
     ToolUnavailable,
     AwaitingApproval,
     AuthorityDenied,

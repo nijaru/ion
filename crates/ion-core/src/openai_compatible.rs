@@ -16,7 +16,6 @@ use crate::{
 };
 
 const MAX_FRAME: usize = 256 * 1024;
-const MAX_ERROR: usize = 16 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 
 /// Host-owned, live credential lookup. The returned secret is used only to build the
@@ -108,10 +107,25 @@ impl OpenAiCompatible {
             key,
         })
     }
-    fn payload(request: &SemanticRequest) -> Value {
+    fn payload(request: &SemanticRequest) -> Result<Value, ProviderError> {
+        if matches!(
+            request.controls.reasoning,
+            ion_ai::Reasoning::BudgetTokens(_)
+        ) {
+            return Err(err(
+                "exact reasoning-token budgets are unsupported by Chat Completions",
+                ProviderErrorKind::Unsupported,
+            ));
+        }
         let mut messages = vec![json!({"role":"system","content":request.instructions})];
         let mut call_ids = BTreeMap::new();
         for m in &request.messages {
+            if m.provider_replay.is_some() {
+                return Err(err(
+                    "opaque provider replay is unsupported by Chat Completions",
+                    ProviderErrorKind::Unsupported,
+                ));
+            }
             let role = match m.role {
                 TranscriptRole::User => "user",
                 TranscriptRole::Assistant => "assistant",
@@ -122,10 +136,42 @@ impl OpenAiCompatible {
             let mut results = Vec::new();
             for c in &m.content {
                 match c {
-                TranscriptContent::Text(s) => text.push_str(s),
-                TranscriptContent::ToolCall { invocation, name, arguments, origin_provider_id } => { let id=origin_provider_id.clone().unwrap_or_else(|| format!("ion_{invocation}")); call_ids.insert(*invocation,id.clone()); calls.push(json!({"id":id,"type":"function","function":{"name":name,"arguments":arguments.to_string()}})); },
-                TranscriptContent::ToolResult { invocation, name:_, result } => results.push(json!({"role":"tool","tool_call_id":call_ids.get(invocation).cloned().unwrap_or_else(||format!("ion_{invocation}")),"content":result.to_string()})),
-            }
+                    TranscriptContent::Text(s) => text.push_str(s),
+                    TranscriptContent::ToolCall {
+                        invocation,
+                        name,
+                        arguments,
+                        ..
+                    } => {
+                        // Provider IDs are not globally unique and origin compatibility is
+                        // not encoded on this field. Remap all calls by durable invocation
+                        // identity, including same-provider history, so fallback cannot
+                        // smuggle colliding or incompatible wire IDs into a new request.
+                        let id = format!("ion_{invocation}");
+                        if call_ids.insert(*invocation, id.clone()).is_some() {
+                            return Err(err(
+                                "duplicate logical tool invocation",
+                                ProviderErrorKind::InvalidRequest,
+                            ));
+                        }
+                        calls.push(json!({"id":id,"type":"function","function":{"name":name,"arguments":arguments.to_string()}}));
+                    }
+                    TranscriptContent::ToolResult {
+                        invocation,
+                        name: _,
+                        result,
+                    } => {
+                        let Some(id) = call_ids.get(invocation) else {
+                            return Err(err(
+                                "orphan logical tool result",
+                                ProviderErrorKind::InvalidRequest,
+                            ));
+                        };
+                        results.push(
+                            json!({"role":"tool","tool_call_id":id,"content":result.to_string()}),
+                        );
+                    }
+                }
             }
             if !results.is_empty() {
                 messages.extend(results);
@@ -162,11 +208,10 @@ impl OpenAiCompatible {
             ion_ai::Reasoning::Low => body["reasoning_effort"] = json!("low"),
             ion_ai::Reasoning::Medium => body["reasoning_effort"] = json!("medium"),
             ion_ai::Reasoning::High => body["reasoning_effort"] = json!("high"),
-            ion_ai::Reasoning::Off | ion_ai::Reasoning::BudgetTokens(_) => {
-                body["reasoning_effort"] = json!("none")
-            }
+            ion_ai::Reasoning::Off => body["reasoning_effort"] = json!("none"),
+            ion_ai::Reasoning::BudgetTokens(_) => unreachable!("rejected before encoding"),
         }
-        body
+        Ok(body)
     }
 }
 
@@ -179,7 +224,8 @@ impl ModelBoundary for OpenAiCompatible {
         request: &SemanticRequest,
         effect_key: &str,
     ) -> Result<ContentDigest, ProviderError> {
-        let envelope = json!({"method":"POST","url":self.endpoint.as_str(),"headers":{"content-type":"application/json","idempotency-key":effect_key},"body":Self::payload(request)});
+        let body = Self::payload(request)?;
+        let envelope = json!({"method":"POST","url":self.endpoint.as_str(),"headers":{"content-type":"application/json","idempotency-key":effect_key},"body":body});
         serde_json::to_vec(&envelope)
             .map(|bytes| ContentDigest::of_bytes(&bytes))
             .map_err(|e| ProviderError {
@@ -200,7 +246,19 @@ impl ModelBoundary for OpenAiCompatible {
                     reason: "provider credential unavailable".into(),
                 };
             };
-            let body = Self::payload(&request);
+            let body = match Self::payload(&request) {
+                Ok(body) => body,
+                Err(error) => {
+                    return ModelStart::NotStarted {
+                        reason: error.to_string(),
+                    };
+                }
+            };
+            if stop.is_cancelled() {
+                return ModelStart::NotStarted {
+                    reason: "cancelled before HTTP dispatch".into(),
+                };
+            }
             let sent = self
                 .client
                 .post(self.endpoint.clone())
@@ -208,45 +266,46 @@ impl ModelBoundary for OpenAiCompatible {
                 .bearer_auth(key)
                 .json(&body)
                 .send();
-            let response = tokio::select! { _=stop.cancelled()=>return ModelStart::NotStarted{reason:"cancelled before HTTP send".into()}, result=sent=>match result{Ok(r)=>r,Err(_)=>return ModelStart::Indeterminate{reason:"HTTP send failed after dispatch boundary".into(),usage:Usage::unknown(),start_receipt:None}}};
+            // Once the send future is polled, cancellation cannot prove no bytes
+            // crossed the boundary. Preserve uncertain physical-start evidence.
+            let response = tokio::select! {
+                _=stop.cancelled()=>return ModelStart::Indeterminate{
+                    reason:"HTTP dispatch was cancelled after start admission".into(),
+                    usage:Usage::unknown(),start_receipt:None},
+                result=sent=>match result{Ok(r)=>r,Err(_)=>return ModelStart::Indeterminate{
+                    reason:"HTTP send failed after dispatch boundary".into(),
+                    usage:Usage::unknown(),start_receipt:None}}
+            };
             if !response.status().is_success() {
                 let status = response.status();
-                let mut body = response.bytes_stream();
-                let mut bytes = Vec::new();
-                while bytes.len() < MAX_ERROR {
-                    match body.next().await {
-                        Some(Ok(chunk)) => {
-                            let n = (MAX_ERROR - bytes.len()).min(chunk.len());
-                            bytes.extend_from_slice(&chunk[..n]);
-                            if n < chunk.len() {
-                                break;
-                            }
-                        }
-                        _ => break,
-                    }
-                }
-                let detail = String::from_utf8_lossy(&bytes);
+                // Error bodies are untrusted and may echo credentials or prompt
+                // content. Drop the body without reading or persisting it.
+                let kind = match status.as_u16() {
+                    401 => ProviderErrorKind::Authentication,
+                    403 => ProviderErrorKind::Permission,
+                    408 => ProviderErrorKind::Timeout,
+                    429 => ProviderErrorKind::RateLimited,
+                    400..=499 => ProviderErrorKind::InvalidRequest,
+                    503 => ProviderErrorKind::Overloaded,
+                    _ => ProviderErrorKind::Server,
+                };
                 return ModelStart::Started {
                     stream: Box::pin(stream::iter(vec![Err(ProviderError {
-                        kind: ProviderErrorKind::Server,
-                        message: format!("HTTP {status}: {detail}"),
+                        kind,
+                        message: format!("HTTP {status}"),
                     })])),
                     start_receipt: None,
                 };
             }
             ModelStart::Started {
-                stream: make_stream(
-                    response.bytes_stream(),
-                    request.model.provider.clone(),
-                    stop,
-                ),
+                stream: make_stream(response.bytes_stream(), stop),
                 start_receipt: None,
             }
         })
     }
 }
 
-fn make_stream<S>(mut source: S, provider: String, stop: CancellationToken) -> ModelStream
+fn make_stream<S>(mut source: S, stop: CancellationToken) -> ModelStream
 where
     S: futures_util::Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Unpin + Send + 'static,
 {
@@ -278,10 +337,15 @@ where
             while let Some((end, delimiter)) = find_frame_end(&buffer) {
                 if end + delimiter > MAX_FRAME { yield Err(err("SSE frame exceeded limit", ProviderErrorKind::InvalidRequest)); return; }
                 let frame: Vec<u8> = buffer.drain(..end + delimiter).collect();
-                let payload = frame.split(|byte| *byte == b'\n')
+                let lines = frame.split(|byte| *byte == b'\n')
                     .filter_map(|line| line.strip_prefix(b"data:"))
-                    .map(|line| String::from_utf8_lossy(line).trim().to_owned())
-                    .collect::<Vec<_>>().join("\n");
+                    .map(std::str::from_utf8)
+                    .collect::<Result<Vec<_>, _>>();
+                let lines = match lines {
+                    Ok(lines) => lines,
+                    Err(_) => { yield Err(err("SSE data is not UTF-8", ProviderErrorKind::InvalidRequest)); return; }
+                };
+                let payload = lines.iter().map(|line| line.trim()).collect::<Vec<_>>().join("\n");
                 if payload.is_empty() { continue; }
                 if payload == "[DONE]" {
                     if finish.is_none() { yield Err(err("[DONE] before finish_reason", ProviderErrorKind::Transport)); return; }
@@ -292,13 +356,31 @@ where
                     Ok(value) => value,
                     Err(_) => { yield Err(err("malformed SSE JSON", ProviderErrorKind::InvalidRequest)); return; }
                 };
-                if let Some(returned) = value.get("model").and_then(Value::as_str) { model = Some(returned.to_owned()); }
+                if value.get("error").is_some_and(|error| !error.is_null()) {
+                    yield Err(err("provider sent an SSE error", ProviderErrorKind::Transport));
+                    return;
+                }
+                if let Some(returned) = value.get("model").and_then(Value::as_str) {
+                    if model.as_deref().is_some_and(|old| old != returned) {
+                        yield Err(err("returned model changed within one response", ProviderErrorKind::InvalidRequest));
+                        return;
+                    }
+                    model = Some(returned.to_owned());
+                }
                 if let Some(usage_value) = value.get("usage")
                     && let (Some(input), Some(output)) = (usage_value["prompt_tokens"].as_u64(), usage_value["completion_tokens"].as_u64()) {
                     usage = Usage::known(input, output);
                     yield Ok(ModelStreamEvent::Usage(usage));
                 }
                 if let Some(choice) = value["choices"].get(0) {
+                    if finish.is_some() {
+                        yield Err(err("provider sent a choice after finish_reason", ProviderErrorKind::InvalidRequest));
+                        return;
+                    }
+                    if choice["index"].as_u64().is_some_and(|index| index != 0) {
+                        yield Err(err("unexpected response choice index", ProviderErrorKind::InvalidRequest));
+                        return;
+                    }
                     if let Some(delta) = choice.get("delta") {
                         if let Some(part) = delta["content"].as_str() {
                             text.push_str(part);
@@ -306,9 +388,18 @@ where
                         }
                         if let Some(fragments) = delta["tool_calls"].as_array() {
                             for fragment in fragments {
-                                let index = fragment["index"].as_u64().unwrap_or(0);
+                                let Some(index) = fragment["index"].as_u64() else {
+                                    yield Err(err("function call fragment has no index", ProviderErrorKind::InvalidRequest));
+                                    return;
+                                };
                                 let call = calls.entry(index).or_default();
-                                if let Some(id) = fragment["id"].as_str() { call.0 = id.to_owned(); }
+                                if let Some(id) = fragment["id"].as_str() {
+                                    if !call.0.is_empty() && call.0 != id {
+                                        yield Err(err("function call ID changed within one response", ProviderErrorKind::InvalidRequest));
+                                        return;
+                                    }
+                                    call.0 = id.to_owned();
+                                }
                                 if let Some(name) = fragment["function"]["name"].as_str() { call.1.push_str(name); }
                                 if let Some(arguments) = fragment["function"]["arguments"].as_str() { call.2.push_str(arguments); }
                             }
@@ -329,6 +420,11 @@ where
             Some("content_filter") => ResponseTermination::Incomplete(IncompleteReason::ContentFilter),
             _ => { yield Err(err("unsupported finish_reason", ProviderErrorKind::InvalidRequest)); return; }
         };
+        if (finish.as_deref() == Some("tool_calls") && calls.is_empty())
+            || (finish.as_deref() == Some("stop") && !calls.is_empty()) {
+            yield Err(err("finish_reason contradicts tool call content", ProviderErrorKind::InvalidRequest));
+            return;
+        }
         let mut content = Vec::new();
         if !text.is_empty() { content.push(Content::Text(text)); }
         if matches!(termination, ResponseTermination::Completed) {
@@ -347,7 +443,6 @@ where
             termination,
             returned_model: model,
         };
-        let _ = provider;
         yield Ok(ModelStreamEvent::Completed(response));
     })
 }
@@ -552,8 +647,222 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
         }
     }
 
+    #[tokio::test]
+    async fn authentication_error_never_persists_echoed_credentials() {
+        let body = "top-secret returned by an untrusted gateway";
+        let url = server(format!(
+            "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        ));
+        let boundary = OpenAiCompatible::test_local(
+            identity(url.clone()),
+            &url,
+            Arc::new(|| Some("top-secret".into())),
+        )
+        .unwrap();
+        let ModelStart::Started { mut stream, .. } = boundary
+            .start(
+                crate::AttemptId::new(1).unwrap(),
+                "effect".into(),
+                request(),
+                CancellationToken::new(),
+            )
+            .await
+        else {
+            panic!("request was not dispatched")
+        };
+        let failure = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(failure.kind, ProviderErrorKind::Authentication);
+        assert!(!failure.message.contains("top-secret"));
+    }
+
+    #[tokio::test]
+    async fn cancellation_after_http_request_is_uncertain_not_not_started() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (reached, arrival) = tokio::sync::oneshot::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut bytes = [0u8; 4096];
+            assert!(socket.read(&mut bytes).unwrap() > 0);
+            reached.send(()).unwrap();
+            released.recv().unwrap();
+        });
+        let boundary = Arc::new(
+            OpenAiCompatible::test_local(
+                identity(url.clone()),
+                &url,
+                Arc::new(|| Some("secret".into())),
+            )
+            .unwrap(),
+        );
+        let stop = CancellationToken::new();
+        let running = tokio::spawn({
+            let boundary = Arc::clone(&boundary);
+            let stop = stop.clone();
+            async move {
+                boundary
+                    .start(
+                        crate::AttemptId::new(1).unwrap(),
+                        "effect".into(),
+                        request(),
+                        stop,
+                    )
+                    .await
+            }
+        });
+        tokio::time::timeout(std::time::Duration::from_secs(3), arrival)
+            .await
+            .unwrap()
+            .unwrap();
+        stop.cancel();
+        assert!(matches!(
+            running.await.unwrap(),
+            ModelStart::Indeterminate { .. }
+        ));
+        release.send(()).unwrap();
+        server.join().unwrap();
+    }
+
+    #[tokio::test]
+    async fn changing_returned_model_midstream_never_completes() {
+        let sse = concat!(
+            "data: {\"model\":\"first\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"x\"}}]}\n\n",
+            "data: {\"model\":\"second\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let url = server(format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
+            sse.len()
+        ));
+        let boundary = OpenAiCompatible::test_local(
+            identity(url.clone()),
+            &url,
+            Arc::new(|| Some("secret".into())),
+        )
+        .unwrap();
+        let ModelStart::Started { mut stream, .. } = boundary
+            .start(
+                crate::AttemptId::new(1).unwrap(),
+                "effect".into(),
+                request(),
+                CancellationToken::new(),
+            )
+            .await
+        else {
+            panic!("request was not dispatched")
+        };
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(ModelStreamEvent::TextDelta(_)))
+        ));
+        assert!(matches!(
+            stream.next().await,
+            Some(Err(ProviderError {
+                kind: ProviderErrorKind::InvalidRequest,
+                ..
+            }))
+        ));
+    }
+
+    #[tokio::test]
+    async fn contradictory_terminal_frames_never_produce_a_completed_response() {
+        let cases = [
+            vec![json!({"model":"gpt-test","choices":[{"index":0,"finish_reason":"tool_calls"}]})],
+            vec![
+                json!({"model":"gpt-test","choices":[{"index":0,"finish_reason":"length"}]}),
+                json!({"choices":[{"index":0,"finish_reason":"stop"}]}),
+            ],
+            vec![
+                json!({"model":"gpt-test","choices":[{"index":0,"finish_reason":"stop"}]}),
+                json!({"error":{"message":"late failure"}}),
+            ],
+            vec![
+                json!({"model":"gpt-test","choices":[{"index":0,"delta":{"tool_calls":[
+                {"index":0,"id":"call_1","function":{"name":"read","arguments":"{}"}}]},
+                "finish_reason":"stop"}]}),
+            ],
+        ];
+        for frames in cases {
+            let mut body = frames
+                .into_iter()
+                .map(|value| format!("data: {value}\n\n"))
+                .collect::<String>();
+            body.push_str("data: [DONE]\n\n");
+            let url = server(format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ));
+            let boundary = OpenAiCompatible::test_local(
+                identity(url.clone()),
+                &url,
+                Arc::new(|| Some("secret".into())),
+            )
+            .unwrap();
+            let ModelStart::Started { mut stream, .. } = boundary
+                .start(
+                    crate::AttemptId::new(1).unwrap(),
+                    "effect".into(),
+                    request(),
+                    CancellationToken::new(),
+                )
+                .await
+            else {
+                panic!("dispatch did not begin")
+            };
+            let mut failed = false;
+            while let Some(event) = stream.next().await {
+                match event {
+                    Ok(ModelStreamEvent::Completed(_)) => panic!("malformed terminal was selected"),
+                    Err(_) => failed = true,
+                    _ => {}
+                }
+            }
+            assert!(failed);
+        }
+    }
+
     #[test]
-    fn canonical_history_replays_function_result_with_matching_provider_id() {
+    fn explicit_reasoning_budget_and_opaque_replay_reject_before_dispatch() {
+        let boundary = OpenAiCompatible::new(
+            identity("https://api.example.test".into()),
+            "https://api.example.test/v1/chat/completions",
+            Arc::new(|| Some("secret".into())),
+        )
+        .unwrap();
+        let mut configured = crate::config::tests::config();
+        configured
+            .control_ceiling
+            .allowed_reasoning
+            .push(ion_ai::Reasoning::BudgetTokens(1024));
+        configured.controls.reasoning = ion_ai::Reasoning::BudgetTokens(1024);
+        configured.validate().unwrap();
+        let mut budget = request();
+        budget.controls.reasoning = ion_ai::Reasoning::BudgetTokens(1024);
+        assert_eq!(
+            boundary.fingerprint(&budget, "effect").unwrap_err().kind,
+            ProviderErrorKind::Unsupported
+        );
+        budget.controls.reasoning = ion_ai::Reasoning::Off;
+        assert!(boundary.fingerprint(&budget, "effect").is_ok());
+        budget.messages.push(crate::TranscriptMessage {
+            role: TranscriptRole::User,
+            content: vec![TranscriptContent::Text("hello".into())],
+            provider_replay: Some(ion_ai::ProviderReplay::new(
+                "another-provider",
+                "opaque",
+                json!({"token":"not portable"}),
+            )),
+        });
+        assert_eq!(
+            boundary.fingerprint(&budget, "effect").unwrap_err().kind,
+            ProviderErrorKind::Unsupported
+        );
+    }
+
+    #[test]
+    fn canonical_history_remaps_colliding_provider_ids_to_unique_logical_aliases() {
         let invocation = crate::InvocationId::new(7).unwrap();
         let mut request = request();
         request.messages = vec![
@@ -577,12 +886,33 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
                 provider_replay: None,
             },
         ];
-        let payload = OpenAiCompatible::payload(&request);
-        assert_eq!(
-            payload["messages"][1]["tool_calls"][0]["id"],
-            "call_original"
-        );
-        assert_eq!(payload["messages"][2]["tool_call_id"], "call_original");
+        for (id, origin) in [(8, "call_original"), (9, "ion_7")] {
+            let invocation = crate::InvocationId::new(id).unwrap();
+            request.messages.push(crate::TranscriptMessage {
+                role: TranscriptRole::Assistant,
+                content: vec![TranscriptContent::ToolCall {
+                    invocation,
+                    name: "read".into(),
+                    arguments: json!({"path":"b"}),
+                    origin_provider_id: Some(origin.into()),
+                }],
+                provider_replay: None,
+            });
+            request.messages.push(crate::TranscriptMessage {
+                role: TranscriptRole::Tool,
+                content: vec![TranscriptContent::ToolResult {
+                    invocation,
+                    name: "read".into(),
+                    result: json!({"ok":true}),
+                }],
+                provider_replay: None,
+            });
+        }
+        let payload = OpenAiCompatible::payload(&request).unwrap();
+        for (index, id) in [(1, "ion_7"), (3, "ion_8"), (5, "ion_9")] {
+            assert_eq!(payload["messages"][index]["tool_calls"][0]["id"], id);
+            assert_eq!(payload["messages"][index + 1]["tool_call_id"], id);
+        }
     }
 
     #[test]
@@ -607,3 +937,6 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
         assert!(!serialized.contains("secret"));
     }
 }
+
+#[cfg(test)]
+mod end_to_end;

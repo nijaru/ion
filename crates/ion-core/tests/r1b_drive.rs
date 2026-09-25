@@ -171,6 +171,7 @@ fn fingerprint(
 struct CompleteBoundary {
     egress: EgressRealm,
     response_text: String,
+    returned_model: Option<String>,
     starts: AtomicUsize,
     stream_dropped: CancellationToken,
 }
@@ -184,6 +185,17 @@ impl CompleteBoundary {
         Arc::new(Self {
             egress,
             response_text: "done".into(),
+            returned_model: Some("test".into()),
+            starts: AtomicUsize::new(0),
+            stream_dropped: CancellationToken::new(),
+        })
+    }
+
+    fn with_returned_model(actual: Option<&str>) -> Arc<Self> {
+        Arc::new(Self {
+            egress: EgressRealm::Local,
+            response_text: "done".into(),
+            returned_model: actual.map(str::to_owned),
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
         })
@@ -193,6 +205,7 @@ impl CompleteBoundary {
         Arc::new(Self {
             egress: EgressRealm::Local,
             response_text: text,
+            returned_model: Some("test".into()),
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
         })
@@ -260,7 +273,7 @@ impl ModelBoundary for CompleteBoundary {
                 },
                 usage: Usage::known(10, 4),
                 termination: ResponseTermination::Completed,
-                returned_model: None,
+                returned_model: self.returned_model.clone(),
             };
             let stream: ion_ai::ModelStream = Box::pin(TerminalWithoutEof {
                 response: Some(response),
@@ -567,6 +580,65 @@ async fn oversized_provider_response_settles_failure_without_reexecuting() {
     let _ = reopened.handle().resume(turn, boundaries).await.unwrap();
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
     reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn returned_model_mismatch_or_missing_identity_cannot_win_selection_after_reopen() {
+    for actual in [None, Some("surprise")] {
+        let (dir, path) = database("returned-model-denied");
+        let session = Session::create(&path, config()).await.unwrap().session;
+        let (handle, turn) = started_turn(&session, "one", "hello").await;
+        let boundary = CompleteBoundary::with_returned_model(actual);
+        let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
+        assert_eq!(
+            handle.resume(turn, boundaries).await.unwrap(),
+            DriveExit::Parked(ParkReason::ReturnedModelMismatch)
+        );
+        let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+        assert_eq!(snapshot.model_attempts.len(), 1);
+        assert!(matches!(&snapshot.model_attempts[0].state,
+            ModelAttemptState::ResponseReady { response, .. }
+            if response.returned_model.as_deref() == actual));
+        assert!(snapshot.unfinished_turn.is_some());
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+        session.close().await.unwrap();
+        let reopened = Session::open(&path).await.unwrap();
+        assert_eq!(
+            reopened
+                .handle()
+                .resume(turn, ModelBoundaries::default())
+                .await
+                .unwrap(),
+            DriveExit::Parked(ParkReason::ReturnedModelMismatch)
+        );
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+        reopened.close().await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn server_route_allows_only_exact_frozen_returned_model_names() {
+    let (dir, path) = database("returned-route");
+    let mut configured = config();
+    configured.providers[0].returned_model = ReturnedModelPolicy::ServerRoute {
+        allowed_family: vec!["allowed".into(), "other".into()],
+    };
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::with_returned_model(Some("allowed"));
+    assert!(matches!(
+        handle
+            .resume(
+                turn,
+                allowed_boundaries([boundary as Arc<dyn ModelBoundary>])
+            )
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    session.close().await.unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -1022,7 +1094,7 @@ impl ModelBoundary for FallbackBoundary {
                 },
                 usage: Usage::known(8, 3),
                 termination: ResponseTermination::Completed,
-                returned_model: None,
+                returned_model: Some("fallback-test".into()),
             };
             let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
                 ModelStreamEvent::Completed(response),
@@ -1419,7 +1491,7 @@ impl ModelBoundary for ReleasedBoundary {
                         },
                         usage: Usage::known(1, 1),
                         termination: ResponseTermination::Completed,
-                returned_model: None,
+                        returned_model: Some("test".into()),
                     };
                     let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([
                         Ok(ModelStreamEvent::Completed(response)),
@@ -1782,7 +1854,7 @@ impl ModelBoundary for NegativeThenCompleteBoundary {
                 },
                 usage: Usage::known(9, 3),
                 termination: ResponseTermination::Completed,
-                returned_model: None,
+                returned_model: Some("test".into()),
             };
             let stream: ion_ai::ModelStream = Box::pin(futures_util::stream::iter([Ok(
                 ModelStreamEvent::Completed(response),
