@@ -57,8 +57,8 @@ cargo test --locked --workspace
 Run targeted tests during iteration. Crash, cancellation, storage and provider changes
 need deterministic fault tests; overflow-sensitive changes also need release checks.
 Terminal changes need reducer/PTY checks and real-terminal smoke, not only golden frames.
-The current `scripts/smoke.sh` targets the excluded legacy application and is not a
-working fresh-workspace gate; replace it when the executable returns, not with a shim.
+Run `scripts/smoke.sh` for the headless executable's offline submit/reopen/preflight
+gate; it does not qualify live providers, native mutation, or the terminal.
 Turn-engine regressions live in `crates/ion-core/tests/c1_*.rs` and in the crate's own
 `#[cfg(test)]` modules where a durable pre-state or a storage fault is required.
 For documentation-only work, verify links, authority/status consistency and preservation;

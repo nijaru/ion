@@ -1,184 +1,80 @@
 #!/usr/bin/env bash
-# Daily-driver smoke checklist (tk-670r): the flows a maintainer hits on
-# every real session, driven through a real terminal (tmux) against the
-# built binary with an isolated data root. Run this before any
-# readiness claim; green unit gates alone are not readiness evidence.
-#
-# Usage: scripts/smoke.sh [--release]
-# Requires: tmux, python3 (sqlite3 module), cargo.
-set -uo pipefail
+# Offline executable smoke for the maintained headless Session path.
+# This proves durable submit/reopen/idempotence and zero provider starts when
+# credentials are absent. It is NOT live-provider or terminal qualification.
+# Usage: scripts/smoke.sh [--release] (or ION_SMOKE_BIN=/path/to/ion ...)
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${ION_SMOKE_BIN:-$ROOT/target/debug/ion}"
-SESSION="ion-smoke"
-STEP=0
-
-if [[ "${1:-}" == "--release" ]]; then
-    BIN="$ROOT/target/release/ion"
-fi
-
-WORK="$(mktemp -d /tmp/ion-smoke.XXXXXX)"
-mkdir -p "$WORK/data/ion"
-printf '' > "$WORK/settings.toml"
-
-cleanup() {
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Kill only the ion this script launched (child of our panes).
-    [[ -n "${SMOKE_PID:-}" ]] && pkill -9 -P "$SMOKE_PID" 2>/dev/null
-    rm -rf "$WORK"
-}
-trap cleanup EXIT
-
-pass() { STEP=$((STEP + 1)); echo "ok $STEP - $1"; }
-fail() { STEP=$((STEP + 1)); echo "FAIL $STEP - $1"; tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 1; }
-
-capture() { tmux capture-pane -t "$SESSION" -p "$@" 2>/dev/null; }
-
-wait_for() { # $1 needle, $2 timeout seconds, remaining args passed to capture
-    local deadline=$((SECONDS + ${2:-15}))
-    until capture "${@:3}" | grep -q "$1"; do
-        (( SECONDS > deadline )) && return 1
-        sleep 0.2
-    done
-}
-
-wait_for_idle() { # $1 timeout seconds
-    local deadline=$((SECONDS + ${1:-15}))
-    local screen
-    while (( SECONDS <= deadline )); do
-        screen="$(capture)"
-        # The footer is the PTY-visible completion boundary. It is
-        # current-screen state, unlike streamed response text, which
-        # may already be present while OperationFinished is pending.
-        if grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]*$' <<<"$screen" \
-            && ! grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
-        then
-            return 0
-        fi
-        sleep 0.2
-    done
-    return 1
-}
-
-launch() { # $@ = ion args
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Explicit bash: tmux default-shell may be fish, where "$?" aborts.
-    # Keep-alive keeps the exit code visible after ion exits.
-    tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-        "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data $BIN $* 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-    SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-}
-
-ion_child_pid() {
-    # Pane pid is the tmux shell wrapper; ion is its child or grandchild.
-    local pid parent grandparent
-    for pid in $(pgrep -x ion); do
-        parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-        if [[ "$parent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-        grandparent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
-        if [[ "$grandparent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-    done
-}
-
-quit_and_check_exit_code() { # $1 = description
-    wait_for_idle 10 || fail "$1: ion did not reach an idle footer"
-    tmux send-keys -t "$SESSION" C-d
-    local deadline=$((SECONDS + 10))
-    until capture | grep -q "SMOKE_EXIT="; do
-        (( SECONDS > deadline )) && fail "$1: ion did not exit after ctrl+d"
-        sleep 0.2
-    done
-    capture | grep -q "SMOKE_EXIT=0" || fail "$1: exit code was not 0: $(capture | grep SMOKE_EXIT)"
-}
-
-type_line() { tmux send-keys -t "$SESSION" -l "$1"; tmux send-keys -t "$SESSION" Enter; }
-
+PROFILE=debug
+if [[ "${1:-}" == --release ]]; then PROFILE=release; shift; fi
+[[ $# == 0 ]] || { echo 'usage: scripts/smoke.sh [--release]' >&2; exit 2; }
+BIN="${ION_SMOKE_BIN:-$ROOT/target/$PROFILE/ion}"
 if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
-    echo "== building =="
-    cargo build -q -p ion || { echo "build failed"; exit 1; }
+    if [[ "$PROFILE" == release ]]; then
+        cargo build --quiet --locked --release -p ion
+    else
+        cargo build --quiet --locked -p ion
+    fi
 fi
-[[ -x "$BIN" ]] || { echo "binary missing at $BIN"; exit 1; }
+WORK="$(mktemp -d /tmp/ion-smoke.XXXXXX)"
+trap 'rm -rf "$WORK"' EXIT
+mkdir "$WORK/state" "$WORK/workspace"
+printf 'sample data\n' > "$WORK/workspace/data.txt"
 
-echo "== 1. fresh start =="
-launch
-wait_for "ion v" 15 || fail "fresh start: no quiet startup banner"
-pass "idle banner renders"
+common=(--state "$WORK/state" --workspace "$WORK/workspace"
+        --endpoint https://api.example.test/v1/chat/completions
+        --api-key-env ION_SMOKE_ABSENT_KEY)
+run=("${common[@]}" --model gpt-test --model-input-limit 8192
+     --model-output-limit 2048 --request-key exact-key 'Read data.txt')
 
-echo "== 2. submit a turn =="
-type_line "hello"
-wait_for "scripted provider" 15 || fail "turn: no scripted response"
-first_count=$(capture | grep -c "scripted provider")
-sleep 1
-second_count=$(capture | grep -c "scripted provider")
-[[ "$first_count" == "$second_count" ]] || fail "turn: response duplicated ($first_count -> $second_count)"
-pass "turn committed exactly once"
-
-echo "== 3. clean exit =="
-quit_and_check_exit_code "clean exit"
-pass "ctrl+d quits with code 0"
-
-echo "== 4. resume shows persisted history =="
-launch "--resume"
-wait_for "resumed" 15 || fail "resume: no resumed banner"
-capture | grep -qE "(> hello|hello)" || fail "resume: previous turn missing"
-pass "resume restores history"
-
-echo "== 5. kill -9 mid-operation recovers =="
-# Relaunch with the scripted provider held open so the operation is
-# deterministically in flight when the process dies.
-tmux kill-session -t "$SESSION" 2>/dev/null
-tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-    "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data ION_TEST_PROVIDER_DELAY_MS=8000 $BIN --resume 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner"
-type_line "interruptible"
-wait_for "> interruptible" 10 || fail "kill -9: submission not accepted"
-CHILD="$(ion_child_pid)"
-[[ -n "$CHILD" ]] && kill -9 "$CHILD" || fail "kill -9: no ion child found"
-launch "--resume"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner after crash"
-# Valid recoveries: the open model step either surfaces as
-# indeterminate/cancelled, or replays safely against the fresh provider
-# and completes. Either way nothing is lost and the session is usable.
-if ! capture | grep -qE "indeterminate|cancelled"; then
-    capture | grep -q "scripted provider:" \
-        || fail "kill -9: interrupted op neither surfaced nor replayed"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run "${run[@]}" > "$WORK/first.json" 2> "$WORK/first.err"; then
+    echo 'FAIL: absent credentials allowed dispatch' >&2; exit 1
 fi
-type_line "/help"
-# Help may exceed the viewport; verify committed terminal history.
-wait_for "/compact" 10 -S - || fail "kill -9: composer unusable after recovery"
-pass "interrupted operation settles and session stays usable"
+grep -q 'MissingCredentials' "$WORK/first.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/snapshot.json"
+TURN="$(python3 - "$WORK/snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['unfinished_turn'], 'submission did not create a durable Turn'
+assert s['model_attempts'] == [], 'preflight consumed a physical provider attempt'
+assert s['tool_attempts'] == [], 'preflight started a tool'
+assert len(s['transcript_tail']) == 1, 'user input did not project exactly once'
+print(s['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run "${run[@]}" > "$WORK/replay.json" 2> "$WORK/replay.err"; then
+    echo 'FAIL: absent credentials allowed replay dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/replay.err"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume "${common[@]}" --turn "$TURN" > "$WORK/resume.json" 2> "$WORK/resume.err"; then
+    echo 'FAIL: absent credentials allowed resume dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/resume.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/reopened.json"
+python3 - "$WORK/snapshot.json" "$WORK/reopened.json" <<'PY'
+import json, sys
+a, b = (json.load(open(path)) for path in sys.argv[1:])
+assert a == b, 'passive reopen, idempotent submit, or blocked resume changed durable state'
+PY
 
-echo "== 6. older schema store archives instead of refusing =="
-tmux kill-session -t "$SESSION" 2>/dev/null
-python3 - <<PYEOF || { echo "python3/sqlite3 unavailable"; exit 1; }
-import sqlite3
-conn = sqlite3.connect("$WORK/data/ion/sessions.db")
-conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT)")
-conn.execute("PRAGMA user_version = 6")
-conn.commit()
-conn.close()
-PYEOF
-launch
-wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "ion v" 15 || fail "schema bump: session did not start"
-ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
-pass "old store archived, notice shown, session starts"
-
-echo "== 7. resize storm stays interactive =="
-for _ in 1 2 3 4; do
-    tmux resize-window -t "$SESSION" -x 40 -y 15
-    sleep 0.05
-    tmux resize-window -t "$SESSION" -x 100 -y 30
-    sleep 0.05
-done
-type_line "still here"
-wait_for "still here" 10 || fail "resize storm: input lost"
-pass "composer survives resize storm"
-
-echo "== 8. final clean exit =="
-quit_and_check_exit_code "post-storm exit"
-pass "clean exit after storm"
-
-echo
-echo "ALL $STEP CHECKS PASSED — safe to ask for maintainer dogfood."
+mkdir "$WORK/workspace/state"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/workspace/state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject in-workspace state' > "$WORK/unsafe.out" 2> "$WORK/unsafe.err"; then
+    echo 'FAIL: writable workspace accepted as host state' >&2; exit 1
+fi
+grep -q 'outside the writable workspace' "$WORK/unsafe.err"
+[[ -z "$(find "$WORK/workspace/state" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+mkdir "$WORK/alias-state" "$WORK/workspace/alias-target"
+ln -s "$WORK/workspace/alias-target" "$WORK/alias-state/registry"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/alias-state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject registry alias' > "$WORK/alias.out" 2> "$WORK/alias.err"; then
+    echo 'FAIL: registry alias into workspace was accepted' >&2; exit 1
+fi
+grep -q 'registry resolves into the writable workspace' "$WORK/alias.err"
+[[ -z "$(find "$WORK/workspace/alias-target" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+echo 'headless offline smoke passed (not live-provider or terminal qualification)'

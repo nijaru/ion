@@ -36,8 +36,8 @@ a scripted integration test kills the owner after mutation and recovers through 
 registry without replay.
 
 R1C acceptance is not complete: provider preflight is not network confinement; the
-OpenAI-compatible streaming adapter has mock-HTTP tests but no live credential/model
-qualification. Returned-model identity now gates selection and tool admission against
+OpenAI-compatible streaming adapter has mock-HTTP tests and a two-request
+Session/native-read loopback exchange, but no live credential/model qualification. Returned-model identity now gates selection and tool admission against
 exact frozen IDs, parking missing/unexpected identities. There is no user-facing
 authenticated approval client, native edit/exec, native large-output capture or real
 parallel dispatch. A native bounded
@@ -48,9 +48,11 @@ preflight rejects static symlinks and nonregular files. It does not provide an O
 Session ownership locks canonicalize database aliases and refuse hardlinks. Admitted
 start receipts reserve a bounded physical settlement envelope, so an oversized backend
 result cannot evict known terminal effect truth. The scripted
-approval store/drive boundary does not implement the host's live policy or confinement. Context
-compaction/reset/forks, real provider adapters, a client binary and workers also remain
-future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
+approval store/drive boundary does not implement the host's live policy or confinement.
+The headless `ion` binary hosts the same Session and bounded read tool for
+submit/inspect/resume; its offline smoke tests no-credential preflight and passive
+reopen, not live-provider or terminal behavior. Context compaction/reset/forks,
+a second provider wire API, a terminal client and workers remain future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
 tests, not obsolete owners or schema/API compatibility.
 
 ## Product and boundaries

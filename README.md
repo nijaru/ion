@@ -7,11 +7,12 @@ compatibility targets.
 
 ## Current status
 
-The workspace builds three libraries:
+The workspace builds a headless `ion` executable and three libraries:
 
 - `ion-core`: the replacement durable Turn runtime and storage layer.
 - `ion-ai`: provider-neutral model contracts and scripted provider fixtures.
 - `ion-terminal`: low-level terminal components.
+- `crates/ion-app`: a headless Session host using the same library path.
 
 The maintained `ion-core` no longer contains the prototype Session/task/tool/workspace
 runtime. The replacement branch implements the R1 durable domain, Session/provider
@@ -81,7 +82,7 @@ scenarios are being restored against the replacement owners.
 Still missing: native edit/exec backends, a user-facing approval client and host
 authentication/policy backend, parallel tool dispatch, context compaction/forking,
 Steer/InteractionReply placement, live provider qualification and additional adapters,
-a runnable `ion` binary, the terminal UI, and workers.
+the terminal UI, and workers.
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
 Unimplemented Steer/InteractionReply inputs reject at admission rather than queue
@@ -112,10 +113,37 @@ cost quote. Request and terminal provider-response capacity checks stop encoding
 their frozen limits rather than allocating complete oversized JSON copies. No live-provider
 effectiveness has been measured.
 
-**There is no runnable `ion` binary in the current workspace.** The legacy
-`crates/ion/` application source is reference material outside the workspace; its CLI,
-provider configuration and usage instructions do not describe the new core.
-`cargo run -p ion` is not supported at this revision.
+## Headless use (experimental)
+
+`cargo run --locked -p ion -- --help` exposes `run`, `resume`, and passive `inspect`.
+Create a host-state directory outside the writable workspace, then supply an exact
+HTTPS Chat Completions endpoint and a model ID. The host must assert the model's
+input and output token capacities; the client cannot discover or verify them.
+The endpoint's returned model ID must match the supplied ID. `run` supports
+`--request-key` for idempotent resubmission after a lost reply.
+
+```sh
+mkdir -p "$HOME/.local/state/ion/example"
+export OPENAI_API_KEY='your provider key'
+cargo run --locked -p ion -- run \
+  --state "$HOME/.local/state/ion/example" --workspace "$PWD" \
+  --endpoint 'https://api.example.com/v1/chat/completions' \
+  --model '<exact-model-id>' \
+  --model-input-limit '<model-input-tokens>' \
+  --model-output-limit '<model-output-tokens>' \
+  --request-key example-1 'Read the project entry point and summarize it'
+```
+
+Replace the example endpoint and capacity placeholders with values for your provider.
+`OPENAI_API_KEY` is read at dispatch and is not stored in the Session. A missing key
+parks without sending a request. `ion inspect --state ...` shows a bounded snapshot;
+`ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
+resumes a persisted Turn. The host currently allows only bounded serial file reads;
+it cannot edit files or execute commands. It does not sandbox workspace access or
+enforce a monetary ceiling. Provider calls can send workspace content and incur charges.
+This path has passed a loopback provider/native-read exchange, **not** a live-provider
+qualification. The excluded legacy `crates/ion/` remains reference material, not
+an alternative maintained runtime.
 
 ## Development
 
@@ -125,6 +153,7 @@ The checked-in toolchain pins Rust 1.98.0 and the required components.
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
+scripts/smoke.sh  # offline executable/Session preflight; not live-provider or PTY
 ```
 
 The replacement runtime regressions currently live here:
@@ -137,8 +166,8 @@ cargo test --locked -p ion-core --test r1c_workspace_registry # claims/identity/
 cargo test --locked -p ion-core --lib               # domain/schema/request/observation contracts
 ```
 
-These are deterministic library/fixture checks; they are not evidence of live-provider
-effectiveness or a usable terminal application.
+These are deterministic library/fixture and offline executable checks; they are not
+evidence of live-provider effectiveness or a usable terminal application.
 
 ## Project documentation
 
