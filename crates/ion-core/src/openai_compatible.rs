@@ -264,13 +264,13 @@ impl ModelBoundary for OpenAiCompatible {
             };
             if !response.status().is_success() {
                 let status = response.status();
-                // Error bodies are untrusted and may echo credentials or prompt
-                // content. Drop the body without reading or persisting it.
+                // Untrusted bodies can echo credentials or prompts. Only inspect
+                // a bounded 429 body for recognized quota codes; never persist it.
                 let kind = match status.as_u16() {
                     401 => ProviderErrorKind::Authentication,
                     403 => ProviderErrorKind::Permission,
                     408 => ProviderErrorKind::Timeout,
-                    429 => ProviderErrorKind::RateLimited,
+                    429 => classify_limit_response(response, &stop).await,
                     400..=499 => ProviderErrorKind::InvalidRequest,
                     503 => ProviderErrorKind::Overloaded,
                     _ => ProviderErrorKind::Server,
@@ -288,6 +288,62 @@ impl ModelBoundary for OpenAiCompatible {
                 start_receipt: None,
             }
         })
+    }
+}
+
+async fn classify_limit_response(
+    mut response: reqwest::Response,
+    stop: &CancellationToken,
+) -> ProviderErrorKind {
+    const MAX_ERROR_BODY: usize = 8 * 1024;
+    if response
+        .content_length()
+        .is_some_and(|size| size > MAX_ERROR_BODY as u64)
+    {
+        return ProviderErrorKind::RateLimited;
+    }
+    let mut body = Vec::new();
+    loop {
+        let chunk = tokio::select! {
+            _ = stop.cancelled() => return ProviderErrorKind::RateLimited,
+            chunk = response.chunk() => chunk,
+        };
+        let Some(chunk) = (match chunk {
+            Ok(chunk) => chunk,
+            Err(_) => return ProviderErrorKind::RateLimited,
+        }) else {
+            break;
+        };
+        if body
+            .len()
+            .checked_add(chunk.len())
+            .is_none_or(|len| len > MAX_ERROR_BODY)
+        {
+            return ProviderErrorKind::RateLimited;
+        }
+        body.extend_from_slice(&chunk);
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&body) else {
+        return ProviderErrorKind::RateLimited;
+    };
+    let code = value.pointer("/error/code").and_then(Value::as_str);
+    let category = value.pointer("/error/type").and_then(Value::as_str);
+    if matches!(category, Some("insufficient_quota"))
+        || matches!(
+            code,
+            Some(
+                "insufficient_quota"
+                    | "credit_balance_exhausted"
+                    | "organization_usage_limit_exceeded"
+                    | "organization_spend_limit_exceeded"
+                    | "project_spend_limit_exceeded"
+                    | "billing_hard_limit_reached"
+            )
+        )
+    {
+        ProviderErrorKind::Quota
+    } else {
+        ProviderErrorKind::RateLimited
     }
 }
 
@@ -686,6 +742,30 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
         let failure = stream.next().await.unwrap().unwrap_err();
         assert_eq!(failure.kind, ProviderErrorKind::Authentication);
         assert!(!failure.message.contains("top-secret"));
+    }
+
+    #[tokio::test]
+    async fn bounded_429_classification_distinguishes_quota_from_retryable_rate_limit() {
+        for (body, expected) in [
+            (r#"{"error":{"type":"insufficient_quota","code":"credit_balance_exhausted","message":"top-secret"}}"#.to_owned(), ProviderErrorKind::Quota),
+            (r#"{"error":{"type":"rate_limit_error","code":"organization_spend_limit_exceeded"}}"#.to_owned(), ProviderErrorKind::Quota),
+            (r#"{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}"#.to_owned(), ProviderErrorKind::RateLimited),
+            (format!("{{\"error\":{{\"code\":\"insufficient_quota\",\"message\":\"{}\"}}}}", "top-secret".repeat(2000)), ProviderErrorKind::RateLimited),
+        ] {
+            let url = server(format!(
+                "HTTP/1.1 429 Too Many Requests\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            ));
+            let boundary = OpenAiCompatible::test_local(
+                identity(url.clone()), &url, Arc::new(|| Some("top-secret".into())),
+            ).unwrap();
+            let ModelStart::Started { mut stream, .. } = boundary.start(
+                crate::AttemptId::new(1).unwrap(), "effect".into(), request(), CancellationToken::new(),
+            ).await else { panic!("request was not dispatched") };
+            let failure = stream.next().await.unwrap().unwrap_err();
+            assert_eq!(failure.kind, expected);
+            assert_eq!(failure.message, "HTTP 429 Too Many Requests");
+        }
     }
 
     #[tokio::test]
