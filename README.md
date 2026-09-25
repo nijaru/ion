@@ -84,7 +84,8 @@ binary, the terminal UI, and workers. Oversized tool results park rather than fa
 truncated success; an immutable bounded BlobStore foundation exists but is not wired to
 Session settlement, publication evidence, artifact paging, or GC. It cannot yet back large
 native output. Its host-owned namespace must be outside agent-writable workspace state and
-exclusively owned; it does not enforce that trust boundary itself.
+protected from untrusted same-user processes; a BlobStore owner lock excludes a second
+handle, while the host still owns namespace ancestry and filesystem trust.
 No live-provider effectiveness has been measured.
 
 **There is no runnable `ion` binary in the current workspace.** The legacy

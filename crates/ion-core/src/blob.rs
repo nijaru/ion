@@ -2,11 +2,12 @@
 //!
 //! The caller owns the host namespace and must keep it outside agent-writable workspace
 //! state. A store is one Session namespace; references are meaningful only with that store.
-//! Publication is synchronous and serialized per handle. The caller must also ensure that
-//! no other process or independently opened handle mutates the same namespace.
+//! Publication is synchronous and serialized per handle. One owner lock excludes other
+//! BlobStore handles; the trusted host must still protect namespace ancestry from external
+//! same-user programs.
 
 use std::collections::HashMap;
-use std::fs::{self, File, OpenOptions};
+use std::fs::{self, File, OpenOptions, TryLockError};
 use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -21,8 +22,10 @@ use crate::ContentDigest;
 const IO_BUFFER_BYTES: usize = 64 * 1024;
 const MAX_METADATA_BYTES: usize = 256;
 const MAX_TEMP_NAME_ATTEMPTS: usize = 8;
+const MAX_SCAN_ENTRIES: usize = 100_000;
 const OBJECTS_DIRECTORY: &str = "objects";
 const STAGING_DIRECTORY: &str = "staging";
+const OWNER_LOCK: &str = ".blob-owner.lock";
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BlobRef {
@@ -137,6 +140,8 @@ pub enum BlobStoreError {
         expected_length: u64,
         actual_length: Option<u64>,
     },
+    #[error("blob namespace is already owned: {0}")]
+    InUse(PathBuf),
     #[error("blob store state lock was poisoned")]
     StatePoisoned,
     #[error("could not reserve memory for bounded blob page: {0}")]
@@ -162,13 +167,14 @@ pub struct BlobStore {
     limits: BlobStoreLimits,
     state: Mutex<StoreState>,
     publish_lock: Mutex<()>,
+    _owner: File,
 }
 
 impl BlobStore {
     /// Opens one existing host-owned Session namespace, creating its private store dirs.
     ///
-    /// The namespace directory must already exist and be exclusively owned by this store
-    /// while it is open. Its parent/provisioning durability is the host's responsibility.
+    /// The namespace directory must already exist. An owner lock excludes another store
+    /// handle until drop. Its parent/provisioning durability is the host's responsibility.
     pub fn open(
         session_namespace: impl AsRef<Path>,
         limits: BlobStoreLimits,
@@ -183,23 +189,23 @@ impl BlobStore {
         }
         let root = fs::canonicalize(requested_root)
             .map_err(|source| io_error("resolve Session namespace", source))?;
+        let owner = acquire_owner(&root)?;
         let objects_dir = root.join(OBJECTS_DIRECTORY);
         let staging_dir = root.join(STAGING_DIRECTORY);
         ensure_child_directory(&root, &objects_dir)?;
         ensure_child_directory(&root, &staging_dir)?;
         sync_directory(&root, "sync Session namespace directories")?;
 
-        // Any staging file left by a crash was never returned as a reference. Remove it
-        // before admitting another writer so stale spool bytes cannot accumulate.
-        clean_staging(&staging_dir)?;
-
-        let state = scan_objects(&objects_dir, limits)?;
+        // Opening is inspection-only once the namespace exists. Crash-leftover
+        // staging is reclaimed at the next explicit publication, not passive open.
+        let state = scan_objects(&objects_dir)?;
         Ok(Self {
             objects_dir,
             staging_dir,
             limits,
             state: Mutex::new(state),
             publish_lock: Mutex::new(()),
+            _owner: owner,
         })
     }
 
@@ -590,6 +596,22 @@ impl Drop for TempBlob {
     }
 }
 
+fn acquire_owner(root: &Path) -> Result<File, BlobStoreError> {
+    let lock = root.join(OWNER_LOCK);
+    let file = File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(&lock)
+        .map_err(|source| io_error("open blob namespace owner lock", source))?;
+    match file.try_lock() {
+        Ok(()) => Ok(file),
+        Err(TryLockError::WouldBlock) => Err(BlobStoreError::InUse(root.to_path_buf())),
+        Err(TryLockError::Error(source)) => Err(io_error("lock blob namespace", source)),
+    }
+}
+
 fn ensure_child_directory(root: &Path, child: &Path) -> Result<(), BlobStoreError> {
     match fs::symlink_metadata(child) {
         Ok(metadata) if !metadata.file_type().is_symlink() && metadata.is_dir() => Ok(()),
@@ -619,45 +641,35 @@ fn clean_staging(staging_dir: &Path) -> Result<(), BlobStoreError> {
     Ok(())
 }
 
-fn scan_objects(objects_dir: &Path, limits: BlobStoreLimits) -> Result<StoreState, BlobStoreError> {
+fn scan_objects(objects_dir: &Path) -> Result<StoreState, BlobStoreError> {
     let entries =
         fs::read_dir(objects_dir).map_err(|source| io_error("list blob objects", source))?;
     let mut objects = HashMap::new();
     let mut content_bytes = 0_u64;
-    for entry in entries {
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_SCAN_ENTRIES {
+            return Err(BlobStoreError::QuotaExceeded {
+                quota: BlobQuota::ObjectCount,
+                limit: MAX_SCAN_ENTRIES as u64,
+            });
+        }
         let entry = entry.map_err(|source| io_error("read blob object entry", source))?;
         let metadata = fs::symlink_metadata(entry.path())
             .map_err(|source| io_error("inspect blob object", source))?;
-        let name = entry
-            .file_name()
-            .into_string()
-            .map_err(|_| BlobStoreError::InvalidNamespace(entry.path()))?;
-        if metadata.file_type().is_symlink() || !metadata.is_file() || !is_digest_name(&name) {
-            return Err(BlobStoreError::InvalidNamespace(entry.path()));
+        let Ok(name) = entry.file_name().into_string() else {
+            continue;
+        };
+        // Corrupt or foreign entries must not hide the Session's committed
+        // transcript. A referenced malformed object fails explicitly on read.
+        if !metadata.is_file() || metadata.file_type().is_symlink() || !is_digest_name(&name) {
+            continue;
         }
         let length = metadata.len();
-        if length > limits.max_blob_bytes {
-            return Err(BlobStoreError::QuotaExceeded {
-                quota: BlobQuota::BlobBytes,
-                limit: limits.max_blob_bytes,
-            });
-        }
-        let count = u64::try_from(objects.len()).map_err(|_| BlobStoreError::LengthOverflow)?;
-        if count >= limits.max_object_count {
-            return Err(BlobStoreError::QuotaExceeded {
-                quota: BlobQuota::ObjectCount,
-                limit: limits.max_object_count,
-            });
-        }
+        // Existing objects remain inspectable if limits were reduced; new growth
+        // is refused by the publication checks below.
         content_bytes = content_bytes
             .checked_add(length)
             .ok_or(BlobStoreError::LengthOverflow)?;
-        if content_bytes > limits.max_content_bytes {
-            return Err(BlobStoreError::QuotaExceeded {
-                quota: BlobQuota::ContentBytes,
-                limit: limits.max_content_bytes,
-            });
-        }
         objects.insert(name, length);
     }
     Ok(StoreState {
@@ -1004,7 +1016,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_staging_is_cleaned_and_open_does_not_eagerly_hash_objects() {
+    fn passive_open_preserves_staging_until_publication_and_defers_digest_checks() {
         let namespace = TestNamespace::new();
         let original_store = store(&namespace, limits());
         let reference = original_store
@@ -1015,16 +1027,58 @@ mod tests {
         let staging = namespace.0.join(STAGING_DIRECTORY);
         fs::write(staging.join("crash-leftover"), b"partial").expect("write orphan");
         let reopened = store(&namespace, limits());
-        assert_eq!(fs::read_dir(staging).expect("staging").count(), 0);
+        assert_eq!(fs::read_dir(&staging).expect("staging").count(), 1);
         let republished = reopened
             .publish(Cursor::new(b"content"))
             .expect("reuse durable orphan after reopen");
         assert_eq!(republished.digest, reference.digest);
+        assert_eq!(fs::read_dir(staging).expect("staging").count(), 0);
         assert_eq!(reopened.usage().expect("usage").object_count, 1);
         // The digest is checked on dereference, not on open.
         fs::write(reopened.object_path(reference.digest), b"corrupt").expect("corrupt object");
         assert!(matches!(
             reopened.read_range(&reference, 0, 7),
+            Err(BlobStoreError::Corrupt { .. })
+        ));
+    }
+
+    #[test]
+    fn concurrent_open_cannot_remove_an_active_writers_staging() {
+        let namespace = TestNamespace::new();
+        let first = store(&namespace, limits());
+        let staging = namespace.0.join(STAGING_DIRECTORY).join("in-progress");
+        fs::write(&staging, b"uncommitted").expect("stage test content");
+        assert!(matches!(
+            BlobStore::open(&namespace.0, limits()),
+            Err(BlobStoreError::InUse(_))
+        ));
+        assert_eq!(fs::read(&staging).unwrap(), b"uncommitted");
+        drop(first);
+        let reopened = store(&namespace, limits());
+        assert_eq!(fs::read(&staging).unwrap(), b"uncommitted");
+        reopened.publish(Cursor::new(b"committed")).unwrap();
+        assert!(!staging.exists());
+    }
+
+    #[test]
+    fn corrupt_auxiliary_object_and_reduced_quota_do_not_block_open() {
+        let namespace = TestNamespace::new();
+        let original = store(&namespace, limits());
+        let reference = original.publish(Cursor::new(b"unchanged")).unwrap();
+        drop(original);
+        let small = BlobStoreLimits::new(2, 2, 2, 2, 1);
+        let reopened = store(&namespace, small);
+        assert_eq!(reopened.usage().unwrap().content_bytes, reference.length);
+        drop(reopened);
+        let path = namespace
+            .0
+            .join(OBJECTS_DIRECTORY)
+            .join(reference.digest.to_string());
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        let reopened = store(&namespace, limits());
+        assert!(matches!(
+            reopened.read_range(&reference, 0, 4),
             Err(BlobStoreError::Corrupt { .. })
         ));
     }
