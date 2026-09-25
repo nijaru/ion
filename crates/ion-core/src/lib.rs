@@ -26,7 +26,7 @@ mod turn;
 
 pub mod workspace_registry;
 
-pub use blob::BlobRef;
+pub use blob::{BlobQuota, BlobRef, BlobStore, BlobStoreError, BlobStoreLimits, BlobStoreUsage};
 pub use config::{
     AuthorityCeiling, ConfigError, ContextPolicy, ControlCeiling, ConversationConfig, EgressRealm,
     InstalledConfig, ProviderBinding, ProviderBindingId, ProviderCapabilities, ReturnedModelPolicy,
