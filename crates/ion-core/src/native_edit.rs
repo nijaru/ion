@@ -292,6 +292,25 @@ impl NativeEditBoundary {
         (expected == *action && replacement.len() <= self.max_file_bytes).then_some(arguments)
     }
 
+    fn cleanup_staged(&self, staged: &EditStaged, slot: &str) {
+        let Some(stage_parent) = &self.staging else {
+            return;
+        };
+        if physical_identity(stage_parent).ok() == Some(staged.parent)
+            && let Ok(_stage_custody) = lock_staging(stage_parent)
+        {
+            // Only exact physical identity permits unlink. Reconciliation can
+            // retry a failed cleanup without changing terminal effect truth.
+            let _ = cleanup_stage_with_identity(
+                stage_parent,
+                slot,
+                staged.file,
+                #[cfg(test)]
+                &self.fault,
+            );
+        }
+    }
+
     fn sync_recovered_directory(&self, parent: &File, source: bool) -> std::io::Result<()> {
         let _ = source;
         #[cfg(test)]
@@ -997,6 +1016,9 @@ async fn reconcile_edit(
         if terminal.receipt == *start {
             match (&terminal.effect, &edit.termination) {
                 (crate::EffectSummary::NoMutation, Some(EditTermination::JoinedWithoutRename)) => {
+                    if let Some(staged) = &edit.staged {
+                        boundary.cleanup_staged(staged, &edit.manifest.stage_slot);
+                    }
                     return aborted_edit(start);
                 }
                 (
@@ -1026,20 +1048,10 @@ async fn reconcile_edit(
         ) {
             return uncertain("pre-arm edit resolution is uncertain", Some(start));
         }
-        if let (Some(staged), Some(stage_parent)) = (&edit.staged, &boundary.staging) {
-            // A durable Staged fact authenticates this exact private object.
-            // Without it, an orphan name could instead be an unowned collision.
-            if physical_identity(stage_parent).ok() == Some(staged.parent)
-                && let Ok(_stage_custody) = lock_staging(stage_parent)
-            {
-                let _ = cleanup_stage_with_identity(
-                    stage_parent,
-                    &edit.manifest.stage_slot,
-                    staged.file,
-                    #[cfg(test)]
-                    &boundary.fault,
-                );
-            }
+        if let Some(staged) = &edit.staged {
+            // Without a durable Staged fact, an orphan name could be a
+            // preexisting collision. Never infer its ownership from the slot.
+            boundary.cleanup_staged(staged, &edit.manifest.stage_slot);
         }
         return aborted_edit(start);
     }
@@ -1555,7 +1567,9 @@ fn cleanup_stage_with_identity(
         Mode::empty(),
     ) {
         Ok(fd) => File::from(fd),
-        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        // A previous unlink may have succeeded before its directory sync
+        // failed. Sync absence again before releasing the cleanup obligation.
+        Err(rustix::io::Errno::NOENT) => return parent.sync_all(),
         Err(error) => return Err(error.into()),
     };
     if FileType::from_raw_mode(fstat(&candidate)?.st_mode) != FileType::RegularFile
@@ -3091,7 +3105,75 @@ mod tests {
                     .await,
                 result
             );
+            // Once the cleanup fault clears, the same terminal receipt can
+            // release its authenticated stage without revising effect truth.
+            boundary.inject_fault(0);
+            assert_eq!(
+                boundary
+                    .reconcile(execution.clone(), attempt(&execution, result.clone()))
+                    .await,
+                result
+            );
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
         }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn terminal_abort_cleanup_preserves_a_replaced_stage_occupant() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(FAULT_CLEANUP_UNLINK);
+        fixture.boundary.pause.point.store(4, Ordering::SeqCst);
+        let pause = Arc::clone(&fixture.boundary.pause);
+        let boundary = Arc::new(fixture.boundary);
+        let worker = Arc::clone(&boundary);
+        let owned = execution.clone();
+        let task =
+            tokio::spawn(async move { worker.execute(owned, CancellationToken::new()).await });
+        pause.entered.wait();
+        boundary.set_live_authority(LiveToolAuthority::Deny);
+        pause.release.wait();
+        let result = task.await.unwrap();
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        let slot = claim.edit.unwrap().manifest.stage_slot;
+        let stage = fixture.host.path().join("staging");
+        fs::rename(stage.join(&slot), stage.join("displaced-stage")).unwrap();
+        fs::write(stage.join(&slot), b"unrelated occupant").unwrap();
+        boundary.inject_fault(0);
+        assert_eq!(
+            boundary
+                .reconcile(execution.clone(), attempt(&execution, result.clone()))
+                .await,
+            result
+        );
+        assert_eq!(fs::read(stage.join(&slot)).unwrap(), b"unrelated occupant");
+        assert_eq!(fs::read_dir(&stage).unwrap().count(), 2);
+        assert_eq!(
+            fixture
+                .registry
+                .revision(&execution.workspace)
+                .unwrap()
+                .files,
+            0
+        );
     }
 
     #[tokio::test]
