@@ -68,6 +68,10 @@ const FAULT_DURING_STAGE_WRITE: u8 = 35;
 const FAULT_CLEANUP_UNLINK: u8 = 36;
 #[cfg(test)]
 const FAULT_CLEANUP_DIRECTORY_SYNC: u8 = 37;
+#[cfg(test)]
+const FAULT_DESTINATION_DIRECTORY_SYNC: u8 = 38;
+#[cfg(test)]
+const FAULT_STAGING_DIRECTORY_SYNC: u8 = 39;
 
 /// Native exact-text editor bound to one frozen tool and workspace.
 pub struct NativeEditBoundary {
@@ -900,7 +904,9 @@ fn run_effect_worker(
     }
     #[cfg(test)]
     trip_fault(&job.fault, FAULT_AFTER_RENAME);
-    if parent.sync_all().is_err() || job.staging.sync_all().is_err() {
+    if job.sync_replacement_directory(&parent, false).is_err()
+        || job.sync_replacement_directory(&job.staging, true).is_err()
+    {
         return indeterminate("replacement directory barriers failed", Some(start));
     }
     settled_edit(
@@ -1640,6 +1646,30 @@ impl Drop for CancelWorkerOnDrop {
 }
 
 impl EditJob {
+    fn sync_replacement_directory(&self, parent: &File, source: bool) -> std::io::Result<()> {
+        let _ = source;
+        #[cfg(test)]
+        if self
+            .fault
+            .compare_exchange(
+                if source {
+                    FAULT_STAGING_DIRECTORY_SYNC
+                } else {
+                    FAULT_DESTINATION_DIRECTORY_SYNC
+                },
+                0,
+                Ordering::SeqCst,
+                Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            return Err(std::io::Error::other(
+                "injected worker directory sync failure",
+            ));
+        }
+        parent.sync_all()
+    }
+
     fn admission_allowed(&self, policy: u8) -> bool {
         if self.execution.binding != self.binding
             || self.execution.action.authority != ToolAuthority::WorkspaceMutation
@@ -2096,6 +2126,77 @@ mod tests {
             .await;
         assert!(matches!(settled, ToolAttemptState::Settled { .. }));
         assert_eq!(registry.revision(&execution.workspace).unwrap().files, 1);
+    }
+
+    #[tokio::test]
+    async fn worker_directory_sync_failures_keep_renamed_edit_uncertain_until_recovery() {
+        for fault in [
+            FAULT_DESTINATION_DIRECTORY_SYNC,
+            FAULT_STAGING_DIRECTORY_SYNC,
+        ] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.inject_fault(fault);
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            let ToolAttemptState::Indeterminate {
+                receipt: Some(saved),
+                ..
+            } = &state
+            else {
+                panic!("worker must retain its start receipt after rename: {state:?}")
+            };
+            let saved = saved.clone();
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha gamma alpha\n"
+            );
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert_eq!(saved, session_receipt(claim.start.as_ref().unwrap()));
+            assert!(claim.terminal.is_none());
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            let settled = fixture
+                .boundary
+                .reconcile(execution.clone(), attempt(&execution, state))
+                .await;
+            assert!(matches!(
+                settled,
+                ToolAttemptState::Settled {
+                    effect: crate::EffectSummary::KnownChanges { .. },
+                    receipt: Some(ref receipt),
+                    ..
+                } if receipt == &saved
+            ));
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                1
+            );
+            assert!(fixture.registry.unresolved(None, 4).unwrap().is_empty());
+        }
     }
 
     #[tokio::test]

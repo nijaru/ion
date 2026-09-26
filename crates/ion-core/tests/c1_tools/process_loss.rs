@@ -4,7 +4,9 @@ use ion_core::workspace_registry::{
     ClaimKey, RegistryReceipt, TerminalEvidence, WorkspaceRegistry, WorkspaceResources,
     WorkspaceRevision,
 };
-use std::{fs, io::Write, path::Path, process::Stdio, time::Duration};
+use std::{
+    fs, io::Write, os::unix::fs::PermissionsExt, path::Path, process::Stdio, time::Duration,
+};
 
 fn mutation_binding() -> ToolBinding {
     let mut binding = ToolBinding::new(
@@ -322,6 +324,243 @@ async fn killed_tool_owner_reconciles_registry_receipt_without_reexecution() {
             .files,
         1
     );
+    session.close().await.unwrap();
+    drop(registry);
+    fs::remove_dir_all(home).unwrap();
+}
+
+struct PauseAfterNativeEdit {
+    backend: Arc<NativeEditBoundary>,
+    marker: PathBuf,
+}
+
+impl ToolBoundary for PauseAfterNativeEdit {
+    fn binding(&self) -> ToolBinding {
+        self.backend.binding()
+    }
+    fn executor(&self) -> SemanticCompatibilityId {
+        self.backend.executor()
+    }
+    fn prepare(&self, arguments: serde_json::Value) -> Result<PreparedAction, ToolBoundaryError> {
+        self.backend.prepare(arguments)
+    }
+    fn live_authority(
+        &self,
+        action: &PreparedAction,
+        workspace: &WorkspaceBinding,
+    ) -> LiveToolAuthority {
+        self.backend.live_authority(action, workspace)
+    }
+    fn execute<'a>(
+        &'a self,
+        execution: ToolExecution,
+        stop: CancellationToken,
+    ) -> BoxFuture<'a, ToolAttemptState> {
+        Box::pin(async move {
+            let state = self.backend.execute(execution, stop).await;
+            assert!(matches!(state, ToolAttemptState::Settled { .. }));
+            // Registry terminal evidence is durable; Session has not received it.
+            fs::write(&self.marker, b"registry terminal, Session reply withheld").unwrap();
+            std::future::pending().await
+        })
+    }
+    fn reconcile<'a>(
+        &'a self,
+        execution: ToolExecution,
+        attempt: ToolAttempt,
+    ) -> BoxFuture<'a, ToolAttemptState> {
+        self.backend.reconcile(execution, attempt)
+    }
+}
+
+fn edit_model() -> Arc<Model> {
+    Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        calls: 1,
+        arguments: json!({
+            "path":"x", "expected_content":"before", "old_text":"before", "new_text":"after",
+            "workspace_revision":{"files":0,"repository":0}
+        }),
+    })
+}
+
+#[tokio::test]
+async fn native_edit_owner_child() {
+    let Some(home) = std::env::var_os("ION_EDIT_SESSION_PROCESS_LOSS_CHILD") else {
+        return;
+    };
+    let home = PathBuf::from(home);
+    let mut registry = WorkspaceRegistry::open(home.join("host")).unwrap();
+    let workspace = registry
+        .bind("workspace", home.join("checkout"), "native-v1")
+        .unwrap();
+    let editor = Arc::new(
+        NativeEditBoundary::new(
+            &registry,
+            workspace.clone(),
+            64,
+            &home.join("host/stage").canonicalize().unwrap(),
+        )
+        .unwrap(),
+    );
+    editor.set_live_authority(LiveToolAuthority::Allow);
+    let mut cfg = config();
+    cfg.workspace = workspace;
+    cfg.authority.workspace_mutation = true;
+    cfg.tools = vec![editor.tool_binding().clone()];
+    cfg.initial_tools = vec![editor.tool_binding().id.clone()];
+    let session = Session::create(home.join("session.sqlite"), cfg)
+        .await
+        .unwrap()
+        .session;
+    let handle = session.handle();
+    let conversation = session.primary_conversation();
+    let input = handle
+        .admit_input(
+            conversation,
+            AdmitInputRequest {
+                sender: InputSender::User,
+                mode: InputMode::Submit,
+                request_key: None,
+                body: InputBody::Text("replace the synthetic marker".into()),
+            },
+        )
+        .await
+        .unwrap();
+    let turn = handle
+        .start_turn(StartTurnRequest {
+            conversation,
+            input: input.input().id,
+            admitted_at_unix_ms: 0,
+            wall_deadline_unix_ms: None,
+        })
+        .await
+        .unwrap()
+        .turn
+        .id;
+    let backend = Arc::new(PauseAfterNativeEdit {
+        backend: editor,
+        marker: home.join("edit-owner-paused"),
+    });
+    let tools = ToolBoundaries::new([backend as Arc<dyn ToolBoundary>]).unwrap();
+    let _ = handle
+        .resume_with_tools(turn, models(&edit_model()), tools, DrivePolicy::default())
+        .await;
+    panic!("parent must kill the edit owner before Session evidence returns");
+}
+
+#[tokio::test]
+async fn killed_native_edit_session_owner_adopts_terminal_without_reexecution() {
+    struct Child(std::process::Child);
+    impl Drop for Child {
+        fn drop(&mut self) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+    let home = std::env::temp_dir().join(format!("ion-edit-session-death-{}", SessionId::new()));
+    fs::create_dir_all(home.join("checkout")).unwrap();
+    fs::create_dir_all(home.join("host/stage")).unwrap();
+    fs::set_permissions(home.join("host/stage"), fs::Permissions::from_mode(0o700)).unwrap();
+    fs::write(home.join("checkout/x"), "before").unwrap();
+    let mut child = Child(
+        std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "process_loss::native_edit_owner_child",
+                "--nocapture",
+            ])
+            .env("ION_EDIT_SESSION_PROCESS_LOSS_CHILD", &home)
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap(),
+    );
+    tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            if home.join("edit-owner-paused").exists() {
+                break;
+            }
+            assert!(
+                child.0.try_wait().unwrap().is_none(),
+                "edit owner exited before its durable terminal"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("durable native edit terminal deadline");
+    child.0.kill().unwrap();
+    assert!(!child.0.wait().unwrap().success());
+    let registry = WorkspaceRegistry::open(home.join("host")).unwrap();
+    assert_eq!(fs::read(home.join("checkout/x")).unwrap(), b"after");
+    assert!(registry.unresolved(None, 4).unwrap().is_empty());
+
+    let session = Session::open(home.join("session.sqlite")).await.unwrap();
+    let step = tool_step(&session).await;
+    let before = session.handle().tool_records(step).await.unwrap();
+    assert_eq!(before.attempts.len(), 1);
+    assert!(matches!(
+        before.attempts[0].state,
+        ToolAttemptState::IntentCommitted {
+            start_receipt: None
+        }
+    ));
+    let claim = registry
+        .claim(ClaimKey {
+            session: session.session_id(),
+            invocation: before.attempts[0].invocation,
+            attempt: before.attempts[0].id,
+        })
+        .unwrap();
+    assert!(
+        claim.terminal.is_some(),
+        "host truth preceded Session evidence"
+    );
+    let editor = Arc::new(
+        NativeEditBoundary::new(
+            &registry,
+            before.turn.environment.workspace.clone(),
+            64,
+            &home.join("host/stage").canonicalize().unwrap(),
+        )
+        .unwrap(),
+    );
+    editor.set_live_authority(LiveToolAuthority::Allow);
+    let tools = ToolBoundaries::new([editor as Arc<dyn ToolBoundary>]).unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .resume_with_tools(
+                before.turn.id,
+                models(&edit_model()),
+                tools,
+                DrivePolicy::default()
+            )
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let after = session.handle().tool_records(step).await.unwrap();
+    assert_eq!(after.attempts.len(), 1);
+    assert_eq!(after.attempts[0].id, before.attempts[0].id);
+    assert!(matches!(
+        &after.attempts[0].state,
+        ToolAttemptState::Settled {
+            effect: EffectSummary::KnownChanges { paths },
+            receipt: Some(receipt),
+            ..
+        } if paths == &["x".to_string()]
+            && receipt.data == serde_json::to_value(claim.start.unwrap()).unwrap()
+    ));
+    assert_eq!(fs::read(home.join("checkout/x")).unwrap(), b"after");
+    assert_eq!(
+        registry
+            .revision(&before.turn.environment.workspace)
+            .unwrap()
+            .files,
+        1
+    );
+    assert_eq!(fs::read_dir(home.join("host/stage")).unwrap().count(), 0);
     session.close().await.unwrap();
     drop(registry);
     fs::remove_dir_all(home).unwrap();
