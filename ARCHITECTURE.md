@@ -692,6 +692,11 @@ unresolved outcome; never imply a failed command made no changes. Generic import
 does not write protected Git metadata. Git mutations require a separate
 repository-level operation or a truthful unsupported result. The snapshot,
 scope and importer are one tool boundary, not a second agent runtime.
+After positive scope stop but before any live import, lost command status or
+output evidence may settle as `NoMutation` only if the private view is safely
+discarded and exact terminal registry evidence is durable. Report the command
+outcome and output as unavailable; do not infer an exit code or import private
+changes. Failed disposal or uncertain terminal evidence retains quarantine.
 
 An explicitly unconfined backend may have wider effects, but its local process
 receipt proves only local-descendant quiescence. It cannot claim that remote or

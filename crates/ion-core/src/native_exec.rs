@@ -925,13 +925,40 @@ fn run_exec(job: ExecJob) -> ToolAttemptState {
         );
     }
     let (Some(stdout), Some(stderr)) = (stdout, stderr) else {
-        return indeterminate("exec output collector failed", Some(&receipt));
+        return discard_terminal_private_view(
+            &view,
+            &mut registry,
+            key,
+            &receipt,
+            start_receipt,
+            "command output is unavailable",
+            output_limit,
+        );
     };
     let Some(scope) = status_data else {
-        return indeterminate("Bubblewrap status record is unavailable", Some(&receipt));
+        return discard_terminal_private_view(
+            &view,
+            &mut registry,
+            key,
+            &receipt,
+            start_receipt,
+            "command status is unavailable",
+            output_limit,
+        );
     };
-    if scope.start != scope_start || (!cancelled && !timed_out && scope.exit_code.is_none()) {
-        return indeterminate("Bubblewrap terminal status is incomplete", Some(&receipt));
+    if scope.start != scope_start {
+        return indeterminate("Bubblewrap status identity changed", Some(&receipt));
+    }
+    if !cancelled && !timed_out && scope.exit_code.is_none() {
+        return discard_terminal_private_view(
+            &view,
+            &mut registry,
+            key,
+            &receipt,
+            start_receipt,
+            "command exit status is unavailable",
+            output_limit,
+        );
     }
     let observed_output = stdout.observed.saturating_add(stderr.observed);
     let mut result = command_result(
@@ -1430,6 +1457,55 @@ fn resolve_no_start(
         return indeterminate("prestart registry resolution is uncertain", Some(receipt));
     }
     not_started(reason)
+}
+
+/// A positively stopped command has affected only its private view until the
+/// first import. Lost command evidence can therefore discard that view and
+/// release the claim, but cannot claim that the command succeeded or retry it.
+fn discard_terminal_private_view(
+    view: &WorkspaceView,
+    registry: &mut WorkspaceRegistry,
+    key: ClaimKey,
+    receipt: &RegistryReceipt,
+    start_receipt: StartReceipt,
+    reason: &str,
+    output_limit: usize,
+) -> ToolAttemptState {
+    if view.cleanup().is_err() {
+        return indeterminate(
+            "private command workspace cleanup is uncertain",
+            Some(receipt),
+        );
+    }
+    let evidence = TerminalEvidence {
+        receipt: receipt.clone(),
+        effect: EffectSummary::NoMutation,
+    };
+    if registry.resolve(key, evidence.clone()).is_err()
+        && !registry
+            .claim(key)
+            .is_ok_and(|claim| claim.terminal.as_ref() == Some(&evidence))
+    {
+        return indeterminate("exec terminal registry write is uncertain", Some(receipt));
+    }
+    let mut result = ToolResult {
+        value: json!({"error": reason, "private_changes_imported": false}),
+        is_error: true,
+        capture: OutputCapture::Incomplete {
+            reason: OutputLoss::BackendFailure,
+            retained_bytes: 0,
+            observed_bytes: None,
+        },
+    };
+    if serde_json::to_vec(&result).map_or(true, |encoded| encoded.len() > output_limit) {
+        result = crate::tool_exec::output_capacity_result();
+    }
+    ToolAttemptState::Settled {
+        result,
+        effect: EffectSummary::NoMutation,
+        receipt: Some(start_receipt),
+        retryable: false,
+    }
 }
 
 fn not_started(reason: &str) -> ToolAttemptState {
@@ -2201,6 +2277,72 @@ mod tests {
             .execute(execution, CancellationToken::new())
             .await;
         panic!("owner-loss child unexpectedly reached terminal execution");
+    }
+
+    #[tokio::test]
+    async fn stopped_supervisor_without_exit_status_discards_private_changes() {
+        let Some(fixture) = Fixture::new() else {
+            return;
+        };
+        let execution = fixture.execution("printf private > marker; sleep 60", 10_000);
+        let identity = format!(
+            "{}-{}-{}",
+            execution.session, execution.invocation, execution.attempt
+        );
+        let private_marker = fixture
+            ._host
+            .path()
+            .join(format!("staging/exec-{identity}-command/marker"));
+        let boundary = Arc::clone(&fixture.boundary);
+        let submitted = execution.clone();
+        let task =
+            tokio::spawn(
+                async move { boundary.execute(submitted, CancellationToken::new()).await },
+            );
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let supervisor_pid = loop {
+            let started = fixture.registry.claim(ClaimKey {
+                session: execution.session,
+                invocation: execution.invocation,
+                attempt: execution.attempt,
+            });
+            if fs::metadata(&private_marker).is_ok_and(|meta| meta.len() > 0)
+                && let Ok(Some(start)) = started.map(|claim| claim.start)
+            {
+                break start
+                    .identity
+                    .rsplit(':')
+                    .nth(2)
+                    .and_then(|pid| pid.parse::<i32>().ok())
+                    .and_then(Pid::from_raw)
+                    .expect("durable supervisor pid");
+            }
+            assert!(Instant::now() < deadline, "private command did not start");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        };
+        let supervisor = pidfd_open(supervisor_pid, PidfdFlags::empty()).unwrap();
+        rustix::process::pidfd_send_signal(&supervisor, rustix::process::Signal::KILL).unwrap();
+        let state = task.await.unwrap();
+        let ToolAttemptState::Settled {
+            result,
+            effect: EffectSummary::NoMutation,
+            retryable: false,
+            ..
+        } = state
+        else {
+            panic!("stopped supervisor did not settle: {state:?}");
+        };
+        assert!(result.is_error);
+        assert_eq!(result.value["private_changes_imported"], false);
+        assert!(matches!(
+            result.capture,
+            OutputCapture::Incomplete {
+                reason: OutputLoss::BackendFailure,
+                ..
+            }
+        ));
+        assert!(!fixture.work.path().join("marker").exists());
+        assert!(fixture.registry.unresolved(None, 10).unwrap().is_empty());
     }
 
     #[test]

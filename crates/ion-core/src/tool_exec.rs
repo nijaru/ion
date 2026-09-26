@@ -326,6 +326,7 @@ pub enum OutputLoss {
     Quota,
     Stopped,
     BackendCapacity,
+    BackendFailure,
     LostOnRecovery,
 }
 

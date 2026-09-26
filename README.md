@@ -318,6 +318,10 @@ unresolved workspace claim and private artifacts for reconciliation. The CLI
 has no automatic reconciliation for that case yet. Native macOS `exec` is
 unavailable; Linux command success does not qualify the first cross-platform
 prerelease.
+If the supervisor is positively stopped but its exit status or output is lost
+before import, Ion discards the private view, reports unavailable command evidence
+and records no live workspace mutation after successful cleanup. It does not
+retry that command.
 If the host registry already recorded exact terminal evidence before a Session
 result was lost, explicit resume adopts that evidence without rerunning the
 command and reports that its original output and exit status are unavailable.
