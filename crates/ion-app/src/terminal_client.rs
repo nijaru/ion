@@ -530,7 +530,7 @@ fn display_entry(entry: &Entry, width: usize) -> Vec<String> {
                     name, arguments, ..
                 } => body.push_str(&format!("{name} {}", arguments)),
                 TranscriptContent::ToolResult { name, result, .. } => {
-                    body.push_str(&format!("{name} {}", result))
+                    body.push_str(&display_tool_result(name, result))
                 }
             }
         }
@@ -543,6 +543,57 @@ fn display_entry(entry: &Entry, width: usize) -> Vec<String> {
     let body = clean_display(&body, MAX_ENTRY_CHARS);
     let text = format!("{label} › {body}");
     wrap(&text, width, None).0
+}
+
+fn display_tool_result(name: &str, result: &serde_json::Value) -> String {
+    let value = &result["value"];
+    if result["is_error"].as_bool() == Some(true) {
+        return format!(
+            "{name} failed: {}",
+            value["error"].as_str().unwrap_or("tool returned an error")
+        );
+    }
+    match name {
+        "list" => {
+            let Some(entries) = value["entries"].as_array() else {
+                return format!("{name} {result}");
+            };
+            let names = entries
+                .iter()
+                .filter_map(|entry| entry["name"].as_str())
+                .collect::<Vec<_>>()
+                .join(", ");
+            let more = if value["has_more"].as_bool() == Some(true) {
+                " (more available)"
+            } else {
+                ""
+            };
+            format!(
+                "list {}: {}{more}",
+                value["path"].as_str().unwrap_or("."),
+                if names.is_empty() { "(empty)" } else { &names }
+            )
+        }
+        "read" => {
+            let Some(content) = value["content"].as_str() else {
+                return format!("{name} {result}");
+            };
+            let more = if value["has_more"].as_bool() == Some(true) {
+                "\n… more available"
+            } else {
+                ""
+            };
+            format!("read:\n{content}{more}")
+        }
+        "edit" | "create" => {
+            let (Some(path), Some(bytes)) = (value["path"].as_str(), value["bytes"].as_u64())
+            else {
+                return format!("{name} {result}");
+            };
+            format!("{name} {path}: {bytes} bytes")
+        }
+        _ => format!("{name} {result}"),
+    }
 }
 
 fn clean_input(text: &str) -> String {
@@ -630,6 +681,20 @@ fn wrap(text: &str, width: usize, cursor: Option<usize>) -> (Vec<String>, Option
 mod tests {
     use super::*;
     use ion_terminal::KeyEvent;
+
+    #[test]
+    fn tool_display_shows_useful_output_without_internal_receipt_fields() {
+        let listed = serde_json::json!({"is_error":false,"capture":"CompleteInline","value":{"path":"src","entries":[{"name":"main.rs"}],"has_more":false,"workspace_revision":{"files":3}}});
+        assert_eq!(display_tool_result("list", &listed), "list src: main.rs");
+        let read = serde_json::json!({"is_error":false,"capture":"CompleteInline","value":{"content":"hello\n","base_digest":"private-detail","has_more":false}});
+        assert_eq!(display_tool_result("read", &read), "read:\nhello\n");
+        assert!(!display_tool_result("read", &read).contains("base_digest"));
+        let failure = serde_json::json!({"is_error":true,"value":{"error":"stale revision"}});
+        assert_eq!(
+            display_tool_result("edit", &failure),
+            "edit failed: stale revision"
+        );
+    }
 
     fn key(code: KeyCode, modifiers: Modifiers) -> KeyEvent {
         KeyEvent::new(code, modifiers)
