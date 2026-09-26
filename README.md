@@ -309,10 +309,14 @@ and imports at most 32 changed paths and 64 MiB of ordinary file content. The
 private view is limited to 100,000 entries and 2 GiB. The result reports
 `imported_paths`, omissions and any `import_error`; a nonzero command exit can
 still import changed files. The import plan is durably recorded before ordinary
-files are published. An owner crash retains an unresolved workspace claim and
-private artifacts for reconciliation. The CLI has no automatic reconciliation
-for that case yet. Native macOS `exec` is unavailable; Linux command success
-does not qualify the first cross-platform prerelease.
+files are published. An owner crash before host terminal evidence retains an
+unresolved workspace claim and private artifacts for reconciliation. The CLI
+has no automatic reconciliation for that case yet. Native macOS `exec` is
+unavailable; Linux command success does not qualify the first cross-platform
+prerelease.
+If the host registry already recorded exact terminal evidence before a Session
+result was lost, explicit resume adopts that evidence without rerunning the
+command and reports that its original output and exit status are unavailable.
 Use `ion claims --registry <path>` to inspect up to 50 unresolved host claims;
 `--limit` accepts 1–256 and `--after <next_after>` pages through the rest.
 This read-only command requires an existing registry and never clears a claim.

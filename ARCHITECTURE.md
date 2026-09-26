@@ -583,6 +583,10 @@ replacement binding.
 The host exposes bounded read-only inspection of unresolved claims from an
 existing registry. Inspection never initializes a missing registry, writes
 claim/recovery facts or treats an absent backend process as terminal evidence.
+If a native backend durably records exact terminal claim evidence before the
+Session records its ToolAttempt result, explicit resume adopts that evidence
+without rerunning the action. Lost output and exit status remain explicitly
+unavailable in the recovered model-visible result, whose capture is incomplete.
 
 Workspace discovery is a bounded read-only listing of one directory per call.
 It returns sorted names, file kinds, a continuation cursor and the observed

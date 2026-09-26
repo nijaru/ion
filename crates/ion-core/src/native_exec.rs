@@ -7,6 +7,9 @@
 //! quarantined. Commands see a bounded private workspace view, never the live
 //! checkout or host registry. A stopped command's ordinary file changes are
 //! imported only after the scope is positively terminal.
+//! The protected registry is authoritative for each attempt's start/terminal
+//! facts; recovery adopts only a matching terminal claim and never infers stop
+//! from a missing process.
 
 #![cfg(target_os = "linux")]
 
@@ -55,9 +58,10 @@ use self::{
 };
 use crate::{
     ApprovalState, EffectSummary, EgressRealm, LiveToolAuthority, OutputCapture, OutputLoss,
-    PreparedAction, SemanticCompatibilityId, StartReceipt, ToolAttemptState, ToolAuthority,
-    ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError, ToolConcurrency, ToolExecution,
-    ToolOutputStream, ToolProgressPublisher, ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
+    PreparedAction, SemanticCompatibilityId, StartReceipt, StartReceiptCapability, ToolAttempt,
+    ToolAttemptState, ToolAuthority, ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError,
+    ToolConcurrency, ToolExecution, ToolOutputStream, ToolProgressPublisher, ToolRecoveryPolicy,
+    ToolResult, WorkspaceBinding,
     workspace_registry::{
         ClaimKey, RegistryError, RegistryReceipt, TerminalEvidence, WorkspaceRegistry,
         WorkspaceResources, WorkspaceRevision,
@@ -65,7 +69,7 @@ use crate::{
 };
 
 const BWRAP: &str = "/usr/bin/bwrap";
-const IMPLEMENTATION_ID: &str = "linux-bwrap-private-view-v1";
+const IMPLEMENTATION_ID: &str = "linux-bwrap-private-view-v2";
 const MAX_COMMAND_BYTES: usize = 8192;
 const MAX_TIMEOUT_MS: u64 = 120_000;
 const DEFAULT_TIMEOUT_MS: u64 = 30_000;
@@ -295,10 +299,162 @@ impl ToolBoundary for NativeExecBoundary {
             result.unwrap_or_else(|_| indeterminate("exec supervisor failed", None))
         })
     }
+
+    fn reconcile<'a>(
+        &'a self,
+        execution: ToolExecution,
+        attempt: ToolAttempt,
+    ) -> ion_ai::BoxFuture<'a, ToolAttemptState> {
+        Box::pin(async move { self.reconcile_terminal_claim(&execution, attempt) })
+    }
+}
+
+impl NativeExecBoundary {
+    fn reconcile_terminal_claim(
+        &self,
+        execution: &ToolExecution,
+        attempt: ToolAttempt,
+    ) -> ToolAttemptState {
+        let previous_receipt = match &attempt.state {
+            ToolAttemptState::IntentCommitted { start_receipt }
+            | ToolAttemptState::Indeterminate {
+                receipt: start_receipt,
+                ..
+            } => start_receipt.clone(),
+            _ => return attempt.state,
+        };
+        let unresolved = |reason: &str| ToolAttemptState::Indeterminate {
+            reason: reason.into(),
+            receipt: previous_receipt.clone(),
+        };
+        if execution.binding != self.binding
+            || execution.workspace != self.workspace
+            || attempt.id != execution.attempt
+            || attempt.invocation != execution.invocation
+            || attempt.executor != self.executor
+            || self.prepared_arguments(&execution.action).is_none()
+        {
+            return unresolved("exec recovery identity changed");
+        }
+        let key = ClaimKey {
+            session: execution.session,
+            invocation: execution.invocation,
+            attempt: execution.attempt,
+        };
+        let registry = match WorkspaceRegistry::open(&self.registry_directory) {
+            Ok(registry) => registry,
+            Err(_) => return unresolved("exec registry unavailable for recovery"),
+        };
+        let claim = match registry.claim(key) {
+            Ok(claim) => claim,
+            Err(_) => return unresolved("exec claim unavailable for recovery"),
+        };
+        if claim.binding != execution.workspace || claim.resources != self.resources {
+            return unresolved("exec claim does not match the frozen workspace");
+        }
+        let base_identity = format!("{}-{}-{}", key.session, key.invocation, key.attempt);
+        let recovered_start = claim
+            .start
+            .as_ref()
+            .and_then(|start| recovered_exec_receipt(&base_identity, start));
+        let Some(terminal) = claim.terminal else {
+            return match (claim.start.as_ref(), recovered_start) {
+                (Some(start), Some(receipt)) if start.backend == execution.workspace.backend => {
+                    match compatible_exec_receipt(&previous_receipt, receipt, start) {
+                        Some(receipt) => ToolAttemptState::Indeterminate {
+                            reason: "exec claim has no terminal evidence".into(),
+                            receipt: Some(receipt),
+                        },
+                        None => unresolved("exec start receipt differs from Session evidence"),
+                    }
+                }
+                _ => unresolved("exec claim has no terminal evidence"),
+            };
+        };
+        if terminal.receipt.backend != execution.workspace.backend {
+            return unresolved("exec terminal receipt backend changed");
+        }
+        let Some(start) = claim.start else {
+            return if previous_receipt.is_none()
+                && terminal.receipt.identity == base_identity
+                && terminal.effect == EffectSummary::NoMutation
+            {
+                ToolAttemptState::NotStarted {
+                    reason: "exec host claim proves no command start".into(),
+                }
+            } else {
+                unresolved("exec terminal evidence conflicts with missing start")
+            };
+        };
+        if terminal.receipt != start {
+            return unresolved("exec terminal receipt differs from start");
+        }
+        let Some(receipt) = recovered_start else {
+            return unresolved("exec start receipt cannot be reconstructed");
+        };
+        let receipt = match compatible_exec_receipt(&previous_receipt, receipt, &start) {
+            Some(receipt) => receipt,
+            None => return unresolved("exec start receipt differs from Session evidence"),
+        };
+        ToolAttemptState::Settled {
+            result: ToolResult {
+                value: json!(
+                    "Exec stopped; output and exit status lost on recovery. Inspect workspace."
+                ),
+                is_error: true,
+                capture: OutputCapture::Incomplete {
+                    reason: OutputLoss::LostOnRecovery,
+                    retained_bytes: 0,
+                    observed_bytes: None,
+                },
+            },
+            effect: terminal.effect,
+            receipt: Some(receipt),
+            retryable: false,
+        }
+    }
+}
+
+fn partial_exec_receipt(receipt: &RegistryReceipt) -> StartReceipt {
+    StartReceipt {
+        kind: IMPLEMENTATION_ID.into(),
+        data: json!({"registry": receipt}),
+    }
+}
+
+fn compatible_exec_receipt(
+    previous: &Option<StartReceipt>,
+    recovered: StartReceipt,
+    start: &RegistryReceipt,
+) -> Option<StartReceipt> {
+    match previous {
+        Some(old) if old == &recovered || old == &partial_exec_receipt(start) => Some(old.clone()),
+        Some(_) => None,
+        None => Some(recovered),
+    }
+}
+
+fn recovered_exec_receipt(base_identity: &str, receipt: &RegistryReceipt) -> Option<StartReceipt> {
+    let suffix = receipt
+        .identity
+        .strip_prefix(base_identity)?
+        .strip_prefix(':')?;
+    let mut parts = suffix.split(':');
+    let bwrap_pid = parts.next()?.parse::<u32>().ok()?;
+    let init_pid = parts.next()?.parse::<i32>().ok()?;
+    let pid_namespace = parts.next()?.parse::<u64>().ok()?;
+    if parts.next().is_some() || bwrap_pid == 0 || init_pid <= 0 || pid_namespace == 0 {
+        return None;
+    }
+    Some(StartReceipt {
+        kind: IMPLEMENTATION_ID.into(),
+        data: json!({"registry": receipt, "init_pid": init_pid,
+            "pid_namespace": pid_namespace}),
+    })
 }
 
 fn native_exec_binding(implementation_id: &str) -> Result<ToolBinding, crate::ConfigError> {
-    ToolBinding::new(
+    let mut binding = ToolBinding::new(
         ToolBindingId::new("exec")?,
         ToolSpec {
             name: "exec".into(),
@@ -316,7 +472,9 @@ fn native_exec_binding(implementation_id: &str) -> Result<ToolBinding, crate::Co
         ToolConcurrency::Serial,
         ToolRecoveryPolicy::NeverRepeat,
         EgressRealm::Local,
-    )
+    )?;
+    binding.start_receipts = StartReceiptCapability::Authoritative;
+    Ok(binding)
 }
 
 #[derive(Debug, Error)]
@@ -1286,10 +1444,7 @@ fn not_started(reason: &str) -> ToolAttemptState {
 fn indeterminate(reason: &str, receipt: Option<&RegistryReceipt>) -> ToolAttemptState {
     ToolAttemptState::Indeterminate {
         reason: reason.into(),
-        receipt: receipt.map(|receipt| StartReceipt {
-            kind: IMPLEMENTATION_ID.into(),
-            data: json!({"registry": receipt}),
-        }),
+        receipt: receipt.map(partial_exec_receipt),
     }
 }
 
@@ -1428,6 +1583,263 @@ mod tests {
                 })
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn terminal_claim_recovers_lost_session_result_without_reexecuting() {
+        let Some(fixture) = Fixture::new() else {
+            return;
+        };
+        let execution = fixture.execution("printf recovered > result.txt", 5000);
+        let original = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        let ToolAttemptState::Settled {
+            effect,
+            receipt: Some(receipt),
+            ..
+        } = original
+        else {
+            panic!("exec did not settle: {original:?}");
+        };
+        assert_eq!(
+            effect,
+            EffectSummary::KnownChanges {
+                paths: vec!["result.txt".into()]
+            }
+        );
+        assert_eq!(
+            fs::read(fixture.work.path().join("result.txt")).unwrap(),
+            b"recovered"
+        );
+        let attempt = ToolAttempt {
+            id: execution.attempt,
+            invocation: execution.invocation,
+            ordinal: 1,
+            generation: 0,
+            executor: fixture.boundary.executor(),
+            progress: None,
+            state: ToolAttemptState::IntentCommitted {
+                start_receipt: None,
+            },
+        };
+        let conflicting = ToolAttempt {
+            state: ToolAttemptState::IntentCommitted {
+                start_receipt: Some(StartReceipt {
+                    kind: IMPLEMENTATION_ID.into(),
+                    data: json!({"registry": "other"}),
+                }),
+            },
+            ..attempt.clone()
+        };
+        assert!(matches!(
+            fixture
+                .boundary
+                .reconcile(execution.clone(), conflicting)
+                .await,
+            ToolAttemptState::Indeterminate { .. }
+        ));
+        let partial_receipt =
+            partial_exec_receipt(fixture.claim(&execution).start.as_ref().unwrap());
+        let partial = ToolAttempt {
+            state: ToolAttemptState::Indeterminate {
+                reason: "registry write reply lost".into(),
+                receipt: Some(partial_receipt.clone()),
+            },
+            ..attempt.clone()
+        };
+        assert!(matches!(
+            fixture.boundary.reconcile(execution.clone(), partial).await,
+            ToolAttemptState::Settled {
+                receipt: Some(actual), ..
+            } if actual == partial_receipt
+        ));
+        let recovered = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt.clone())
+            .await;
+        let ToolAttemptState::Settled {
+            result,
+            effect: recovered_effect,
+            receipt: Some(recovered_receipt),
+            retryable: false,
+        } = recovered
+        else {
+            panic!("terminal claim was not adopted: {recovered:?}");
+        };
+        assert_eq!(recovered_effect, effect);
+        assert_eq!(recovered_receipt, receipt);
+        assert!(result.is_error);
+        assert!(
+            result
+                .value
+                .as_str()
+                .unwrap()
+                .contains("output and exit status lost on recovery")
+        );
+        assert_eq!(
+            result.capture,
+            OutputCapture::Incomplete {
+                reason: OutputLoss::LostOnRecovery,
+                retained_bytes: 0,
+                observed_bytes: None,
+            }
+        );
+        assert!(
+            serde_json::to_vec(&result).unwrap().len()
+                <= serde_json::to_vec(&crate::tool_exec::output_capacity_result())
+                    .unwrap()
+                    .len()
+        );
+        assert_eq!(
+            fs::read(fixture.work.path().join("result.txt")).unwrap(),
+            b"recovered"
+        );
+        assert!(fixture.claim(&execution).terminal.is_some());
+    }
+
+    #[tokio::test]
+    async fn unstarted_terminal_claim_recovers_only_with_exact_no_mutation_evidence() {
+        let Some(mut fixture) = Fixture::new() else {
+            return;
+        };
+        assert_eq!(
+            fixture.boundary.binding().start_receipts,
+            StartReceiptCapability::Authoritative
+        );
+        let execution = fixture.execution("printf should-not-run > file.txt", 5000);
+        let key = ClaimKey {
+            session: execution.session,
+            invocation: execution.invocation,
+            attempt: execution.attempt,
+        };
+        let attempt = ToolAttempt {
+            id: execution.attempt,
+            invocation: execution.invocation,
+            ordinal: 1,
+            generation: 0,
+            executor: fixture.boundary.executor(),
+            progress: None,
+            state: ToolAttemptState::IntentCommitted {
+                start_receipt: None,
+            },
+        };
+        let revision = fixture.registry.revision(&execution.workspace).unwrap();
+        fixture
+            .registry
+            .admit(
+                &execution.workspace,
+                key,
+                fixture.boundary.resources,
+                revision,
+            )
+            .unwrap();
+        assert!(matches!(
+            fixture
+                .boundary
+                .reconcile(execution.clone(), attempt.clone())
+                .await,
+            ToolAttemptState::Indeterminate { .. }
+        ));
+        fixture
+            .registry
+            .resolve(
+                key,
+                TerminalEvidence {
+                    receipt: RegistryReceipt {
+                        backend: execution.workspace.backend.clone(),
+                        identity: format!("{}-{}-{}", key.session, key.invocation, key.attempt),
+                    },
+                    effect: EffectSummary::NoMutation,
+                },
+            )
+            .unwrap();
+        assert!(matches!(
+            fixture.boundary.reconcile(execution, attempt).await,
+            ToolAttemptState::NotStarted { .. }
+        ));
+        assert!(!fixture.work.path().join("file.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn start_only_claim_recovers_receipt_without_claiming_scope_stopped() {
+        let Some(mut fixture) = Fixture::new() else {
+            return;
+        };
+        let execution = fixture.execution("printf uncertain > file.txt", 5000);
+        let key = ClaimKey {
+            session: execution.session,
+            invocation: execution.invocation,
+            attempt: execution.attempt,
+        };
+        let revision = fixture.registry.revision(&execution.workspace).unwrap();
+        fixture
+            .registry
+            .admit(
+                &execution.workspace,
+                key,
+                fixture.boundary.resources,
+                revision,
+            )
+            .unwrap();
+        let start = RegistryReceipt {
+            backend: execution.workspace.backend.clone(),
+            identity: format!(
+                "{}-{}-{}:123:124:456",
+                key.session, key.invocation, key.attempt
+            ),
+        };
+        fixture.registry.record_start(key, start.clone()).unwrap();
+        let attempt = ToolAttempt {
+            id: execution.attempt,
+            invocation: execution.invocation,
+            ordinal: 1,
+            generation: 0,
+            executor: fixture.boundary.executor(),
+            progress: None,
+            state: ToolAttemptState::IntentCommitted {
+                start_receipt: None,
+            },
+        };
+        let recovered = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt.clone())
+            .await;
+        assert!(matches!(
+            &recovered,
+            ToolAttemptState::Indeterminate {
+                receipt: Some(receipt), ..
+            } if receipt == &recovered_exec_receipt(
+                &format!("{}-{}-{}", key.session, key.invocation, key.attempt),
+                &start
+            ).unwrap()
+        ));
+        assert!(fixture.claim(&execution).terminal.is_none());
+        assert!(!fixture.work.path().join("file.txt").exists());
+        fixture
+            .registry
+            .resolve(
+                key,
+                TerminalEvidence {
+                    receipt: start,
+                    effect: EffectSummary::NoMutation,
+                },
+            )
+            .unwrap();
+        let prior = ToolAttempt {
+            state: recovered.clone(),
+            ..attempt
+        };
+        assert!(matches!(
+            fixture.boundary.reconcile(execution, prior).await,
+            ToolAttemptState::Settled {
+                effect: EffectSummary::NoMutation,
+                receipt: Some(_),
+                retryable: false,
+                ..
+            }
+        ));
     }
 
     #[tokio::test]

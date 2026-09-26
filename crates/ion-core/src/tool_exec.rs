@@ -326,6 +326,7 @@ pub enum OutputLoss {
     Quota,
     Stopped,
     BackendCapacity,
+    LostOnRecovery,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
