@@ -497,7 +497,7 @@ async fn compaction_keeps_evidence_and_exact_current_input_without_replaying_old
         .unwrap()
         .session;
     let (handle, first) = started_turn(&session, "first", &"x".repeat(6200)).await;
-    let checkpoint = r#"{"goals":["continue the coding task"],"constraints":[],"done":["earlier answer completed"],"in_progress":[],"blocked":[],"decisions":[],"evidence":[],"unresolved":[],"next_action":"read current user request","terminal_condition":null}"#;
+    let checkpoint = "continue the coding task. The previous answer completed; exec's result was observed. Read the current user request next.";
     let boundary = CompactingBoundary::new(checkpoint);
     let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     assert!(matches!(
@@ -523,7 +523,7 @@ async fn compaction_keeps_evidence_and_exact_current_input_without_replaying_old
         assert!(
             serde_json::to_string(requests[1].messages.last().unwrap())
                 .unwrap()
-                .contains("Create the continuation checkpoint now")
+                .contains("Create a concise continuation summary now")
         );
         assert_eq!(requests[2].instructions, "answer carefully");
         let projected = serde_json::to_string(&requests[2].messages).unwrap();
@@ -555,14 +555,14 @@ async fn compaction_keeps_evidence_and_exact_current_input_without_replaying_old
 }
 
 #[tokio::test]
-async fn malformed_checkpoint_does_not_advance_context_or_repeat_model_call() {
+async fn blank_checkpoint_does_not_advance_context_or_repeat_model_call() {
     let (dir, path) = database("compaction-invalid");
     let session = Session::create(&path, compaction_config())
         .await
         .unwrap()
         .session;
     let (handle, first) = started_turn(&session, "first", &"x".repeat(6200)).await;
-    let boundary = CompactingBoundary::new("not-json");
+    let boundary = CompactingBoundary::new("  \n  ");
     let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
     assert!(matches!(
         handle.resume(first, boundaries.clone()).await.unwrap(),

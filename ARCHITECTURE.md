@@ -316,18 +316,19 @@ Model-facing context has four distinct layers:
   advisory checkpoint/tail; requirements that must persist exactly across turns belong in
   explicit conversation instructions/configuration. Model memories, worker chatter and
   live approval authority do not enter this layer.
-- **Continuation checkpoint:** bounded versioned typed model-generated execution frontier
-  (goal, progress, blockers, decisions, validated evidence refs, unresolved work, next
-  action/terminal condition). Schema validation is required, but content remains advisory
-  and never authority.
+- **Continuation checkpoint:** bounded, versioned advisory summary text of the
+  execution frontier: relevant goal, progress, blockers, decisions, observed checks,
+  unresolved work and next action. The host validates the envelope and byte bound;
+  it does not require the model to emit a JSON field taxonomy or treat model-cited
+  evidence as verified. Exact evidence stays in immutable history and the raw tail.
 - **Operational tail:** bounded lossless suffix of recent complete exchange groups.
 
 Compaction/reset appends one immutable **ContextBoundary Entry** containing its source
-cutoff, ordered exact active-turn RetainedInput IDs, typed checkpoint, raw-tail range,
+cutoff, ordered exact active-turn RetainedInput IDs, checkpoint, raw-tail range,
 checkpoint/compactor revision and optional provider-owned opaque artifact. The boundary
 never duplicates retained input bodies. The opaque artifact is an encoding optimization with explicit provider/model/
 replay-family compatibility identity, never semantic truth: compatible bindings may use
-it; incompatible switching reconstructs from the typed checkpoint + retained inputs +
+it; incompatible switching reconstructs from the checkpoint + retained inputs +
 raw tail instead. The compatibility choice is part of the request manifest/fingerprint.
 
 Projection is source-aware: a retained InputId is rendered only when its canonical
@@ -351,20 +352,19 @@ bytes also cap admission against the selected provider's asserted input-token li
 This conservative proxy can park early and does not prove a provider will accept the
 request; a wire-specific encoding may add overhead.
 
-Compaction is **incremental from the current projection**: previous typed checkpoint plus
+Compaction is **incremental from the current projection**: previous checkpoint plus
 selected complete exchanges from the current tail/new suffix. It never reloads and
 resummarizes the entire raw EvidenceHistory prefix. Trigger policy reserves enough
 headroom that this bounded compactor input fits the frozen compaction ProviderBinding
 before generation becomes stranded. If it cannot fit, return a typed ContextCapacity
 block; do not recursively compact the compaction request or silently select another
-provider. Compactor ModelSteps expose no tools/provider-hosted actions, require the typed
-checkpoint output schema and use ordinary ModelStep/Attempt budget/recovery semantics.
-Large outputs are bounded/spooled before this path.
-Native provider-enforced JSON is an optimization, not a prerequisite for a local
-compaction route. The host validates the complete text response against the typed
-checkpoint schema and frozen byte bound before selecting it; malformed or incomplete
-responses cannot advance the context boundary. A compaction step consumes the same
-Turn's bounded model-step and attempt budget, and selection atomically appends its
+provider. Compactor ModelSteps expose no tools/provider-hosted actions and use
+ordinary ModelStep/Attempt budget/recovery semantics. Large outputs are
+bounded/spooled before this path. The host accepts only a complete, nonempty,
+bounded text response and wraps it in a versioned checkpoint envelope. Missing,
+oversized or incomplete responses cannot advance the context boundary. A
+compaction step consumes the same Turn's bounded model-step and attempt budget;
+selection atomically appends its
 boundary while returning the Turn to request preparation. Model-facing checkpoint
 content is advisory and cannot grant tool authority or assert an external effect.
 

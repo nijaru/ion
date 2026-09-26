@@ -135,7 +135,9 @@ impl ModelBoundary for Model {
             self.starts.fetch_add(1, Ordering::SeqCst);
             let has_result = r.messages.iter().any(|m| m.role == TranscriptRole::Tool);
             let content = if r.instructions.contains("advisory continuation checkpoint") {
-                vec![Content::Text(r#"{"goals":["finish read"],"constraints":[],"done":["read completed"],"in_progress":[],"blocked":[],"decisions":[],"evidence":[],"unresolved":[],"next_action":"answer","terminal_condition":null}"#.into())]
+                vec![Content::Text(
+                    "Read completed. Answer the user next.".into(),
+                )]
             } else if has_result {
                 vec![Content::Text("done".into())]
             } else {

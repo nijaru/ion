@@ -18,7 +18,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v11 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v12 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -35,9 +35,9 @@ foundation, and an initial tool-execution boundary:
   monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
   step eligibility, and atomic predecessor-superseding provider fallback;
 - automatic safe-boundary context compaction through a tool-free ModelStep. A complete,
-  schema-checked checkpoint and bounded raw exchange tail become one immutable
+  bounded advisory text checkpoint and raw exchange tail become one immutable
   ContextBoundary; exact current-turn user input remains separate, and old transcript
-  evidence remains inspectable. Malformed or incomplete checkpoints park without
+  evidence remains inspectable. Empty, oversized or incomplete checkpoints park without
   advancing the boundary;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
   provider-request fingerprint when adapters use them as idempotency material; exact frozen
@@ -82,7 +82,7 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v10) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v11) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 The CLI now exposes bounded `list`, `read`, `create`, and exact-base `edit` tools,
@@ -99,6 +99,14 @@ tests passed. Native macOS command execution, user-facing approval, and broader
 provider qualification remain open. Parallel tool dispatch, context reset/forking,
 Steer/InteractionReply placement and workers remain optional later work.
 
+With the text checkpoint, a separate Fedora PTY run completed a `make test`
+Turn and a test-edit/`make test` Turn in one Session, crossed three context
+boundaries, and exited cleanly. The model's first guard test was ineffective;
+a corrective headless Turn in the same Session fixed the guard and completed
+after three more boundaries. Independent `make test` passed and production C
+files were unchanged. This demonstrates recovery from a model mistake, not
+general test-design reliability.
+
 Known limits before prerelease: absolute Turn wall deadlines are not implemented;
 the library now rejects non-`None` deadlines at admission and the CLI supplies
 `None`. Previously persisted experimental deadlines are not retroactively
@@ -110,8 +118,8 @@ batch and remaining context headroom, rather than reserving 64 KiB for a tiny
 read. It still compares serialized request **bytes** to an asserted input-token
 capacity, not an exact tokenizer-backed bound; a provider may reject a context
 that passes this conservative proxy.
-Compaction uses the selected frozen provider and requires one valid checkpoint
-JSON object. A local Qwen run with an asserted 4096-token output cap exhausted
+Compaction uses the selected frozen provider and stores one complete, bounded
+advisory summary. A local Qwen run with an asserted 4096-token output cap exhausted
 that cap on a compaction request; the current drive parks incomplete responses
 as `IncompleteResponse`. An 8192-token-cap run completed the tested two-turn task.
 This is task evidence, not a universal output-cap recommendation or provider
@@ -150,7 +158,8 @@ protect the registry, custody inode and staging namespace from arbitrary same-us
 writers; `0700` and file locks alone do not establish that protection. Blocked
 allocations have no force-clear. The host can opt into edit and create with
 an explicit shared registry. Creation requires an absent target and uses an
-atomic no-clobber rename. There is no sustained coding qualification.
+atomic no-clobber rename. A narrow two-Turn Fedora coding task passed; broader
+repository and provider qualification remains open.
 Registry v3/v4/v5 files are refused without migration.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage

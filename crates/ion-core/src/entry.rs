@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    AttemptId, BlobRef, ConversationId, EntryId, InputId, InvocationId, SemanticCompatibilityId,
+    BlobRef, ConversationId, EntryId, InputId, InvocationId, SemanticCompatibilityId,
     TranscriptMessage,
 };
 
@@ -69,30 +69,5 @@ pub struct EntryRange {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ContinuationCheckpoint {
-    pub goals: Vec<String>,
-    pub constraints: Vec<String>,
-    pub done: Vec<String>,
-    pub in_progress: Vec<String>,
-    pub blocked: Vec<String>,
-    pub decisions: Vec<CheckpointDecision>,
-    pub evidence: Vec<EvidenceRef>,
-    pub unresolved: Vec<String>,
-    pub next_action: Option<String>,
-    pub terminal_condition: Option<String>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CheckpointDecision {
-    pub decision: String,
-    pub rationale: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub enum EvidenceRef {
-    Entry(EntryId),
-    ModelAttempt(AttemptId),
-    ToolAttempt(AttemptId),
-    Invocation(InvocationId),
-    Blob(crate::ContentDigest),
+    pub summary: String,
 }

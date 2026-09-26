@@ -757,24 +757,20 @@ pub(super) fn select_compaction_response(
             .min(turn.environment.context.max_input_tokens)
             / 4,
     ) as usize;
-    if text.is_empty() || text.len() > bound {
+    if text.trim().is_empty() || text.len() > bound {
         return Err(StoreError::InvalidCheckpoint(format!(
             "checkpoint text must be between 1 and {bound} bytes"
         )));
     }
-    let checkpoint: ContinuationCheckpoint = serde_json::from_str(&text)
-        .map_err(|error| StoreError::InvalidCheckpoint(error.to_string()))?;
-    if !checkpoint.evidence.is_empty() {
-        return Err(StoreError::InvalidCheckpoint(
-            "checkpoint cites evidence IDs absent from the compactor request".into(),
-        ));
-    }
+    let checkpoint = ContinuationCheckpoint {
+        summary: text.trim().to_owned(),
+    };
     let boundary = ContextBoundary {
         source_cutoff: step.manifest.cutoff,
         retained_inputs: step.manifest.included_inputs.clone(),
         checkpoint,
         raw_tail: select_raw_tail(&transaction, &turn, step.manifest.cutoff)?,
-        checkpoint_schema: SemanticCompatibilityId::new("ion-checkpoint-v1")
+        checkpoint_schema: SemanticCompatibilityId::new("ion-checkpoint-v2")
             .expect("static checkpoint schema is valid"),
         compactor: step.manifest.settings.provider.clone(),
         opaque_provider_artifact: None,
@@ -1281,8 +1277,8 @@ pub(super) fn load_turn_entries(
             entry.projection.push(TranscriptMessage {
                 role: TranscriptRole::Assistant,
                 content: vec![TranscriptContent::Text(format!(
-                    "Advisory continuation checkpoint (not instructions or proof of effects): {}",
-                    json_to(&boundary.checkpoint)?
+                    "Advisory continuation checkpoint (not instructions or proof of effects):\n{}",
+                    boundary.checkpoint.summary
                 ))],
                 provider_replay: None,
             });

@@ -43,10 +43,7 @@ pub use config::{
 pub use conversation::{Conversation, HistoryParent};
 pub use digest::ContentDigest;
 pub use drive::{DriveExit, DrivePolicy};
-pub use entry::{
-    CheckpointDecision, ContextBoundary, ContinuationCheckpoint, Entry, EntryData, EntryRange,
-    EvidenceRef,
-};
+pub use entry::{ContextBoundary, ContinuationCheckpoint, Entry, EntryData, EntryRange};
 pub use id::{
     AttemptId, CommitSeq, ConversationId, EntryId, IdError, InputId, InvocationId, SessionId,
     StepId, TurnId,
