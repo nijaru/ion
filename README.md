@@ -116,8 +116,11 @@ immutable receipts, durable staged/rename-armed facts and both directory sync ba
 Only the original worker may rename; recovery never replays an uncertain replacement.
 Durability depends on the filesystem and hardware; process-loss tests are not power-loss
 qualification. The host must not delete or recreate the custody lock or staging directory.
-Aborted staging is retained with a hard 64-file/1-MiB ceiling; admission fails closed when
-full. Automated GC and pre-arm orphan resolution are not implemented. A recovery-only
+Ordinary pre-rename aborts clean up their authenticated private stage after terminal
+no-rename evidence; pre-arm process-loss recovery can settle `NoMutation` and remove
+a stage only when its physical identity was durably recorded. Unauthenticated
+partial-write crash survivors and cleanup failures remain under a hard 64-file/1-MiB
+ceiling; admission fails closed when full. General orphan GC is not implemented. A recovery-only
 constructor can adopt terminal evidence after the workspace disappears, but cannot prove
 an unresolved rename. No native edit is wired into the executable or live-provider tests.
 

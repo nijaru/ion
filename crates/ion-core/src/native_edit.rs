@@ -20,7 +20,9 @@ use std::{
 };
 
 use ion_ai::ToolSpec;
-use rustix::fs::{AtFlags, FileType, Mode, OFlags, fchmod, fstat, open, openat, renameat, statat};
+use rustix::fs::{
+    AtFlags, FileType, Mode, OFlags, fchmod, fstat, open, openat, renameat, statat, unlinkat,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
@@ -56,6 +58,16 @@ const FAULT_AFTER_RENAME: u8 = 1;
 const FAULT_AFTER_REGISTRY_COMMIT: u8 = 2;
 #[cfg(test)]
 const FAULT_RECOVERY_DIRECTORY_SYNC: u8 = 3;
+#[cfg(test)]
+const FAULT_AFTER_ADMIT: u8 = 32;
+#[cfg(test)]
+const FAULT_AFTER_STAGE_FACT: u8 = 33;
+#[cfg(test)]
+const FAULT_DURING_STAGE_WRITE: u8 = 35;
+#[cfg(test)]
+const FAULT_CLEANUP_UNLINK: u8 = 36;
+#[cfg(test)]
+const FAULT_CLEANUP_DIRECTORY_SYNC: u8 = 37;
 
 /// Native exact-text editor bound to one frozen tool and workspace.
 pub struct NativeEditBoundary {
@@ -577,6 +589,11 @@ struct EditJob {
     pause: Arc<TestPause>,
 }
 
+struct OwnedStage {
+    file: File,
+    slot: String,
+}
+
 fn run_edit(job: EditJob) -> ToolAttemptState {
     // The permanent registry lock is opened independently for every operation.
     // The blocking owner retains it even if its async waiter is dropped.
@@ -607,7 +624,8 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
     }
     // Returning from the effect worker is the quiescence boundary. Only this
     // supervisor settles NoMutation; the worker cannot perform any later rename.
-    let state = run_effect_worker(&job, &mut registry);
+    let mut owned_stage = None;
+    let state = run_effect_worker(&job, &mut registry, &mut owned_stage);
     let ToolAttemptState::Settled {
         effect,
         receipt: Some(receipt),
@@ -634,12 +652,28 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
     if !resolve_confirmed(&mut registry, key, &start, effect.clone(), proof) {
         return indeterminate("workspace registry resolution is uncertain", Some(&start));
     }
+    if matches!(effect, crate::EffectSummary::NoMutation)
+        && let Some(stage) = &owned_stage
+    {
+        // Release host-private staging only after durable no-rename evidence.
+        // A failure leaves a bounded orphan, not a changed target verdict.
+        let _ = cleanup_owned_stage(
+            &job.staging,
+            stage,
+            #[cfg(test)]
+            &job.fault,
+        );
+    }
     #[cfg(test)]
     trip_fault(&job.fault, FAULT_AFTER_REGISTRY_COMMIT);
     state
 }
 
-fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAttemptState {
+fn run_effect_worker(
+    job: &EditJob,
+    registry: &mut WorkspaceRegistry,
+    owned_stage: &mut Option<OwnedStage>,
+) -> ToolAttemptState {
     if job.stop.is_cancelled() {
         return not_started("edit cancelled before admission");
     }
@@ -740,6 +774,8 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
     if edit.staged.is_some() || edit.rename_armed.is_some() || claim.terminal.is_some() {
         return indeterminate("existing edit cannot authorize execution", Some(start));
     }
+    #[cfg(test)]
+    trip_fault(&job.fault, FAULT_AFTER_ADMIT);
     if job.stop.is_cancelled() || !job.admission_allowed(job.live_authority.load(Ordering::SeqCst))
     {
         return aborted_edit(start);
@@ -752,25 +788,35 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
             .write_all(b"occupant")
             .unwrap();
     }
-    let mut staged = match create_temporary(&job.staging, temporary) {
+    let staged = match create_temporary(&job.staging, temporary) {
         Ok(file) => file,
         // An existing occupant is never opened, adopted, truncated or removed.
         Err(_) => return aborted_edit(start),
     };
+    *owned_stage = Some(OwnedStage {
+        file: staged,
+        slot: temporary.clone(),
+    });
+    let staged = &mut owned_stage.as_mut().expect("new stage is owned").file;
     #[cfg(test)]
     if job.fault.load(Ordering::SeqCst) == 20 {
         staged.write_all(b"partial").unwrap();
         return aborted_edit(start);
     }
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == FAULT_DURING_STAGE_WRITE {
+        staged.write_all(b"partial").unwrap();
+        trip_fault(&job.fault, FAULT_DURING_STAGE_WRITE);
+    }
     if staged.write_all(&replacement).is_err()
-        || fchmod(&staged, Mode::from_raw_mode(base_mode as _)).is_err()
+        || fchmod(&*staged, Mode::from_raw_mode(base_mode as _)).is_err()
         || staged.sync_all().is_err()
         || job.staging.sync_all().is_err()
     {
         return aborted_edit(start);
     }
     let (Ok(staged_identity), Ok(stage_parent), Ok(target_parent)) = (
-        physical_identity(&staged),
+        physical_identity(staged),
         physical_identity(&job.staging),
         physical_identity(&parent),
     ) else {
@@ -798,6 +844,8 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
     {
         return aborted_edit(start);
     }
+    #[cfg(test)]
+    trip_fault(&job.fault, FAULT_AFTER_STAGE_FACT);
     #[cfg(test)]
     test_phase(job, 4);
     if job.stop.is_cancelled() || !job.admission_allowed(job.live_authority.load(Ordering::SeqCst))
@@ -959,8 +1007,36 @@ async fn reconcile_edit(
         }
         return uncertain("terminal host evidence conflicts with edit", Some(start));
     }
-    // Process loss is not the owning worker's no-rename attestation. Even a
-    // pre-armed orphan stays quarantined in this deliberately conservative slice.
+    // The permanent custody lock proves the old worker has stopped. Without a
+    // durable arm, the sole authorized worker could not have invoked rename;
+    // a host-private orphan is a separate cleanup obligation, not target effect.
+    if edit.rename_armed.is_none() {
+        if !resolve_confirmed(
+            &mut registry,
+            key,
+            start,
+            crate::EffectSummary::NoMutation,
+            EditTermination::JoinedWithoutRename,
+        ) {
+            return uncertain("pre-arm edit resolution is uncertain", Some(start));
+        }
+        if let (Some(staged), Some(stage_parent)) = (&edit.staged, &boundary.staging) {
+            // A durable Staged fact authenticates this exact private object.
+            // Without it, an orphan name could instead be an unowned collision.
+            if physical_identity(stage_parent).ok() == Some(staged.parent)
+                && let Ok(_stage_custody) = lock_staging(stage_parent)
+            {
+                let _ = cleanup_stage_with_identity(
+                    stage_parent,
+                    &edit.manifest.stage_slot,
+                    staged.file,
+                    #[cfg(test)]
+                    &boundary.fault,
+                );
+            }
+        }
+        return aborted_edit(start);
+    }
     let (Some(staged), Some(armed), Some(root), Some(stage_parent)) = (
         &edit.staged,
         &edit.rename_armed,
@@ -1446,6 +1522,57 @@ fn create_temporary(parent: &File, leaf: &str) -> std::io::Result<File> {
     Ok(File::from(fd))
 }
 
+fn cleanup_owned_stage(
+    parent: &File,
+    stage: &OwnedStage,
+    #[cfg(test)] fault: &AtomicU8,
+) -> std::io::Result<()> {
+    cleanup_stage_with_identity(
+        parent,
+        &stage.slot,
+        physical_identity(&stage.file)?,
+        #[cfg(test)]
+        fault,
+    )
+}
+
+fn cleanup_stage_with_identity(
+    parent: &File,
+    slot: &str,
+    expected: PhysicalIdentity,
+    #[cfg(test)] fault: &AtomicU8,
+) -> std::io::Result<()> {
+    let candidate = match openat(
+        parent,
+        slot,
+        OFlags::RDONLY | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) {
+        Ok(fd) => File::from(fd),
+        Err(rustix::io::Errno::NOENT) => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    if FileType::from_raw_mode(fstat(&candidate)?.st_mode) != FileType::RegularFile
+        || physical_identity(&candidate)? != expected
+    {
+        return Err(std::io::Error::other(
+            "staged file custody cannot be authenticated",
+        ));
+    }
+    #[cfg(test)]
+    if fault.load(Ordering::SeqCst) == FAULT_CLEANUP_UNLINK {
+        return Err(std::io::Error::other("injected staging unlink failure"));
+    }
+    unlinkat(parent, slot, AtFlags::empty())?;
+    #[cfg(test)]
+    if fault.load(Ordering::SeqCst) == FAULT_CLEANUP_DIRECTORY_SYNC {
+        return Err(std::io::Error::other(
+            "injected staging directory sync failure",
+        ));
+    }
+    parent.sync_all()
+}
+
 fn physical_identity(file: &File) -> std::io::Result<PhysicalIdentity> {
     let metadata = file.metadata()?;
     let birth = metadata.created().map_err(|_| {
@@ -1583,7 +1710,14 @@ impl Default for TestPause {
 
 #[cfg(test)]
 fn trip_fault(fault: &AtomicU8, point: u8) {
-    if fault.load(Ordering::SeqCst) == 31 && point == FAULT_AFTER_RENAME {
+    if (fault.load(Ordering::SeqCst) == 31 && point == FAULT_AFTER_RENAME)
+        || (std::env::var_os("ION_EDIT_TEST_HOST").is_some()
+            && matches!(
+                point,
+                FAULT_AFTER_ADMIT | FAULT_AFTER_STAGE_FACT | FAULT_DURING_STAGE_WRITE
+            )
+            && fault.load(Ordering::SeqCst) == point)
+    {
         std::process::exit(73);
     }
     if fault
@@ -2625,7 +2759,12 @@ mod tests {
         )
         .unwrap();
         boundary.set_live_authority(LiveToolAuthority::Allow);
-        boundary.inject_fault(31);
+        boundary.inject_fault(
+            std::env::var("ION_EDIT_TEST_FAULT")
+                .ok()
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(31),
+        );
         let fixture = Fixture {
             root: TestRoot(workspace.canonical_root.into()),
             host: TestRoot(host.into()),
@@ -2645,6 +2784,91 @@ mod tests {
             .execute(execution, CancellationToken::new())
             .await;
         panic!("child must exit inside rename worker without destructors");
+    }
+
+    #[tokio::test]
+    async fn actual_pre_arm_process_loss_settles_without_rename_or_receipt_change() {
+        for fault in [
+            FAULT_AFTER_ADMIT,
+            FAULT_DURING_STAGE_WRITE,
+            FAULT_AFTER_STAGE_FACT,
+        ] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native_edit::tests::process_loss_child",
+                    "--nocapture",
+                ])
+                .env("ION_EDIT_TEST_HOST", fixture.host.path())
+                .env(
+                    "ION_EDIT_TEST_WORKSPACE",
+                    serde_json::to_string(&execution.workspace).unwrap(),
+                )
+                .env(
+                    "ION_EDIT_TEST_SESSION",
+                    serde_json::to_string(&execution.session).unwrap(),
+                )
+                .env("ION_EDIT_TEST_FAULT", fault.to_string())
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(73));
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert!(claim.terminal.is_none());
+            assert!(claim.edit.as_ref().unwrap().rename_armed.is_none());
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                usize::from(fault != FAULT_AFTER_ADMIT)
+            );
+            let receipt = session_receipt(claim.start.as_ref().unwrap());
+            let recovered = fixture
+                .boundary
+                .reconcile(
+                    execution.clone(),
+                    attempt(
+                        &execution,
+                        ToolAttemptState::IntentCommitted {
+                            start_receipt: Some(receipt.clone()),
+                        },
+                    ),
+                )
+                .await;
+            assert!(matches!(recovered, ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                receipt: Some(ref saved), ..
+            } if saved == &receipt));
+            let terminal = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert_eq!(
+                terminal.terminal.unwrap().effect,
+                crate::EffectSummary::NoMutation
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                usize::from(fault == FAULT_DURING_STAGE_WRITE)
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
+            );
+        }
     }
 
     #[tokio::test]
@@ -2707,6 +2931,103 @@ mod tests {
         );
     }
 
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn staging_cleanup_faults_never_change_terminal_no_mutation() {
+        for fault in [FAULT_CLEANUP_UNLINK, FAULT_CLEANUP_DIRECTORY_SYNC] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.inject_fault(fault);
+            fixture.boundary.pause.point.store(4, Ordering::SeqCst);
+            let pause = Arc::clone(&fixture.boundary.pause);
+            let boundary = Arc::new(fixture.boundary);
+            let worker = Arc::clone(&boundary);
+            let owned = execution.clone();
+            let task =
+                tokio::spawn(async move { worker.execute(owned, CancellationToken::new()).await });
+            pause.entered.wait();
+            boundary.set_live_authority(LiveToolAuthority::Deny);
+            pause.release.wait();
+            let result = task.await.unwrap();
+            assert!(matches!(
+                result,
+                ToolAttemptState::Settled {
+                    effect: crate::EffectSummary::NoMutation,
+                    ..
+                }
+            ));
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert_eq!(
+                claim.terminal.unwrap().effect,
+                crate::EffectSummary::NoMutation
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
+            );
+            assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                usize::from(fault == FAULT_CLEANUP_UNLINK)
+            );
+            assert_eq!(
+                boundary
+                    .reconcile(execution.clone(), attempt(&execution, result.clone()))
+                    .await,
+                result
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn ordinary_partial_staging_abort_does_not_exhaust_quota() {
+        let fixture = Fixture::new(false);
+        fixture.boundary.inject_fault(20);
+        for _ in 0..=MAX_STAGE_FILES {
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            let state = fixture
+                .boundary
+                .execute(execution, CancellationToken::new())
+                .await;
+            assert!(matches!(
+                state,
+                ToolAttemptState::Settled {
+                    effect: crate::EffectSummary::NoMutation,
+                    ..
+                }
+            ));
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+        }
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+            "alpha beta alpha\n"
+        );
+    }
+
     #[tokio::test]
     async fn immutable_receipt_survives_staged_and_armed_cancellation() {
         for point in [14, 15, 20] {
@@ -2743,6 +3064,12 @@ mod tests {
                 "alpha beta alpha\n"
             );
             assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
             let recovered = fixture
                 .boundary
                 .reconcile(execution.clone(), attempt(&execution, state.clone()))
