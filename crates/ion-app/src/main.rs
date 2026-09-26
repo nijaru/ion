@@ -12,13 +12,13 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Args, Parser, Subcommand};
 use ion_ai::{GenerationControls, ModelRef, Reasoning, ToolChoice};
 use ion_core::{
-    AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling, ConversationConfig, DriveExit,
-    DrivePolicy, EgressRealm, InputSender, LiveToolAuthority, ModelBoundaries, ModelBoundary,
-    ModelBoundaryIdentity, NativeEditBoundary, NativeReadBoundary, ProviderAdmissionError,
-    ProviderBinding, ProviderBindingId, ProviderCapabilities, ReturnedModelPolicy,
-    SemanticCompatibilityId, Session, SnapshotRequest, StartReceiptCapability, SubmitTurnRequest,
-    SubmittedTurn, ToolBinding, ToolBoundaries, ToolBoundary, TurnId, TurnLimits,
-    anthropic::AnthropicMessages, openai_compatible::OpenAiCompatible,
+    AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling, ConversationConfig, CostQuote,
+    DriveExit, DrivePolicy, EgressRealm, InputSender, LiveToolAuthority, ModelBoundaries,
+    ModelBoundary, ModelBoundaryIdentity, NativeEditBoundary, NativeReadBoundary,
+    ProviderAdmissionError, ProviderBinding, ProviderBindingId, ProviderCapabilities,
+    ReturnedModelPolicy, SemanticCompatibilityId, Session, SnapshotRequest, StartReceiptCapability,
+    SubmitTurnRequest, SubmittedTurn, ToolBinding, ToolBoundaries, ToolBoundary, TurnId,
+    TurnLimits, anthropic::AnthropicMessages, openai_compatible::OpenAiCompatible,
     workspace_registry::WorkspaceRegistry,
 };
 
@@ -78,6 +78,11 @@ struct HostArgs {
     /// Explicitly enable one exact-match native edit tool for this Session.
     #[arg(long)]
     enable_edit: bool,
+    /// Trusted operator assertion of the ALL-IN upper charge per physical model
+    /// attempt (micro-USD), including route, cache and reasoning charges. May
+    /// change on resume; absent pricing parks a capped Turn before dispatch.
+    #[arg(long)]
+    cost_quote_microusd: Option<u64>,
     /// Frozen provider wire API. Anthropic Messages requires /v1/messages.
     #[arg(long, value_enum, default_value = "chat-completions")]
     wire: Wire,
@@ -113,6 +118,9 @@ struct RunArgs {
     max_model_attempts_per_step: u32,
     #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=32))]
     max_tool_invocations: u32,
+    /// Frozen total maximum reserved model charges for this Turn (micro-USD).
+    #[arg(long)]
+    max_cost_microusd: Option<u64>,
     #[arg(long)]
     request_key: Option<String>,
     prompt: String,
@@ -285,7 +293,7 @@ fn initial_config(
             max_parallel_read_tools: 1,
             max_response_bytes: 1024 * 1024,
             max_tool_preview_bytes: 64 * 1024,
-            max_cost_microusd: None,
+            max_cost_microusd: args.max_cost_microusd,
         },
     };
     config.validate()?;
@@ -436,12 +444,20 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
             current.config.providers[0].model.model == run.model,
             "model differs from frozen Session provider"
         );
+        ensure!(
+            current.config.limits.max_cost_microusd == run.max_cost_microusd,
+            "monetary ceiling differs from frozen Session configuration"
+        );
     }
+    ensure!(
+        args.cost_quote_microusd.is_none() || current.config.limits.max_cost_microusd.is_some(),
+        "cost quote requires a frozen monetary ceiling"
+    );
     let key_name = args
         .api_key_env
         .clone()
         .unwrap_or_else(|| args.wire.default_key_env().into());
-    let models = ModelBoundaries::new(
+    let mut models = ModelBoundaries::new(
         [provider],
         Arc::new(move |binding: &ProviderBinding| {
             if binding.egress != realm {
@@ -454,6 +470,24 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
             }
         }),
     )?;
+    if let Some(amount) = args.cost_quote_microusd {
+        let frozen_provider = current.config.providers[0].clone();
+        let quote = CostQuote {
+            revision: format!(
+                "operator-all-in-v1-{}",
+                ContentDigest::of(&(&frozen_provider, amount))?
+            ),
+            reserved_microusd: amount,
+        };
+        models = models.with_cost_quoter(Arc::new(
+            move |binding: &ProviderBinding,
+                  _request: &ion_core::SemanticRequest,
+                  _effect_key: &str,
+                  _fingerprint: &ion_core::ProviderFingerprint| {
+                (binding == &frozen_provider).then(|| quote.clone())
+            },
+        ));
+    }
     let tools = ToolBoundaries::new(boundaries)?;
     Ok(Host {
         state,

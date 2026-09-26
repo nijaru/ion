@@ -58,6 +58,57 @@ a, b = (json.load(open(path)) for path in sys.argv[1:])
 assert a == b, 'passive reopen, idempotent submit, or blocked resume changed durable state'
 PY
 
+# An optional monetary ceiling cannot dispatch without a trusted operator's
+# all-in quote. A quote exceeding that ceiling parks before provider egress;
+# changing the frozen ceiling when replaying the same request is refused.
+mkdir "$WORK/priced-state"
+priced_common=(--state "$WORK/priced-state" --workspace "$WORK/workspace"
+               --endpoint https://api.example.test/v1/chat/completions
+               --api-key-env ION_SMOKE_SYNTHETIC_KEY)
+priced_run=("${priced_common[@]}" --model gpt-test --model-input-limit 8192
+            --model-output-limit 2048 --max-cost-microusd 25
+            --request-key priced-key 'synthetic priced request')
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" run "${priced_run[@]}" \
+    > "$WORK/priced.out" 2> "$WORK/priced.err"; then
+    echo 'FAIL: capped request dispatched without pricing' >&2; exit 1
+fi
+grep -q 'CostQuoteUnavailable' "$WORK/priced.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced.snapshot"
+priced_turn="$(python3 - "$WORK/priced.snapshot" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['config']['config']['limits']['max_cost_microusd'] == 25
+assert s['model_attempts'] == []
+assert s['unfinished_turn']['budget']['reserved_cost_microusd'] == 0
+print(s['unfinished_turn']['id'])
+PY
+)"
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" resume "${priced_common[@]}" \
+    --cost-quote-microusd 26 --turn "$priced_turn" \
+    > "$WORK/priced-over.out" 2> "$WORK/priced-over.err"; then
+    echo 'FAIL: over-budget cost quote reached provider dispatch' >&2; exit 1
+fi
+grep -q 'MonetaryCapacity' "$WORK/priced-over.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced-after.snapshot"
+cmp "$WORK/priced.snapshot" "$WORK/priced-after.snapshot"
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" run "${priced_common[@]}" \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    --max-cost-microusd 26 --request-key priced-key 'synthetic priced request' \
+    > "$WORK/priced-changed.out" 2> "$WORK/priced-changed.err"; then
+    echo 'FAIL: a resumed request changed its frozen monetary ceiling' >&2; exit 1
+fi
+grep -q 'monetary ceiling differs' "$WORK/priced-changed.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced-after-changed.snapshot"
+cmp "$WORK/priced.snapshot" "$WORK/priced-after-changed.snapshot"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume "${common[@]}" \
+    --cost-quote-microusd 1 --turn "$TURN" \
+    > "$WORK/uncapped-quote.out" 2> "$WORK/uncapped-quote.err"; then
+    echo 'FAIL: uncapped Session accepted a priced host policy' >&2; exit 1
+fi
+grep -q 'cost quote requires a frozen monetary ceiling' "$WORK/uncapped-quote.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/uncapped-quote.snapshot"
+cmp "$WORK/snapshot.json" "$WORK/uncapped-quote.snapshot"
+
 # The second wire API must pass through the same Session and credential preflight.
 mkdir "$WORK/anthropic-state"
 if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/anthropic-state" \

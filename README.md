@@ -113,8 +113,9 @@ Mac and Linux ARM guest synthetic process-loss/Session recovery tests pass; they
 not prove host confinement or power-loss durability. A trusted host must continuously
 protect the registry, custody inode and staging namespace from arbitrary same-user
 writers; `0700` and file locks alone do not establish that protection. Blocked
-allocations have no force-clear. The headless host can opt into the editor with an explicit shared registry. One
-synthetic read/edit/read task passed; there is no sustained coding qualification.
+allocations have no force-clear. The headless host can opt into the editor with
+an explicit shared registry. One synthetic read/edit/read task passed; there is
+no sustained coding qualification.
 Registry v3/v4 files are refused without migration.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
@@ -128,8 +129,9 @@ preflight are not network confinement or a production credential policy. Library
 can supply a conservative, route-wide cost bound for each proposed model attempt;
 the store reserves it with attempt intent and retains it unless the attempt is proven
 not started. A configured cap parks before intent without a trusted quote or enough
-remaining allowance. Ion does not discover provider prices or infer exact billable
-tokens from request bytes. Request and terminal provider-response capacity checks stop encoding at
+remaining allowance. The headless host accepts an optional operator-asserted
+all-in per-attempt quote and frozen Turn cap; it does not discover provider
+prices or infer exact billable tokens from request bytes. Request and terminal provider-response capacity checks stop encoding at
 their frozen limits rather than allocating complete oversized JSON copies. A separate
 Anthropic Messages adapter supports streamed text and client tools, with strict
 index/terminal/usage checks and stable logical tool-result pairing. Unsupported thinking,
@@ -162,6 +164,20 @@ cargo run --locked -p ion -- run \
 ```
 
 Replace the example endpoint and capacity placeholders with values for your provider.
+For a Turn-wide reservation ceiling, set `--max-cost-microusd <positive-total>`
+on `run` and `--cost-quote-microusd <trusted-per-attempt-upper-bound>` on `run`
+and each `resume`. Both are in millionths of a US dollar. The latter must
+**actually bound every possible physical request** under the frozen provider
+route, including input/output, cache, reasoning, fees and prices before
+provider start; it is an operator assertion, not catalog discovery, token
+counting, provider billing or a guaranteed bill cap. Without a quote a capped
+Turn parks `CostQuoteUnavailable`; when the entire asserted bound does not fit
+its remaining allowance it parks `MonetaryCapacity`, both before provider
+start. Past attempt quotes remain immutable; unknown or completed effects keep
+their reservations. The ceiling freezes with the Session configuration, while
+the quote may change on resume. Do not configure a monetary ceiling without an
+authoritative upper bound for your provider and route.
+
 The default `--wire chat-completions` reads `OPENAI_API_KEY`. For Anthropic's
 `/v1/messages`, use `--wire anthropic-messages`, an exact Anthropic endpoint/model,
 and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint; use a new
@@ -198,9 +214,9 @@ private staging inside the shared registry, refuses unsupported filesystem or
 mount combinations, and never falls back to workspace staging.
 The host must continuously protect the registry, its staging directory and the
 workspace namespace from arbitrary same-user writers; directory permissions and
-advisory locks are **not** a sandbox. There is no command-execution tool, automatic
-cleanup of blocked allocations or monetary-cap option. Provider calls can send
-workspace content and incur charges.
+advisory locks are **not** a sandbox. There is no command-execution tool or
+automatic cleanup of blocked allocations. Provider calls can send workspace
+content and incur charges.
 A synthetic OpenRouter Chat Completions read-and-answer exchange passed on
 2026-09-25. On 2026-09-26 another synthetic workspace completed read → edit →
 read: the file held exactly the requested bytes, the registry had one terminal
