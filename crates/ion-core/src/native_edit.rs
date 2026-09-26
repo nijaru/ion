@@ -33,8 +33,9 @@ use crate::{
     ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError, ToolConcurrency, ToolExecution,
     ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
     workspace_registry::{
-        ClaimKey, RegistryError, RegistryReceipt, TerminalEvidence, WorkspaceRegistry,
-        WorkspaceResources, WorkspaceRevision,
+        ClaimKey, EditAction, EditContent, EditPhysicalIdentity, EditRenameArmed, EditStaged,
+        EditTermination, RegistryError, RegistryReceipt, TerminalEvidence, WorkspaceClaim,
+        WorkspaceRegistry, WorkspaceResources, WorkspaceRevision,
     },
 };
 
@@ -42,7 +43,9 @@ use crate::{
 pub const MAX_NATIVE_EDIT_BYTES: usize = 16 * 1024;
 
 const MAX_PATH_BYTES: usize = 4096;
-const IMPLEMENTATION_ID: &str = "native-edit-v1";
+const IMPLEMENTATION_ID: &str = "native-edit-private-v2";
+const MAX_STAGE_FILES: usize = 64;
+const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
 const AUTHORITY_ASK: u8 = 1;
 const AUTHORITY_DENY: u8 = 2;
@@ -61,6 +64,7 @@ pub struct NativeEditBoundary {
     executor: SemanticCompatibilityId,
     root: Option<File>,
     root_identity: Option<PhysicalIdentity>,
+    staging: Option<File>,
     registry_directory: PathBuf,
     resources: WorkspaceResources,
     protected_paths: Vec<PathBuf>,
@@ -69,6 +73,8 @@ pub struct NativeEditBoundary {
     permits: Arc<Semaphore>,
     #[cfg(test)]
     fault: Arc<AtomicU8>,
+    #[cfg(test)]
+    pause: Arc<TestPause>,
 }
 
 impl std::fmt::Debug for NativeEditBoundary {
@@ -87,12 +93,18 @@ impl NativeEditBoundary {
     /// host must protect the namespace from external concurrent renames. Creation
     /// time is required so recovery can distinguish inode reuse; unsupported
     /// filesystems fail closed instead of exposing a weaker recovery proof.
+    /// `staging_root` must be preexisting, canonical, private (0700), a strict
+    /// descendant of the registry's protected namespace, and on the same
+    /// supported local filesystem. The host protects it and the permanent registry custody inode
+    /// from replacement, including by same-user tools. Retained staging is bounded;
+    /// this backend never cleans up unknown artifacts or falls back to workspace staging.
     pub fn new(
         registry: &WorkspaceRegistry,
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
+        staging_root: &Path,
     ) -> Result<Self, NativeEditError> {
-        Self::construct(registry, workspace, max_file_bytes, true)
+        Self::construct(registry, workspace, max_file_bytes, Some(staging_root))
     }
 
     /// Adopt already durable host evidence when the frozen workspace is gone.
@@ -102,15 +114,16 @@ impl NativeEditBoundary {
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
     ) -> Result<Self, NativeEditError> {
-        Self::construct(registry, workspace, max_file_bytes, false)
+        Self::construct(registry, workspace, max_file_bytes, None)
     }
 
     fn construct(
         registry: &WorkspaceRegistry,
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
-        live: bool,
+        staging_root: Option<&Path>,
     ) -> Result<Self, NativeEditError> {
+        let live = staging_root.is_some();
         if !(1..=MAX_NATIVE_EDIT_BYTES).contains(&max_file_bytes) {
             return Err(NativeEditError::InvalidFileLimit);
         }
@@ -144,6 +157,31 @@ impl NativeEditBoundary {
         {
             return Err(NativeEditError::InvalidWorkspace);
         }
+        let staging = if let Some(path) = staging_root {
+            let text = path.to_str().ok_or(NativeEditError::InvalidStaging)?;
+            let stage = open_absolute_directory(text)?;
+            let canonical = path.canonicalize()?;
+            if canonical != path
+                || canonical == registry.directory()
+                || !canonical.starts_with(registry.directory())
+                || canonical.starts_with(&workspace.canonical_root)
+                || Path::new(&workspace.canonical_root).starts_with(&canonical)
+                || protected_paths
+                    .iter()
+                    .any(|admin| canonical.starts_with(admin) || admin.starts_with(&canonical))
+                || stage.metadata()?.permissions().mode() & 0o077 != 0
+            {
+                return Err(NativeEditError::InvalidStaging);
+            }
+            let root = root.as_ref().expect("live root");
+            qualify_filesystem(root, &stage)?;
+            physical_identity(&stage)?;
+            stage.sync_all()?;
+            root.sync_all()?;
+            Some(stage)
+        } else {
+            None
+        };
         if live {
             registry.verify_current(&workspace)?;
         }
@@ -154,6 +192,7 @@ impl NativeEditBoundary {
             executor,
             root,
             root_identity,
+            staging,
             registry_directory: registry.directory().to_path_buf(),
             resources,
             protected_paths,
@@ -162,6 +201,8 @@ impl NativeEditBoundary {
             permits: Arc::new(Semaphore::new(1)),
             #[cfg(test)]
             fault: Arc::new(AtomicU8::new(0)),
+            #[cfg(test)]
+            pause: Arc::new(TestPause::default()),
         })
     }
 
@@ -235,12 +276,17 @@ impl NativeEditBoundary {
         (expected == *action && replacement.len() <= self.max_file_bytes).then_some(arguments)
     }
 
-    fn sync_recovered_directory(&self, parent: &File) -> std::io::Result<()> {
+    fn sync_recovered_directory(&self, parent: &File, source: bool) -> std::io::Result<()> {
+        let _ = source;
         #[cfg(test)]
         if self
             .fault
             .compare_exchange(
-                FAULT_RECOVERY_DIRECTORY_SYNC,
+                if source {
+                    33
+                } else {
+                    FAULT_RECOVERY_DIRECTORY_SYNC
+                },
                 0,
                 Ordering::SeqCst,
                 Ordering::SeqCst,
@@ -370,11 +416,20 @@ impl ToolBoundary for NativeEditBoundary {
                 Ok(root) => root,
                 Err(_) => return not_started("workspace root is no longer available"),
             };
+            let staging = match self
+                .staging
+                .as_ref()
+                .and_then(|stage| stage.try_clone().ok())
+            {
+                Some(stage) => stage,
+                None => return not_started("private staging is unavailable"),
+            };
             let drop_cancellation = CancelWorkerOnDrop::new(stop.clone());
             let job = EditJob {
                 execution,
                 arguments,
                 root,
+                staging,
                 root_identity: self.root_identity.expect("live root has physical identity"),
                 registry_directory: self.registry_directory.clone(),
                 resources: self.resources,
@@ -386,6 +441,8 @@ impl ToolBoundary for NativeEditBoundary {
                 _permit: permit,
                 #[cfg(test)]
                 fault: Arc::clone(&self.fault),
+                #[cfg(test)]
+                pause: Arc::clone(&self.pause),
             };
             let result = tokio::task::spawn_blocking(move || run_edit(job)).await;
             drop_cancellation.disarm();
@@ -446,6 +503,10 @@ pub enum NativeEditError {
     InvalidWorkspace,
     #[error("native edit file limit must be between 1 and 16384 bytes")]
     InvalidFileLimit,
+    #[error(
+        "staging must be a preexisting private directory outside workspace and Git administration"
+    )]
+    InvalidStaging,
     #[error("filesystem does not provide trustworthy creation-time identity")]
     UnsupportedIdentity,
     #[error("failed to construct the native edit binding: {0}")]
@@ -494,18 +555,13 @@ impl From<EditRevision> for WorkspaceRevision {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct PhysicalIdentity {
-    device: u64,
-    inode: u64,
-    birth_seconds: u64,
-    birth_nanos: u32,
-}
+type PhysicalIdentity = EditPhysicalIdentity;
 
 struct EditJob {
     execution: ToolExecution,
     arguments: EditArguments,
     root: File,
+    staging: File,
     root_identity: PhysicalIdentity,
     registry_directory: PathBuf,
     resources: WorkspaceResources,
@@ -517,9 +573,73 @@ struct EditJob {
     _permit: tokio::sync::OwnedSemaphorePermit,
     #[cfg(test)]
     fault: Arc<AtomicU8>,
+    #[cfg(test)]
+    pause: Arc<TestPause>,
 }
 
 fn run_edit(job: EditJob) -> ToolAttemptState {
+    // The permanent registry lock is opened independently for every operation.
+    // The blocking owner retains it even if its async waiter is dropped.
+    let _custody = match acquire_custody(&job.registry_directory) {
+        Ok(lock) => lock,
+        Err(_) => return not_started("edit custody is unavailable before admission"),
+    };
+    let mut registry = match WorkspaceRegistry::open(&job.registry_directory) {
+        Ok(registry) => registry,
+        Err(_) => return indeterminate("workspace registry is unavailable", None),
+    };
+    // A separate open description locks the permanent staging directory itself.
+    // This also bounds shared staging across independently configured registries.
+    let _stage_custody = match lock_staging(&job.staging) {
+        Ok(lock) => lock,
+        Err(_) => return not_started("private staging custody is unavailable before admission"),
+    };
+    let key = claim_key(&job.execution);
+    match registry.claim(key) {
+        Ok(claim) => {
+            return indeterminate(
+                "existing attempt is never executed again",
+                claim.start.as_ref(),
+            );
+        }
+        Err(RegistryError::EvidenceConflict) => {} // Authoritative missing key.
+        Err(_) => return indeterminate("prior admission is unreadable", None),
+    }
+    // Returning from the effect worker is the quiescence boundary. Only this
+    // supervisor settles NoMutation; the worker cannot perform any later rename.
+    let state = run_effect_worker(&job, &mut registry);
+    let ToolAttemptState::Settled {
+        effect,
+        receipt: Some(receipt),
+        ..
+    } = &state
+    else {
+        return state;
+    };
+    let Ok(start) = serde_json::from_value::<RegistryReceipt>(receipt.data.clone()) else {
+        return indeterminate("invalid worker receipt", None);
+    };
+    let proof = match effect {
+        crate::EffectSummary::NoMutation => EditTermination::JoinedWithoutRename,
+        crate::EffectSummary::KnownChanges { .. } => EditTermination::Replaced {
+            destination_parent_synced: true,
+            staging_parent_synced: true,
+        },
+        _ => return indeterminate("invalid worker terminal effect", Some(&start)),
+    };
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 9 {
+        registry.lose_commit_ack();
+    }
+    if !resolve_confirmed(&mut registry, key, &start, effect.clone(), proof) {
+        return indeterminate("workspace registry resolution is uncertain", Some(&start));
+    }
+    #[cfg(test)]
+    trip_fault(&job.fault, FAULT_AFTER_REGISTRY_COMMIT);
+    state
+}
+
+fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAttemptState {
     if job.stop.is_cancelled() {
         return not_started("edit cancelled before admission");
     }
@@ -529,10 +649,6 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
         Ok(identity) if identity == job.root_identity => {}
         _ => return not_started("workspace root identity changed before edit admission"),
     }
-    let mut registry = match WorkspaceRegistry::open(&job.registry_directory) {
-        Ok(registry) => registry,
-        Err(_) => return not_started("workspace registry is unavailable"),
-    };
     if registry.verify_current(&job.execution.workspace).is_err() {
         return not_started("workspace binding changed before edit admission");
     }
@@ -583,105 +699,168 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
     if job.stop.is_cancelled() {
         return not_started("edit cancelled before admission");
     }
-    if registry
-        .admit(
-            &job.execution.workspace,
-            key,
-            job.resources,
-            current_revision,
-        )
-        .is_err()
-    {
-        return not_started("workspace claim or revision admission failed");
+    if stage_capacity(&job.staging).is_err() || qualify_filesystem(&parent, &job.staging).is_err() {
+        return not_started("private staging capacity or filesystem is unavailable");
     }
-
-    // From here on the durable claim is quarantine. Any failure keeps it active
-    // unless authenticated terminal evidence proves what happened.
+    let action = edit_action(&job.execution, &job.arguments, &replacement);
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 6 {
+        registry.lose_commit_ack();
+    }
+    let claim = match registry.admit_edit(
+        &job.execution.workspace,
+        key,
+        job.resources,
+        current_revision,
+        action.clone(),
+    ) {
+        Ok(claim) => claim,
+        Err(_) => match registry.claim(key) {
+            Ok(claim)
+                if claim_matches(
+                    &claim,
+                    &job.execution,
+                    &job.arguments,
+                    &action,
+                    job.resources,
+                ) =>
+            {
+                claim
+            }
+            // An authoritative missing key proves this call never crossed edit
+            // admission. An unreadable claim, unlike a refused write, is not proof.
+            Err(RegistryError::EvidenceConflict) => {
+                return not_started("edit admission was refused before physical start");
+            }
+            _ => return indeterminate("edit admission could not be confirmed", None),
+        },
+    };
+    let start = claim.start.as_ref().expect("edit admission mints receipt");
+    let edit = claim.edit.as_ref().expect("edit admission mints manifest");
+    if edit.staged.is_some() || edit.rename_armed.is_some() || claim.terminal.is_some() {
+        return indeterminate("existing edit cannot authorize execution", Some(start));
+    }
     if job.stop.is_cancelled() || !job.admission_allowed(job.live_authority.load(Ordering::SeqCst))
     {
-        return indeterminate(
-            "edit authority denied after durable workspace admission",
-            None,
-        );
+        return aborted_edit(start);
     }
-    let temporary = temporary_leaf(key);
-    let mut staged = match create_temporary(&parent, &temporary) {
+    let temporary = &edit.manifest.stage_slot;
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 10 {
+        create_temporary(&job.staging, temporary)
+            .unwrap()
+            .write_all(b"occupant")
+            .unwrap();
+    }
+    let mut staged = match create_temporary(&job.staging, temporary) {
         Ok(file) => file,
-        Err(_) => return indeterminate("staging file could not be created", None),
+        // An existing occupant is never opened, adopted, truncated or removed.
+        Err(_) => return aborted_edit(start),
     };
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 20 {
+        staged.write_all(b"partial").unwrap();
+        return aborted_edit(start);
+    }
     if staged.write_all(&replacement).is_err()
         || fchmod(&staged, Mode::from_raw_mode(base_mode as _)).is_err()
         || staged.sync_all().is_err()
+        || job.staging.sync_all().is_err()
     {
-        return indeterminate("staging file could not be durably written", None);
+        return aborted_edit(start);
     }
-    let staged_identity = match physical_identity(&staged) {
-        Ok(identity) => identity,
-        Err(_) => return indeterminate("staging file lacks physical identity proof", None),
+    let (Ok(staged_identity), Ok(stage_parent), Ok(target_parent)) = (
+        physical_identity(&staged),
+        physical_identity(&job.staging),
+        physical_identity(&parent),
+    ) else {
+        return aborted_edit(start);
     };
-    if staged_identity.device != base_identity.device || parent.sync_all().is_err() {
-        return indeterminate("staging file identity or directory sync failed", None);
-    }
-    let start = match registry_receipt(
-        &job.execution.workspace.backend,
-        job.execution.action.digest,
-        staged_identity,
-    ) {
-        Ok(receipt) => receipt,
-        Err(_) => return indeterminate("staging receipt exceeds its durable bound", None),
+    let fact = EditStaged {
+        file: staged_identity,
+        parent: stage_parent,
+        content: action.replacement,
+        file_synced: true,
+        parent_synced: true,
     };
-    if registry.record_start(key, start.clone()).is_err() {
-        return indeterminate("durable start receipt could not be confirmed", Some(&start));
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 7 {
+        registry.lose_commit_ack();
     }
-
+    if registry
+        .record_edit_staged(key, start, fact.clone())
+        .is_err()
+        && !registry.claim(key).is_ok_and(|claim| {
+            claim
+                .edit
+                .is_some_and(|edit| edit.staged.as_ref() == Some(&fact))
+        })
+    {
+        return aborted_edit(start);
+    }
+    #[cfg(test)]
+    test_phase(job, 4);
     if job.stop.is_cancelled() || !job.admission_allowed(job.live_authority.load(Ordering::SeqCst))
     {
-        return indeterminate(
-            "live edit authority revoked after durable start",
-            Some(&start),
-        );
+        return aborted_edit(start);
     }
     match read_target(&parent, &leaf, job.max_file_bytes) {
         Ok((identity, _, content))
             if identity == base_identity
                 && content == job.arguments.expected_content.as_bytes() => {}
-        _ => {
-            return indeterminate("edit target changed after durable start", Some(&start));
-        }
+        _ => return aborted_edit(start),
     }
+    if !target_matches_staged(
+        &job.staging,
+        temporary,
+        staged_identity,
+        &replacement,
+        job.max_file_bytes,
+    ) {
+        return aborted_edit(start);
+    }
+    let armed = EditRenameArmed {
+        staged_file: staged_identity,
+        target_file: base_identity,
+        target_parent,
+    };
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 8 {
+        registry.lose_commit_ack();
+    }
+    if registry
+        .record_edit_rename_armed(key, start, armed.clone())
+        .is_err()
+        && !registry.claim(key).is_ok_and(|claim| {
+            claim
+                .edit
+                .is_some_and(|edit| edit.rename_armed.as_ref() == Some(&armed))
+        })
+    {
+        return aborted_edit(start);
+    }
+    #[cfg(test)]
+    test_phase(job, 5);
     if job.stop.is_cancelled() || !job.admission_allowed(job.live_authority.load(Ordering::SeqCst))
     {
-        return indeterminate(
-            "live edit authority denied at effect admission",
-            Some(&start),
-        );
+        return aborted_edit(start);
     }
-    if renameat(&parent, &temporary, &parent, &leaf).is_err() {
-        return indeterminate("atomic replacement outcome is unknown", Some(&start));
-    }
-    if parent.sync_all().is_err() {
-        return indeterminate("replacement directory sync failed", Some(&start));
+    // Exactly one invocation, only by this worker after a confirmed durable arm.
+    // Errors are ambiguous and must never fall back to copying or another rename.
+    if renameat(&job.staging, temporary, &parent, &leaf).is_err() {
+        return indeterminate("atomic replacement outcome is unknown", Some(start));
     }
     #[cfg(test)]
     trip_fault(&job.fault, FAULT_AFTER_RENAME);
-
-    let effect = known_change(&job.arguments.path);
-    if registry
-        .resolve(
-            key,
-            TerminalEvidence {
-                receipt: start.clone(),
-                effect: effect.clone(),
-            },
-        )
-        .is_err()
-    {
-        return indeterminate("workspace registry resolution is uncertain", Some(&start));
+    if parent.sync_all().is_err() || job.staging.sync_all().is_err() {
+        return indeterminate("replacement directory barriers failed", Some(start));
     }
-    #[cfg(test)]
-    trip_fault(&job.fault, FAULT_AFTER_REGISTRY_COMMIT);
-
-    settled_edit(&job.arguments, &replacement, effect, &start)
+    settled_edit(
+        &job.arguments,
+        &replacement,
+        known_change(&job.arguments.path),
+        start,
+    )
 }
 
 async fn reconcile_edit(
@@ -689,116 +868,154 @@ async fn reconcile_edit(
     execution: ToolExecution,
     attempt: ToolAttempt,
 ) -> ToolAttemptState {
+    // Keep the exact Session receipt on EVERY uncertain exit, even malformed or
+    // conflicting receipts. Host evidence never rewrites immutable Session truth.
+    let retained = match &attempt.state {
+        ToolAttemptState::IntentCommitted { start_receipt } => start_receipt.clone(),
+        ToolAttemptState::Indeterminate { receipt, .. }
+        | ToolAttemptState::Settled { receipt, .. } => receipt.clone(),
+        ToolAttemptState::NotStarted { .. } => None,
+    };
+    let uncertain =
+        |reason: &str, host: Option<&RegistryReceipt>| ToolAttemptState::Indeterminate {
+            reason: reason.into(),
+            receipt: retained.clone().or_else(|| host.map(session_receipt)),
+        };
+    let _custody = match acquire_custody(&boundary.registry_directory) {
+        Ok(lock) => lock,
+        Err(_) => {
+            return uncertain(
+                "edit worker still owns custody or custody is unavailable",
+                None,
+            );
+        }
+    };
     let Some(arguments) = boundary.prepared_arguments(&execution.action) else {
-        return indeterminate("persisted prepared edit action is invalid", None);
+        return uncertain("persisted prepared edit action is invalid", None);
     };
     if execution.binding != boundary.binding
         || execution.workspace != boundary.workspace
         || execution.action.authority != ToolAuthority::WorkspaceMutation
+        || attempt.id != execution.attempt
+        || attempt.invocation != execution.invocation
+        || attempt.executor != boundary.executor
     {
-        return indeterminate("edit reconciliation binding changed", None);
+        return uncertain("edit reconciliation binding changed", None);
     }
     let key = claim_key(&execution);
     let mut registry = match WorkspaceRegistry::open(&boundary.registry_directory) {
         Ok(registry) => registry,
         Err(_) => {
-            let saved = saved_receipt(&attempt);
-            return indeterminate("workspace registry is unavailable", saved.as_ref());
+            return uncertain("workspace registry is unavailable", None);
         }
     };
     let claim = match registry.claim(key) {
         Ok(claim) => claim,
         Err(_) => {
-            let saved = saved_receipt(&attempt);
-            return indeterminate("durable edit claim is unavailable", saved.as_ref());
+            return uncertain("durable edit claim is unavailable", None);
         }
-    };
-    if claim.binding != execution.workspace
-        || claim.resources != boundary.resources
-        || claim.base != arguments.base_revision.into()
-    {
-        return indeterminate(
-            "durable edit claim does not match the prepared action",
-            None,
-        );
-    }
-    let Some(start) = claim.start.clone() else {
-        let saved = saved_receipt(&attempt);
-        return indeterminate(
-            "edit has no durable physical start identity",
-            saved.as_ref(),
-        );
-    };
-    if saved_receipt(&attempt).is_some_and(|saved| saved != start) {
-        return indeterminate("Session and host edit receipts conflict", Some(&start));
-    }
-    let Some(staged_identity) = parse_registry_receipt(&start, &execution.action.digest) else {
-        return indeterminate("durable staged-file identity is invalid", Some(&start));
     };
     let replacement = match replacement(&arguments, boundary.max_file_bytes) {
         Ok(replacement) => replacement,
-        Err(_) => return indeterminate("persisted replacement is invalid", Some(&start)),
+        Err(_) => return uncertain("persisted replacement is invalid", None),
     };
+    let action = edit_action(&execution, &arguments, &replacement);
+    if !claim_matches(&claim, &execution, &arguments, &action, boundary.resources) {
+        return uncertain("durable edit manifest does not match", None);
+    }
+    let (Some(start), Some(edit)) = (&claim.start, &claim.edit) else {
+        return uncertain("edit receipt or manifest is unavailable", None);
+    };
+    if retained
+        .as_ref()
+        .is_some_and(|receipt| receipt != &session_receipt(start))
+    {
+        return uncertain("Session and host edit receipts conflict", Some(start));
+    }
     if !result_fits(&arguments.path, &replacement, execution.output_limit) {
-        return indeterminate(
+        return uncertain(
             "edit result exceeds its persisted output bound",
-            Some(&start),
+            Some(start),
         );
     }
     let effect = known_change(&arguments.path);
     if let Some(terminal) = &claim.terminal {
-        if terminal.receipt != start || terminal.effect != effect {
-            return indeterminate(
-                "terminal host evidence conflicts with the edit",
-                Some(&start),
-            );
+        if terminal.receipt == *start {
+            match (&terminal.effect, &edit.termination) {
+                (crate::EffectSummary::NoMutation, Some(EditTermination::JoinedWithoutRename)) => {
+                    return aborted_edit(start);
+                }
+                (
+                    actual,
+                    Some(EditTermination::Replaced {
+                        destination_parent_synced: true,
+                        staging_parent_synced: true,
+                    }),
+                ) if actual == &effect => {
+                    return settled_edit(&arguments, &replacement, effect, start);
+                }
+                _ => {}
+            }
         }
-        // Once committed, host evidence is authoritative even if a later
-        // cooperating edit has changed the current target.
-        return settled_edit(&arguments, &replacement, effect, &start);
+        return uncertain("terminal host evidence conflicts with edit", Some(start));
     }
-    let Some(root) = boundary.root.as_ref() else {
-        return indeterminate(
-            "workspace root is unavailable for unresolved edit",
-            Some(&start),
-        );
+    // Process loss is not the owning worker's no-rename attestation. Even a
+    // pre-armed orphan stays quarantined in this deliberately conservative slice.
+    let (Some(staged), Some(armed), Some(root), Some(stage_parent)) = (
+        &edit.staged,
+        &edit.rename_armed,
+        &boundary.root,
+        &boundary.staging,
+    ) else {
+        return uncertain("unresolved edit lacks physical rename proof", Some(start));
     };
+    if !boundary.workspace_is_current(&execution.workspace)
+        || physical_identity(stage_parent).ok() != Some(staged.parent)
+    {
+        return uncertain("workspace or staging identity changed", Some(start));
+    }
     let (parent, leaf) = match open_relative_parent(root, &arguments.path) {
         Ok(parent) => parent,
-        Err(_) => return indeterminate("edit target parent is unavailable", Some(&start)),
+        Err(_) => return uncertain("target parent is unavailable", Some(start)),
     };
-    if !target_matches_staged(
-        &parent,
-        &leaf,
-        staged_identity,
-        &replacement,
-        boundary.max_file_bytes,
-    ) {
-        // This includes restored base content and missing/mismatched physical
-        // evidence. Never resolve, retry, or infer NoMutation from either case.
-        return indeterminate(
+    if physical_identity(&parent).ok() != Some(armed.target_parent)
+        || !target_matches_staged(
+            &parent,
+            &leaf,
+            staged.file,
+            &replacement,
+            boundary.max_file_bytes,
+        )
+    {
+        return uncertain(
             "replacement identity or exact content is unproven",
-            Some(&start),
+            Some(start),
         );
     }
-    // A visible rename is not proof of a durable directory entry. In particular
-    // the original post-rename fsync may have failed before process loss.
-    if boundary.sync_recovered_directory(&parent).is_err() {
-        return indeterminate("replacement directory sync is uncertain", Some(&start));
-    }
-    if registry
-        .resolve(
-            key,
-            TerminalEvidence {
-                receipt: start.clone(),
-                effect: effect.clone(),
-            },
-        )
-        .is_err()
+    let _stage_custody = match lock_staging(stage_parent) {
+        Ok(lock) => lock,
+        Err(_) => return uncertain("private staging is busy", Some(start)),
+    };
+    if boundary.sync_recovered_directory(&parent, false).is_err()
+        || boundary
+            .sync_recovered_directory(stage_parent, true)
+            .is_err()
     {
-        return indeterminate("workspace registry resolution is uncertain", Some(&start));
+        return uncertain("replacement directory barriers are uncertain", Some(start));
     }
-    settled_edit(&arguments, &replacement, effect, &start)
+    if !resolve_confirmed(
+        &mut registry,
+        key,
+        start,
+        effect.clone(),
+        EditTermination::Replaced {
+            destination_parent_synced: true,
+            staging_parent_synced: true,
+        },
+    ) {
+        return uncertain("workspace registry resolution is uncertain", Some(start));
+    }
+    settled_edit(&arguments, &replacement, effect, start)
 }
 
 fn target_matches_staged(
@@ -859,65 +1076,186 @@ fn session_receipt(receipt: &RegistryReceipt) -> StartReceipt {
     }
 }
 
-fn saved_receipt(attempt: &ToolAttempt) -> Option<RegistryReceipt> {
-    let receipt = match &attempt.state {
-        ToolAttemptState::IntentCommitted { start_receipt }
-        | ToolAttemptState::Indeterminate {
-            receipt: start_receipt,
-            ..
-        }
-        | ToolAttemptState::Settled {
-            receipt: start_receipt,
-            ..
-        } => start_receipt.as_ref()?,
-        ToolAttemptState::NotStarted { .. } => return None,
-    };
-    if receipt.kind != IMPLEMENTATION_ID {
-        return None;
+fn edit_action(
+    execution: &ToolExecution,
+    arguments: &EditArguments,
+    replacement: &[u8],
+) -> EditAction {
+    EditAction {
+        action_digest: execution.action.digest,
+        tool_binding: ContentDigest::of(&execution.binding).expect("serializable frozen binding"),
+        target: arguments.path.clone(),
+        expected: EditContent {
+            digest: ContentDigest::of_bytes(arguments.expected_content.as_bytes()),
+            bytes: arguments.expected_content.len() as u64,
+        },
+        replacement: EditContent {
+            digest: ContentDigest::of_bytes(replacement),
+            bytes: replacement.len() as u64,
+        },
     }
-    serde_json::from_value(receipt.data.clone()).ok()
 }
 
-fn registry_receipt(
-    backend: &str,
-    action_digest: ContentDigest,
-    identity: PhysicalIdentity,
-) -> Result<RegistryReceipt, ()> {
-    let encoded = format!(
-        "1:{}:{:016x}:{:016x}:{}:{:09}",
-        action_digest,
-        identity.device,
-        identity.inode,
-        identity.birth_seconds,
-        identity.birth_nanos,
-    );
-    if encoded.len() > 160 {
-        return Err(());
-    }
-    Ok(RegistryReceipt {
-        backend: backend.to_owned(),
-        identity: encoded,
-    })
+fn claim_matches(
+    claim: &WorkspaceClaim,
+    execution: &ToolExecution,
+    arguments: &EditArguments,
+    action: &EditAction,
+    resources: WorkspaceResources,
+) -> bool {
+    claim.key == claim_key(execution)
+        && claim.binding == execution.workspace
+        && claim.resources == resources
+        && claim.base == arguments.base_revision.into()
+        && claim
+            .edit
+            .as_ref()
+            .is_some_and(|edit| edit.manifest.action == *action)
 }
 
-fn parse_registry_receipt(
+fn aborted_edit(start: &RegistryReceipt) -> ToolAttemptState {
+    ToolAttemptState::Settled {
+        result: ToolResult {
+            value: json!("Edit stopped before rename."),
+            is_error: true,
+            capture: crate::OutputCapture::CompleteInline,
+        },
+        effect: crate::EffectSummary::NoMutation,
+        retryable: false,
+        receipt: Some(session_receipt(start)),
+    }
+}
+
+fn resolve_confirmed(
+    registry: &mut WorkspaceRegistry,
+    key: ClaimKey,
     receipt: &RegistryReceipt,
-    action_digest: &ContentDigest,
-) -> Option<PhysicalIdentity> {
-    if receipt.identity.len() > 160 {
-        return None;
-    }
-    let mut fields = receipt.identity.split(':');
-    if fields.next()? != "1" || fields.next()? != action_digest.to_string() {
-        return None;
-    }
-    let identity = PhysicalIdentity {
-        device: u64::from_str_radix(fields.next()?, 16).ok()?,
-        inode: u64::from_str_radix(fields.next()?, 16).ok()?,
-        birth_seconds: fields.next()?.parse().ok()?,
-        birth_nanos: fields.next()?.parse().ok()?,
+    effect: crate::EffectSummary,
+    proof: EditTermination,
+) -> bool {
+    let evidence = TerminalEvidence {
+        receipt: receipt.clone(),
+        effect,
     };
-    (fields.next().is_none() && identity.birth_nanos < 1_000_000_000).then_some(identity)
+    registry
+        .resolve_edit(key, evidence.clone(), proof.clone())
+        .is_ok()
+        || registry.claim(key).is_ok_and(|claim| {
+            claim.terminal.as_ref() == Some(&evidence)
+                && claim
+                    .edit
+                    .is_some_and(|edit| edit.termination.as_ref() == Some(&proof))
+        })
+}
+
+/// Host must protect this permanent inode and its ancestors from removal and
+/// replacement. It is never unlinked, including on process loss or cleanup.
+fn acquire_custody(directory: &Path) -> std::io::Result<File> {
+    let parent = open_absolute_directory(
+        directory
+            .to_str()
+            .ok_or_else(|| std::io::Error::other("non-UTF8 registry"))?,
+    )?;
+    let lock = File::from(openat(
+        &parent,
+        CUSTODY_LEAF,
+        OFlags::RDWR | OFlags::CREATE | OFlags::NOFOLLOW | OFlags::NONBLOCK | OFlags::CLOEXEC,
+        Mode::from_bits_truncate(0o600),
+    )?);
+    let meta = lock.metadata()?;
+    if !meta.is_file()
+        || meta.nlink() != 1
+        || meta.len() != 0
+        || meta.permissions().mode() & 0o077 != 0
+    {
+        return Err(std::io::Error::other("invalid permanent custody inode"));
+    }
+    lock.try_lock()
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    parent.sync_all()?;
+    Ok(lock)
+}
+
+fn lock_staging(parent: &File) -> std::io::Result<File> {
+    let lock = File::from(openat(
+        parent,
+        ".",
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    )?);
+    lock.try_lock()
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    Ok(lock)
+}
+
+fn stage_capacity(parent: &File) -> std::io::Result<()> {
+    let mut count = 0;
+    for entry in rustix::fs::Dir::read_from(parent)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        if name.to_bytes() == b"." || name.to_bytes() == b".." {
+            continue;
+        }
+        count += 1;
+        if count >= MAX_STAGE_FILES {
+            return Err(std::io::Error::other("private staging count limit"));
+        }
+        let stat = statat(parent, name, AtFlags::SYMLINK_NOFOLLOW)?;
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile
+            || stat.st_nlink != 1
+            || stat.st_size < 0
+            || stat.st_size as u64 > MAX_NATIVE_EDIT_BYTES as u64
+        {
+            return Err(std::io::Error::other("unqualified staging occupant"));
+        }
+    }
+    Ok(())
+}
+
+fn qualify_filesystem(target: &File, stage: &File) -> std::io::Result<()> {
+    let a = rustix::fs::fstatfs(target)?;
+    let b = rustix::fs::fstatfs(stage)?;
+    if target.metadata()?.dev() != stage.metadata()?.dev() || a.f_type != b.f_type {
+        return Err(std::io::Error::other("staging is on another filesystem"));
+    }
+    // A bind-mounted alias may have the same device and filesystem type while
+    // naming an agent-writable directory or producing EXDEV at rename. Require
+    // the exact same mount, not just the same underlying superblock.
+    #[cfg(target_os = "linux")]
+    {
+        use rustix::fs::StatxFlags;
+        let mount_id = |directory: &File| -> std::io::Result<u64> {
+            let stat = rustix::fs::statx(directory, "", AtFlags::EMPTY_PATH, StatxFlags::MNT_ID)?;
+            if stat.stx_mask & StatxFlags::MNT_ID.bits() == 0 {
+                return Err(std::io::Error::other(
+                    "filesystem mount identity is unavailable",
+                ));
+            }
+            Ok(stat.stx_mnt_id)
+        };
+        if mount_id(target)? != mount_id(stage)? {
+            return Err(std::io::Error::other("staging and target mounts differ"));
+        }
+    }
+    // Deliberately narrow local-filesystem support. No network/FUSE/overlay
+    // durability claims. Rename errors still remain uncertain, never copied.
+    #[cfg(target_os = "linux")]
+    let supported = matches!(a.f_type as u64, 0xef53 | 0x58465342 | 0x9123683e);
+    #[cfg(target_os = "macos")]
+    let supported = a
+        .f_fstypename
+        .iter()
+        .map(|c| *c as u8)
+        .take_while(|c| *c != 0)
+        .eq(b"apfs".iter().copied());
+    #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+    let supported = false;
+    if !supported {
+        return Err(std::io::Error::other(
+            "filesystem is not qualified for native edit",
+        ));
+    }
+    Ok(())
 }
 
 fn claim_key(execution: &ToolExecution) -> ClaimKey {
@@ -926,15 +1264,6 @@ fn claim_key(execution: &ToolExecution) -> ClaimKey {
         invocation: execution.invocation,
         attempt: execution.attempt,
     }
-}
-
-fn temporary_leaf(key: ClaimKey) -> String {
-    format!(
-        ".ion-edit-{}-{}-{}",
-        key.session,
-        key.invocation.get(),
-        key.attempt.get()
-    )
 }
 
 fn known_change(path: &str) -> crate::EffectSummary {
@@ -1222,7 +1551,41 @@ fn now_unix_ms() -> i64 {
 }
 
 #[cfg(test)]
+fn test_phase(job: &EditJob, point: u8) {
+    if job.pause.point.load(Ordering::SeqCst) == point {
+        job.pause.entered.wait();
+        job.pause.release.wait();
+    }
+    if job.fault.load(Ordering::SeqCst) == point + 10 {
+        job.stop.cancel();
+        return;
+    }
+    trip_fault(&job.fault, point);
+}
+
+#[cfg(test)]
+struct TestPause {
+    point: AtomicU8,
+    entered: std::sync::Barrier,
+    release: std::sync::Barrier,
+}
+
+#[cfg(test)]
+impl Default for TestPause {
+    fn default() -> Self {
+        Self {
+            point: AtomicU8::new(0),
+            entered: std::sync::Barrier::new(2),
+            release: std::sync::Barrier::new(2),
+        }
+    }
+}
+
+#[cfg(test)]
 fn trip_fault(fault: &AtomicU8, point: u8) {
+    if fault.load(Ordering::SeqCst) == 31 && point == FAULT_AFTER_RENAME {
+        std::process::exit(73);
+    }
     if fault
         .compare_exchange(point, 0, Ordering::SeqCst, Ordering::SeqCst)
         .is_ok()
@@ -1285,7 +1648,10 @@ mod tests {
             let workspace = registry
                 .bind("test-workspace", root.path(), "local-v1")
                 .unwrap();
-            let boundary = NativeEditBoundary::new(&registry, workspace, 1024).unwrap();
+            let stage = host.path().join("staging");
+            fs::create_dir(&stage).unwrap();
+            fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
+            let boundary = NativeEditBoundary::new(&registry, workspace, 1024, &stage).unwrap();
             boundary.set_live_authority(LiveToolAuthority::Allow);
             Self {
                 root,
@@ -1399,8 +1765,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn redirected_git_and_common_admin_roots_cannot_be_edited_or_bound_as_ordinary_files() {
+    #[tokio::test]
+    async fn redirected_git_and_common_admin_roots_cannot_be_edited_or_bound_as_ordinary_files() {
         let root = TestRoot::new();
         let host = TestRoot::new();
         fs::create_dir(root.path().join("admin")).unwrap();
@@ -1412,7 +1778,10 @@ mod tests {
         let mut registry = WorkspaceRegistry::open(host.path()).unwrap();
         let workspace = registry.bind("workspace", root.path(), "local-v1").unwrap();
         let revision = registry.revision(&workspace).unwrap();
-        let boundary = NativeEditBoundary::new(&registry, workspace, 1024).unwrap();
+        let stage = host.path().join("staging");
+        fs::create_dir(&stage).unwrap();
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
+        let boundary = NativeEditBoundary::new(&registry, workspace, 1024, &stage).unwrap();
         for path in ["admin/config", "shared/HEAD", ".git"] {
             let arguments = json!({
                 "path": path,
@@ -1426,11 +1795,50 @@ mod tests {
                 Err(ToolBoundaryError::InvalidArguments)
             ));
         }
+        if root.path().join("ADMIN/config").is_file() {
+            // Case-insensitive APFS resolves this spelling to admin/config.
+            // Reject it at registry admission before staging or any claim.
+            boundary.set_live_authority(LiveToolAuthority::Allow);
+            let action = boundary
+                .prepare(json!({
+                    "path": "ADMIN/config", "expected_content": "alpha beta alpha\n",
+                    "workspace_revision": revision, "old_text": "beta", "new_text": "gamma"
+                }))
+                .unwrap();
+            let execution = ToolExecution {
+                session: SessionId::new(),
+                invocation: InvocationId::new(1).unwrap(),
+                attempt: AttemptId::new(1).unwrap(),
+                effect_key: "case-alias".into(),
+                binding: boundary.binding(),
+                action,
+                workspace: boundary.workspace.clone(),
+                ceiling: AuthorityCeiling {
+                    workspace_mutation: true,
+                    unconfined_execution: false,
+                    remote_tools: false,
+                    egress_realms: vec![EgressRealm::Local],
+                },
+                approval: ApprovalState::NotRequired,
+                output_limit: 4096,
+                artifacts: crate::ArtifactPublisher::closed(),
+            };
+            assert!(matches!(
+                boundary.execute(execution, CancellationToken::new()).await,
+                ToolAttemptState::NotStarted { .. }
+            ));
+            assert!(registry.unresolved(None, 8).unwrap().is_empty());
+            assert_eq!(
+                fs::read_to_string(root.path().join("admin/config")).unwrap(),
+                "alpha beta alpha\n"
+            );
+            assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+        }
         let admin = registry
             .bind("admin", root.path().join("admin"), "local-v1")
             .unwrap();
         assert!(matches!(
-            NativeEditBoundary::new(&registry, admin, 1024),
+            NativeEditBoundary::new(&registry, admin, 1024, &stage),
             Err(NativeEditError::InvalidWorkspace)
         ));
     }
@@ -1589,7 +1997,7 @@ mod tests {
             .boundary
             .execute(execution, CancellationToken::new())
             .await;
-        assert!(matches!(retry, ToolAttemptState::NotStarted { .. }));
+        assert!(matches!(retry, ToolAttemptState::Indeterminate { .. }));
     }
 
     #[tokio::test]
@@ -1640,7 +2048,13 @@ mod tests {
         assert!(matches!(lost_reply, ToolAttemptState::Indeterminate { .. }));
         fs::remove_dir_all(fixture.root.path()).unwrap();
         assert!(
-            NativeEditBoundary::new(&fixture.registry, execution.workspace.clone(), 1024,).is_err()
+            NativeEditBoundary::new(
+                &fixture.registry,
+                execution.workspace.clone(),
+                1024,
+                &fixture.host.path().join("staging")
+            )
+            .is_err()
         );
         let recovery =
             NativeEditBoundary::new_recovery(&fixture.registry, execution.workspace.clone(), 1024)
@@ -1719,8 +2133,179 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
     #[test]
-    fn identity_binds_digest_and_creation_time_within_registry_limit() {
+    fn bind_mounted_stage_alias_is_rejected_before_admission() {
+        let Ok(home) = std::env::var("ION_EDIT_MOUNT_ALIAS_HOME") else {
+            return; // The dedicated Docker test supplies a nested second mount.
+        };
+        let home = Path::new(&home);
+        let root = home.join("workspace");
+        let host = home.join("host");
+        let stage = host.join("staging");
+        let target = root.join("file.txt");
+        fs::write(&target, b"alpha beta alpha\n").unwrap();
+        let before = fs::read_dir(&root).unwrap().count();
+        let mut registry = WorkspaceRegistry::open(&host).unwrap();
+        let binding = registry.bind("workspace", &root, "local-v1").unwrap();
+        let root_fd = open_absolute_directory(root.to_str().unwrap()).unwrap();
+        let stage_fd = open_absolute_directory(stage.to_str().unwrap()).unwrap();
+        let flags = rustix::fs::StatxFlags::MNT_ID;
+        let mount = |fd: &File| {
+            rustix::fs::statx(fd, "", AtFlags::EMPTY_PATH, flags)
+                .unwrap()
+                .stx_mnt_id
+        };
+        assert_ne!(
+            mount(&root_fd),
+            mount(&stage_fd),
+            "test needs distinct bind mounts"
+        );
+        match NativeEditBoundary::new(&registry, binding, 1024, &stage) {
+            Err(NativeEditError::Io(error))
+                if error.to_string() == "staging and target mounts differ" => {}
+            Err(other) => panic!("unexpected alias rejection: {other:?}"),
+            Ok(_) => panic!("bind-mounted staging alias was accepted"),
+        }
+        assert_eq!(fs::read(&target).unwrap(), b"alpha beta alpha\n");
+        assert_eq!(fs::read_dir(root).unwrap().count(), before);
+        assert!(registry.unresolved(None, 8).unwrap().is_empty());
+    }
+
+    #[test]
+    fn staging_constructor_refuses_missing_writable_workspace_and_symlink_roots() {
+        let fixture = Fixture::new(false);
+        let workspace = fixture.boundary.workspace.clone();
+        let missing = fixture.host.path().join("absent");
+        assert!(
+            NativeEditBoundary::new(&fixture.registry, workspace.clone(), 1024, &missing).is_err()
+        );
+        assert!(!missing.exists());
+        let internal = fixture.root.path().join("stage");
+        fs::create_dir(&internal).unwrap();
+        fs::set_permissions(&internal, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            NativeEditBoundary::new(&fixture.registry, workspace.clone(), 1024, &internal).is_err()
+        );
+        let unrelated = fixture
+            .root
+            .path()
+            .parent()
+            .unwrap()
+            .join(format!("ion-unrelated-stage-{}", SessionId::new()));
+        fs::create_dir(&unrelated).unwrap();
+        fs::set_permissions(&unrelated, fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            NativeEditBoundary::new(&fixture.registry, workspace.clone(), 1024, &unrelated)
+                .is_err()
+        );
+        fs::remove_dir(&unrelated).unwrap();
+        let stage = fixture.host.path().join("staging");
+        let link = fixture.host.path().join("linked-stage");
+        std::os::unix::fs::symlink(&stage, &link).unwrap();
+        assert!(
+            NativeEditBoundary::new(&fixture.registry, workspace.clone(), 1024, &link).is_err()
+        );
+        fs::set_permissions(&stage, fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(NativeEditBoundary::new(&fixture.registry, workspace, 1024, &stage).is_err());
+    }
+
+    #[tokio::test]
+    async fn source_directory_sync_failure_retains_claim_and_file_mode() {
+        let fixture = Fixture::new(false);
+        fs::set_permissions(
+            fixture.root.path().join("file.txt"),
+            fs::Permissions::from_mode(0o751),
+        )
+        .unwrap();
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(FAULT_AFTER_RENAME);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        fixture.boundary.inject_fault(33);
+        let state = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+        assert_eq!(
+            fixture
+                .registry
+                .revision(&execution.workspace)
+                .unwrap()
+                .files,
+            0
+        );
+        assert!(
+            fixture
+                .registry
+                .claim(claim_key(&execution))
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+        let state = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(state, ToolAttemptState::Settled { .. }));
+        assert_eq!(
+            fs::metadata(fixture.root.path().join("file.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o751
+        );
+    }
+
+    #[tokio::test]
+    async fn lost_commit_acknowledgements_are_read_back_at_every_phase() {
+        for point in [6, 7, 8, 9] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.inject_fault(point);
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            assert!(
+                matches!(
+                    state,
+                    ToolAttemptState::Settled {
+                        effect: crate::EffectSummary::KnownChanges { .. },
+                        ..
+                    }
+                ),
+                "{point}: {state:?}"
+            );
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert!(claim.edit.unwrap().rename_armed.is_some());
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn collision_preserves_occupant_and_abort_retention_is_bounded() {
         let fixture = Fixture::new(false);
         let execution = fixture.execution(
             fixture
@@ -1728,20 +2313,441 @@ mod tests {
                 .prepare(fixture.arguments("beta", "gamma"))
                 .unwrap(),
         );
-        let path = fixture.root.path().join("file.txt");
-        let file = File::open(path).unwrap();
-        let identity = physical_identity(&file).unwrap();
-        let receipt = registry_receipt(
-            &execution.workspace.backend,
-            execution.action.digest,
-            identity,
+        fixture.boundary.inject_fault(10);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                ..
+            }
+        ));
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        let stage = fixture.host.path().join("staging");
+        assert_eq!(
+            fs::read(stage.join(claim.edit.unwrap().manifest.stage_slot)).unwrap(),
+            b"occupant"
+        );
+        for n in 1..MAX_STAGE_FILES {
+            fs::write(stage.join(format!("occupied-{n}")), b"x").unwrap();
+        }
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        let state = fixture
+            .boundary
+            .execute(execution, CancellationToken::new())
+            .await;
+        assert!(matches!(state, ToolAttemptState::NotStarted { .. }));
+        assert_eq!(fs::read_dir(stage).unwrap().count(), MAX_STAGE_FILES);
+        assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn dropped_waiter_keeps_permanent_custody_until_worker_quiescence() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        let recovery = NativeEditBoundary::new(
+            &fixture.registry,
+            execution.workspace.clone(),
+            1024,
+            &fixture.host.path().join("staging"),
         )
         .unwrap();
-        assert!(receipt.identity.len() <= 160);
-        assert_eq!(
-            parse_registry_receipt(&receipt, &execution.action.digest),
-            Some(identity)
+        fixture.boundary.pause.point.store(5, Ordering::SeqCst);
+        let pause = Arc::clone(&fixture.boundary.pause);
+        let boundary = Arc::new(fixture.boundary);
+        let worker = Arc::clone(&boundary);
+        let owned_execution = execution.clone();
+        let task = tokio::spawn(async move {
+            worker
+                .execute(owned_execution, CancellationToken::new())
+                .await
+        });
+        pause.entered.wait();
+        let inode = fs::metadata(fixture.host.path().join(CUSTODY_LEAF))
+            .unwrap()
+            .ino();
+        task.abort();
+        assert!(task.await.unwrap_err().is_cancelled());
+        assert!(acquire_custody(fixture.host.path()).is_err());
+        let uncertain = ToolAttemptState::Indeterminate {
+            reason: "waiter dropped".into(),
+            receipt: None,
+        };
+        let state = recovery
+            .reconcile(execution.clone(), attempt(&execution, uncertain.clone()))
+            .await;
+        assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+        assert!(
+            fixture
+                .registry
+                .claim(claim_key(&execution))
+                .unwrap()
+                .terminal
+                .is_none()
         );
-        assert!(parse_registry_receipt(&receipt, &ContentDigest::of_bytes(b"wrong")).is_none());
+        pause.release.wait();
+        // Acquiring the permanent lock, not a timer, proves worker quiescence.
+        let mut joined = false;
+        for _ in 0..1000 {
+            if let Ok(lock) = acquire_custody(fixture.host.path()) {
+                drop(lock);
+                joined = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+        assert!(joined);
+        assert_eq!(
+            fs::metadata(fixture.host.path().join(CUSTODY_LEAF))
+                .unwrap()
+                .ino(),
+            inode
+        );
+        let state = recovery
+            .reconcile(execution.clone(), attempt(&execution, uncertain))
+            .await;
+        assert!(matches!(
+            state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+            "alpha beta alpha\n"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn busy_custody_before_admission_proves_nonexecution() {
+        let fixture = Fixture::new(false);
+        let first = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        let second_boundary = NativeEditBoundary::new(
+            &fixture.registry,
+            first.workspace.clone(),
+            1024,
+            &fixture.host.path().join("staging"),
+        )
+        .unwrap();
+        second_boundary.set_live_authority(LiveToolAuthority::Allow);
+        let second_action = second_boundary
+            .prepare(fixture.arguments("beta", "delta"))
+            .unwrap();
+        let mut second = fixture.execution(second_action);
+        second.invocation = InvocationId::new(2).unwrap();
+        second.attempt = AttemptId::new(2).unwrap();
+        fixture.boundary.pause.point.store(5, Ordering::SeqCst);
+        let pause = Arc::clone(&fixture.boundary.pause);
+        let boundary = Arc::new(fixture.boundary);
+        let running = Arc::clone(&boundary);
+        let first_task =
+            tokio::spawn(async move { running.execute(first, CancellationToken::new()).await });
+        pause.entered.wait();
+
+        let outcome = second_boundary
+            .execute(second.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(outcome, ToolAttemptState::NotStarted { .. }));
+        assert!(matches!(
+            fixture.registry.claim(claim_key(&second)),
+            Err(RegistryError::EvidenceConflict)
+        ));
+        pause.release.wait();
+        assert!(matches!(
+            first_task.await.unwrap(),
+            ToolAttemptState::Settled { .. }
+        ));
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn live_revocation_at_staged_and_armed_barriers_aborts_without_rename() {
+        for point in [4, 5] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.pause.point.store(point, Ordering::SeqCst);
+            let pause = Arc::clone(&fixture.boundary.pause);
+            let boundary = Arc::new(fixture.boundary);
+            let worker = Arc::clone(&boundary);
+            let owned = execution.clone();
+            let task =
+                tokio::spawn(async move { worker.execute(owned, CancellationToken::new()).await });
+            pause.entered.wait();
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert!(claim.edit.as_ref().unwrap().staged.is_some());
+            assert_eq!(
+                claim.edit.as_ref().unwrap().rename_armed.is_some(),
+                point == 5
+            );
+            boundary.set_live_authority(LiveToolAuthority::Deny);
+            pause.release.wait();
+            assert!(matches!(
+                task.await.unwrap(),
+                ToolAttemptState::Settled {
+                    effect: crate::EffectSummary::NoMutation,
+                    ..
+                }
+            ));
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn identical_replacement_bytes_on_another_inode_are_not_recovery_proof() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(FAULT_AFTER_RENAME);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        fs::write(fixture.root.path().join("other"), "alpha gamma alpha\n").unwrap();
+        fs::rename(
+            fixture.root.path().join("other"),
+            fixture.root.path().join("file.txt"),
+        )
+        .unwrap();
+        let recovered = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(recovered, ToolAttemptState::Indeterminate { .. }));
+        assert!(
+            fixture
+                .registry
+                .claim(claim_key(&execution))
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn armed_crash_never_replays_and_conflicting_session_receipt_is_preserved() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(5);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        let state = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+        assert!(
+            fixture
+                .registry
+                .claim(claim_key(&execution))
+                .unwrap()
+                .terminal
+                .is_none()
+        );
+        let receipt = StartReceipt {
+            kind: "incompatible".into(),
+            data: json!("immutable"),
+        };
+        let old = ToolAttemptState::Indeterminate {
+            reason: "unknown".into(),
+            receipt: Some(receipt.clone()),
+        };
+        let recovered = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, old))
+            .await;
+        assert!(
+            matches!(recovered, ToolAttemptState::Indeterminate { receipt: Some(r), .. } if r == receipt)
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+            "alpha beta alpha\n"
+        );
+    }
+
+    #[tokio::test]
+    async fn process_loss_child() {
+        let Ok(host) = std::env::var("ION_EDIT_TEST_HOST") else {
+            return;
+        };
+        let workspace: WorkspaceBinding =
+            serde_json::from_str(&std::env::var("ION_EDIT_TEST_WORKSPACE").unwrap()).unwrap();
+        let registry = WorkspaceRegistry::open(&host).unwrap();
+        let boundary = NativeEditBoundary::new(
+            &registry,
+            workspace.clone(),
+            1024,
+            &Path::new(&host).join("staging"),
+        )
+        .unwrap();
+        boundary.set_live_authority(LiveToolAuthority::Allow);
+        boundary.inject_fault(31);
+        let fixture = Fixture {
+            root: TestRoot(workspace.canonical_root.into()),
+            host: TestRoot(host.into()),
+            registry,
+            boundary,
+        };
+        let mut execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        execution.session =
+            serde_json::from_str(&std::env::var("ION_EDIT_TEST_SESSION").unwrap()).unwrap();
+        fixture
+            .boundary
+            .execute(execution, CancellationToken::new())
+            .await;
+        panic!("child must exit inside rename worker without destructors");
+    }
+
+    #[tokio::test]
+    async fn actual_process_loss_after_rename_recovers_without_replay() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        let status = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "native_edit::tests::process_loss_child",
+                "--nocapture",
+            ])
+            .env("ION_EDIT_TEST_HOST", fixture.host.path())
+            .env(
+                "ION_EDIT_TEST_WORKSPACE",
+                serde_json::to_string(&execution.workspace).unwrap(),
+            )
+            .env(
+                "ION_EDIT_TEST_SESSION",
+                serde_json::to_string(&execution.session).unwrap(),
+            )
+            .status()
+            .unwrap();
+        assert_eq!(status.code(), Some(73));
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        assert!(claim.terminal.is_none());
+        assert!(claim.edit.as_ref().unwrap().rename_armed.is_some());
+        let state = ToolAttemptState::IntentCommitted {
+            start_receipt: Some(session_receipt(claim.start.as_ref().unwrap())),
+        };
+        let recovered = fixture
+            .boundary
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(
+            recovered,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::KnownChanges { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture
+                .registry
+                .revision(&execution.workspace)
+                .unwrap()
+                .files,
+            1
+        );
+        assert_eq!(
+            fs::read_dir(fixture.host.path().join("staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn immutable_receipt_survives_staged_and_armed_cancellation() {
+        for point in [14, 15, 20] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.inject_fault(point);
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert!(
+                matches!(&state, ToolAttemptState::Settled { effect: crate::EffectSummary::NoMutation, receipt: Some(r), .. } if *r == session_receipt(claim.start.as_ref().unwrap()))
+            );
+            assert_eq!(
+                claim.edit.as_ref().unwrap().termination,
+                Some(EditTermination::JoinedWithoutRename)
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
+            );
+            assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
+            let recovered = fixture
+                .boundary
+                .reconcile(execution.clone(), attempt(&execution, state.clone()))
+                .await;
+            assert_eq!(state, recovered);
+        }
     }
 }

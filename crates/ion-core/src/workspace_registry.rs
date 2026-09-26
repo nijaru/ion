@@ -50,7 +50,7 @@ const MAX_BINDINGS: i64 = 4096;
 pub enum RegistryError {
     #[error("workspace binding changed")]
     BindingChanged,
-    #[error("registry must be outside every registered workspace and repository")]
+    #[error("registry namespace must be disjoint from every bound workspace and repository")]
     RegistryInWorkspace,
     #[error("conflicting unresolved claim")]
     Conflict,
@@ -408,6 +408,11 @@ impl WorkspaceRegistry {
         Ok(claim)
     }
 
+    #[cfg(test)]
+    pub(crate) fn lose_commit_ack(&mut self) {
+        self.lose_next_commit_ack = true;
+    }
+
     /// Inspect by attribution even when the Session and all blobs are gone.
     pub fn claim(&self, key: ClaimKey) -> Result<WorkspaceClaim> {
         load_claim(&self.connection, key)
@@ -677,7 +682,7 @@ fn outside(directory: &Path, descriptor: &Descriptor) -> Result<()> {
         .chain(descriptor.git.iter())
         .chain(descriptor.common.iter())
     {
-        if directory.starts_with(&object.path) {
+        if directory.starts_with(&object.path) || object.path.starts_with(directory) {
             return Err(RegistryError::RegistryInWorkspace);
         }
     }

@@ -39,7 +39,7 @@ R1C acceptance is not complete: provider preflight is not network confinement; t
 OpenAI-compatible streaming adapter has mock-HTTP tests and a two-request
 Session/native-read loopback exchange, but no live credential/model qualification. Returned-model identity now gates selection and tool admission against
 exact frozen IDs, parking missing/unexpected identities. There is no user-facing
-authenticated approval client, native edit/exec, native large-output capture or real
+authenticated approval client, CLI-hosted native edit, native exec, native large-output capture or real
 parallel dispatch. A native bounded
 read boundary exists and checks its frozen binding against WorkspaceRegistry before
 pinning the root; its descriptor-relative walk is not a race-free beneath-root primitive.
@@ -568,7 +568,10 @@ coordinator is host-owned outside the agent-writable checkout and addressed thro
 WorkspaceBindingId backed by a frozen descriptor: canonical root, execution-backend
 identity and platform filesystem/repository/common-dir identity where available. A path
 string alone is not durable workspace identity. Do not put final claim authority in
-`.ion/claims.sqlite` or another file normal workspace tools can delete. Claims are keyed by invocation/attempt identity. Safety-critical registry records are
+`.ion/claims.sqlite` or another file normal workspace tools can delete. The
+registry namespace and every bound workspace/repository-admin namespace are
+mutually disjoint; a workspace rooted *inside* registry state is also refused.
+Claims are keyed by invocation/attempt identity. Safety-critical registry records are
 bounded and self-contained: binding/resource claim, start/termination receipt identity
 and effect-certainty summary cannot depend on Session SQLite or Session BlobRefs for
 quarantine/release decisions. Session/Invocation/Attempt IDs are attribution only; large
@@ -585,6 +588,21 @@ current host user and outlives Session loss: a missing/deleted/corrupt Session l
 orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
 replacement binding.
+
+For native single-file edit, stage verified replacement content in a host-owned,
+rename-compatible filesystem namespace **outside** the agent-writable workspace.
+The experimental backend requires staging strictly inside the protected registry
+namespace and, on Linux, on the same mount identity as the workspace. The
+registry atomically admits an edit manifest and one immutable attempt receipt;
+staging and rename eligibility are separate durable facts, not replacement receipts.
+The owning, joined worker may settle an abort as `NoMutation` only if it can attest
+it never invoked rename and all staging was host-internal. After durable rename
+admission, recovery cannot infer nonexecution from an absent visible replacement:
+retain quarantine without retry absent stronger terminal proof.
+A successful cross-directory replacement requires both destination and staging-parent
+durability barriers before terminal registry evidence releases the claim. Refuse native
+edit where custody, identity, required barriers or same-filesystem rename cannot be
+qualified; staging errors do not spill a file into the workspace.
 
 Worktree isolation does not imply independent Git metadata: worktrees can share object,
 ref and configuration state. Execution backends therefore declare repository-level

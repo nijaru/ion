@@ -45,11 +45,35 @@ impl EditAction {
 
     pub(super) fn validate_target(&self, descriptor: &Descriptor) -> Result<()> {
         let target = descriptor.root.path.join(&self.target);
-        if descriptor
-            .git
-            .iter()
-            .chain(descriptor.common.iter())
-            .any(|admin| target.starts_with(&admin.path))
+        // The lexical guard alone misses APFS case aliases such as ADMIN/config
+        // for a redirected .git directory named admin. Authentication at claim
+        // admission uses the actual existing object too. A missing target still
+        // needs its ordinary backend's no-follow base check before effect.
+        let resolved = match fs::canonicalize(&target) {
+            Ok(resolved) => Some(resolved),
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::NotFound | std::io::ErrorKind::InvalidFilename
+                ) =>
+            {
+                None
+            }
+            Err(error) => return Err(error.into()),
+        };
+        if resolved
+            .as_ref()
+            .is_some_and(|path| !path.starts_with(&descriptor.root.path))
+            || descriptor
+                .git
+                .iter()
+                .chain(descriptor.common.iter())
+                .any(|admin| {
+                    target.starts_with(&admin.path)
+                        || resolved
+                            .as_ref()
+                            .is_some_and(|path| path.starts_with(&admin.path))
+                })
         {
             return Err(RegistryError::Invalid);
         }

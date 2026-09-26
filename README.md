@@ -79,7 +79,7 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v7) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: native edit/exec backends, a user-facing approval client and host
+Still missing: CLI-hosted native edit, a native exec backend, a user-facing approval client and host
 authentication/policy backend, parallel tool dispatch, context compaction/forking,
 Steer/InteractionReply placement, live provider qualification and additional adapters,
 the terminal UI, and workers.
@@ -102,6 +102,25 @@ A registry-authenticated native `read` ToolBoundary supports bounded file ranges
 persisted tool exchange. It is serial, not an OS sandbox: the host must protect the
 workspace namespace against concurrent renames and enforce its promised read authority.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
+
+An experimental library-only `NativeEditBoundary` replaces one exact occurrence in a
+UTF-8 regular file (at most 16 KiB). Its constructor requires an explicit preexisting,
+canonical, private staging directory strictly inside the registry's protected namespace,
+which must be disjoint from bound workspaces and Git administration. Staging and
+workspace must share a supported local filesystem (APFS on macOS; ext4, XFS or Btrfs
+on Linux), and on Linux the same mount identity.
+The host must protect staging, registry state, their ancestry and the workspace namespace;
+permissions and advisory locks do not confine untrusted same-user processes. The backend
+uses descriptor-relative no-follow access, permanent custody locks, registry-minted
+immutable receipts, durable staged/rename-armed facts and both directory sync barriers.
+Only the original worker may rename; recovery never replays an uncertain replacement.
+Durability depends on the filesystem and hardware; process-loss tests are not power-loss
+qualification. The host must not delete or recreate the custody lock or staging directory.
+Aborted staging is retained with a hard 64-file/1-MiB ceiling; admission fails closed when
+full. Automated GC and pre-arm orphan resolution are not implemented. A recovery-only
+constructor can adopt terminal evidence after the workspace disappears, but cannot prove
+an unresolved rename. No native edit is wired into the executable or live-provider tests.
+
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
 with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient
 proxies, and obtains an API key from a live host callback at dispatch. Returned-model IDs

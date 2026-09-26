@@ -65,6 +65,26 @@ fn git_markers_reject_static_fifo_and_symlink_without_opening_them() {
 }
 
 #[test]
+fn registry_namespace_cannot_be_bound_as_a_workspace_or_descendant() {
+    let home = std::env::temp_dir().join(format!("ion-registry-overlap-{}", SessionId::new()));
+    let host = home.join("host");
+    let stage = host.join("staging");
+    let sibling = home.join("sibling");
+    fs::create_dir_all(&stage).unwrap();
+    fs::create_dir_all(&sibling).unwrap();
+    let mut registry = WorkspaceRegistry::open(&host).unwrap();
+    for root in [&home, &host, &stage] {
+        assert!(matches!(
+            registry.bind("unsafe", root, "local"),
+            Err(RegistryError::RegistryInWorkspace)
+        ));
+    }
+    registry.bind("safe", &sibling, "local").unwrap();
+    drop(registry);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn failed_resolution_and_revision_exhaustion_preserve_quarantine() {
     let home = std::env::temp_dir().join(format!("ion-registry-fault-{}", SessionId::new()));
     let root = home.join("root");
