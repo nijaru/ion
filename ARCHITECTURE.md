@@ -26,10 +26,10 @@ are outside this initial scope.
 
 `ion-ai` owns provider-neutral messages, streams and usage facts. Provider
 adapters own wire encoding and provider-specific constraints. `ion-core`
-owns the Session, model/tool continuation, ordered conversation and bounded
-context. The executable composes models, credentials, project instructions,
-host tools and clients. Terminal rendering and input never become a second
-agent loop.
+owns one committed Session log and the coding Turn loop: ordered conversation,
+continuation, recovery and bounded model context. The executable composes
+models, credentials, project instructions, host tools and clients. Terminal
+rendering and input never become a second agent loop.
 
 ```text
 user input -> model stream -> final answer
@@ -38,48 +38,65 @@ user input -> model stream -> final answer
                host tools -> results -> next model request
 ```
 
-One Turn starts from a user message. The engine builds model input, streams a
-response, dispatches complete tool calls in order, records their results and
-continues until a final response, stop or limit. A tool result is available
-to the model before a dependent request. Tool failure can be a result the
-model reasons about; transport, storage and unrecoverable dispatch errors
-surface to the client. Neither client infers task success from the model's
-prose alone.
+One Turn starts from an accepted user message. The loop selects its model,
+tools and instructions once, builds model input, streams a response,
+dispatches complete tool calls in order, records their results and continues
+until a final response, stop or limit. A tool result is available to the
+model before a dependent request. Tool failure can be a result the model
+reasons about; transport, storage and unrecoverable dispatch errors surface
+to the client. Neither client infers task success from the model's prose alone.
 
 ## Session and recovery
 
-A Session records an ordered conversation and its working directory for
-resume across launches. Save a complete assistant message containing tool
-calls before executing those calls, then save each observed result before
-another model request depends on it. Partial model text and streaming tool
-output are live progress until a complete record exists. On reopen, an
-unmatched call is visibly incomplete or has an unknown effect; Ion does not
-silently execute it again. Opening and reading a Session are passive. A later
-user request can inspect the checkout and decide how to continue.
+A Session owns the working-directory identity and one typed, append-only
+history. It admits at most one executing coding Turn. A single writer
+serializes append transactions. Turn acceptance and its user message commit
+together; record the nonsecret context needed to interpret the history without
+duplicating a full request manifest. Save a complete assistant message
+containing tool calls before executing those calls, then
+save each observed result before another model request depends on it. A final
+answer and explicit Turn-end reason commit together. Cancellation, provider
+failure and limits also have explicit end reasons. Turn state is derived from
+entries; any index is rebuildable. Partial model text and streaming tool
+output may be shown live, but committed Session facts are the authority on
+reopen.
+
+An unmatched call after process loss has an unknown effect, including when
+dispatch may not have begun. An accepted Turn without an end entry is
+interrupted. Opening and reading a Session are passive; the read-only view
+can project these facts without changing history. Before a later user message
+enters model context, a writer closes unresolved calls with visible
+interruption results and ends the interrupted Turn in order. It never
+silently reruns a call. Session resume means continuing the conversation
+across launches, not automatically resuming an interrupted external effect.
 
 Cancellation prevents new dispatch and requests that active host work stop.
 A command's direct exit, timeout or signal result is recorded as observed;
 remote or detached effects may continue. A failure to persist history needed
 for the next step stops that step. These rules give truthful recovery without
-promising all-descendant quiescence or atomic filesystem changes. A separate
-pre-effect marker, logical/physical attempt ledger, immutable request
-manifest, receipt graph and parallel outcome staging are not required by the
-initial contract. Introduce them only for a reproducible failure or measured
-concurrency need.
+promising all-descendant quiescence or atomic filesystem changes. The typed
+history is an explicit durable continuation, not a generic task framework.
+A separate pre-effect marker, physical attempt ledger, immutable request
+manifest, receipt graph and parallel outcome staging need a demonstrated
+recovery or concurrency benefit before becoming part of this coding contract.
 
-The storage implementation may use SQLite or JSONL. It has one authority for
-conversation order and must make reopen and incomplete-call handling
-unambiguous. It need not preserve R1's schema or APIs. In unreleased v0, do
-not keep two production runtimes or compatibility facades.
+The storage implementation may use SQLite or JSONL. Its ordered entries are
+the one authority for conversation and Turn state; it must make atomic append,
+reopen and incomplete-call handling unambiguous. It need not preserve R1's
+schema or APIs. In unreleased v0, do not keep two production runtimes or
+compatibility facades.
 
 ## Context, tools and trust
 
 Project instructions, the current request and useful Session history form a
-bounded model input. Keep tool calls and results intelligible together. If a
-request is too large, show an actionable capacity error. When actual sessions
-need compaction, evaluate a summary policy on representative tasks and keep
-history available for inspection. No particular checkpoint or tail algorithm
-is fixed by the baseline.
+bounded model input. Raw history and the model-context view are distinct;
+context changes must leave the recorded conversation inspectable. Keep tool
+calls and results intelligible together. If a request is too large, show an
+actionable capacity error. When actual sessions need compaction, evaluate a
+summary policy on representative tasks. No particular checkpoint or tail
+algorithm is fixed by the baseline. If a later model cannot encode stored
+history faithfully, report that or make an explicit context change rather
+than silently dropping content.
 
 Default file and shell tools act on the live working directory with the host
 user's permissions. There is no implicit sandbox, VM, importer or private
