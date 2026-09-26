@@ -119,11 +119,12 @@ read. It still compares serialized request **bytes** to an asserted input-token
 capacity, not an exact tokenizer-backed bound; a provider may reject a context
 that passes this conservative proxy.
 Compaction uses the selected frozen provider and stores one complete, bounded
-advisory summary. A local Qwen run with an asserted 4096-token output cap exhausted
-that cap on a compaction request; the current drive parks incomplete responses
-as `IncompleteResponse`. An 8192-token-cap run completed the tested two-turn task.
-This is task evidence, not a universal output-cap recommendation or provider
-guarantee.
+advisory summary. A local Qwen run with the earlier JSON checkpoint exhausted
+an asserted 4096-token output cap; the drive parks incomplete responses as
+`IncompleteResponse`. With the text checkpoint, a fresh 4096-cap two-turn C
+task completed across two boundaries and passed independent `make test`; an
+8192-cap two-turn task also passed. These are task observations, not universal
+output-cap recommendations or provider guarantees.
 
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
