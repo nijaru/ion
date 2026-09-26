@@ -214,7 +214,7 @@ if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/edit-one" --enable-edit
     "${edit_common[@]}" 'synthetic edit' > "$WORK/no-registry.out" 2> "$WORK/no-registry.err"; then
     echo 'FAIL: edit without a shared registry was admitted' >&2; exit 1
 fi
-grep -q -- '--enable-edit requires --registry' "$WORK/no-registry.err"
+grep -q 'mutating tools require --registry' "$WORK/no-registry.err"
 [[ -z "$(find "$WORK/edit-one" -mindepth 1 -maxdepth 1 -print -quit)" ]]
 for state in edit-one edit-two; do
     if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/$state" \
@@ -257,7 +257,7 @@ if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/edit-one" \
     > "$WORK/no-edit.out" 2> "$WORK/no-edit.err"; then
     echo 'FAIL: editable Session resumed without explicit edit enablement' >&2; exit 1
 fi
-grep -q -- '--enable-edit and host tools must match' "$WORK/no-edit.err"
+grep -q 'mutating tool flags and host tools must match' "$WORK/no-edit.err"
 "$BIN" inspect --state "$WORK/edit-one" > "$WORK/edit-after-refusal.snapshot"
 cmp "$WORK/edit-one.snapshot" "$WORK/edit-after-refusal.snapshot"
 echo 'headless offline smoke passed (not live-provider or terminal qualification)'

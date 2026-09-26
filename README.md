@@ -81,12 +81,15 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 scenarios are being restored against the replacement owners.
 
 The CLI now exposes bounded `list`, `read`, `create`, and exact-base `edit` tools,
-plus an inline terminal client with transcript display and Ctrl-C cancellation.
+an opt-in Linux `exec` tool, and an inline terminal client with transcript display
+and Ctrl-C cancellation.
 Two synthetic workspace tasks completed against a local Qwen model through the
 OpenAI-compatible loopback endpoint: read/edit/re-read and list/read/create/re-read.
 A terminal session also completed a live model exchange and restored the terminal.
-This is narrow functional evidence; native command execution, user-facing approval,
-broader provider qualification, and sustained coding-task evidence remain open.
+One synthetic Linux task also created C source, compiled and ran it with native
+GCC through `exec`, and read the imported source back. Native macOS command
+execution, user-facing approval, broader provider qualification, and sustained
+coding-task evidence remain open.
 Parallel tool dispatch, context compaction/forking,
 Steer/InteractionReply placement and workers remain optional later work.
 
@@ -214,11 +217,11 @@ read at dispatch and are not stored. Literal-loopback HTTP providers may run
 without a key; public HTTPS providers park if their key is missing. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
 resumes a persisted Turn. A read-only Session uses `<state>/registry` by default.
-To enable single-file exact-match edits and no-clobber creation, give every Session touching the same
+To enable mutation tools, give every Session touching the same
 workspace **one shared host-owned registry**, separate from its per-Session state
 and the workspace. Create it privately on the same supported local filesystem
-as the workspace, then pass `--registry <path> --enable-edit` to both `run` and
-`resume`. The read-only and editable tool loadouts are frozen when the Session
+as the workspace, then pass `--registry <path> --enable-edit` and/or
+`--enable-exec` to both `run` and `resume`. The tool loadout is frozen when the Session
 is created; use a new state directory to change modes. The registry incarnation
 is frozen into the workspace binding, so resuming with another registry fails.
 
@@ -249,16 +252,35 @@ refuse unsupported filesystem or mount combinations, and never fall back to
 workspace staging.
 The host must continuously protect the registry, its staging directory and the
 workspace namespace from arbitrary same-user writers; directory permissions and
-advisory locks are **not** a sandbox. There is no command-execution tool or
-automatic cleanup of blocked allocations. Provider calls can send workspace
-content and incur charges.
+advisory locks are **not** a sandbox. Blocked edit allocations have no automatic
+cleanup. Provider calls can send workspace content and incur charges.
+
+On Linux, `--enable-exec` requires `/usr/bin/bwrap`, a private shared registry,
+and a workspace and registry staging directory on the same supported local
+filesystem. The command runs with no network in a fresh PID namespace against a
+private copy of the workspace. Git-ignored paths and sockets/FIFOs are omitted;
+included symlinks and hard links are currently refused. A command can inspect a
+private copy of Git metadata, but changes to Git metadata are never imported;
+the result marks a private Git mutation as an error even if Git exited zero.
+After the command and its descendants stop, the host checks the captured bases
+and imports at most 32 changed paths and 64 MiB of ordinary file content. The
+private view is limited to 100,000 entries and 2 GiB. The result reports
+`imported_paths`, omissions and any `import_error`; a nonzero command exit can
+still import changed files. The import plan is durably recorded before ordinary
+files are published. An owner crash retains an unresolved workspace claim and
+private artifacts for reconciliation. The CLI has no automatic reconciliation
+for that case yet. Native macOS `exec` is unavailable; Linux command success
+does not qualify the first cross-platform prerelease.
+
 A synthetic OpenRouter Chat Completions read-and-answer exchange passed on
 2026-09-25. On 2026-09-26, a local Qwen model over loopback completed isolated
 headless read/edit/read and list/read/create/read tasks; externally inspected
 files held the requested bytes. It also completed a read-and-answer exchange
-through `ion chat` in a PTY without an API key. A direct OpenAI attempt returned
-HTTP 429; the Anthropic adapter has only loopback tests. These checks do not
-qualify sustained coding, public-provider behavior, native exec or the full
+through `ion chat` in a PTY without an API key. A Linux Bubblewrap scope and a
+synthetic C creation/compile/run task passed on Fedora; the imported source and
+binary were inspected outside Ion. A direct OpenAI attempt returned HTTP 429;
+the Anthropic adapter has only loopback tests. These checks do not qualify
+sustained coding, public-provider behavior, macOS exec or the full
 range of terminal emulators. The excluded legacy `crates/ion/` remains
 reference material, not an alternative maintained runtime.
 

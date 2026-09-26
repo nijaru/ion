@@ -642,10 +642,21 @@ preexisting Unix-socket broker in a Fedora probe, which kept working after the
 command's local descendants stopped. Therefore the initial confined command
 path uses a host-private workspace view containing only ordinary source files
 and directories, with an explicit symlink policy; it does not bind the live
-checkout, host state, user bus or network into the command scope. The host owns
-bounded snapshot creation and the changed-file manifest. After positive scope
-stop it imports permitted regular-file changes through durable registry claims
-and staging, checking the captured base before each mutation. This applies even
+checkout, host-owned agent state, user bus or network into the command scope.
+Read-only operating-system toolchain paths, such as Linux alternatives, may be
+exposed when native build tools require them. The host owns
+bounded snapshot creation and the changed-file manifest. For a Git workspace,
+the initial view omits Git-ignored paths and special filesystem entries, reports
+those omissions, and rejects symlinks until their target and import semantics
+are defined. A private copy of Git metadata may support read-only inspection,
+but the generic importer never publishes changes to that metadata. The command
+result must say which changes were imported, skipped or refused; an exit code
+alone is not evidence that a private change reached the checkout. In particular,
+a successful private Git command that changes metadata must report that its index,
+refs or commits stayed private. After positive scope stop it imports permitted
+regular-file changes through durable registry claims
+and staging, persisting the bounded import plan before publication and checking
+the captured base before each mutation. This applies even
 when the command exits nonzero. Report exact partial import and quarantine any
 unresolved outcome; never imply a failed command made no changes. Generic import
 does not write protected Git metadata. Git mutations require a separate

@@ -14,6 +14,8 @@ mod id;
 mod input;
 mod model;
 mod native_edit;
+#[cfg(target_os = "linux")]
+mod native_exec;
 mod native_list;
 mod native_read;
 mod observation;
@@ -61,6 +63,8 @@ pub use native_edit::{
     MAX_NATIVE_EDIT_BYTES, NativeEditBoundary, NativeEditError, native_create_binding,
     native_edit_binding,
 };
+#[cfg(target_os = "linux")]
+pub use native_exec::{NativeExecBoundary, NativeExecError, native_exec_binding};
 pub use native_list::{
     MAX_NATIVE_LIST_ENTRIES, NativeListBoundary, NativeListError, native_list_binding,
 };
