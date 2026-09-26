@@ -591,6 +591,19 @@ orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
 replacement binding.
 
+For native single-file edit, stage verified replacement content in a host-owned,
+rename-compatible filesystem namespace **outside** the agent-writable workspace.
+The registry atomically admits an edit manifest and one immutable attempt receipt;
+staging and rename eligibility are separate durable facts, not replacement receipts.
+The owning, joined worker may settle an abort as `NoMutation` only if it can attest
+it never invoked rename and all staging was host-internal. After durable rename
+admission, recovery cannot infer nonexecution from an absent visible replacement:
+retain quarantine without retry absent stronger terminal proof.
+A successful cross-directory replacement requires both destination and staging-parent
+durability barriers before terminal registry evidence releases the claim. Refuse native
+edit where custody, identity, required barriers or same-filesystem rename cannot be
+qualified; staging errors do not spill a file into the workspace.
+
 Worktree isolation does not imply independent Git metadata: worktrees can share object,
 ref and configuration state. Execution backends therefore declare repository-level
 resource claims separately from workspace-file claims; shared ref/config mutations
