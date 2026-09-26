@@ -3,19 +3,17 @@
 Accepted contract, 2026-09-15; materially refined 2026-09-18 for external
 boundaries and 2026-09-25 for native edit/exec safety. [README.md](README.md)
 states what the current source implements; this file states the contracts the
-maintained engine must satisfy. Ion is
-unreleased v0: replace obsolete abstractions directly rather than preserving them
-through compatibility layers.
+maintained engine must satisfy. Ion is unreleased v0: replace obsolete
+abstractions directly rather than preserving them through compatibility layers.
 
 The maintained Turn/Session runtime replaces the former generic task runtime
-rather than wrapping it. R1A/R1B foundations are implemented; R1C/C2 product
-acceptance is not complete. The headless host currently supports serial native
-read and two streaming wire adapters, with only one synthetic gateway exchange
-observed live. It has no integrated native edit/exec, terminal or general OS
-confinement. Host preflight and descriptor-relative access are not confinement;
-passing scripted recovery tests is not a qualified coding agent. For current
-capabilities, limitations and validation, use [README.md](README.md). The
-contracts below describe the target even where the implementation is incomplete.
+rather than wrapping it. The headless host has experimental read/edit support,
+but the coding-agent product and native command execution remain incomplete.
+Host preflight and descriptor-relative access are not confinement; passing
+scripted recovery tests or one synthetic live edit does not qualify a coding
+agent. For current capabilities, limitations and validation, use
+[README.md](README.md). The contracts below describe the target even where the
+implementation is incomplete.
 
 ## Product and boundaries
 
@@ -562,12 +560,13 @@ replacement binding.
 
 For native single-file edit, stage verified replacement content in a host-owned,
 rename-compatible filesystem namespace **outside** the agent-writable workspace.
-The model supplies both the complete original file and the complete desired file.
-The backend derives the single exact replacement from old/new text and refuses
-inconsistent desired bytes **before** any workspace claim; a syntactically valid
-but malformed edit cannot silently duplicate surrounding text. The registry
-atomically admits an edit manifest and one immutable attempt receipt; staging
-and rename eligibility are separate durable facts, not replacement receipts.
+Bind an exact original base and deterministically validate the proposed target
+before any workspace claim; reject internally inconsistent arguments before an
+effect. The model-facing encoding is a versioned implementation choice, and a
+consistent proposal is not proof that the model understood the user's intent.
+The registry atomically admits an edit manifest and one immutable attempt
+receipt; staging and rename eligibility are separate durable facts, not
+replacement receipts.
 Under permanent worker/staging custody, an exact no-follow vacancy check and
 staging-parent durability barrier precede a receipt/slot/physical-parent/registry-
 incarnation-bound allocation. Only a confirmed allocation permits exclusive stage
@@ -599,12 +598,27 @@ resource claims separately from workspace-file claims; shared ref/config mutatio
 serialize or use an isolated repository clone.
 
 Arbitrary exec is treated as mutating unless an enforceable backend restricts it.
-The first qualified prerelease must support native command execution on **both macOS
-and Linux** through a host-owned enforceable scope that can stop and prove quiescence
-of the child and its descendants before terminal settlement. Process groups alone
-do not establish that guarantee for detached descendants. If platform enforcement
-or stopped-effect evidence is unavailable, refuse dispatch or retain quarantine;
-preparation-only command declarations do not count as working exec.
+The first qualified prerelease must execute **native macOS binaries, including
+macOS toolchains, on macOS** and native Linux binaries on Linux. Running a Linux
+guest on a Mac does not satisfy the macOS requirement. Each platform needs a
+host-owned enforceable command scope that can stop and positively observe
+quiescence of its child and local descendants before recording known-terminal
+execution evidence and releasing its claim. A truthful model-visible unknown
+result may settle separately while execution remains uncertain and quarantined.
+Process-group signaling alone cannot enforce the lifecycle when descendants
+change group/session or after owner loss. If scope enforcement or quiescence
+evidence is unavailable, refuse dispatch or retain quarantine; preparation-only
+command declarations do not count as working exec.
+
+A lifecycle scope alone is not filesystem or broker confinement. Commands must
+not be able to corrupt the host-owned Session, registry or edit staging whose
+integrity other tools rely on: a Linux cgroup, same-user permissions and advisory
+locks do not establish that separation. If an execution backend permits effects
+through a preexisting broker or remote service outside its scope, local process
+quiescence does not prove those effects stopped. Restrict such delegation where
+the stronger guarantee is claimed, or retain uncertainty and quarantine instead
+of treating a stopped shell as complete effect evidence.
+
 Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
 compare-and-swap against an uncooperative external editor. Report that limitation.
 Multi-file edits preflight all targets/bases and use per-file atomic replacement where

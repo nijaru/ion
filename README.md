@@ -80,11 +80,23 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v9) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: qualified macOS/Linux native exec,
-a user-facing approval client and host authentication/policy backend, parallel tool
-dispatch, context compaction/forking,
-Steer/InteractionReply placement, live qualification of both wire adapters,
-the terminal UI, and workers.
+Still missing: qualified native macOS/Linux exec, a user-facing cancellation and
+approval client with host authentication/policy, streaming progress in the executable,
+parallel tool dispatch, context compaction/forking, Steer/InteractionReply placement,
+live qualification of both wire adapters, the terminal UI, and workers. Ordinary
+file creation and sustained multi-turn coding have not been qualified.
+
+Known limits before prerelease: the library accepts and persists an optional absolute
+Turn wall deadline but does **not** enforce it; the CLI always supplies `None`.
+Library hosts must not rely on a non-`None` deadline until it is implemented or
+rejected at admission. The headless host freezes the provider wire API and HTTPS
+**origin**, not the entire endpoint URL: changing the path on that origin may
+change future requests, although replay of an existing sealed step detects a
+fingerprint mismatch. Use the same exact URL when resuming. Tool admission also
+reserves the configured full 64 KiB preview per call and compares request bytes
+to an asserted input-token capacity. Small-context models can reject even a
+tiny read; this is not tokenizer-backed context admission.
+
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
 Unimplemented Steer/InteractionReply inputs reject at admission rather than queue
@@ -124,19 +136,20 @@ proxies, and obtains an API key from a live host callback at dispatch. Returned-
 must match the exact binding or a frozen list of allowed route models; missing or unexpected
 IDs park without selecting a response or admitting tools. Returned calls also must
 respect frozen tool choice and parallel-call controls, including after passive reopen.
-This callback and provider
-preflight are not network confinement or a production credential policy. Library hosts
-can supply a conservative, route-wide cost bound for each proposed model attempt;
+Credentials and provider preflight are neither network confinement nor a
+production credential policy. Library hosts can supply a conservative,
+route-wide cost bound for each proposed model attempt;
 the store reserves it with attempt intent and retains it unless the attempt is proven
 not started. A configured cap parks before intent without a trusted quote or enough
 remaining allowance. The headless host accepts an optional operator-asserted
 all-in per-attempt quote and frozen Turn cap; it does not discover provider
-prices or infer exact billable tokens from request bytes. Request and terminal provider-response capacity checks stop encoding at
-their frozen limits rather than allocating complete oversized JSON copies. A separate
-Anthropic Messages adapter supports streamed text and client tools, with strict
+prices or infer exact billable tokens from request bytes. Request and terminal
+provider-response capacity checks stop encoding at their frozen limits rather
+than allocating complete oversized JSON copies. A separate Anthropic Messages
+adapter supports streamed text and client tools, with strict
 index/terminal/usage checks and stable logical tool-result pairing. Unsupported thinking,
 opaque replay, provider-hosted tools and explicit sampling/reasoning controls fail closed.
-One synthetic OpenRouter Chat Completions exchange passed; neither official
+Isolated synthetic OpenRouter Chat Completions exchanges passed; neither official
 provider API has been qualified live.
 
 ## Headless use (experimental)
@@ -149,7 +162,8 @@ The current request admission enforces a serialized-byte ceiling (`--max-request
 default 1 MiB), **not** an exact tokenizer-backed input-token bound; a provider may
 reject an oversized context.
 The endpoint's returned model ID must match the supplied ID. `run` supports
-`--request-key` for idempotent resubmission after a lost reply.
+`--request-key` for idempotent resubmission after a lost reply. Keep the exact
+endpoint URL when resuming; the host currently verifies only its HTTPS origin.
 
 ```sh
 mkdir -p "$HOME/.local/state/ion/example"
@@ -180,9 +194,10 @@ authoritative upper bound for your provider and route.
 
 The default `--wire chat-completions` reads `OPENAI_API_KEY`. For Anthropic's
 `/v1/messages`, use `--wire anthropic-messages`, an exact Anthropic endpoint/model,
-and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint; use a new
-state directory to switch. Keys are read at dispatch and are not stored. A missing
-key parks without sending a request. `ion inspect --state ...` shows a bounded snapshot;
+and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint origin,
+not the full URL path; use a new state directory to switch endpoints. Keys are
+read at dispatch and are not stored. A missing key parks without sending a
+request. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
 resumes a persisted Turn. A read-only Session uses `<state>/registry` by default.
 To enable single-file exact-match edits, give every Session touching the same
@@ -207,11 +222,15 @@ cargo run --locked -p ion -- run \
   'Read one file, replace the requested text, then summarize the change'
 ```
 
-The editor's `native-edit-private-v4` binding requires both the complete original
-file and the complete desired file. It refuses a proposed old/new replacement that
-does not produce those desired bytes before creating a workspace claim. It creates
-private staging inside the shared registry, refuses unsupported filesystem or
-mount combinations, and never falls back to workspace staging.
+The current `native-edit-private-v4` tool edits existing regular files up to 16 KiB;
+it does not create files. Its model-facing format requires both the complete
+original file and the complete desired file plus old/new text. This duplicates
+model output to catch inconsistent proposals; it does not prove that the model
+chose the right change and needs comparative coding-task evaluation. The tool
+refuses a replacement that differs from those desired bytes before creating a
+workspace claim. It creates private staging inside the shared registry,
+refuses unsupported filesystem or mount combinations, and never falls back
+to workspace staging.
 The host must continuously protect the registry, its staging directory and the
 workspace namespace from arbitrary same-user writers; directory permissions and
 advisory locks are **not** a sandbox. There is no command-execution tool or
@@ -223,8 +242,8 @@ read: the file held exactly the requested bytes, the registry had one terminal
 known-change claim and its stage was disposed. A direct OpenAI attempt returned
 HTTP 429; the Anthropic adapter has only loopback tests. These are isolated
 exchanges, **not** sustained coding, broad provider, native-exec or terminal
-qualification. The excluded legacy
-`crates/ion/` remains reference material, not an alternative maintained runtime.
+qualification. The excluded legacy `crates/ion/` remains reference material,
+not an alternative maintained runtime.
 
 ## Development
 
