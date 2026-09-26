@@ -278,7 +278,13 @@ headless read/edit/read and list/read/create/read tasks; externally inspected
 files held the requested bytes. It also completed a read-and-answer exchange
 through `ion chat` in a PTY without an API key. A Linux Bubblewrap scope and a
 synthetic C creation/compile/run task passed on Fedora; the imported source and
-binary were inspected outside Ion. A direct OpenAI attempt returned HTTP 429;
+binary were inspected outside Ion. A disposable Git repository task also passed:
+with a 16K local-model context, Ion observed a failing C test, edited the parser,
+read it back and reran the test; an independent host run passed. The same task
+parked before editing with an 8K context because Ion conservatively reserves
+serialized request bytes against the asserted input-token capacity. A live PTY
+`ion chat` run used `exec` to write a file, read it back and exited through
+`/quit`. A direct OpenAI attempt returned HTTP 429;
 the Anthropic adapter has only loopback tests. These checks do not qualify
 sustained coding, public-provider behavior, macOS exec or the full
 range of terminal emulators. The excluded legacy `crates/ion/` remains
