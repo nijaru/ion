@@ -38,8 +38,8 @@ pub const MAX_NATIVE_READ_BYTES: usize = crate::MAX_TOOL_RECORD_BYTES;
 pub(crate) const MAX_PATH_BYTES: usize = 4096;
 const MAX_CONCURRENT_READS: usize = 4;
 const READ_CHUNK_BYTES: usize = 8192;
-// The complete-file digest changes the frozen result semantics.
-const IMPLEMENTATION_ID: &str = "native-read-v3";
+// Actual encoded-size fitting changes the frozen result behavior.
+const IMPLEMENTATION_ID: &str = "native-read-v4";
 const AUTHORITY_ALLOW: u8 = 0;
 const AUTHORITY_ASK: u8 = 1;
 const AUTHORITY_DENY: u8 = 2;
@@ -252,10 +252,9 @@ impl ToolBoundary for NativeReadBoundary {
             }
 
             let output_limit = execution.output_limit.min(crate::MAX_TOOL_RECORD_BYTES / 2);
-            let Some(content_limit) = content_budget(output_limit, arguments.offset) else {
+            if !result_envelope_fits(output_limit, arguments.offset) {
                 return not_started("tool output limit cannot fit a bounded read result");
-            };
-            let content_limit = content_limit.min(self.max_read_bytes);
+            }
 
             let permit = tokio::select! {
                 biased;
@@ -284,7 +283,6 @@ impl ToolBoundary for NativeReadBoundary {
                 executor: self.executor.clone(),
                 binding: self.binding.clone(),
                 stop,
-                content_limit,
                 output_limit,
                 _permit: permit,
             };
@@ -415,10 +413,11 @@ pub(crate) fn valid_relative_path(path: &str) -> bool {
             .all(|part| !part.is_empty() && part != "." && part != "..")
 }
 
-fn content_budget(output_limit: usize, offset: u64) -> Option<usize> {
+fn result_envelope_fits(output_limit: usize, offset: u64) -> bool {
     let maximum = output_limit.min(crate::MAX_TOOL_RECORD_BYTES);
-    // Reserve the complete worst-case v2 envelope, including a quota-limited
-    // capture and full-width revision counters, before admitting content bytes.
+    // Reserve the complete worst-case envelope, including a quota-limited
+    // capture and full-width revision counters. The actual content is fitted
+    // after reading so ordinary ASCII does not pay a sixfold escape tax.
     let baseline = read_result(
         String::new(),
         offset,
@@ -434,10 +433,80 @@ fn content_budget(output_limit: usize, offset: u64) -> Option<usize> {
             repository: u64::MAX,
         },
     );
-    let baseline_size = serde_json::to_vec(&baseline).ok()?.len();
-    maximum
-        .checked_sub(baseline_size)
-        .map(|remaining| remaining / 6)
+    serde_json::to_vec(&baseline).is_ok_and(|encoded| encoded.len() < maximum)
+}
+
+fn bounded_read_result(
+    content: &str,
+    offset: u64,
+    source_has_more: bool,
+    output_limit: usize,
+    workspace_revision: WorkspaceRevision,
+) -> Option<ToolResult> {
+    let fits = |result: &ToolResult| {
+        serde_json::to_vec(result)
+            .is_ok_and(|encoded| encoded.len() <= output_limit.min(crate::MAX_TOOL_RECORD_BYTES))
+    };
+    let complete = read_result(
+        content.to_owned(),
+        offset,
+        u64::try_from(content.len()).ok()?,
+        source_has_more,
+        crate::OutputCapture::CompleteInline,
+        workspace_revision,
+    );
+    if fits(&complete) {
+        return Some(complete);
+    }
+
+    // The response envelope, not a pessimistic per-byte escape factor,
+    // determines the longest UTF-8 prefix that can be represented durably.
+    let boundaries: Vec<usize> = content
+        .char_indices()
+        .map(|(index, _)| index)
+        .chain(std::iter::once(content.len()))
+        .collect();
+    let mut low = 0;
+    let mut high = boundaries.len();
+    while low + 1 < high {
+        let mid = low + (high - low) / 2;
+        let bytes = boundaries[mid];
+        let bytes_read = u64::try_from(bytes).ok()?;
+        let candidate = read_result(
+            content[..bytes].to_owned(),
+            offset,
+            bytes_read,
+            true,
+            crate::OutputCapture::Incomplete {
+                reason: crate::OutputLoss::Quota,
+                retained_bytes: bytes_read,
+                observed_bytes: bytes_read.checked_add(1),
+            },
+            workspace_revision,
+        );
+        if fits(&candidate) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    if low == 0 {
+        return None;
+    }
+    let bytes = boundaries[low];
+    let bytes_read = u64::try_from(bytes).ok()?;
+    Some(read_result(
+        content[..bytes].to_owned(),
+        offset,
+        bytes_read,
+        true,
+        crate::OutputCapture::Incomplete {
+            reason: crate::OutputLoss::Quota,
+            retained_bytes: bytes_read,
+            observed_bytes: bytes_read.checked_add(1),
+        },
+        workspace_revision,
+    ))
 }
 
 fn not_started(reason: &str) -> ToolAttemptState {
@@ -541,7 +610,6 @@ struct ReadJob {
     executor: SemanticCompatibilityId,
     binding: ToolBinding,
     stop: CancellationToken,
-    content_limit: usize,
     output_limit: usize,
     _permit: tokio::sync::OwnedSemaphorePermit,
 }
@@ -602,8 +670,7 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
         .arguments
         .limit
         .and_then(|limit| usize::try_from(limit).ok())
-        .unwrap_or(0)
-        .min(job.content_limit);
+        .unwrap_or(0);
     let Some(capture_limit) = read_limit.checked_add(1) else {
         return settled_error("file range is too large", job.output_limit);
     };
@@ -636,43 +703,24 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
         }
         Err(_) => return settled_error("file content is not valid UTF-8", job.output_limit),
     };
-    let bytes_read = match u64::try_from(content.len()) {
-        Ok(bytes_read) => bytes_read,
-        Err(_) => return settled_error("file range is too large", job.output_limit),
-    };
-    // A short requested range is complete. Only a quota-limited range is incomplete.
-    let quota_limited = truncated && read_limit < job.arguments.limit.unwrap_or(0) as usize;
-    let capture = if quota_limited {
-        crate::OutputCapture::Incomplete {
-            reason: crate::OutputLoss::Quota,
-            retained_bytes: bytes_read,
-            observed_bytes: bytes_read.checked_add(1),
-        }
-    } else {
-        crate::OutputCapture::CompleteInline
-    };
     if !matches!(
         registry.revision(&job.execution.workspace),
         Ok(current) if current == workspace_revision
     ) {
         return settled_error("workspace changed during read", job.output_limit);
     }
-    let result = read_result(
-        content,
+    let Some(result) = bounded_read_result(
+        &content,
         job.arguments.offset,
-        bytes_read,
         truncated,
-        capture,
+        job.output_limit,
         workspace_revision,
-    );
-    if serde_json::to_vec(&result).map_or(true, |encoded| {
-        encoded.len() > job.output_limit.min(crate::MAX_TOOL_RECORD_BYTES)
-    }) {
+    ) else {
         return settled_error(
             "read result exceeded its configured output bound",
             job.output_limit,
         );
-    }
+    };
     ToolAttemptState::Settled {
         result,
         effect: crate::EffectSummary::NoMutation,
@@ -1057,6 +1105,40 @@ mod tests {
             crate::OutputCapture::Incomplete { .. }
         ));
         assert!(!result.value["content"].as_str().unwrap().is_empty());
+        assert!(serde_json::to_vec(&result).unwrap().len() <= 512);
+    }
+
+    #[tokio::test]
+    async fn ascii_file_uses_actual_encoded_size_to_supply_complete_edit_digest() {
+        let root = TestRoot::new();
+        let content = "plain source line\n".repeat(150);
+        fs::write(root.path().join("source.c"), &content).unwrap();
+        let boundary = boundary(root.path(), 4096);
+        let result = result(read(&boundary, json!({"path":"source.c"}), 5000).await);
+        assert_eq!(result.capture, crate::OutputCapture::CompleteInline);
+        assert_eq!(result.value["content"], content);
+        assert_eq!(
+            result.value["base_digest"],
+            ContentDigest::of_bytes(content.as_bytes()).to_string()
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() <= 5000);
+    }
+
+    #[tokio::test]
+    async fn quota_truncation_keeps_utf8_and_a_forward_offset() {
+        let root = TestRoot::new();
+        fs::write(root.path().join("unicode.txt"), "界".repeat(1000)).unwrap();
+        let boundary = boundary(root.path(), 4096);
+        let result = result(read(&boundary, json!({"path":"unicode.txt"}), 512).await);
+        assert!(matches!(
+            result.capture,
+            crate::OutputCapture::Incomplete { .. }
+        ));
+        let content = result.value["content"].as_str().unwrap();
+        assert!(!content.is_empty());
+        assert!(content.chars().all(|ch| ch == '界'));
+        assert_eq!(result.value["bytes_read"], content.len());
+        assert_eq!(result.value["has_more"], true);
         assert!(serde_json::to_vec(&result).unwrap().len() <= 512);
     }
 

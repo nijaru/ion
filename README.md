@@ -143,10 +143,14 @@ resolve database symlink aliases; hard-linked database aliases are refused.
 A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
 persisted tool exchange. A complete read from offset zero returns a SHA-256
 `base_digest` for exact edits and a before/after-checked registry revision.
-Partial reads return no base digest. This result uses the frozen `native-read-v3`
-binding. It is serial, not an OS sandbox: the host must protect the workspace
-namespace against concurrent renames
-and enforce its promised read authority. Native `list` returns a bounded, sorted
+Partial reads return no base digest. The `native-read-v4` binding fits UTF-8
+content to the actual serialized result allowance, allowing a complete edit
+digest when ordinary source text fits; larger or heavily escaped content still
+returns a bounded partial result. In one live local-Qwen check with an asserted
+8K input limit, `read` returned a complete 2,299-byte C file and digest inside
+a 4,468-byte result allowance. It is serial, not an OS sandbox: the host must
+protect the workspace namespace against concurrent renames and enforce its
+promised read authority. Native `list` returns a bounded, sorted
 page from one directory with a workspace revision; it does not follow symlinks
 or promise a snapshot across pages.
 The library also has an experimental single-file `NativeEditBoundary` on registry
