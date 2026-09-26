@@ -38,12 +38,14 @@ use std::{
 use ion_ai::ToolSpec;
 use rustix::{
     event::{PollFd, PollFlags, Timespec, poll},
+    fs::{AtFlags, Dir, FileType, Mode, OFlags, openat, statat},
     io::{FdFlags, fcntl_setfd},
     pipe::pipe,
     process::{Pid, PidfdFlags, pidfd_open},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -80,6 +82,8 @@ pub struct NativeExecBoundary {
     staging_directory: PathBuf,
     resources: WorkspaceResources,
     live_authority: Arc<AtomicU8>,
+    rust_toolchain: Option<ReadonlyRoot>,
+    cargo_registry: Option<ReadonlyRoot>,
 }
 
 impl NativeExecBoundary {
@@ -87,15 +91,40 @@ impl NativeExecBoundary {
         registry: &WorkspaceRegistry,
         workspace: WorkspaceBinding,
         staging_directory: &Path,
+        rust_toolchain: Option<&Path>,
+        cargo_registry: Option<&Path>,
     ) -> Result<Self, NativeExecError> {
         registry.verify_current(&workspace)?;
         let metadata = fs::metadata(BWRAP)?;
         if !metadata.is_file() {
             return Err(NativeExecError::Unavailable);
         }
+        if cargo_registry.is_some() && rust_toolchain.is_none() {
+            return Err(NativeExecError::InvalidToolchain);
+        }
+        let rust_toolchain =
+            qualify_readonly_root(rust_toolchain, &workspace, registry.directory())?;
+        let cargo_registry =
+            qualify_readonly_root(cargo_registry, &workspace, registry.directory())?;
+        if let (Some(toolchain), Some(cache)) = (&rust_toolchain, &cargo_registry)
+            && (toolchain.path.starts_with(&cache.path) || cache.path.starts_with(&toolchain.path))
+        {
+            return Err(NativeExecError::InvalidToolchain);
+        }
+        let identity = format!(
+            "{}:{:x}",
+            IMPLEMENTATION_ID,
+            Sha256::digest(
+                format!(
+                    "{}:{rust_toolchain:?}:{cargo_registry:?}",
+                    workspace.backend
+                )
+                .as_bytes()
+            )
+        );
         let executor = SemanticCompatibilityId::new(workspace.backend.clone())
             .map_err(|_| NativeExecError::InvalidWorkspace)?;
-        let binding = native_exec_binding().map_err(NativeExecError::InvalidBinding)?;
+        let binding = native_exec_binding(&identity).map_err(NativeExecError::InvalidBinding)?;
         let resources = registry.mutation_resources(&workspace)?;
         let stage = staging_directory
             .canonicalize()
@@ -122,6 +151,8 @@ impl NativeExecBoundary {
             staging_directory: stage,
             resources,
             live_authority: Arc::new(AtomicU8::new(AUTHORITY_DENY)),
+            rust_toolchain,
+            cargo_registry,
         })
     }
 
@@ -255,6 +286,8 @@ impl ToolBoundary for NativeExecBoundary {
                 executor: self.executor.clone(),
                 live_authority: Arc::clone(&self.live_authority),
                 stop: stop.clone(),
+                rust_toolchain: self.rust_toolchain.clone(),
+                cargo_registry: self.cargo_registry.clone(),
             };
             let cancellation = CancelWorkerOnDrop::new(stop);
             let result = tokio::task::spawn_blocking(move || run_exec(job)).await;
@@ -264,7 +297,7 @@ impl ToolBoundary for NativeExecBoundary {
     }
 }
 
-pub fn native_exec_binding() -> Result<ToolBinding, crate::ConfigError> {
+fn native_exec_binding(implementation_id: &str) -> Result<ToolBinding, crate::ConfigError> {
     ToolBinding::new(
         ToolBindingId::new("exec")?,
         ToolSpec {
@@ -279,7 +312,7 @@ pub fn native_exec_binding() -> Result<ToolBinding, crate::ConfigError> {
                 }
             }),
         },
-        SemanticCompatibilityId::new(IMPLEMENTATION_ID)?,
+        SemanticCompatibilityId::new(implementation_id)?,
         ToolConcurrency::Serial,
         ToolRecoveryPolicy::NeverRepeat,
         EgressRealm::Local,
@@ -292,12 +325,114 @@ pub enum NativeExecError {
     Unavailable,
     #[error("invalid exec workspace binding")]
     InvalidWorkspace,
+    #[error("unsafe or incompatible read-only command toolchain root")]
+    InvalidToolchain,
     #[error("failed to construct exec binding: {0}")]
     InvalidBinding(#[source] crate::ConfigError),
     #[error(transparent)]
     Registry(#[from] RegistryError),
     #[error(transparent)]
     Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Syscall(#[from] rustix::io::Errno),
+}
+
+#[derive(Debug, Clone)]
+struct ReadonlyRoot {
+    path: PathBuf,
+    device: u64,
+    inode: u64,
+}
+
+impl ReadonlyRoot {
+    fn still_qualified(&self) -> bool {
+        fs::metadata(&self.path).is_ok_and(|meta| {
+            meta.dev() == self.device && meta.ino() == self.inode && meta.is_dir()
+        }) && validate_readonly_tree(&self.path).is_ok()
+    }
+}
+
+fn qualify_readonly_root(
+    candidate: Option<&Path>,
+    workspace: &WorkspaceBinding,
+    registry: &Path,
+) -> Result<Option<ReadonlyRoot>, NativeExecError> {
+    let Some(candidate) = candidate else {
+        return Ok(None);
+    };
+    let path = candidate.canonicalize()?;
+    let workspace = Path::new(&workspace.canonical_root);
+    if path == Path::new("/")
+        || path.starts_with(workspace)
+        || workspace.starts_with(&path)
+        || path.starts_with(registry)
+        || registry.starts_with(&path)
+    {
+        return Err(NativeExecError::InvalidToolchain);
+    }
+    let meta = fs::metadata(&path)?;
+    if !meta.is_dir() || meta.permissions().mode() & 0o7000 != 0 {
+        return Err(NativeExecError::InvalidToolchain);
+    }
+    validate_readonly_tree(&path)?;
+    Ok(Some(ReadonlyRoot {
+        path,
+        device: meta.dev(),
+        inode: meta.ino(),
+    }))
+}
+
+/// Refuse broker endpoints and nested mounts in a host-selected read-only tree.
+/// The caller must also protect this host namespace against concurrent same-user
+/// replacement, just as it does for the live workspace and private registry.
+fn validate_readonly_tree(path: &Path) -> Result<(), NativeExecError> {
+    let root = File::open(path)?;
+    let device = root.metadata()?.dev();
+    let mut remaining = 500_000_usize;
+    fn walk(
+        directory: &File,
+        device: u64,
+        depth: usize,
+        remaining: &mut usize,
+    ) -> Result<(), NativeExecError> {
+        if depth > 64 {
+            return Err(NativeExecError::InvalidToolchain);
+        }
+        for entry in Dir::read_from(directory)? {
+            let entry = entry?;
+            let name = entry.file_name().to_bytes();
+            if name == b"." || name == b".." {
+                continue;
+            }
+            *remaining = remaining
+                .checked_sub(1)
+                .ok_or(NativeExecError::InvalidToolchain)?;
+            let name = std::str::from_utf8(name).map_err(|_| NativeExecError::InvalidToolchain)?;
+            let before = statat(directory, name, AtFlags::SYMLINK_NOFOLLOW)?;
+            if before.st_dev != device {
+                return Err(NativeExecError::InvalidToolchain);
+            }
+            match FileType::from_raw_mode(before.st_mode) {
+                FileType::RegularFile | FileType::Symlink => {}
+                FileType::Directory => {
+                    let child = File::from(openat(
+                        directory,
+                        name,
+                        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+                        Mode::empty(),
+                    )?);
+                    let meta = child.metadata()?;
+                    if meta.dev() != device || meta.ino() != before.st_ino {
+                        return Err(NativeExecError::InvalidToolchain);
+                    }
+                    walk(&child, device, depth + 1, remaining)?;
+                }
+                _ => return Err(NativeExecError::InvalidToolchain),
+            }
+        }
+        Ok(())
+    }
+    walk(&root, device, 0, &mut remaining)
 }
 
 #[derive(Deserialize)]
@@ -329,6 +464,8 @@ struct ExecJob {
     executor: SemanticCompatibilityId,
     live_authority: Arc<AtomicU8>,
     stop: CancellationToken,
+    rust_toolchain: Option<ReadonlyRoot>,
+    cargo_registry: Option<ReadonlyRoot>,
 }
 
 fn run_exec(job: ExecJob) -> ToolAttemptState {
@@ -430,6 +567,23 @@ fn run_exec(job: ExecJob) -> ToolAttemptState {
             );
         }
     };
+    if job
+        .rust_toolchain
+        .as_ref()
+        .is_some_and(|root| !root.still_qualified())
+        || job
+            .cargo_registry
+            .as_ref()
+            .is_some_and(|root| !root.still_qualified())
+    {
+        return cleanup_no_start(
+            &view,
+            &mut registry,
+            key,
+            &receipt,
+            "selected read-only command tools changed or became unsafe",
+        );
+    }
     let (status_read, status_write) = match pipe() {
         Ok(pipe) => pipe,
         Err(_) => {
@@ -792,19 +946,41 @@ fn sandbox_command(job: &ExecJob, private_workspace: &Path, status_fd: i32) -> C
         "/tmp",
         "--dir",
         "/run",
-        "--bind",
     ]);
+    if let Some(toolchain) = &job.rust_toolchain {
+        command
+            .arg("--ro-bind")
+            .arg(&toolchain.path)
+            .arg("/toolchain");
+        command.args(["--dir", "/tmp/cargo"]);
+        if let Some(cache) = &job.cargo_registry {
+            command
+                .arg("--ro-bind")
+                .arg(&cache.path)
+                .arg("/tmp/cargo/registry");
+        }
+    }
+    command.arg("--bind");
     command.arg(private_workspace);
+    command.args(["/work", "--chdir", "/work", "--setenv", "HOME", "/tmp"]);
+    if job.rust_toolchain.is_some() {
+        command.args([
+            "--setenv",
+            "CARGO_HOME",
+            "/tmp/cargo",
+            "--setenv",
+            "CARGO_NET_OFFLINE",
+            "true",
+        ]);
+    }
     command.args([
-        "/work",
-        "--chdir",
-        "/work",
-        "--setenv",
-        "HOME",
-        "/tmp",
         "--setenv",
         "PATH",
-        "/usr/local/bin:/usr/bin:/bin",
+        if job.rust_toolchain.is_some() {
+            "/toolchain/bin:/usr/local/bin:/usr/bin:/bin"
+        } else {
+            "/usr/local/bin:/usr/bin:/bin"
+        },
         "--json-status-fd",
     ]);
     command.arg(status_fd.to_string());
@@ -1122,6 +1298,7 @@ impl Drop for CancelWorkerOnDrop {
 mod tests {
     use std::{
         os::unix::fs::DirBuilderExt,
+        os::unix::net::UnixListener,
         path::Path,
         sync::atomic::{AtomicU64, Ordering},
     };
@@ -1162,6 +1339,10 @@ mod tests {
 
     impl Fixture {
         fn new() -> Option<Self> {
+            Self::new_with_roots(None, None)
+        }
+
+        fn new_with_roots(toolchain: Option<&Path>, cache: Option<&Path>) -> Option<Self> {
             if !Path::new(BWRAP).is_file() {
                 return None;
             }
@@ -1173,11 +1354,12 @@ mod tests {
             let workspace = registry
                 .bind("test-workspace", work.path(), "local-v1")
                 .unwrap();
-            let boundary = match NativeExecBoundary::new(&registry, workspace, &stage) {
-                Ok(boundary) => Arc::new(boundary),
-                Err(NativeExecError::Unavailable) => return None,
-                Err(error) => panic!("exec setup failed: {error}"),
-            };
+            let boundary =
+                match NativeExecBoundary::new(&registry, workspace, &stage, toolchain, cache) {
+                    Ok(boundary) => Arc::new(boundary),
+                    Err(NativeExecError::Unavailable) => return None,
+                    Err(error) => panic!("exec setup failed: {error}"),
+                };
             boundary.set_live_authority(LiveToolAuthority::Allow);
             Some(Self {
                 work,
@@ -1431,6 +1613,59 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn selected_readonly_toolchain_runs_with_private_writable_state() {
+        let tools = Temp::new();
+        fs::create_dir(tools.path().join("bin")).unwrap();
+        let probe = tools.path().join("bin/probe-tool");
+        fs::write(&probe, b"#!/bin/sh\nprintf 'tool-ok:%s' \"$HOME\"\n").unwrap();
+        fs::set_permissions(&probe, fs::Permissions::from_mode(0o755)).unwrap();
+        let cache = Temp::new();
+        fs::write(cache.path().join("cached-crate"), b"public code").unwrap();
+        let Some(fixture) = Fixture::new_with_roots(Some(tools.path()), Some(cache.path())) else {
+            return;
+        };
+        let plain = Fixture::new().unwrap();
+        assert_ne!(
+            plain.boundary.tool_binding().implementation,
+            fixture.boundary.tool_binding().implementation
+        );
+        let execution = fixture.execution("probe-tool", 3000);
+        let state = fixture
+            .boundary
+            .execute(execution, CancellationToken::new())
+            .await;
+        let ToolAttemptState::Settled { result, .. } = state else {
+            panic!("selected toolchain did not run: {state:?}");
+        };
+        assert_eq!(result.value["stdout"], "tool-ok:/tmp");
+        assert_eq!(result.value["exit_code"], 0);
+        assert!(fixture.registry.unresolved(None, 10).unwrap().is_empty());
+    }
+
+    #[test]
+    fn readonly_toolchain_refuses_broker_socket() {
+        let root = Temp::new();
+        let _socket = UnixListener::bind(root.path().join("broker.sock")).unwrap();
+        assert!(matches!(
+            validate_readonly_tree(root.path()),
+            Err(NativeExecError::InvalidToolchain)
+        ));
+        let Some(fixture) = Fixture::new() else {
+            return;
+        };
+        assert!(matches!(
+            NativeExecBoundary::new(
+                &fixture.registry,
+                fixture.boundary.workspace.clone(),
+                &fixture._host.path().join("staging"),
+                None,
+                Some(root.path()),
+            ),
+            Err(NativeExecError::InvalidToolchain)
+        ));
+    }
+
+    #[tokio::test]
     async fn unavailable_durable_import_plan_prevents_publication() {
         let Some(fixture) = Fixture::new() else {
             return;
@@ -1469,7 +1704,14 @@ mod tests {
             .bind("owner-loss-workspace", work.path(), "local-v1")
             .unwrap();
         let boundary = Arc::new(
-            NativeExecBoundary::new(&registry, workspace, &host.path().join("staging")).unwrap(),
+            NativeExecBoundary::new(
+                &registry,
+                workspace,
+                &host.path().join("staging"),
+                None,
+                None,
+            )
+            .unwrap(),
         );
         boundary.set_live_authority(LiveToolAuthority::Allow);
         let fixture = Fixture {

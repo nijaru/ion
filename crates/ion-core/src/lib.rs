@@ -64,7 +64,7 @@ pub use native_edit::{
     native_edit_binding,
 };
 #[cfg(target_os = "linux")]
-pub use native_exec::{NativeExecBoundary, NativeExecError, native_exec_binding};
+pub use native_exec::{NativeExecBoundary, NativeExecError};
 pub use native_list::{
     MAX_NATIVE_LIST_ENTRIES, NativeListBoundary, NativeListError, native_list_binding,
 };

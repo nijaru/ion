@@ -87,6 +87,12 @@ struct HostArgs {
     /// Enable confined native command execution on supported hosts.
     #[arg(long)]
     enable_exec: bool,
+    /// Read-only Rust toolchain root exposed to Linux exec as /toolchain.
+    #[arg(long, requires = "enable_exec")]
+    exec_rust_toolchain: Option<PathBuf>,
+    /// Read-only Cargo registry cache exposed to Linux exec (offline builds).
+    #[arg(long, requires = "exec_rust_toolchain")]
+    exec_cargo_registry: Option<PathBuf>,
     /// Trusted operator assertion of the ALL-IN upper charge per physical model
     /// attempt (micro-USD), including route, cache and reasoning charges. May
     /// change on resume; absent pricing parks a capped Turn before dispatch.
@@ -430,6 +436,8 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
                 &registry,
                 binding.clone(),
                 &staging_root(&registry_root)?,
+                args.exec_rust_toolchain.as_deref(),
+                args.exec_cargo_registry.as_deref(),
             )?);
             executor.set_live_authority(LiveToolAuthority::Allow);
             tool_bindings.push(executor.tool_binding().clone());

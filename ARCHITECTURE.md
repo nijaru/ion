@@ -644,7 +644,14 @@ path uses a host-private workspace view containing only ordinary source files
 and directories, with an explicit symlink policy; it does not bind the live
 checkout, host-owned agent state, user bus or network into the command scope.
 Read-only operating-system toolchain paths, such as Linux alternatives, may be
-exposed when native build tools require them. The host owns
+exposed when native build tools require them. A host-selected user toolchain or
+dependency cache is an explicit additional read-only mount: freeze its canonical
+root identity with the tool implementation binding, keep credentials and host
+configuration outside the view, and give build tools private writable state
+with network disabled. Never infer from a read-only bind that a broker socket
+inside the selected tree is harmless; qualify each mounted tree or refuse it.
+The host must protect selected roots from hostile same-user replacement during
+validation and dispatch. The host owns
 bounded snapshot creation and the changed-file manifest. For a Git workspace,
 the initial view omits Git-ignored paths and special filesystem entries, reports
 those omissions, and rejects symlinks until their target and import semantics

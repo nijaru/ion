@@ -272,6 +272,18 @@ private artifacts for reconciliation. The CLI has no automatic reconciliation
 for that case yet. Native macOS `exec` is unavailable; Linux command success
 does not qualify the first cross-platform prerelease.
 
+For Rust work on Linux, pass `--exec-rust-toolchain <toolchain-root>` with
+`--enable-exec`. Ion mounts that selected directory read-only at `/toolchain`
+and uses its `cargo` and `rustc` with a private writable Cargo home and network
+disabled. `--exec-cargo-registry <cargo-home>/registry` additionally exposes a
+selected cached registry read-only for offline dependencies. Choose roots that
+contain only toolchain/cache content intended for the command to read; Ion
+rejects roots with sockets, FIFOs, devices or nested mounts and never mounts
+Cargo credentials or configuration automatically. The selected root identities
+are frozen in the Session's `exec` binding. The live Fedora Rust check compiled
+a cached `serde` dependency, fixed a failing test and passed an independent
+`cargo test --offline` run.
+
 A synthetic OpenRouter Chat Completions read-and-answer exchange passed on
 2026-09-25. On 2026-09-26, a local Qwen model over loopback completed isolated
 headless read/edit/read and list/read/create/read tasks; externally inspected
