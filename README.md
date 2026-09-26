@@ -79,8 +79,9 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v8) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: native edit/exec backends, a user-facing approval client and host
-authentication/policy backend, parallel tool dispatch, context compaction/forking,
+Still missing: a headless native-edit binding and qualified macOS/Linux native exec,
+a user-facing approval client and host authentication/policy backend, parallel tool
+dispatch, context compaction/forking,
 Steer/InteractionReply placement, live qualification of both wire adapters,
 the terminal UI, and workers.
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
@@ -99,8 +100,20 @@ The host must keep that namespace outside agent-writable workspace state and pro
 its filesystem ancestry from untrusted same-user processes. Session ownership locks
 resolve database symlink aliases; hard-linked database aliases are refused.
 A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
-persisted tool exchange. It is serial, not an OS sandbox: the host must protect the
-workspace namespace against concurrent renames and enforce its promised read authority.
+persisted tool exchange. Read results now include the host registry's before/after-
+checked workspace revision, under the frozen `native-read-v2` binding; old v1
+bindings cannot silently receive the revised result. It is serial, not an OS
+sandbox: the host must protect the workspace namespace against concurrent renames
+and enforce its promised read authority.
+The library also has an experimental single-file `NativeEditBoundary` on registry
+format v5, with protected private staging, pre-create allocation, immutable receipts,
+joined worker custody, durable rename phases and discoverable cleanup obligations.
+Mac and Linux ARM guest synthetic process-loss/Session recovery tests pass; they do
+not prove host confinement or power-loss durability. A trusted host must continuously
+protect the registry, custody inode and staging namespace from arbitrary same-user
+writers; `0700` and file locks alone do not establish that protection. Blocked
+allocations have no force-clear. No headless edit tool or live-model edit task has
+been qualified; registry v3/v4 files are refused without migration.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
 with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient

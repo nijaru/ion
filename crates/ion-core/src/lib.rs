@@ -13,6 +13,7 @@ mod entry;
 mod id;
 mod input;
 mod model;
+mod native_edit;
 mod native_read;
 mod observation;
 pub mod openai_compatible;
@@ -54,6 +55,9 @@ pub use model::{
     CostQuote, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
     ProviderFailureEvidence, ProviderFingerprint, ProviderStartReceipt, RequestManifest,
     StepDisposition, StepPurpose,
+};
+pub use native_edit::{
+    MAX_NATIVE_EDIT_BYTES, NativeEditBoundary, NativeEditError, native_edit_binding,
 };
 pub use native_read::{
     MAX_NATIVE_READ_BYTES, NativeReadBoundary, NativeReadError, native_read_binding,

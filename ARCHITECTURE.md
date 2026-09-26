@@ -560,6 +560,22 @@ For native single-file edit, stage verified replacement content in a host-owned,
 rename-compatible filesystem namespace **outside** the agent-writable workspace.
 The registry atomically admits an edit manifest and one immutable attempt receipt;
 staging and rename eligibility are separate durable facts, not replacement receipts.
+Under permanent worker/staging custody, an exact no-follow vacancy check and
+staging-parent durability barrier precede a receipt/slot/physical-parent/registry-
+incarnation-bound allocation. Only a confirmed allocation permits exclusive stage
+creation; it reserves bounded cleanup capacity even after Session loss or terminal
+settlement. `Staged` adds physical identity, content and durability evidence for
+rename eligibility. Allocation alone authenticates partial-write crash survivors
+**only while the host continuously protects the namespace**, including against
+same-user writers; permissions and advisory locks are not confinement. A witnessed
+collision blocks cleanup rather than adopting or deleting the occupant. If that
+block cannot be durably recorded/read back, stop namespace recovery: a later
+unrecorded partial-stage occupant is no longer authenticated.
+Disposal is independently discoverable after terminal settlement. Commit disposal
+authority only after phase-compatible terminal proof, before unlink; sync the
+staging parent even after an absent-name retry, then durably retire quota. An
+armed unknown never gains cleanup permission merely to free capacity. Failed
+cleanup retains the obligation without changing effect truth or Session evidence.
 The owning, joined worker may settle an abort as `NoMutation` only if it can attest
 it never invoked rename and all staging was host-internal. After durable rename
 admission, recovery cannot infer nonexecution from an absent visible replacement:

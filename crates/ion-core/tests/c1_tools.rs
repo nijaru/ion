@@ -621,6 +621,154 @@ async fn native_read_settles_a_durable_tool_exchange_and_reopens_without_rereadi
 }
 
 #[tokio::test]
+async fn native_edit_settles_session_exchange_with_registry_minted_receipt() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::env::temp_dir().join(format!("ion-edit-exchange-{}", SessionId::new()));
+    let workspace = dir.join("workspace");
+    let host = dir.join("host");
+    let stage = host.join("stage");
+    for path in [&workspace, &host, &stage] {
+        std::fs::create_dir_all(path).unwrap();
+    }
+    std::fs::set_permissions(&stage, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let stage = stage.canonicalize().unwrap();
+    std::fs::write(workspace.join("x"), "before").unwrap();
+    let mut registry = workspace_registry::WorkspaceRegistry::open(&host).unwrap();
+    let binding = registry.bind("w", &workspace, "native-v1").unwrap();
+    let editor = Arc::new(NativeEditBoundary::new(&registry, binding.clone(), 64, &stage).unwrap());
+    editor.set_live_authority(LiveToolAuthority::Allow);
+    let mut cfg = config();
+    cfg.workspace = binding.clone();
+    cfg.authority.workspace_mutation = true;
+    cfg.tools = vec![editor.tool_binding().clone()];
+    cfg.initial_tools = vec![editor.tool_binding().id.clone()];
+    let (session, db, turn) = setup(cfg).await;
+    let model = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        calls: 1,
+        arguments: json!({"path":"x", "expected_content":"before", "old_text":"before", "new_text":"after", "workspace_revision": registry.revision(&binding).unwrap()}),
+    });
+    // Lose terminal delivery, but retain the registry receipt in Session evidence.
+    struct LoseReply(Arc<NativeEditBoundary>, AtomicBool);
+    impl ToolBoundary for LoseReply {
+        fn binding(&self) -> ToolBinding {
+            self.0.binding()
+        }
+        fn executor(&self) -> SemanticCompatibilityId {
+            self.0.executor()
+        }
+        fn prepare(&self, value: serde_json::Value) -> Result<PreparedAction, ToolBoundaryError> {
+            self.0.prepare(value)
+        }
+        fn live_authority(
+            &self,
+            action: &PreparedAction,
+            workspace: &WorkspaceBinding,
+        ) -> LiveToolAuthority {
+            self.0.live_authority(action, workspace)
+        }
+        fn execute<'a>(
+            &'a self,
+            execution: ToolExecution,
+            stop: CancellationToken,
+        ) -> BoxFuture<'a, ToolAttemptState> {
+            Box::pin(async move {
+                match self.0.execute(execution, stop).await {
+                    ToolAttemptState::Settled { receipt, .. } => ToolAttemptState::Indeterminate {
+                        reason: "lost terminal delivery".into(),
+                        receipt,
+                    },
+                    state => state,
+                }
+            })
+        }
+        fn reconcile<'a>(
+            &'a self,
+            execution: ToolExecution,
+            attempt: ToolAttempt,
+        ) -> BoxFuture<'a, ToolAttemptState> {
+            if self.1.load(Ordering::SeqCst) {
+                self.0.reconcile(execution, attempt)
+            } else {
+                Box::pin(async move { attempt.state })
+            }
+        }
+    }
+    let backend = Arc::new(LoseReply(editor, AtomicBool::new(false)));
+    let tools = ToolBoundaries::new([Arc::clone(&backend) as Arc<dyn ToolBoundary>]).unwrap();
+    assert_eq!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools.clone(), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::RecoveryRequired)
+    );
+    let step = tool_step(&session).await;
+    let uncertain = session.handle().tool_records(step).await.unwrap();
+    let ToolAttemptState::Indeterminate {
+        receipt: Some(saved),
+        ..
+    } = &uncertain.attempts[0].state
+    else {
+        panic!("receipt must be persisted before reconciliation")
+    };
+    backend.1.store(true, Ordering::SeqCst);
+    session
+        .handle()
+        .reconcile_tools(step, tools.clone())
+        .await
+        .unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools, DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let before = session.handle().tool_records(step).await.unwrap();
+    assert!(
+        matches!(&before.attempts[0].state, ToolAttemptState::Settled { receipt: Some(r), .. } if r == saved)
+    );
+    assert_eq!(before.attempts.len(), 1);
+    match &before.attempts[0].state {
+        ToolAttemptState::Settled {
+            result,
+            effect,
+            receipt: Some(receipt),
+            ..
+        } => {
+            assert!(!result.is_error);
+            assert_eq!(
+                *effect,
+                EffectSummary::KnownChanges {
+                    paths: vec!["x".into()]
+                }
+            );
+            let r: workspace_registry::RegistryReceipt =
+                serde_json::from_value(receipt.data.clone()).unwrap();
+            assert!(r.identity.starts_with("edit-attempt-v2:"));
+        }
+        other => panic!("native edit not settled: {other:?}"),
+    }
+    assert_eq!(
+        std::fs::read_to_string(workspace.join("x")).unwrap(),
+        "after"
+    );
+    assert_eq!(registry.revision(&binding).unwrap().files, 1);
+    assert_eq!(std::fs::read_dir(&stage).unwrap().count(), 0);
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(&workspace).unwrap();
+    let reopened = Session::open(&db).await.unwrap();
+    assert_eq!(reopened.handle().tool_records(step).await.unwrap(), before);
+    reopened.close().await.unwrap();
+    drop(registry);
+    std::fs::remove_dir_all(dir).unwrap();
+    std::fs::remove_file(db).unwrap();
+}
+
+#[tokio::test]
 async fn authoritative_negative_recovery_creates_distinct_attempt_without_repreparing() {
     let (s, path, turn) = setup(config()).await;
     let m = model();

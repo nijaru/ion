@@ -8,6 +8,7 @@ use std::{
     fs::File,
     io::{Read, Seek, SeekFrom},
     os::{fd::OwnedFd, unix::fs::MetadataExt},
+    path::PathBuf,
     sync::{
         Arc,
         atomic::{AtomicU8, Ordering},
@@ -27,7 +28,7 @@ use crate::{
     ApprovalState, EgressRealm, LiveToolAuthority, PreparedAction, SemanticCompatibilityId,
     ToolAttemptState, ToolAuthority, ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError,
     ToolConcurrency, ToolExecution, ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
-    workspace_registry::{RegistryError, WorkspaceRegistry},
+    workspace_registry::{RegistryError, WorkspaceRegistry, WorkspaceRevision},
 };
 
 /// Hard maximum for one configured file range before the smaller inline-result limit.
@@ -36,7 +37,9 @@ pub const MAX_NATIVE_READ_BYTES: usize = crate::MAX_TOOL_RECORD_BYTES;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_CONCURRENT_READS: usize = 4;
 const READ_CHUNK_BYTES: usize = 8192;
-const IMPLEMENTATION_ID: &str = "native-read-v1";
+// The result now includes a registry revision for exact-base native edit; old
+// read-v1 Sessions must not silently receive a different frozen tool result.
+const IMPLEMENTATION_ID: &str = "native-read-v2";
 const AUTHORITY_ALLOW: u8 = 0;
 const AUTHORITY_ASK: u8 = 1;
 const AUTHORITY_DENY: u8 = 2;
@@ -49,6 +52,7 @@ pub struct NativeReadBoundary {
     root: File,
     root_identity: RootIdentity,
     max_read_bytes: usize,
+    registry_directory: PathBuf,
     live_authority: Arc<AtomicU8>,
     permits: Arc<Semaphore>,
 }
@@ -97,6 +101,7 @@ impl NativeReadBoundary {
             root,
             root_identity,
             max_read_bytes,
+            registry_directory: registry.directory().to_path_buf(),
             live_authority: Arc::new(AtomicU8::new(AUTHORITY_DENY)),
             permits: Arc::new(Semaphore::new(MAX_CONCURRENT_READS)),
         })
@@ -274,6 +279,7 @@ impl ToolBoundary for NativeReadBoundary {
                 root,
                 root_path: self.workspace.canonical_root.clone(),
                 root_identity: self.root_identity,
+                registry_directory: self.registry_directory.clone(),
                 live_authority: Arc::clone(&self.live_authority),
                 executor: self.executor.clone(),
                 binding: self.binding.clone(),
@@ -299,7 +305,7 @@ pub fn native_read_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolSpec {
             name: "read".into(),
             description:
-                "Read a bounded byte range from a regular file under the bound workspace root."
+                "Read a bounded byte range from a regular workspace file; returns the current workspace_revision needed for exact-base edits."
                     .into(),
             input_schema: json!({
                 "type": "object",
@@ -411,12 +417,22 @@ fn valid_relative_path(path: &str) -> bool {
 
 fn content_budget(output_limit: usize, offset: u64) -> Option<usize> {
     let maximum = output_limit.min(crate::MAX_TOOL_RECORD_BYTES);
+    // Reserve the complete worst-case v2 envelope, including a quota-limited
+    // capture and full-width revision counters, before admitting content bytes.
     let baseline = read_result(
         String::new(),
         offset,
         u64::MAX,
         false,
-        crate::OutputCapture::CompleteInline,
+        crate::OutputCapture::Incomplete {
+            reason: crate::OutputLoss::Quota,
+            retained_bytes: u64::MAX,
+            observed_bytes: Some(u64::MAX),
+        },
+        WorkspaceRevision {
+            files: u64::MAX,
+            repository: u64::MAX,
+        },
     );
     let baseline_size = serde_json::to_vec(&baseline).ok()?.len();
     maximum
@@ -460,10 +476,14 @@ fn read_result(
     bytes_read: u64,
     has_more: bool,
     capture: crate::OutputCapture,
+    workspace_revision: WorkspaceRevision,
 ) -> ToolResult {
     ToolResult {
         value: json!({"content": content, "offset": offset, "bytes_read": bytes_read,
-            "has_more": has_more}),
+        "has_more": has_more, "workspace_revision": {
+            "files": workspace_revision.files,
+            "repository": workspace_revision.repository,
+        }}),
         is_error: false,
         capture,
     }
@@ -514,6 +534,7 @@ struct ReadJob {
     root: File,
     root_path: String,
     root_identity: RootIdentity,
+    registry_directory: PathBuf,
     live_authority: Arc<AtomicU8>,
     executor: SemanticCompatibilityId,
     binding: ToolBinding,
@@ -548,6 +569,14 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
         return not_started("read cancelled before admission");
     }
 
+    let registry = match WorkspaceRegistry::open(&job.registry_directory) {
+        Ok(registry) => registry,
+        Err(_) => return settled_error("workspace revision is unavailable", job.output_limit),
+    };
+    let workspace_revision = match registry.revision(&job.execution.workspace) {
+        Ok(revision) => revision,
+        Err(_) => return settled_error("workspace revision is unavailable", job.output_limit),
+    };
     let mut file = match open_relative_regular_file(&job.root, &job.arguments.path) {
         Ok(file) => file,
         Err(_) => {
@@ -620,12 +649,19 @@ fn run_read(job: ReadJob) -> ToolAttemptState {
     } else {
         crate::OutputCapture::CompleteInline
     };
+    if !matches!(
+        registry.revision(&job.execution.workspace),
+        Ok(current) if current == workspace_revision
+    ) {
+        return settled_error("workspace changed during read", job.output_limit);
+    }
     let result = read_result(
         content,
         job.arguments.offset,
         bytes_read,
         truncated,
         capture,
+        workspace_revision,
     );
     if serde_json::to_vec(&result).map_or(true, |encoded| {
         encoded.len() > job.output_limit.min(crate::MAX_TOOL_RECORD_BYTES)
@@ -753,12 +789,12 @@ mod tests {
     impl Drop for TestRoot {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.0);
+            let _ = fs::remove_dir_all(self.0.with_extension("host-registry"));
         }
     }
 
     fn boundary(root: &Path, max_read_bytes: usize) -> NativeReadBoundary {
-        let registry_root = TestRoot::new();
-        let mut registry = WorkspaceRegistry::open(registry_root.path()).unwrap();
+        let mut registry = WorkspaceRegistry::open(root.with_extension("host-registry")).unwrap();
         let workspace = registry.bind("test-workspace", root, "local-v1").unwrap();
         let boundary = NativeReadBoundary::new(&registry, workspace, max_read_bytes).unwrap();
         boundary.set_live_authority(LiveToolAuthority::Allow);
@@ -1020,6 +1056,27 @@ mod tests {
         ));
         assert!(!result.value["content"].as_str().unwrap().is_empty());
         assert!(serde_json::to_vec(&result).unwrap().len() <= 512);
+    }
+
+    #[tokio::test]
+    async fn revisioned_read_truncates_before_escaped_content_overflows_its_envelope() {
+        let root = TestRoot::new();
+        fs::write(root.path().join("nul.txt"), "\0".repeat(5439)).unwrap();
+        let boundary = boundary(root.path(), 6000);
+        let result = result(read(&boundary, json!({"path":"nul.txt", "limit":5439}), 32_768).await);
+        assert!(
+            !result.is_error,
+            "a fitting prefix must not become an error"
+        );
+        assert!(matches!(
+            result.capture,
+            crate::OutputCapture::Incomplete { .. }
+        ));
+        assert_eq!(
+            result.value["workspace_revision"],
+            json!({"files":0,"repository":0})
+        );
+        assert!(serde_json::to_vec(&result).unwrap().len() <= 32_768);
     }
 
     #[tokio::test]
