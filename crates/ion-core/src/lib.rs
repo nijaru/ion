@@ -4,6 +4,8 @@ pub mod anthropic;
 mod artifact;
 mod blob;
 mod bounded_json;
+#[cfg(any(target_os = "linux", test))]
+mod command_workspace;
 mod config;
 mod conversation;
 mod digest;

@@ -13,10 +13,6 @@
 
 #![cfg(target_os = "linux")]
 
-mod import;
-mod snapshot;
-mod workspace_view;
-
 use std::{
     fs::{self, File},
     io::{BufRead, BufReader, Read, Write},
@@ -52,9 +48,10 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use self::{
+use crate::command_workspace::{
     import::{ImportFailure, apply_import, persist_import_plan, plan_import, remove_import_plan},
-    workspace_view::WorkspaceView,
+    snapshot,
+    workspace_view::{self, WorkspaceView},
 };
 use crate::{
     ApprovalState, EffectSummary, EgressRealm, LiveToolAuthority, OutputCapture, OutputLoss,

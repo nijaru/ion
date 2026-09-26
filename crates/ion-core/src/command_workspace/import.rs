@@ -20,13 +20,13 @@ use thiserror::Error;
 
 use super::snapshot::{BaseEntry, BaseKind};
 
-pub(super) const MAX_IMPORT_CHANGES: usize = 32;
-pub(super) const MAX_IMPORT_BYTES: u64 = 64 * 1024 * 1024;
+pub(crate) const MAX_IMPORT_CHANGES: usize = 32;
+pub(crate) const MAX_IMPORT_BYTES: u64 = 64 * 1024 * 1024;
 const MAX_IMPORT_EFFECT_BYTES: usize = 8 * 1024;
 const MAX_IMPORT_PLAN_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) enum ImportChange {
+pub(crate) enum ImportChange {
     CreateDirectory {
         path: String,
         mode: u32,
@@ -47,7 +47,7 @@ pub(super) enum ImportChange {
 }
 
 impl ImportChange {
-    pub(super) fn path(&self) -> &str {
+    pub(crate) fn path(&self) -> &str {
         match self {
             Self::CreateDirectory { path, .. }
             | Self::PutFile { path, .. }
@@ -58,7 +58,7 @@ impl ImportChange {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub(super) struct ImportPlan {
+pub(crate) struct ImportPlan {
     /// Ordered so parents exist before file publication and empty directories
     /// are removed after their contents.
     pub changes: Vec<ImportChange>,
@@ -69,7 +69,7 @@ pub(super) struct ImportPlan {
 }
 
 #[derive(Debug, Error, PartialEq, Eq)]
-pub(super) enum ImportPlanError {
+pub(crate) enum ImportPlanError {
     #[error("private workspace manifest contains a duplicate or invalid path")]
     InvalidManifest,
     #[error("command changed a file into a directory or vice versa at {0}")]
@@ -81,7 +81,7 @@ pub(super) enum ImportPlanError {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(super) enum ImportFailure {
+pub(crate) enum ImportFailure {
     /// No visible change was attempted; the command's private changes remain
     /// unpublished.
     Preflight(String),
@@ -102,7 +102,7 @@ pub(super) enum ImportFailure {
 /// Record the exact bounded publication intent before the first live change.
 /// The file remains in host custody until the registry has durable terminal
 /// evidence, so an owner crash retains both the plan and the private output.
-pub(super) fn persist_import_plan(
+pub(crate) fn persist_import_plan(
     stage: &File,
     name: &str,
     plan: &ImportPlan,
@@ -131,7 +131,7 @@ pub(super) fn persist_import_plan(
     stage.sync_all()
 }
 
-pub(super) fn remove_import_plan(stage: &File, name: &str) -> std::io::Result<()> {
+pub(crate) fn remove_import_plan(stage: &File, name: &str) -> std::io::Result<()> {
     unlinkat(stage, name, AtFlags::empty())?;
     stage.sync_all()
 }
@@ -141,7 +141,7 @@ pub(super) fn remove_import_plan(stage: &File, name: &str) -> std::io::Result<()
 /// directories. `stage` must be protected, on the live root's filesystem, and
 /// outside the command view. No automatic recovery or cleanup of unknown stages
 /// is attempted after owner loss.
-pub(super) fn apply_import(
+pub(crate) fn apply_import(
     plan: &ImportPlan,
     base_manifest: &[BaseEntry],
     live_root: &File,
@@ -502,7 +502,7 @@ fn open_directory(root: &File, path: &str) -> std::io::Result<File> {
     Ok(current)
 }
 
-pub(super) fn plan_import(
+pub(crate) fn plan_import(
     before: &[BaseEntry],
     after: &[BaseEntry],
 ) -> Result<ImportPlan, ImportPlanError> {
@@ -666,7 +666,7 @@ fn depth(path: &str) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::native_exec::snapshot::{SnapshotLimits, build_snapshot};
+    use crate::command_workspace::snapshot::{SnapshotLimits, build_snapshot};
     use std::{
         fs,
         os::unix::fs::PermissionsExt,
@@ -754,6 +754,31 @@ mod tests {
 
     fn file(path: &str, bytes: &str) -> BaseEntry {
         entry(path, BaseKind::RegularFile, 0o644, bytes)
+    }
+
+    #[test]
+    fn import_plan_is_persisted_without_clobber_and_removed() {
+        let fixture = Fixture::new();
+        let stage = File::open(&fixture.private).unwrap();
+        let plan = ImportPlan {
+            changes: vec![ImportChange::CreateDirectory {
+                path: "created".into(),
+                mode: 0o700,
+            }],
+            copied_bytes: 0,
+            git_metadata_changed: false,
+        };
+        persist_import_plan(&stage, "attempt-1", &plan).unwrap();
+        let encoded = fs::read(fixture.private.join("attempt-1")).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<serde_json::Value>(&encoded).unwrap()["changes"][0]["CreateDirectory"]
+                ["path"],
+            "created"
+        );
+        assert!(persist_import_plan(&stage, "attempt-1", &plan).is_err());
+        assert!(persist_import_plan(&stage, "../escape", &plan).is_err());
+        remove_import_plan(&stage, "attempt-1").unwrap();
+        assert!(!fixture.private.join("attempt-1").exists());
     }
 
     #[test]

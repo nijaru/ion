@@ -18,7 +18,7 @@ use super::snapshot::{
 const MAX_IGNORE_OUTPUT: u64 = 256 * 1024;
 const GIT_DEADLINE: Duration = Duration::from_secs(5);
 
-pub(super) const VIEW_LIMITS: SnapshotLimits = SnapshotLimits {
+pub(crate) const VIEW_LIMITS: SnapshotLimits = SnapshotLimits {
     max_entries: 100_000,
     max_bytes: 2 * 1024 * 1024 * 1024,
     max_depth: 64,
@@ -28,7 +28,7 @@ pub(super) const VIEW_LIMITS: SnapshotLimits = SnapshotLimits {
 };
 
 #[derive(Debug, Error)]
-pub(super) enum ViewError {
+pub(crate) enum ViewError {
     #[error("Git ignored-path discovery failed or exceeded its time/size bound")]
     GitIgnore,
     #[error("invalid command workspace identity")]
@@ -39,7 +39,7 @@ pub(super) enum ViewError {
     Io(#[from] std::io::Error),
 }
 
-pub(super) struct WorkspaceView {
+pub(crate) struct WorkspaceView {
     parent: File,
     command_leaf: String,
     output_leaf: String,
