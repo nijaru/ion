@@ -8,7 +8,7 @@ use ion_ai::{
 };
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
-    ConversationConfig, DriveExit, EgressRealm, InputBody, InputMode, InputSender,
+    ConversationConfig, CostQuote, DriveExit, EgressRealm, InputBody, InputMode, InputSender,
     ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelStart,
     ObservationError, ParkReason, ProviderAdmissionError, ProviderBinding, ProviderBindingId,
     ProviderCapabilities, ProviderStartReceipt, RequestKey, ReturnedModelPolicy,
@@ -643,6 +643,298 @@ async fn server_route_allows_only_exact_frozen_returned_model_names() {
 }
 
 #[tokio::test]
+async fn priced_attempt_reserves_the_entire_host_bound_before_provider_start() {
+    let (dir, path) = database("priced-cap");
+    let mut configured = config();
+    configured.providers[0].returned_model = ReturnedModelPolicy::ServerRoute {
+        allowed_family: vec!["test".into(), "alternate".into()],
+    };
+    configured.limits.max_cost_microusd = Some(6);
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = WaitingBoundary::new();
+    let quote = CostQuote {
+        revision: "frozen-route-v1".into(),
+        reserved_microusd: 6,
+    };
+    let expected = quote.clone();
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            move |binding: &ProviderBinding,
+                  request: &ion_core::SemanticRequest,
+                  effect_key: &str,
+                  actual_fingerprint: &ion_core::ProviderFingerprint| {
+                assert_eq!(binding.id.as_str(), "scripted");
+                assert_eq!(
+                    binding.returned_model,
+                    ReturnedModelPolicy::ServerRoute {
+                        allowed_family: vec!["test".into(), "alternate".into()],
+                    }
+                );
+                assert_eq!(request.messages.len(), 1);
+                assert!(!effect_key.is_empty());
+                assert_eq!(
+                    actual_fingerprint.digest,
+                    fingerprint(request, effect_key).unwrap()
+                );
+                Some(quote.clone())
+            },
+        ));
+    let drive_handle = handle.clone();
+    let task = tokio::spawn(async move { drive_handle.resume(turn, boundaries).await });
+    boundary.wait_started().await;
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert_eq!(snapshot.model_attempts.len(), 1);
+    assert_eq!(snapshot.model_attempts[0].cost_quote, Some(expected));
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        6
+    );
+    let watch = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: snapshot_request(&session),
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    handle.cancel_turn(turn).await.unwrap();
+    task.await.unwrap().unwrap();
+    let mut terminal_reservation = None;
+    loop {
+        let receipt = match watch.watch.try_recv() {
+            Ok(receipt) => receipt,
+            Err(ObservationError::Empty) => break,
+            Err(error) => panic!("watch failed: {error}"),
+        };
+        for change in receipt.update.changes {
+            if let SessionChange::Turn(turn) = change
+                && turn.outcome.is_some()
+            {
+                terminal_reservation = Some(turn.budget.reserved_cost_microusd);
+            }
+        }
+    }
+    assert_eq!(
+        terminal_reservation,
+        Some(6),
+        "unknown usage cannot release its bound"
+    );
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn monetary_bound_over_ceiling_refuses_intent_without_a_provider_call() {
+    let (dir, path) = database("priced-over-cap");
+    let mut configured = config();
+    configured.limits.max_cost_microusd = Some(5);
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::new();
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            |_: &ProviderBinding,
+             _: &ion_core::SemanticRequest,
+             _: &str,
+             _: &ion_core::ProviderFingerprint| {
+                Some(CostQuote {
+                    revision: "route-v1".into(),
+                    reserved_microusd: 6,
+                })
+            },
+        ));
+    assert_eq!(
+        handle.resume(turn, boundaries).await.unwrap(),
+        DriveExit::Parked(ParkReason::MonetaryCapacity)
+    );
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert!(snapshot.model_attempts.is_empty());
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        0
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn explicit_zero_cost_quote_is_not_treated_as_missing_pricing() {
+    let (dir, path) = database("explicit-free-quote");
+    let mut configured = config();
+    configured.limits.max_cost_microusd = Some(1);
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::new();
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            |_: &ProviderBinding,
+             _: &ion_core::SemanticRequest,
+             _: &str,
+             _: &ion_core::ProviderFingerprint| {
+                Some(CostQuote {
+                    revision: "free-route-v1".into(),
+                    reserved_microusd: 0,
+                })
+            },
+        ));
+    let established = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: snapshot_request(&session),
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    assert!(matches!(
+        handle.resume(turn, boundaries).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let mut quoted_intent = false;
+    loop {
+        let receipt = match established.watch.try_recv() {
+            Ok(receipt) => receipt,
+            Err(ObservationError::Empty) => break,
+            Err(error) => panic!("watch failed: {error}"),
+        };
+        for change in &receipt.update.changes {
+            if let SessionChange::ModelAttempt(attempt) = change
+                && matches!(attempt.state, ModelAttemptState::IntentCommitted { .. })
+                && attempt.cost_quote.as_ref().is_some_and(|quote| {
+                    quote.revision == "free-route-v1" && quote.reserved_microusd == 0
+                })
+            {
+                quoted_intent = true;
+            }
+        }
+    }
+    assert!(quoted_intent);
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn malformed_host_quote_fails_before_provider_start_or_reservation() {
+    for revision in ["", "control\ncharacter", &"x".repeat(161)] {
+        let (dir, path) = database("malformed-price");
+        let mut configured = config();
+        configured.limits.max_cost_microusd = Some(7);
+        let session = Session::create(&path, configured).await.unwrap().session;
+        let (handle, turn) = started_turn(&session, "one", "hello").await;
+        let boundary = CompleteBoundary::new();
+        let quote = CostQuote {
+            revision: revision.into(),
+            reserved_microusd: 1,
+        };
+        let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+            .with_cost_quoter(Arc::new(
+                move |_: &ProviderBinding,
+                      _: &ion_core::SemanticRequest,
+                      _: &str,
+                      _: &ion_core::ProviderFingerprint| Some(quote.clone()),
+            ));
+        assert!(matches!(
+            handle.resume(turn, boundaries).await.unwrap(),
+            DriveExit::Faulted { .. }
+        ));
+        let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+        assert!(snapshot.model_attempts.is_empty());
+        assert_eq!(
+            snapshot
+                .unfinished_turn
+                .unwrap()
+                .budget
+                .reserved_cost_microusd,
+            0
+        );
+        assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+        session.close().await.unwrap();
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn failed_priced_budget_update_rolls_back_intent_and_reservation() {
+    let (dir, path) = database("priced-intent-fault");
+    let mut configured = config();
+    configured.limits.max_cost_microusd = Some(7);
+    let session = Session::create(&path, configured).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = CompleteBoundary::new();
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            |_: &ProviderBinding,
+             _: &ion_core::SemanticRequest,
+             _: &str,
+             _: &ion_core::ProviderFingerprint| {
+                Some(CostQuote {
+                    revision: "route-v1".into(),
+                    reserved_microusd: 7,
+                })
+            },
+        ));
+    let injector = rusqlite::Connection::open(&path).unwrap();
+    injector
+        .execute_batch(
+            "CREATE TRIGGER fail_priced_budget BEFORE UPDATE OF budget ON turns
+        WHEN json_extract(NEW.budget, '$.reserved_cost_microusd') > 0
+        BEGIN SELECT RAISE(ABORT, 'injected priced budget write failure'); END;",
+        )
+        .unwrap();
+    assert!(matches!(
+        handle.resume(turn, boundaries).await.unwrap(),
+        DriveExit::Faulted { .. }
+    ));
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert!(snapshot.model_attempts.is_empty());
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        0
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+    injector
+        .execute_batch("DROP TRIGGER fail_priced_budget;")
+        .unwrap();
+    drop(injector);
+    session.close().await.unwrap();
+    let reopened = Session::open(&path).await.unwrap();
+    let snapshot = reopened
+        .handle()
+        .snapshot(snapshot_request(&reopened))
+        .await
+        .unwrap();
+    assert!(snapshot.model_attempts.is_empty());
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        0
+    );
+    reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
 async fn monetary_ceiling_without_a_host_quote_never_dispatches() {
     let (dir, path) = database("unpriced-cap");
     let mut configured = config();
@@ -657,7 +949,7 @@ async fn monetary_ceiling_without_a_host_quote_never_dispatches() {
     .unwrap();
     assert_eq!(
         handle.resume(turn, boundaries.clone()).await.unwrap(),
-        DriveExit::Parked(ParkReason::Capacity)
+        DriveExit::Parked(ParkReason::CostQuoteUnavailable)
     );
     let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
     assert!(snapshot.model_attempts.is_empty());
@@ -681,7 +973,7 @@ async fn monetary_ceiling_without_a_host_quote_never_dispatches() {
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
     assert_eq!(
         reopened.handle().resume(turn, boundaries).await.unwrap(),
-        DriveExit::Parked(ParkReason::Capacity)
+        DriveExit::Parked(ParkReason::CostQuoteUnavailable)
     );
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
     reopened.close().await.unwrap();
@@ -907,10 +1199,9 @@ async fn revocation_after_intent_records_one_not_started_attempt_without_network
 #[tokio::test]
 async fn failed_not_started_commit_fences_without_starting_or_erasing_intent() {
     let (dir, path) = database("revocation-evidence-fault");
-    let session = Session::create(&path, config())
-        .await
-        .expect("create")
-        .session;
+    let mut cfg = config();
+    cfg.limits.max_cost_microusd = Some(7);
+    let session = Session::create(&path, cfg).await.expect("create").session;
     let (handle, turn) = started_turn(&session, "one", "hello").await;
     let boundary = CompleteBoundary::new();
     let admission = Arc::new(AdmissionControl {
@@ -919,12 +1210,25 @@ async fn failed_not_started_commit_fences_without_starting_or_erasing_intent() {
         error: ProviderAdmissionError::EgressDenied,
     });
     let boundaries = ModelBoundaries::new([boundary.clone() as Arc<dyn ModelBoundary>], admission)
-        .expect("boundaries");
+        .expect("boundaries")
+        .with_cost_quoter(Arc::new(
+            |_: &ProviderBinding,
+             _: &ion_core::SemanticRequest,
+             _: &str,
+             _: &ion_core::ProviderFingerprint| {
+                Some(CostQuote {
+                    revision: "route-v1".into(),
+                    reserved_microusd: 7,
+                })
+            },
+        ));
     let injector = rusqlite::Connection::open(&path).expect("injector");
     injector
         .execute_batch(
-            "CREATE TRIGGER fail_not_started BEFORE UPDATE ON model_attempts
-         BEGIN SELECT RAISE(ABORT, 'injected evidence failure'); END;",
+            "CREATE TRIGGER fail_not_started_release BEFORE UPDATE OF budget ON turns
+         WHEN json_extract(OLD.budget, '$.reserved_cost_microusd') = 7
+          AND json_extract(NEW.budget, '$.reserved_cost_microusd') = 0
+         BEGIN SELECT RAISE(ABORT, 'injected reservation release failure'); END;",
         )
         .expect("inject fault");
     assert!(matches!(
@@ -938,12 +1242,21 @@ async fn failed_not_started_commit_fences_without_starting_or_erasing_intent() {
         .await
         .expect("snapshot");
     assert_eq!(before.model_attempts.len(), 1);
+    assert_eq!(
+        before
+            .unfinished_turn
+            .as_ref()
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        7
+    );
     assert!(matches!(
         before.model_attempts[0].state,
         ModelAttemptState::IntentCommitted { .. }
     ));
     injector
-        .execute_batch("DROP TRIGGER fail_not_started;")
+        .execute_batch("DROP TRIGGER fail_not_started_release;")
         .expect("remove fault");
     drop(injector);
     session.close().await.expect("close");
@@ -956,6 +1269,15 @@ async fn failed_not_started_commit_fences_without_starting_or_erasing_intent() {
         .expect("snapshot");
     assert_eq!(after.coverage, before.coverage);
     assert_eq!(after.model_attempts, before.model_attempts);
+    assert_eq!(
+        after
+            .unfinished_turn
+            .as_ref()
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        7
+    );
     assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
     // Lost negative evidence is not reconstructible from current availability.
     assert_eq!(
@@ -1105,6 +1427,57 @@ impl ModelBoundary for FallbackBoundary {
             }
         })
     }
+}
+
+#[tokio::test]
+async fn failed_primary_retains_its_quote_and_blocks_unaffordable_fallback() {
+    let (dir, path) = database("priced-fallback");
+    let mut cfg = fallback_config();
+    cfg.limits.max_cost_microusd = Some(10);
+    let session = Session::create(&path, cfg).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let primary = FailingBoundary::new(ProviderErrorKind::Authentication);
+    let fallback = FallbackBoundary::new();
+    let boundaries = allowed_boundaries([
+        primary.clone() as Arc<dyn ModelBoundary>,
+        fallback.clone() as Arc<dyn ModelBoundary>,
+    ])
+    .with_cost_quoter(Arc::new(
+        |binding: &ProviderBinding,
+         _: &ion_core::SemanticRequest,
+         _: &str,
+         _: &ion_core::ProviderFingerprint| {
+            Some(CostQuote {
+                revision: "route-v1".into(),
+                reserved_microusd: if binding.id.as_str() == "fallback" {
+                    4
+                } else {
+                    7
+                },
+            })
+        },
+    ));
+    assert_eq!(
+        handle.resume(turn, boundaries).await.unwrap(),
+        DriveExit::Parked(ParkReason::MonetaryCapacity)
+    );
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        7
+    );
+    assert!(
+        snapshot.model_attempts.is_empty(),
+        "fallback never committed an attempt"
+    );
+    assert_eq!(primary.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(fallback.starts.load(Ordering::SeqCst), 0);
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]
@@ -1963,4 +2336,128 @@ async fn authoritative_negative_is_durable_before_retry_attempt() {
 
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
+async fn authoritative_no_start_releases_only_its_captured_quote_before_retry() {
+    let (dir, path) = database("priced-negative");
+    let mut cfg = config();
+    cfg.providers[0].start_receipts = StartReceiptCapability::Authoritative;
+    cfg.limits.max_cost_microusd = Some(7);
+    let session = Session::create(&path, cfg).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "one", "hello").await;
+    let boundary = NegativeThenCompleteBoundary::new();
+    let first_quote = CostQuote {
+        revision: "route-v1".into(),
+        reserved_microusd: 7,
+    };
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            move |_: &ProviderBinding,
+                  _: &ion_core::SemanticRequest,
+                  _: &str,
+                  _: &ion_core::ProviderFingerprint| Some(first_quote.clone()),
+        ));
+    assert_eq!(
+        handle.resume(turn, boundaries.clone()).await.unwrap(),
+        DriveExit::Parked(ParkReason::RecoveryRequired)
+    );
+    let snapshot = handle.snapshot(snapshot_request(&session)).await.unwrap();
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        7
+    );
+    assert_eq!(
+        snapshot.model_attempts[0]
+            .cost_quote
+            .as_ref()
+            .unwrap()
+            .revision,
+        "route-v1"
+    );
+    session.close().await.unwrap();
+    let reopened = Session::open(&path).await.unwrap();
+    let handle = reopened.handle();
+    let restored = handle.snapshot(snapshot_request(&reopened)).await.unwrap();
+    assert_eq!(
+        restored
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        7
+    );
+    assert_eq!(
+        restored.model_attempts[0]
+            .cost_quote
+            .as_ref()
+            .unwrap()
+            .revision,
+        "route-v1"
+    );
+    let watch = handle
+        .snapshot_and_watch(WatchRequest {
+            snapshot: snapshot_request(&reopened),
+            queue: WatchQueueLimits {
+                max_receipts: 32,
+                max_bytes: 1024 * 1024,
+            },
+        })
+        .await
+        .unwrap();
+    let second_quote = CostQuote {
+        revision: "route-v2".into(),
+        reserved_microusd: 5,
+    };
+    let repriced = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>])
+        .with_cost_quoter(Arc::new(
+            move |_: &ProviderBinding,
+                  _: &ion_core::SemanticRequest,
+                  _: &str,
+                  _: &ion_core::ProviderFingerprint| Some(second_quote.clone()),
+        ));
+    assert!(matches!(
+        handle.resume(turn, repriced).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let mut released = false;
+    let mut retried = false;
+    loop {
+        let receipt = match watch.watch.try_recv() {
+            Ok(receipt) => receipt,
+            Err(ObservationError::Empty) => break,
+            Err(error) => panic!("watch failed: {error}"),
+        };
+        let no_start = receipt.update.changes.iter().any(|change| matches!(change,
+            SessionChange::ModelAttempt(attempt)
+            if attempt.ordinal == 1 && matches!(attempt.state, ModelAttemptState::NotStarted { .. })
+        ));
+        if no_start {
+            assert!(receipt.update.changes.iter().any(|change| matches!(change,
+                SessionChange::Turn(turn) if turn.budget.reserved_cost_microusd == 0
+            )));
+            released = true;
+        }
+        if receipt.update.changes.iter().any(|change| {
+            matches!(change,
+                SessionChange::ModelAttempt(attempt)
+                if attempt.ordinal == 2
+                    && matches!(attempt.state, ModelAttemptState::IntentCommitted { .. })
+                    && attempt.cost_quote.as_ref().is_some_and(|q| q.revision == "route-v2" && q.reserved_microusd == 5)
+            )
+        }) {
+            assert!(released, "release commits before retry intent");
+            assert!(receipt.update.changes.iter().any(|change| matches!(change,
+                SessionChange::Turn(turn) if turn.budget.reserved_cost_microusd == 5
+            )));
+            retried = true;
+        }
+    }
+    assert!(released && retried);
+    reopened.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }

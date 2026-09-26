@@ -65,7 +65,7 @@ pub use observation::{
 };
 pub use provider::{
     ApiKeySource, ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity,
-    ModelStart, ProviderAdmission, ProviderAdmissionError, StartReconciliation,
+    ModelStart, ProviderAdmission, ProviderAdmissionError, ProviderCostQuoter, StartReconciliation,
 };
 pub use request::{
     AssembledRequest, RequestError, SEMANTIC_REQUEST_ASSEMBLY_REVISION, SemanticRequest, assemble,

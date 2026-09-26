@@ -1610,6 +1610,56 @@ async fn complete_tool_exchange_prepares_once_and_continues() {
 }
 
 #[tokio::test]
+async fn completed_model_step_retains_its_quote_across_tool_continuation() {
+    let mut cfg = config();
+    cfg.limits.max_cost_microusd = Some(10);
+    let (session, _path, turn) = setup(cfg).await;
+    let model = model();
+    let tool = Arc::new(Tool::new(success()));
+    let boundaries = models(&model).with_cost_quoter(Arc::new(
+        |_: &ProviderBinding, _: &SemanticRequest, _: &str, _: &ProviderFingerprint| {
+            Some(CostQuote {
+                revision: "route-v1".into(),
+                reserved_microusd: 6,
+            })
+        },
+    ));
+    assert_eq!(
+        session
+            .handle()
+            .resume_with_tools(turn, boundaries, tools(&tool), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::MonetaryCapacity)
+    );
+    let snapshot = session
+        .handle()
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        snapshot
+            .unfinished_turn
+            .unwrap()
+            .budget
+            .reserved_cost_microusd,
+        6
+    );
+    assert!(
+        snapshot.model_attempts.is_empty(),
+        "second model step never got an attempt"
+    );
+    assert_eq!(model.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(tool.executes.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn response_ready_settles_mixed_unavailable_calls_without_inventing_actions() {
     let mut c = parallel_config();
     c.tools.push(alternate_binding());

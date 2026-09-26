@@ -11,8 +11,8 @@ use super::semantic::{
     Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_turn,
 };
 use crate::{
-    AttemptId, CommitReceipt, CommitSeq, Entry, EntryData, EntryId, InputId, ModelAttempt,
-    ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
+    AttemptId, CommitReceipt, CommitSeq, CostQuote, Entry, EntryData, EntryId, InputId,
+    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
     SessionUpdate, StepDisposition, StepId, StepPurpose, TranscriptContent, TranscriptMessage,
     TranscriptRole, TurnId, TurnOutcome, TurnPhase, TurnSettings,
 };
@@ -244,6 +244,7 @@ pub(super) fn commit_attempt_intent(
     step_id: StepId,
     generation: u64,
     timing: ModelAttemptTiming,
+    cost_quote: Option<CostQuote>,
 ) -> Result<CreatedModelAttempt, StoreError> {
     let transaction = connection.transaction()?;
     let step = load_step(&transaction, step_id)?;
@@ -282,6 +283,29 @@ pub(super) fn commit_attempt_intent(
         .checked_add(1)
         .ok_or_else(|| StoreError::Limit("model-attempt ordinal overflow".to_owned()))?;
 
+    if turn.environment.limits.max_cost_microusd.is_some() && cost_quote.is_none() {
+        return Err(StoreError::CostQuoteUnavailable);
+    }
+    let amount = match &cost_quote {
+        Some(quote) => {
+            if quote.revision.is_empty()
+                || quote.revision.len() > 160
+                || !quote.revision.bytes().all(|byte| byte.is_ascii_graphic())
+            {
+                return Err(StoreError::InvalidRequest(
+                    "invalid host cost quote revision".to_owned(),
+                ));
+            }
+            quote.reserved_microusd
+        }
+        None => 0,
+    };
+    let reserved = reserve_cost(
+        turn.budget.reserved_cost_microusd,
+        amount,
+        turn.environment.limits.max_cost_microusd,
+    )?;
+
     let mut sequence = Sequence::load(&transaction)?;
     let attempt_id: AttemptId = sequence.next()?;
     let commit: CommitSeq = sequence.next()?;
@@ -291,7 +315,7 @@ pub(super) fn commit_attempt_intent(
         ordinal,
         generation,
         timing,
-        cost_quote: None,
+        cost_quote,
         state: ModelAttemptState::IntentCommitted {
             start_receipt: None,
         },
@@ -302,6 +326,7 @@ pub(super) fn commit_attempt_intent(
         .model_attempts
         .checked_add(1)
         .ok_or_else(|| StoreError::Limit("turn model-attempt budget overflow".to_owned()))?;
+    turn.budget.reserved_cost_microusd = reserved;
     update_turn_runtime(&transaction, &turn)?;
     advance_metadata(&transaction, &sequence, commit, None)?;
     transaction.commit()?;
@@ -369,18 +394,59 @@ pub(super) fn settle_attempt(
         )));
     }
 
+    // NotStarted is the sole terminal evidence that proves no physical provider
+    // effect. Release its exact captured quote atomically with that evidence;
+    // success, failure, unknown usage and cancellation retain their bounds.
+    let released_turn = if matches!(state, ModelAttemptState::NotStarted { .. }) {
+        attempt
+            .cost_quote
+            .as_ref()
+            .map(|quote| {
+                let step = load_step(&transaction, attempt.step)?;
+                let mut turn = load_turn(&transaction, step.turn)?;
+                turn.budget.reserved_cost_microusd =
+                    release_cost(turn.budget.reserved_cost_microusd, quote.reserved_microusd)?;
+                Ok::<_, StoreError>(turn)
+            })
+            .transpose()?
+    } else {
+        None
+    };
     attempt.state = state;
     update_attempt_state(&transaction, &attempt)?;
+    if let Some(turn) = &released_turn {
+        update_turn_runtime(&transaction, turn)?;
+    }
     let mut sequence = Sequence::load(&transaction)?;
     let commit: CommitSeq = sequence.next()?;
     advance_metadata(&transaction, &sequence, commit, None)?;
     transaction.commit()?;
 
+    let mut changes = vec![SessionChange::ModelAttempt(attempt.clone())];
+    if let Some(turn) = released_turn {
+        changes.push(SessionChange::Turn(turn));
+    }
     let receipt = CommitReceipt {
         seq: commit,
-        update: SessionUpdate::new(vec![SessionChange::ModelAttempt(attempt.clone())]),
+        update: SessionUpdate::new(changes),
     };
     Ok(RecordedModelAttempt::Committed { attempt, receipt })
+}
+
+fn reserve_cost(previous: u64, bound: u64, ceiling: Option<u64>) -> Result<u64, StoreError> {
+    let reserved = previous
+        .checked_add(bound)
+        .ok_or(StoreError::MonetaryCapacity)?;
+    if ceiling.is_some_and(|maximum| reserved > maximum) {
+        return Err(StoreError::MonetaryCapacity);
+    }
+    Ok(reserved)
+}
+
+fn release_cost(previous: u64, bound: u64) -> Result<u64, StoreError> {
+    previous
+        .checked_sub(bound)
+        .ok_or_else(|| StoreError::Corrupt("model cost reservation underflow".to_owned()))
 }
 
 fn attach_start_receipt(
@@ -1075,4 +1141,29 @@ where
 {
     T::try_from(value)
         .map_err(|error| StoreError::Corrupt(format!("invalid {label} {value}: {error}")))
+}
+
+#[cfg(test)]
+mod cost_tests {
+    use super::*;
+
+    #[test]
+    fn exact_cap_and_large_bounds_never_wrap_or_saturate() {
+        assert_eq!(reserve_cost(7, 3, Some(10)).unwrap(), 10);
+        assert!(matches!(
+            reserve_cost(7, 4, Some(10)),
+            Err(StoreError::MonetaryCapacity)
+        ));
+        assert_eq!(
+            reserve_cost(u64::MAX - 1, 1, Some(u64::MAX)).unwrap(),
+            u64::MAX
+        );
+        assert!(matches!(
+            reserve_cost(u64::MAX, 1, None),
+            Err(StoreError::MonetaryCapacity)
+        ));
+        assert_eq!(reserve_cost(10, 0, Some(10)).unwrap(), 10);
+        assert_eq!(release_cost(u64::MAX, u64::MAX).unwrap(), 0);
+        assert!(matches!(release_cost(0, 1), Err(StoreError::Corrupt(_))));
+    }
 }

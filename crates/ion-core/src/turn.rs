@@ -56,6 +56,8 @@ pub enum ParkReason {
     AwaitingApproval,
     AuthorityDenied,
     Capacity,
+    CostQuoteUnavailable,
+    MonetaryCapacity,
     ContextCapacity,
     RecoveryRequired,
     Other(String),
@@ -72,7 +74,10 @@ pub struct TurnBudget {
     pub model_steps: u32,
     pub model_attempts: u32,
     pub tool_invocations: u32,
+    /// Cumulative upper bounds of quoted attempts, except those durably proven
+    /// NotStarted. Known token usage never reduces this monetary reservation.
     pub reserved_cost_microusd: u64,
+    /// Separate provider-reported bill, not a reduction of the reserved bound.
     pub reported_cost_microusd: u64,
 }
 

@@ -231,9 +231,10 @@ impl SqliteDatabase {
         step: StepId,
         generation: u64,
         timing: ModelAttemptTiming,
+        cost_quote: Option<crate::CostQuote>,
     ) -> Result<CreatedModelAttempt, StoreError> {
         let result = self.mutate(|connection| {
-            model_state::commit_attempt_intent(connection, step, generation, timing)
+            model_state::commit_attempt_intent(connection, step, generation, timing, cost_quote)
         })?;
         self.observations.publish(result.receipt.clone());
         Ok(result)

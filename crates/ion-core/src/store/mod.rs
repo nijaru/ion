@@ -17,10 +17,10 @@ use crate::session::{
     CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
 };
 use crate::{
-    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, Entry, EntryId, EntryPage,
-    InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep,
-    ProviderBindingId, RequestManifest, SessionId, SessionSnapshot, SnapshotRequest, StepId, Turn,
-    TurnId, TurnSettings,
+    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, CostQuote, Entry, EntryId,
+    EntryPage, InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming,
+    ModelStep, ProviderBindingId, RequestManifest, SessionId, SessionSnapshot, SnapshotRequest,
+    StepId, Turn, TurnId, TurnSettings,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -338,11 +338,13 @@ impl SessionStore {
         step: StepId,
         generation: u64,
         timing: ModelAttemptTiming,
+        cost_quote: Option<CostQuote>,
     ) -> Result<CreatedModelAttempt, StoreError> {
         self.call(|reply| Command::CommitModelAttemptIntent {
             step,
             generation,
             timing,
+            cost_quote,
             reply,
         })
         .await
@@ -576,6 +578,7 @@ enum Command {
         step: StepId,
         generation: u64,
         timing: ModelAttemptTiming,
+        cost_quote: Option<CostQuote>,
         reply: oneshot::Sender<Result<CreatedModelAttempt, StoreError>>,
     },
     RecordModelStartReceipt {
@@ -704,9 +707,12 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
                 step,
                 generation,
                 timing,
+                cost_quote,
                 reply,
             } => {
-                let _ = reply.send(database.commit_model_attempt_intent(step, generation, timing));
+                let _ = reply.send(
+                    database.commit_model_attempt_intent(step, generation, timing, cost_quote),
+                );
             }
             Command::RecordModelStartReceipt {
                 attempt,
@@ -787,6 +793,10 @@ pub(crate) enum StoreError {
     ContextCapacity(String),
     #[error("turn reached a configured limit: {0}")]
     Limit(String),
+    #[error("no conservative host quote is available for a capped model attempt")]
+    CostQuoteUnavailable,
+    #[error("the model attempt exceeds the remaining monetary ceiling")]
+    MonetaryCapacity,
     #[error("tool approval is missing, expired or does not match the frozen action")]
     ApprovalRequired,
     #[error("model response contains tool calls awaiting tool admission")]
@@ -824,6 +834,8 @@ impl StoreError {
                 | Self::Cancelled(_)
                 | Self::ContextCapacity(_)
                 | Self::Limit(_)
+                | Self::CostQuoteUnavailable
+                | Self::MonetaryCapacity
                 | Self::ToolsPending
                 | Self::ApprovalRequired
                 | Self::SnapshotTooLarge { .. }

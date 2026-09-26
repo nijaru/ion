@@ -264,13 +264,16 @@ artifact reads return explicit ContentUnavailable instead of empty/fabricated by
 Open need not hash all historical blobs: verify required content at consumption,
 auxiliary content at read, and all reachable content only in explicit integrity/export.
 
-Every ModelAttempt dispatch also captures the host CostQuote revision/rates or
-conservative bound used for monetary admission. Price is not part of semantic request
-identity. A configured monetary ceiling dispatches only when a conservative reservation
-can be made; missing/unknown bounded pricing parks rather than guessing, unknown usage
-retains its reservation, and later price-catalog changes never rewrite historical
-attempt accounting. Provider-reported billed cost may be stored separately; host-side
-caps are not represented as provider billing guarantees.
+A ModelAttempt captures any host CostQuote revision and conservative bound used for
+monetary admission. Price is not part of semantic request identity. An uncapped Turn
+may dispatch unpriced; that conveys no monetary protection or zero-cost assertion. A
+configured ceiling requires a trusted, all-in bound for the exact request across the
+frozen returned-model route, still valid at provider start. The attempt intent and
+its Turn-wide reservation commit atomically; missing pricing or insufficient allowance
+parks rather than guessing. Unknown usage and even a completed response retain the
+bound; only durable proof that the attempt never started releases it. Later catalog
+changes never rewrite historical accounting. Provider-reported billed cost is a
+separate fact, not a substitute for an upper bound or a billing guarantee.
 
 Reserve bounded control/settlement capacity, including admitted start receipts
 and terminal attempt evidence, before dispatch; new inputs and output growth

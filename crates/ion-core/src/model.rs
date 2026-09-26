@@ -71,9 +71,14 @@ pub struct ModelAttemptTiming {
     pub deferred_poll_timeout_ms: Option<u64>,
 }
 
+/// Immutable host-asserted all-in upper bound for one physical model attempt.
+/// This is not provider-reported billing and does not establish token counts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CostQuote {
+    /// Opaque bounded identifier for the host's pricing assertion at admission.
     pub revision: String,
+    /// Conservative cost including every route member and applicable charge.
+    /// Zero requires an explicit trusted host assertion, never absent pricing.
     pub reserved_microusd: u64,
 }
 

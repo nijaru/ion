@@ -109,9 +109,12 @@ must match the exact binding or a frozen list of allowed route models; missing o
 IDs park without selecting a response or admitting tools. Returned calls also must
 respect frozen tool choice and parallel-call controls, including after passive reopen.
 This callback and provider
-preflight are not network confinement or a production credential policy. A configured
-monetary cap parks before physical attempt intent until a host can supply a conservative
-cost quote. Request and terminal provider-response capacity checks stop encoding at
+preflight are not network confinement or a production credential policy. Library hosts
+can supply a conservative, route-wide cost bound for each proposed model attempt;
+the store reserves it with attempt intent and retains it unless the attempt is proven
+not started. A configured cap parks before intent without a trusted quote or enough
+remaining allowance. Ion does not discover provider prices or infer exact billable
+tokens from request bytes. Request and terminal provider-response capacity checks stop encoding at
 their frozen limits rather than allocating complete oversized JSON copies. A separate
 Anthropic Messages adapter supports streamed text and client tools, with strict
 index/terminal/usage checks and stable logical tool-result pairing. Unsupported thinking,

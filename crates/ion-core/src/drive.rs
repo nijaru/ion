@@ -636,10 +636,22 @@ async fn dispatch(
     if let Err(error) = preflight(basis, prepared, boundaries) {
         return DispatchAction::Exit(DriveExit::Parked(admission_park_reason(error)));
     }
-    // No host cost catalog/reservation is installed yet. A configured cap cannot
-    // safely dispatch on an unpriced physical attempt, even if the provider is live.
-    if basis.turn.environment.limits.max_cost_microusd.is_some() {
-        return DispatchAction::Exit(DriveExit::Parked(ParkReason::Capacity));
+    // The host attests a conservative bound for this exact proposed dispatch.
+    // The store, not this snapshot, atomically checks the remaining Turn ceiling.
+    // Reconciliation of an existing attempt never asks the host to reprice it.
+    let binding = basis
+        .turn
+        .environment
+        .provider(&prepared.manifest.settings.provider)
+        .expect("preflight validated the frozen provider binding");
+    let cost_quote = boundaries.quote(
+        binding,
+        &prepared.request,
+        &prepared.effect_key,
+        &prepared.manifest.provider_fingerprint,
+    );
+    if basis.turn.environment.limits.max_cost_microusd.is_some() && cost_quote.is_none() {
+        return DispatchAction::Exit(DriveExit::Parked(ParkReason::CostQuoteUnavailable));
     }
     let step = basis
         .current_step
@@ -652,6 +664,7 @@ async fn dispatch(
                 step.id,
                 basis.turn.cancellation.generation,
                 timing.clone(),
+                cost_quote,
             )
             .await,
     ) {
@@ -1073,6 +1086,8 @@ fn store_exit(turn: TurnId, error: StoreError) -> DriveExit {
         StoreError::Cancelled(_) => DriveExit::Stopped { turn },
         StoreError::ContextCapacity(_) => DriveExit::Parked(ParkReason::ContextCapacity),
         StoreError::Limit(_) => DriveExit::Parked(ParkReason::Capacity),
+        StoreError::CostQuoteUnavailable => DriveExit::Parked(ParkReason::CostQuoteUnavailable),
+        StoreError::MonetaryCapacity => DriveExit::Parked(ParkReason::MonetaryCapacity),
         other => DriveExit::Faulted {
             turn,
             message: other.to_string(),

@@ -14,8 +14,9 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    AttemptId, ContentDigest, EgressRealm, ProviderBinding, ProviderBindingId,
-    ProviderStartReceipt, SemanticCompatibilityId, SemanticRequest, StartReceiptCapability,
+    AttemptId, ContentDigest, CostQuote, EgressRealm, ProviderBinding, ProviderBindingId,
+    ProviderFingerprint, ProviderStartReceipt, SemanticCompatibilityId, SemanticRequest,
+    StartReceiptCapability,
 };
 
 /// Host-owned, synchronous live credential lookup at actual provider I/O. Secrets
@@ -59,6 +60,39 @@ where
     }
 }
 
+/// Trusted host assertion of an all-in upper charge for this physical dispatch.
+/// It must cover the entire frozen returned-model route and all applicable
+/// input, output, cache and reasoning charges, including prices that may change
+/// before provider start. A missing bound is not a zero-cost quote. This local,
+/// synchronous host callback must be bounded and must not perform I/O or
+/// reserve resources; the store atomically reserves its bound with intent.
+pub trait ProviderCostQuoter: Send + Sync {
+    fn quote(
+        &self,
+        binding: &ProviderBinding,
+        request: &SemanticRequest,
+        effect_key: &str,
+        fingerprint: &ProviderFingerprint,
+    ) -> Option<CostQuote>;
+}
+
+impl<F> ProviderCostQuoter for F
+where
+    F: Fn(&ProviderBinding, &SemanticRequest, &str, &ProviderFingerprint) -> Option<CostQuote>
+        + Send
+        + Sync,
+{
+    fn quote(
+        &self,
+        binding: &ProviderBinding,
+        request: &SemanticRequest,
+        effect_key: &str,
+        fingerprint: &ProviderFingerprint,
+    ) -> Option<CostQuote> {
+        self(binding, request, effect_key, fingerprint)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
 pub enum ProviderAdmissionError {
     #[error("provider credentials are unavailable")]
@@ -74,9 +108,9 @@ pub enum ModelStart {
         stream: ModelStream,
         start_receipt: Option<ProviderStartReceipt>,
     },
-    NotStarted {
-        reason: String,
-    },
+    /// The boundary authoritatively proves provider start did not happen;
+    /// missing usage or a lost response alone must be Indeterminate.
+    NotStarted { reason: String },
     Indeterminate {
         reason: String,
         usage: Usage,
@@ -142,6 +176,7 @@ pub trait ModelBoundary: Send + Sync {
 pub struct ModelBoundaries {
     inner: Arc<BTreeMap<ProviderBindingId, Arc<dyn ModelBoundary>>>,
     admission: Arc<dyn ProviderAdmission>,
+    cost_quoter: Option<Arc<dyn ProviderCostQuoter>>,
 }
 
 impl Default for ModelBoundaries {
@@ -149,6 +184,7 @@ impl Default for ModelBoundaries {
         Self {
             inner: Arc::new(BTreeMap::new()),
             admission: Arc::new(|_: &ProviderBinding| Err(ProviderAdmissionError::Unavailable)),
+            cost_quoter: None,
         }
     }
 }
@@ -179,7 +215,28 @@ impl ModelBoundaries {
         Ok(Self {
             inner: Arc::new(inner),
             admission,
+            cost_quoter: None,
         })
+    }
+
+    /// Install a host-owned bound for future dispatches. Already persisted
+    /// attempts retain their captured quote even if the catalog changes.
+    #[must_use]
+    pub fn with_cost_quoter(mut self, cost_quoter: Arc<dyn ProviderCostQuoter>) -> Self {
+        self.cost_quoter = Some(cost_quoter);
+        self
+    }
+
+    pub(crate) fn quote(
+        &self,
+        binding: &ProviderBinding,
+        request: &SemanticRequest,
+        effect_key: &str,
+        fingerprint: &ProviderFingerprint,
+    ) -> Option<CostQuote> {
+        self.cost_quoter
+            .as_ref()
+            .and_then(|quoter| quoter.quote(binding, request, effect_key, fingerprint))
     }
 
     pub(crate) fn preflight(
