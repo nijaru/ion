@@ -14,6 +14,7 @@ mod id;
 mod input;
 mod model;
 mod native_edit;
+mod native_list;
 mod native_read;
 mod observation;
 pub mod openai_compatible;
@@ -57,7 +58,11 @@ pub use model::{
     StepDisposition, StepPurpose,
 };
 pub use native_edit::{
-    MAX_NATIVE_EDIT_BYTES, NativeEditBoundary, NativeEditError, native_edit_binding,
+    MAX_NATIVE_EDIT_BYTES, NativeEditBoundary, NativeEditError, native_create_binding,
+    native_edit_binding,
+};
+pub use native_list::{
+    MAX_NATIVE_LIST_ENTRIES, NativeListBoundary, NativeListError, native_list_binding,
 };
 pub use native_read::{
     MAX_NATIVE_READ_BYTES, NativeReadBoundary, NativeReadError, native_read_binding,

@@ -21,7 +21,8 @@ use std::{
 
 use ion_ai::ToolSpec;
 use rustix::fs::{
-    AtFlags, FileType, Mode, OFlags, fchmod, fstat, open, openat, renameat, statat, unlinkat,
+    AtFlags, FileType, Mode, OFlags, RenameFlags, fchmod, fstat, open, openat, renameat,
+    renameat_with, statat, unlinkat,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -35,10 +36,10 @@ use crate::{
     ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError, ToolConcurrency, ToolExecution,
     ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
     workspace_registry::{
-        ClaimKey, EditAction, EditContent, EditPhysicalIdentity, EditRenameArmed, EditStaged,
-        EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES, RegistryError, RegistryReceipt,
-        StageAllocation, StageDisposal, TerminalEvidence, WorkspaceClaim, WorkspaceRegistry,
-        WorkspaceResources, WorkspaceRevision,
+        ClaimKey, EditAction, EditContent, EditKind, EditPhysicalIdentity, EditRenameArmed,
+        EditStaged, EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES, RegistryError,
+        RegistryReceipt, StageAllocation, StageDisposal, TerminalEvidence, WorkspaceClaim,
+        WorkspaceRegistry, WorkspaceResources, WorkspaceRevision,
     },
 };
 
@@ -47,6 +48,7 @@ pub const MAX_NATIVE_EDIT_BYTES: usize = MAX_EDIT_BYTES as usize;
 
 const MAX_PATH_BYTES: usize = 4096;
 const IMPLEMENTATION_ID: &str = "native-edit-private-v5";
+const CREATE_IMPLEMENTATION_ID: &str = "native-create-private-v1";
 const MAX_STAGE_FILES: usize = MAX_EDIT_ALLOCATIONS;
 const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
@@ -93,6 +95,7 @@ const FAULT_AFTER_DISPOSAL_SYNC: u8 = 51;
 /// Native exact-text editor bound to one frozen tool and workspace.
 pub struct NativeEditBoundary {
     binding: ToolBinding,
+    kind: EditKind,
     workspace: WorkspaceBinding,
     executor: SemanticCompatibilityId,
     root: Option<File>,
@@ -140,7 +143,29 @@ impl NativeEditBoundary {
         max_file_bytes: usize,
         staging_root: &Path,
     ) -> Result<Self, NativeEditError> {
-        Self::construct(registry, workspace, max_file_bytes, Some(staging_root))
+        Self::construct(
+            registry,
+            workspace,
+            max_file_bytes,
+            Some(staging_root),
+            EditKind::Replace,
+        )
+    }
+
+    /// Use the same durable mutation owner for absent-base creation.
+    pub fn new_create(
+        registry: &WorkspaceRegistry,
+        workspace: WorkspaceBinding,
+        max_file_bytes: usize,
+        staging_root: &Path,
+    ) -> Result<Self, NativeEditError> {
+        Self::construct(
+            registry,
+            workspace,
+            max_file_bytes,
+            Some(staging_root),
+            EditKind::Create,
+        )
     }
 
     /// Adopt already durable host evidence when the frozen workspace is gone.
@@ -150,7 +175,15 @@ impl NativeEditBoundary {
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
     ) -> Result<Self, NativeEditError> {
-        Self::construct(registry, workspace, max_file_bytes, None)
+        Self::construct(registry, workspace, max_file_bytes, None, EditKind::Replace)
+    }
+
+    pub fn new_create_recovery(
+        registry: &WorkspaceRegistry,
+        workspace: WorkspaceBinding,
+        max_file_bytes: usize,
+    ) -> Result<Self, NativeEditError> {
+        Self::construct(registry, workspace, max_file_bytes, None, EditKind::Create)
     }
 
     fn construct(
@@ -158,6 +191,7 @@ impl NativeEditBoundary {
         workspace: WorkspaceBinding,
         max_file_bytes: usize,
         staging_root: Option<&Path>,
+        kind: EditKind,
     ) -> Result<Self, NativeEditError> {
         let live = staging_root.is_some();
         if !(1..=MAX_NATIVE_EDIT_BYTES).contains(&max_file_bytes) {
@@ -223,7 +257,12 @@ impl NativeEditBoundary {
         }
 
         Ok(Self {
-            binding: native_edit_binding().map_err(NativeEditError::InvalidBinding)?,
+            binding: match kind {
+                EditKind::Replace => native_edit_binding(),
+                EditKind::Create => native_create_binding(),
+            }
+            .map_err(NativeEditError::InvalidBinding)?,
+            kind,
             workspace,
             executor,
             root,
@@ -282,6 +321,7 @@ impl NativeEditBoundary {
         }
         let arguments: EditArguments = serde_json::from_value(action.arguments.clone()).ok()?;
         if !self.ordinary_path(&arguments.path)
+            || arguments.kind != self.kind
             || arguments.path.len() > MAX_PATH_BYTES
             || arguments.expected_content.len() > self.max_file_bytes
             || arguments.old_text.len() > self.max_file_bytes
@@ -292,10 +332,7 @@ impl NativeEditBoundary {
             return None;
         }
         let replacement = replacement(&arguments, self.max_file_bytes).ok()?;
-        let facts = vec![BaseFact {
-            path: arguments.path.clone(),
-            digest: ContentDigest::of_bytes(arguments.expected_content.as_bytes()),
-        }];
+        let facts = base_facts(&arguments);
         if action.base_facts != facts {
             return None;
         }
@@ -355,14 +392,18 @@ impl NativeEditBoundary {
         }
         let _stage_custody = lock_staging(&stage)?;
         let parent = physical_identity(&stage)?;
-        let binding =
-            ContentDigest::of(&native_edit_binding().map_err(NativeEditError::InvalidBinding)?)
-                .map_err(|_| NativeEditError::InvalidStaging)?;
+        let bindings = [native_edit_binding(), native_create_binding()]
+            .into_iter()
+            .map(|binding| {
+                ContentDigest::of(&binding.map_err(NativeEditError::InvalidBinding)?)
+                    .map_err(|_| NativeEditError::InvalidStaging)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         for claim in registry.outstanding_edit_allocations()? {
             let (Some(edit), Some(start)) = (&claim.edit, &claim.start) else {
                 continue;
             };
-            if edit.manifest.action.tool_binding != binding
+            if !bindings.contains(&edit.manifest.action.tool_binding)
                 || edit.allocation.as_ref().is_none_or(|a| {
                     a.parent != parent || a.registry_incarnation != registry.incarnation()
                 })
@@ -454,6 +495,33 @@ impl ToolBoundary for NativeEditBoundary {
     }
 
     fn prepare(&self, arguments: Value) -> Result<PreparedAction, ToolBoundaryError> {
+        if self.kind == EditKind::Create {
+            let proposal: CreateProposal = serde_json::from_value(arguments)
+                .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+            if !self.ordinary_path(&proposal.path)
+                || proposal.path.len() > MAX_PATH_BYTES
+                || proposal.content.len() > self.max_file_bytes
+            {
+                return Err(ToolBoundaryError::InvalidArguments);
+            }
+            let root = self.root.as_ref().ok_or(ToolBoundaryError::InvalidAction)?;
+            let (parent, leaf) = open_relative_parent(root, &proposal.path)
+                .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+            if !target_is_absent(&parent, &leaf) {
+                return Err(ToolBoundaryError::InvalidArguments);
+            }
+            let arguments = EditArguments {
+                kind: EditKind::Create,
+                path: proposal.path,
+                expected_content: String::new(),
+                desired_content: proposal.content.clone(),
+                expected_digest: digest_text(""),
+                base_revision: proposal.base_revision,
+                old_text: String::new(),
+                new_text: proposal.content,
+            };
+            return prepare_edit_action(self, arguments);
+        }
         let proposal: EditProposal =
             serde_json::from_value(arguments).map_err(|_| ToolBoundaryError::InvalidArguments)?;
         if !self.ordinary_path(&proposal.path)
@@ -486,6 +554,7 @@ impl ToolBoundary for NativeEditBoundary {
         )
         .map_err(|_| ToolBoundaryError::InvalidArguments)?;
         let arguments = EditArguments {
+            kind: EditKind::Replace,
             path: proposal.path,
             expected_content,
             desired_content,
@@ -494,24 +563,7 @@ impl ToolBoundary for NativeEditBoundary {
             old_text: proposal.old_text,
             new_text: proposal.new_text,
         };
-        replacement(&arguments, self.max_file_bytes)
-            .map_err(|_| ToolBoundaryError::InvalidArguments)?;
-        let facts = vec![BaseFact {
-            path: arguments.path.clone(),
-            digest: ContentDigest::of_bytes(arguments.expected_content.as_bytes()),
-        }];
-        let action = PreparedAction::new(
-            self.binding.id.clone(),
-            serde_json::to_value(arguments.clone())
-                .map_err(|_| ToolBoundaryError::InvalidAction)?,
-            EgressRealm::Local,
-            ToolAuthority::WorkspaceMutation,
-            Some(arguments.base_revision.files),
-            facts,
-        )
-        .map_err(|_| ToolBoundaryError::InvalidAction)?;
-        crate::tool_boundary::bounded(&action)?;
-        Ok(action)
+        prepare_edit_action(self, arguments)
     }
 
     fn live_authority(
@@ -608,6 +660,67 @@ impl ToolBoundary for NativeEditBoundary {
     }
 }
 
+fn base_facts(arguments: &EditArguments) -> Vec<BaseFact> {
+    if arguments.kind == EditKind::Create {
+        Vec::new()
+    } else {
+        vec![BaseFact {
+            path: arguments.path.clone(),
+            digest: ContentDigest::of_bytes(arguments.expected_content.as_bytes()),
+        }]
+    }
+}
+
+fn prepare_edit_action(
+    boundary: &NativeEditBoundary,
+    arguments: EditArguments,
+) -> Result<PreparedAction, ToolBoundaryError> {
+    replacement(&arguments, boundary.max_file_bytes)
+        .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+    let action = PreparedAction::new(
+        boundary.binding.id.clone(),
+        serde_json::to_value(&arguments).map_err(|_| ToolBoundaryError::InvalidAction)?,
+        EgressRealm::Local,
+        ToolAuthority::WorkspaceMutation,
+        Some(arguments.base_revision.files),
+        base_facts(&arguments),
+    )
+    .map_err(|_| ToolBoundaryError::InvalidAction)?;
+    crate::tool_boundary::bounded(&action)?;
+    Ok(action)
+}
+
+/// Construct the frozen declaration for bounded absent-base creation.
+pub fn native_create_binding() -> Result<ToolBinding, crate::ConfigError> {
+    ToolBinding::new(
+        ToolBindingId::new("create")?,
+        ToolSpec {
+            name: "create".into(),
+            description: "Create one new regular workspace file (max 16 KiB). The parent directory must exist and the destination must be absent. Supply workspace_revision from a recent read; existing destinations are never overwritten. Read the new file to verify.".into(),
+            input_schema: json!({
+                "type": "object", "additionalProperties": false,
+                "required": ["path", "content", "workspace_revision"],
+                "properties": {
+                    "path": {"type": "string", "minLength": 1, "maxLength": MAX_PATH_BYTES},
+                    "content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
+                    "workspace_revision": {
+                        "type": "object", "additionalProperties": false,
+                        "required": ["files", "repository"],
+                        "properties": {
+                            "files": {"type": "integer", "minimum": 0, "maximum": i64::MAX},
+                            "repository": {"type": "integer", "minimum": 0, "maximum": i64::MAX}
+                        }
+                    }
+                }
+            }),
+        },
+        SemanticCompatibilityId::new(CREATE_IMPLEMENTATION_ID)?,
+        ToolConcurrency::Serial,
+        ToolRecoveryPolicy::NeverRepeat,
+        EgressRealm::Local,
+    )
+}
+
 /// Construct the frozen declaration for the native `edit` tool.
 pub fn native_edit_binding() -> Result<ToolBinding, crate::ConfigError> {
     ToolBinding::new(
@@ -666,6 +779,7 @@ pub enum NativeEditError {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct EditArguments {
+    kind: EditKind,
     path: String,
     expected_content: String,
     desired_content: String,
@@ -686,6 +800,15 @@ struct EditProposal {
     base_revision: EditRevision,
     old_text: String,
     new_text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateProposal {
+    path: String,
+    content: String,
+    #[serde(rename = "workspace_revision")]
+    base_revision: EditRevision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -849,16 +972,25 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
         Ok(parent) => parent,
         Err(_) => return not_started("edit target parent is unavailable"),
     };
-    let (base_identity, base_mode, base_bytes) =
-        match read_target(&parent, &leaf, job.max_file_bytes) {
+    let (base_identity, base_mode) = if job.arguments.kind == EditKind::Create {
+        if !target_is_absent(&parent, &leaf) {
+            return not_started("create target is not absent");
+        }
+        // Staging starts private; creating a target must not broaden that mode
+        // and bypass the operator's restrictive umask.
+        (None, 0o600)
+    } else {
+        let (identity, mode, bytes) = match read_target(&parent, &leaf, job.max_file_bytes) {
             Ok(target) => target,
             Err(_) => return not_started("edit target is not a bounded regular file"),
         };
-    if base_bytes != job.arguments.expected_content.as_bytes()
-        || digest_text_bytes(&base_bytes) != job.arguments.expected_digest
-    {
-        return not_started("edit target content differs from the prepared base");
-    }
+        if bytes != job.arguments.expected_content.as_bytes()
+            || digest_text_bytes(&bytes) != job.arguments.expected_digest
+        {
+            return not_started("edit target content differs from the prepared base");
+        }
+        (Some(identity), mode)
+    };
     let key = claim_key(&job.execution);
     if !job.admission_allowed(job.live_authority.load(Ordering::SeqCst)) {
         return not_started("live edit authority denied before admission");
@@ -1048,11 +1180,17 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
     {
         return aborted_edit(start);
     }
-    match read_target(&parent, &leaf, job.max_file_bytes) {
-        Ok((identity, _, content))
-            if identity == base_identity
-                && content == job.arguments.expected_content.as_bytes() => {}
-        _ => return aborted_edit(start),
+    if job.arguments.kind == EditKind::Create {
+        if !target_is_absent(&parent, &leaf) {
+            return aborted_edit(start);
+        }
+    } else {
+        match read_target(&parent, &leaf, job.max_file_bytes) {
+            Ok((identity, _, content))
+                if Some(identity) == base_identity
+                    && content == job.arguments.expected_content.as_bytes() => {}
+            _ => return aborted_edit(start),
+        }
     }
     if !target_matches_staged(
         &job.staging,
@@ -1091,7 +1229,18 @@ fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAtt
     }
     // Exactly one invocation, only by this worker after a confirmed durable arm.
     // Errors are ambiguous and must never fall back to copying or another rename.
-    if renameat(&job.staging, temporary, &parent, &leaf).is_err() {
+    let mutation = if job.arguments.kind == EditKind::Create {
+        renameat_with(
+            &job.staging,
+            temporary,
+            &parent,
+            &leaf,
+            RenameFlags::NOREPLACE,
+        )
+    } else {
+        renameat(&job.staging, temporary, &parent, &leaf)
+    };
+    if mutation.is_err() {
         return indeterminate("atomic replacement outcome is unknown", Some(start));
     }
     #[cfg(test)]
@@ -1340,7 +1489,12 @@ fn settled_edit(
 
 fn session_receipt(receipt: &RegistryReceipt) -> StartReceipt {
     StartReceipt {
-        kind: IMPLEMENTATION_ID.to_owned(),
+        kind: if receipt.identity.starts_with("create-attempt-v1:") {
+            CREATE_IMPLEMENTATION_ID
+        } else {
+            IMPLEMENTATION_ID
+        }
+        .to_owned(),
         data: serde_json::to_value(receipt).unwrap_or(Value::Null),
     }
 }
@@ -1351,6 +1505,7 @@ fn edit_action(
     replacement: &[u8],
 ) -> EditAction {
     EditAction {
+        kind: arguments.kind,
         action_digest: execution.action.digest,
         tool_binding: ContentDigest::of(&execution.binding).expect("serializable frozen binding"),
         target: arguments.path.clone(),
@@ -1563,6 +1718,14 @@ fn replacement(arguments: &EditArguments, maximum: usize) -> Result<Vec<u8>, ()>
     {
         return Err(());
     }
+    if arguments.kind == EditKind::Create {
+        return (arguments.expected_content.is_empty()
+            && arguments.expected_digest == digest_text("")
+            && arguments.old_text.is_empty()
+            && arguments.new_text == arguments.desired_content)
+            .then(|| arguments.desired_content.as_bytes().to_vec())
+            .ok_or(());
+    }
     let target = derive_replacement(
         &arguments.expected_content,
         &arguments.old_text,
@@ -1572,6 +1735,13 @@ fn replacement(arguments: &EditArguments, maximum: usize) -> Result<Vec<u8>, ()>
     (target == arguments.desired_content)
         .then(|| target.into_bytes())
         .ok_or(())
+}
+
+fn target_is_absent(parent: &File, leaf: &str) -> bool {
+    matches!(
+        statat(parent, leaf, AtFlags::SYMLINK_NOFOLLOW),
+        Err(rustix::io::Errno::NOENT)
+    )
 }
 
 fn derive_replacement(
@@ -2207,6 +2377,193 @@ mod tests {
             progress: None,
             state,
         }
+    }
+
+    fn create_boundary(fixture: &Fixture) -> NativeEditBoundary {
+        let boundary = NativeEditBoundary::new_create(
+            &fixture.registry,
+            fixture.boundary.workspace.clone(),
+            1024,
+            &fixture.host.path().join("staging"),
+        )
+        .unwrap();
+        boundary.set_live_authority(LiveToolAuthority::Allow);
+        boundary
+    }
+
+    fn create_execution(
+        fixture: &Fixture,
+        boundary: &NativeEditBoundary,
+        action: PreparedAction,
+    ) -> ToolExecution {
+        let mut execution = fixture.execution(action);
+        execution.binding = boundary.binding();
+        execution
+    }
+
+    #[tokio::test]
+    async fn create_commits_only_an_absent_bounded_regular_file() {
+        let fixture = Fixture::new(false);
+        let create = create_boundary(&fixture);
+        let revision = fixture
+            .registry
+            .revision(create.workspace_binding())
+            .unwrap();
+        let action = create
+            .prepare(json!({
+                "path": "new.txt", "content": "created\n", "workspace_revision": revision,
+            }))
+            .unwrap();
+        assert!(action.base_facts.is_empty());
+        assert_eq!(action.authority, ToolAuthority::WorkspaceMutation);
+        let execution = create_execution(&fixture, &create, action);
+        let state = create
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::KnownChanges { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::read(fixture.root.path().join("new.txt")).unwrap(),
+            b"created\n"
+        );
+        assert_eq!(
+            fs::metadata(fixture.root.path().join("new.txt"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fixture
+                .registry
+                .revision(create.workspace_binding())
+                .unwrap()
+                .files,
+            revision.files + 1
+        );
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        assert_eq!(claim.edit.unwrap().manifest.action.kind, EditKind::Create);
+        assert!(
+            create
+                .prepare(json!({
+                    "path": "new.txt", "content": "overwrite", "workspace_revision": revision,
+                }))
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_rechecks_absence_before_admission_and_never_overwrites() {
+        let fixture = Fixture::new(false);
+        let create = create_boundary(&fixture);
+        let revision = fixture
+            .registry
+            .revision(create.workspace_binding())
+            .unwrap();
+        let action = create
+            .prepare(json!({
+                "path": "new.txt", "content": "created", "workspace_revision": revision,
+            }))
+            .unwrap();
+        fs::write(fixture.root.path().join("new.txt"), "other").unwrap();
+        let state = create
+            .execute(
+                create_execution(&fixture, &create, action),
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(matches!(state, ToolAttemptState::NotStarted { .. }));
+        assert_eq!(
+            fs::read(fixture.root.path().join("new.txt")).unwrap(),
+            b"other"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_recovers_exact_committed_object_after_worker_loss() {
+        let fixture = Fixture::new(false);
+        let create = create_boundary(&fixture);
+        let revision = fixture
+            .registry
+            .revision(create.workspace_binding())
+            .unwrap();
+        let action = create
+            .prepare(json!({
+                "path": "new.txt", "content": "created", "workspace_revision": revision,
+            }))
+            .unwrap();
+        let execution = create_execution(&fixture, &create, action);
+        create.inject_fault(FAULT_AFTER_RENAME);
+        let state = create
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+        assert_eq!(
+            fs::read(fixture.root.path().join("new.txt")).unwrap(),
+            b"created"
+        );
+        let recovered = create
+            .reconcile(execution.clone(), attempt(&execution, state))
+            .await;
+        assert!(matches!(
+            recovered,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::KnownChanges { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            fixture
+                .registry
+                .revision(create.workspace_binding())
+                .unwrap()
+                .files,
+            revision.files + 1
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn create_never_clobbers_a_name_occupied_after_durable_arm() {
+        let fixture = Fixture::new(false);
+        let create = Arc::new(create_boundary(&fixture));
+        let revision = fixture
+            .registry
+            .revision(create.workspace_binding())
+            .unwrap();
+        let action = create
+            .prepare(json!({
+                "path": "new.txt", "content": "created", "workspace_revision": revision,
+            }))
+            .unwrap();
+        let execution = create_execution(&fixture, &create, action);
+        create.pause.point.store(5, Ordering::SeqCst);
+        let pause = Arc::clone(&create.pause);
+        let worker = Arc::clone(&create);
+        let task =
+            tokio::spawn(async move { worker.execute(execution, CancellationToken::new()).await });
+        pause.entered.wait();
+        fs::write(fixture.root.path().join("new.txt"), "other").unwrap();
+        pause.release.wait();
+        let state = task.await.unwrap();
+        assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+        assert_eq!(
+            fs::read(fixture.root.path().join("new.txt")).unwrap(),
+            b"other"
+        );
+        assert_eq!(
+            fixture
+                .registry
+                .revision(create.workspace_binding())
+                .unwrap()
+                .files,
+            revision.files
+        );
     }
 
     #[test]

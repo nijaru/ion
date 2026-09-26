@@ -36,9 +36,9 @@ use thiserror::Error;
 
 mod edit;
 pub use edit::{
-    EditAction, EditClaim, EditContent, EditManifest, EditPhysicalIdentity, EditRenameArmed,
-    EditStaged, EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES, MAX_EDIT_TARGET_BYTES,
-    StageAllocation, StageDisposal,
+    EditAction, EditClaim, EditContent, EditKind, EditManifest, EditPhysicalIdentity,
+    EditRenameArmed, EditStaged, EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES,
+    MAX_EDIT_TARGET_BYTES, StageAllocation, StageDisposal,
 };
 
 #[cfg(all(test, unix))]
@@ -186,8 +186,8 @@ impl WorkspaceRegistry {
                 CREATE TABLE registry_identity(incarnation TEXT NOT NULL);
                 INSERT INTO registry_identity VALUES(lower(hex(randomblob(32))));
                 CREATE TABLE edit_allocations(key TEXT PRIMARY KEY REFERENCES claims(key));
-                PRAGMA application_id=1229934162; PRAGMA user_version=5;")?;
-        } else if version != 5 || application != 1229934162 {
+                PRAGMA application_id=1229934162; PRAGMA user_version=6;")?;
+        } else if version != 6 || application != 1229934162 {
             return Err(RegistryError::Unsupported);
         }
         let incarnation: String =

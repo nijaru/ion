@@ -96,6 +96,7 @@ fn content(bytes: &[u8]) -> EditContent {
 
 fn action() -> EditAction {
     EditAction {
+        kind: EditKind::Replace,
         action_digest: ContentDigest::of_bytes(b"prepared action"),
         tool_binding: ContentDigest::of_bytes(b"exact frozen binding"),
         target: "src/file.txt".into(),
@@ -126,7 +127,7 @@ fn staged() -> EditStaged {
 fn armed() -> EditRenameArmed {
     EditRenameArmed {
         staged_file: staged().file,
-        target_file: identity(3),
+        target_file: Some(identity(3)),
         target_parent: identity(4),
     }
 }
@@ -198,6 +199,78 @@ fn admission_atomically_mints_one_receipt_and_bounded_manifest_without_staging()
         next.edit.unwrap().manifest.stage_slot,
         edit.manifest.stage_slot
     );
+}
+
+#[test]
+fn create_manifest_requires_absent_base_and_absent_target_arm() {
+    let mut f = Fixture::new();
+    let mut create = action();
+    create.kind = EditKind::Create;
+    create.expected = content(b"");
+    let claim = f
+        .registry
+        .admit_edit(
+            &f.binding,
+            key(),
+            WorkspaceResources::FilesAndRepository,
+            f.registry.revision(&f.binding).unwrap(),
+            create.clone(),
+        )
+        .unwrap();
+    assert!(
+        claim
+            .start
+            .as_ref()
+            .unwrap()
+            .identity
+            .starts_with("create-attempt-v1:")
+    );
+    f.allocate(&claim, staged().parent);
+    let receipt = claim.start.as_ref().unwrap();
+    f.registry
+        .record_edit_staged(claim.key, receipt, staged())
+        .unwrap();
+    assert!(matches!(
+        f.registry
+            .record_edit_rename_armed(claim.key, receipt, armed()),
+        Err(RegistryError::EvidenceConflict)
+    ));
+    let vacant = EditRenameArmed {
+        target_file: None,
+        ..armed()
+    };
+    f.registry
+        .record_edit_rename_armed(claim.key, receipt, vacant)
+        .unwrap();
+    f.registry
+        .resolve_edit(
+            claim.key,
+            evidence(
+                &claim,
+                EffectSummary::KnownChanges {
+                    paths: vec![create.target.clone()],
+                },
+            ),
+            replaced(),
+        )
+        .unwrap();
+    assert_eq!(
+        f.registry.revision(&f.binding).unwrap().files,
+        claim.base.files + 1
+    );
+
+    let mut invalid = create;
+    invalid.expected = content(b"existing");
+    assert!(matches!(
+        f.registry.admit_edit(
+            &f.binding,
+            key(),
+            WorkspaceResources::FilesAndRepository,
+            f.registry.revision(&f.binding).unwrap(),
+            invalid,
+        ),
+        Err(RegistryError::Invalid)
+    ));
 }
 
 #[test]
@@ -447,15 +520,15 @@ fn phase_facts_are_append_only_and_receipt_bound() {
             ..armed()
         },
         EditRenameArmed {
-            target_file: staged().file,
+            target_file: Some(staged().file),
             ..armed()
         },
         EditRenameArmed {
-            target_file: staged().parent,
+            target_file: Some(staged().parent),
             ..armed()
         },
         EditRenameArmed {
-            target_file: armed().target_parent,
+            target_file: Some(armed().target_parent),
             ..armed()
         },
         EditRenameArmed {
@@ -484,10 +557,10 @@ fn phase_facts_are_append_only_and_receipt_bound() {
             k,
             receipt,
             EditRenameArmed {
-                target_file: EditPhysicalIdentity {
+                target_file: Some(EditPhysicalIdentity {
                     birth_nanos: 1_000_000_000,
                     ..identity(3)
-                },
+                }),
                 ..armed()
             }
         ),
@@ -505,7 +578,7 @@ fn phase_facts_are_append_only_and_receipt_bound() {
             k,
             receipt,
             EditRenameArmed {
-                target_file: identity(99),
+                target_file: Some(identity(99)),
                 ..armed()
             }
         ),
@@ -779,7 +852,7 @@ fn manifest_bounds_and_terminal_capacity_are_checked_before_admission() {
     };
     let arm = EditRenameArmed {
         staged_file: stage.file,
-        target_file: large_identity(u64::MAX - 2),
+        target_file: Some(large_identity(u64::MAX - 2)),
         target_parent: large_identity(u64::MAX - 3),
     };
     f.allocate(&claim, stage.parent);
@@ -867,7 +940,7 @@ fn old_registry_version_is_refused_without_migration() {
     let mut f = Fixture::new();
     f.registry
         .connection
-        .execute_batch("PRAGMA user_version=4;")
+        .execute_batch("PRAGMA user_version=5;")
         .unwrap();
     assert!(matches!(
         WorkspaceRegistry::open(f.home.join("host")),
@@ -878,11 +951,11 @@ fn old_registry_version_is_refused_without_migration() {
         .connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 4);
+    assert_eq!(version, 5);
     // Restore only the test fixture, not through a production migration path.
     f.registry
         .connection
-        .execute_batch("PRAGMA user_version=5;")
+        .execute_batch("PRAGMA user_version=6;")
         .unwrap();
     f.reopen();
 }

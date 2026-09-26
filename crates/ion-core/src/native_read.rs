@@ -35,7 +35,7 @@ use crate::{
 /// Hard maximum for one configured file range before the smaller inline-result limit.
 pub const MAX_NATIVE_READ_BYTES: usize = crate::MAX_TOOL_RECORD_BYTES;
 
-const MAX_PATH_BYTES: usize = 4096;
+pub(crate) const MAX_PATH_BYTES: usize = 4096;
 const MAX_CONCURRENT_READS: usize = 4;
 const READ_CHUNK_BYTES: usize = 8192;
 // The complete-file digest changes the frozen result semantics.
@@ -353,12 +353,12 @@ struct ReadArguments {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct RootIdentity {
+pub(crate) struct RootIdentity {
     device: u64,
     inode: u64,
 }
 
-fn identity(file: &File) -> std::io::Result<RootIdentity> {
+pub(crate) fn identity(file: &File) -> std::io::Result<RootIdentity> {
     let metadata = file.metadata()?;
     Ok(RootIdentity {
         device: metadata.dev(),
@@ -366,7 +366,7 @@ fn identity(file: &File) -> std::io::Result<RootIdentity> {
     })
 }
 
-fn open_absolute_directory(path: &str) -> std::io::Result<File> {
+pub(crate) fn open_absolute_directory(path: &str) -> std::io::Result<File> {
     if path.len() > MAX_PATH_BYTES {
         return Err(std::io::Error::new(
             std::io::ErrorKind::InvalidInput,
@@ -405,7 +405,7 @@ fn open_absolute_directory(path: &str) -> std::io::Result<File> {
     Ok(current)
 }
 
-fn valid_relative_path(path: &str) -> bool {
+pub(crate) fn valid_relative_path(path: &str) -> bool {
     !path.is_empty()
         && path.len() <= MAX_PATH_BYTES
         && !path.starts_with('/')

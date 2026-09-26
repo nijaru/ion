@@ -9,10 +9,11 @@ Ion is unreleased v0: replace obsolete
 abstractions directly rather than preserving them through compatibility layers.
 
 The maintained Turn/Session runtime replaces the former generic task runtime
-rather than wrapping it. The headless host has experimental read/edit support,
-but the coding-agent product and native command execution remain incomplete.
+rather than wrapping it. The headless and terminal hosts have experimental
+list/read/create/edit support, but the coding-agent product and native command
+execution remain incomplete.
 Host preflight and descriptor-relative access are not confinement; passing
-scripted recovery tests or one synthetic live edit does not qualify a coding
+scripted recovery tests or synthetic live file tasks do not qualify a coding
 agent. For current capabilities, limitations and validation, use
 [README.md](README.md). The contracts below describe the target even where the
 implementation is incomplete.
@@ -23,6 +24,8 @@ Ion is a local, provider-neutral Rust terminal coding agent with an equally capa
 headless/library interface. One primary conversation is the default; cooperating
 workers are optional. macOS and Linux are the initial execution targets. No cloud
 account, daemon or telemetry service is required; local models are ordinary providers.
+An exact literal loopback HTTP endpoint may serve a local model; public endpoints
+require HTTPS. Provider clients follow no redirects or ambient proxies.
 
 The engine runs a coding turn, not arbitrary workflows. It does not mandate a
 planner, memory system, task board, gateway, schedule service or swarm policy.
@@ -563,6 +566,11 @@ current host user and outlives Session loss: a missing/deleted/corrupt Session l
 orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
 replacement binding.
+
+Workspace discovery is a bounded read-only listing of one directory per call.
+It returns sorted names, file kinds, a continuation cursor and the observed
+workspace revision. Symlinks may be named but are not traversed; separate pages
+are not a filesystem snapshot. A model can then request an exact file read.
 
 For native single-file edit, the model supplies a concise change tied to an exact
 base identity returned by `read`, rather than echoing both complete file versions.

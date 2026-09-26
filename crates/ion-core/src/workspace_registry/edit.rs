@@ -46,12 +46,19 @@ pub struct EditContent {
 /// expected revision live in the enclosing WorkspaceClaim, not in Session storage.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditAction {
+    pub kind: EditKind,
     pub action_digest: ContentDigest,
     /// `ContentDigest::of` the exact frozen ToolBinding, not just its display name.
     pub tool_binding: ContentDigest,
     pub target: String,
     pub expected: EditContent,
     pub replacement: EditContent,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EditKind {
+    Replace,
+    Create,
 }
 
 impl EditAction {
@@ -64,7 +71,13 @@ impl EditAction {
             })
             || self.expected.bytes > MAX_EDIT_BYTES
             || self.replacement.bytes > MAX_EDIT_BYTES
-            || self.expected == self.replacement
+            || (self.kind == EditKind::Replace && self.expected == self.replacement)
+            || (self.kind == EditKind::Create
+                && self.expected
+                    != EditContent {
+                        digest: ContentDigest::of_bytes(b""),
+                        bytes: 0,
+                    })
         {
             return Err(RegistryError::Invalid);
         }
@@ -165,7 +178,8 @@ pub struct EditStaged {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditRenameArmed {
     pub staged_file: EditPhysicalIdentity,
-    pub target_file: EditPhysicalIdentity,
+    /// Existing base for replacement; absent base for creation.
+    pub target_file: Option<EditPhysicalIdentity>,
     pub target_parent: EditPhysicalIdentity,
 }
 
@@ -382,14 +396,20 @@ impl WorkspaceRegistry {
                     .staged
                     .as_ref()
                     .ok_or(RegistryError::EvidenceConflict)?;
-                armed.target_file.validate()?;
+                if let Some(file) = armed.target_file {
+                    file.validate()?;
+                }
                 armed.target_parent.validate()?;
                 if armed.staged_file != staged.file
-                    || armed.target_file.device != staged.file.device
+                    || armed.target_file.is_some()
+                        != (edit.manifest.action.kind == EditKind::Replace)
+                    || armed
+                        .target_file
+                        .is_some_and(|file| file.device != staged.file.device)
                     || armed.target_parent.device != staged.file.device
-                    || armed.target_file == staged.file
-                    || armed.target_file == staged.parent
-                    || armed.target_file == armed.target_parent
+                    || armed.target_file == Some(staged.file)
+                    || armed.target_file == Some(staged.parent)
+                    || armed.target_file == Some(armed.target_parent)
                     || armed.target_parent == staged.file
                     || armed.target_parent == staged.parent
                 {
@@ -477,7 +497,14 @@ pub(super) fn initialize(
     );
     claim.start = Some(RegistryReceipt {
         backend: claim.binding.backend.clone(),
-        identity: format!("edit-attempt-v2:{identity}"),
+        identity: format!(
+            "{}:{identity}",
+            if action.kind == EditKind::Create {
+                "create-attempt-v1"
+            } else {
+                "edit-attempt-v2"
+            }
+        ),
     });
     claim.edit = Some(EditClaim {
         manifest: EditManifest {
@@ -513,7 +540,7 @@ fn reserve_terminal_capacity(claim: &WorkspaceClaim) -> Result<()> {
     });
     edit.rename_armed = Some(EditRenameArmed {
         staged_file: EditPhysicalIdentity::MAX,
-        target_file: EditPhysicalIdentity::MAX,
+        target_file: Some(EditPhysicalIdentity::MAX),
         target_parent: EditPhysicalIdentity::MAX,
     });
     edit.termination = Some(EditTermination::Replaced {
