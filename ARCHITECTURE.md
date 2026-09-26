@@ -580,6 +580,9 @@ current host user and outlives Session loss: a missing/deleted/corrupt Session l
 orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
 replacement binding.
+The host exposes bounded read-only inspection of unresolved claims from an
+existing registry. Inspection never initializes a missing registry, writes
+claim/recovery facts or treats an absent backend process as terminal evidence.
 
 Workspace discovery is a bounded read-only listing of one directory per call.
 It returns sorted names, file kinds, a continuation cursor and the observed

@@ -46,6 +46,18 @@ enum Action {
         #[arg(long)]
         state: PathBuf,
     },
+    /// List unresolved host workspace claims without changing registry evidence.
+    Claims {
+        /// Existing private host registry directory.
+        #[arg(long)]
+        registry: PathBuf,
+        /// Opaque next_after value returned by an earlier page.
+        #[arg(long)]
+        after: Option<String>,
+        /// Maximum claims to return in one page.
+        #[arg(long, default_value_t = 50, value_parser = clap::value_parser!(u32).range(1..=256))]
+        limit: u32,
+    },
 }
 
 #[derive(Clone, Copy, clap::ValueEnum)]
@@ -166,11 +178,36 @@ async fn main() {
         Action::Run(args) => run(args).await,
         Action::Resume(args) => resume(args).await,
         Action::Inspect { state } => inspect(&state).await,
+        Action::Claims {
+            registry,
+            after,
+            limit,
+        } => claims(&registry, after.as_deref(), limit),
     };
     if let Err(error) = result {
         eprintln!("ion: {error:#}");
         std::process::exit(1);
     }
+}
+
+fn claims(registry: &Path, after: Option<&str>, limit: u32) -> Result<()> {
+    let unresolved = WorkspaceRegistry::unresolved_existing(
+        registry,
+        after,
+        usize::try_from(limit).context("claim page limit exceeds host size")?,
+    )?;
+    let next_after = unresolved
+        .last()
+        .map(|claim| WorkspaceRegistry::claim_cursor(claim.key))
+        .transpose()?;
+    println!(
+        "{}",
+        serde_json::to_string_pretty(&serde_json::json!({
+            "claims": unresolved,
+            "next_after": next_after,
+        }))?
+    );
+    Ok(())
 }
 
 fn existing_host_roots(state: &Path, workspace: &Path) -> Result<(PathBuf, PathBuf)> {

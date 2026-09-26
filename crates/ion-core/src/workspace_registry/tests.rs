@@ -1,6 +1,38 @@
 use super::*;
 
 #[test]
+fn read_only_inspection_keeps_missing_registry_absent_and_claim_unresolved() {
+    let home = std::env::temp_dir().join(format!("ion-registry-inspect-{}", SessionId::new()));
+    let host = home.join("host");
+    let root = home.join("root");
+    assert!(WorkspaceRegistry::unresolved_existing(&host, None, 10).is_err());
+    assert!(!home.exists());
+    fs::create_dir_all(&root).unwrap();
+    let mut registry = WorkspaceRegistry::open(&host).unwrap();
+    let binding = registry.bind("workspace", &root, "local").unwrap();
+    let key = ClaimKey {
+        session: SessionId::new(),
+        invocation: InvocationId::new(1).unwrap(),
+        attempt: AttemptId::new(2).unwrap(),
+    };
+    registry
+        .admit(
+            &binding,
+            key,
+            WorkspaceResources::Files,
+            registry.revision(&binding).unwrap(),
+        )
+        .unwrap();
+    let claims = WorkspaceRegistry::unresolved_existing(&host, None, 10).unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].key, key);
+    assert!(claims[0].terminal.is_none());
+    assert_eq!(registry.unresolved(None, 10).unwrap(), claims);
+    drop(registry);
+    fs::remove_dir_all(home).unwrap();
+}
+
+#[test]
 fn git_markers_reject_static_fifo_and_symlink_without_opening_them() {
     if std::env::var_os("ION_GIT_MARKER_TEST_CHILD").is_none() {
         let mut child = std::process::Command::new(std::env::current_exe().unwrap())

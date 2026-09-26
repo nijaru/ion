@@ -313,6 +313,10 @@ files are published. An owner crash retains an unresolved workspace claim and
 private artifacts for reconciliation. The CLI has no automatic reconciliation
 for that case yet. Native macOS `exec` is unavailable; Linux command success
 does not qualify the first cross-platform prerelease.
+Use `ion claims --registry <path>` to inspect up to 50 unresolved host claims;
+`--limit` accepts 1–256 and `--after <next_after>` pages through the rest.
+This read-only command requires an existing registry and never clears a claim.
+Only authenticated terminal backend evidence can release a quarantined workspace.
 
 For Rust work on Linux, pass `--exec-rust-toolchain <toolchain-root>` with
 `--enable-exec`. Ion mounts that selected directory read-only at `/toolchain`

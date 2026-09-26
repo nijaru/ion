@@ -23,7 +23,7 @@
 //! creation time where available; this is not a race-free filesystem capability.
 
 use crate::{AttemptId, ContentDigest, EffectSummary, InvocationId, SessionId, WorkspaceBinding};
-use rusqlite::{Connection, OptionalExtension, TransactionBehavior, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, TransactionBehavior, params};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeSet,
@@ -151,6 +151,26 @@ pub struct WorkspaceRegistry {
     incarnation: String,
     #[cfg(test)]
     lose_next_commit_ack: bool,
+}
+
+fn unresolved_from(
+    connection: &Connection,
+    after: Option<&str>,
+    limit: usize,
+) -> Result<Vec<WorkspaceClaim>> {
+    if limit > 256 || after.is_some_and(|s| s.len() > 256) {
+        return Err(RegistryError::Capacity);
+    }
+    let mut stmt = connection
+        .prepare("SELECT record FROM claims WHERE active=1 AND key>?1 ORDER BY key LIMIT ?2")?;
+    let rows = stmt.query_map(
+        params![
+            after.unwrap_or(""),
+            i64::try_from(limit).map_err(|_| RegistryError::Capacity)?
+        ],
+        |r| r.get::<_, String>(0),
+    )?;
+    rows.map(|r| decode(&r?)).collect()
 }
 
 impl WorkspaceRegistry {
@@ -446,20 +466,34 @@ impl WorkspaceRegistry {
     /// Bounded orphan discovery. Cursor is the last returned serialized ClaimKey;
     /// use `claim_cursor` rather than interpreting it. No Session lookup occurs.
     pub fn unresolved(&self, after: Option<&str>, limit: usize) -> Result<Vec<WorkspaceClaim>> {
-        if limit > 256 || after.is_some_and(|s| s.len() > 256) {
-            return Err(RegistryError::Capacity);
-        }
-        let mut stmt = self
-            .connection
-            .prepare("SELECT record FROM claims WHERE active=1 AND key>?1 ORDER BY key LIMIT ?2")?;
-        let rows = stmt.query_map(
-            params![
-                after.unwrap_or(""),
-                i64::try_from(limit).map_err(|_| RegistryError::Capacity)?
-            ],
-            |r| r.get::<_, String>(0),
+        unresolved_from(&self.connection, after, limit)
+    }
+
+    /// Inspect an existing registry without creating it or writing recovery facts.
+    /// An absent or incompatible registry is an error, not an empty claim set.
+    pub fn unresolved_existing(
+        directory: impl AsRef<Path>,
+        after: Option<&str>,
+        limit: usize,
+    ) -> Result<Vec<WorkspaceClaim>> {
+        let directory = fs::canonicalize(directory)?;
+        let connection = Connection::open_with_flags(
+            directory.join("workspace-registry.sqlite"),
+            OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        rows.map(|r| decode(&r?)).collect()
+        let version: i64 = connection.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        let application: i64 = connection.query_row("PRAGMA application_id", [], |r| r.get(0))?;
+        if version != 6 || application != 1229934162 {
+            return Err(RegistryError::Unsupported);
+        }
+        let incarnation: String =
+            connection.query_row("SELECT incarnation FROM registry_identity", [], |r| {
+                r.get(0)
+            })?;
+        if incarnation.len() != 64 || !incarnation.bytes().all(|b| b.is_ascii_hexdigit()) {
+            return Err(RegistryError::Unsupported);
+        }
+        unresolved_from(&connection, after, limit)
     }
 
     pub fn claim_cursor(key: ClaimKey) -> Result<String> {
