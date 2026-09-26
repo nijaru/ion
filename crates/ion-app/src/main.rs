@@ -94,6 +94,9 @@ struct RunArgs {
     model_output_limit: u32,
     #[arg(long, default_value_t = 1024)]
     max_output_tokens: u32,
+    /// Frozen serialized request byte ceiling; this is not a token estimate.
+    #[arg(long, default_value_t = 1024 * 1024, value_parser = clap::value_parser!(u32).range(4096..=1048576))]
+    max_request_bytes: u32,
     #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..=32))]
     max_model_steps: u32,
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=4))]
@@ -236,7 +239,7 @@ fn initial_config(
             allowed_reasoning: vec![Reasoning::ProviderDefault],
         },
         context: ContextPolicy {
-            max_request_bytes: 1024 * 1024,
+            max_request_bytes: args.max_request_bytes,
             max_input_tokens: args.model_input_limit,
             max_checkpoint_bytes: 128 * 1024, max_tail_bytes: 256 * 1024,
         },

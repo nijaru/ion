@@ -77,6 +77,25 @@ assert s['model_attempts'] == [], 'Anthropic preflight consumed a provider attem
 assert s['config']['config']['providers'][0]['id'] == 'anthropic-messages'
 PY
 
+# A serialized request that exceeds its frozen byte budget never reaches egress.
+mkdir "$WORK/byte-state"
+oversized_prompt="$(python3 -c 'print("X" * 8192)')"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/byte-state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --model gpt-test \
+    --model-input-limit 8192 --model-output-limit 2048 \
+    --max-request-bytes 4096 "$oversized_prompt" > "$WORK/byte.json" 2> "$WORK/byte.err"; then
+    echo 'FAIL: oversized request reached provider dispatch' >&2; exit 1
+fi
+grep -q 'ContextCapacity' "$WORK/byte.err"
+"$BIN" inspect --state "$WORK/byte-state" > "$WORK/byte-snapshot.json"
+python3 - "$WORK/byte-snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['model_attempts'] == [], 'request byte ceiling consumed a provider attempt'
+assert s['config']['config']['context']['max_request_bytes'] == 4096
+PY
+
 mkdir "$WORK/workspace/state"
 if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/workspace/state" \
     --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \

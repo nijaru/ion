@@ -125,8 +125,9 @@ provider API has been qualified live.
 Create a host-state directory outside the writable workspace, then supply an exact
 HTTPS Chat Completions endpoint and a model ID. The host must assert the model's
 input and output token capacities; the client cannot discover or verify them.
-The current request admission enforces a serialized-byte ceiling, **not** an
-exact tokenizer-backed input-token bound; a provider may reject an oversized context.
+The current request admission enforces a serialized-byte ceiling (`--max-request-bytes`,
+default 1 MiB), **not** an exact tokenizer-backed input-token bound; a provider may
+reject an oversized context.
 The endpoint's returned model ID must match the supplied ID. `run` supports
 `--request-key` for idempotent resubmission after a lost reply.
 
