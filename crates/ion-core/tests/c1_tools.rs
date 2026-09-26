@@ -685,7 +685,7 @@ async fn native_edit_settles_session_exchange_with_registry_minted_receipt() {
             );
             let r: workspace_registry::RegistryReceipt =
                 serde_json::from_value(receipt.data.clone()).unwrap();
-            assert!(r.identity.starts_with("edit-attempt-v1:"));
+            assert!(r.identity.starts_with("edit-attempt-v2:"));
         }
         other => panic!("native edit not settled: {other:?}"),
     }

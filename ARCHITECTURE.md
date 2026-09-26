@@ -595,6 +595,30 @@ The experimental backend requires staging strictly inside the protected registry
 namespace and, on Linux, on the same mount identity as the workspace. The
 registry atomically admits an edit manifest and one immutable attempt receipt;
 staging and rename eligibility are separate durable facts, not replacement receipts.
+In this experimental allocation/disposal slice, registry v5 and the frozen
+`native-edit-private-v3` implementation replace the former protocol without migration.
+Under worker-held permanent registry and staging custody, an exact no-follow vacancy
+check and successful staging-parent barrier precede a receipt/slot-bound `StageAllocation`
+commit; only acknowledgment or authoritative readback permits exclusive create. The
+allocation binds the physical staging parent and random registry incarnation. It
+reserves one of 64 outstanding 16-KiB allocations, including crashed, terminal
+cleanup-pending and blocked claims; a separate directory count/size check bounds
+filesystem occupancy. Saturation refuses admission, not retained cleanup evidence.
+
+Allocation authenticates a later partial stage **only under continuously host-protected
+registry and staging namespaces**; permissions/advisory locks do not confine arbitrary
+same-user writers. Registry restore/reset or loss of protection invalidates that premise.
+A pre-allocation occupant prevents allocation and is never adopted. A witnessed collision
+after allocation blocks disposal, rather than using contradicted provenance to delete it.
+`Staged` remains the stronger content/identity/barrier fact required for rename eligibility.
+Pre-arm recovery under custody commits terminal `NoMutation` before cleanup. A separate
+registry-owned disposition authorizes disposal before unlink and retains quota until
+unlink/absence plus a staging-parent sync and confirmed durable disposal. ENOENT retries
+must repeat that barrier. Cleanup errors never revise effect truth or clear an armed
+unknown. Bounded explicit host recovery discovers allocations independently of terminal
+Session/workspace state and retries authenticated cleanup under custody; it provides no
+force-clear, replay or automatic namespace retirement.
+
 The owning, joined worker may settle an abort as `NoMutation` only if it can attest
 it never invoked rename and all staging was host-internal. After durable rename
 admission, recovery cannot infer nonexecution from an absent visible replacement:

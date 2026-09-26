@@ -21,7 +21,8 @@ impl Fixture {
     }
 
     fn admit(&mut self, key: ClaimKey) -> WorkspaceClaim {
-        self.registry
+        let claim = self
+            .registry
             .admit_edit(
                 &self.binding,
                 key,
@@ -29,7 +30,23 @@ impl Fixture {
                 self.registry.revision(&self.binding).unwrap(),
                 action(),
             )
-            .unwrap()
+            .unwrap();
+        self.allocate(&claim, staged().parent);
+        self.registry.claim(key).unwrap()
+    }
+
+    fn allocate(&mut self, claim: &WorkspaceClaim, parent: EditPhysicalIdentity) {
+        self.registry
+            .allocate_edit_stage(
+                claim.key,
+                claim.start.as_ref().unwrap(),
+                StageAllocation {
+                    registry_incarnation: self.registry.incarnation().to_owned(),
+                    parent,
+                    reserved_bytes: MAX_EDIT_BYTES,
+                },
+            )
+            .unwrap();
     }
 
     fn reopen(&mut self) {
@@ -144,7 +161,7 @@ fn admission_atomically_mints_one_receipt_and_bounded_manifest_without_staging()
     let admitted = f.admit(k);
     let receipt = admitted.start.as_ref().unwrap();
     assert_eq!(receipt.backend, f.binding.backend);
-    assert!(receipt.identity.starts_with("edit-attempt-v1:"));
+    assert!(receipt.identity.starts_with("edit-attempt-v2:"));
     assert!(receipt.identity.len() <= 160);
     let edit = admitted.edit.as_ref().unwrap();
     assert_eq!(edit.manifest.action, action());
@@ -765,6 +782,7 @@ fn manifest_bounds_and_terminal_capacity_are_checked_before_admission() {
         target_file: large_identity(u64::MAX - 2),
         target_parent: large_identity(u64::MAX - 3),
     };
+    f.allocate(&claim, stage.parent);
     f.registry
         .record_edit_staged(k, claim.start.as_ref().unwrap(), stage)
         .unwrap();
@@ -849,7 +867,7 @@ fn old_registry_version_is_refused_without_migration() {
     let mut f = Fixture::new();
     f.registry
         .connection
-        .execute_batch("PRAGMA user_version=3;")
+        .execute_batch("PRAGMA user_version=4;")
         .unwrap();
     assert!(matches!(
         WorkspaceRegistry::open(f.home.join("host")),
@@ -860,11 +878,11 @@ fn old_registry_version_is_refused_without_migration() {
         .connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
         .unwrap();
-    assert_eq!(version, 3);
+    assert_eq!(version, 4);
     // Restore only the test fixture, not through a production migration path.
     f.registry
         .connection
-        .execute_batch("PRAGMA user_version=4;")
+        .execute_batch("PRAGMA user_version=5;")
         .unwrap();
     f.reopen();
 }
@@ -1007,6 +1025,328 @@ fn run_phase(
 }
 
 #[test]
+fn allocation_is_incarnation_receipt_parent_and_byte_bound() {
+    let mut f = Fixture::new();
+    let k = key();
+    let claim = f
+        .registry
+        .admit_edit(
+            &f.binding,
+            k,
+            WorkspaceResources::Files,
+            f.registry.revision(&f.binding).unwrap(),
+            action(),
+        )
+        .unwrap();
+    let receipt = claim.start.as_ref().unwrap();
+    assert!(claim.edit.as_ref().unwrap().allocation.is_none());
+    assert!(
+        f.registry
+            .outstanding_edit_allocations()
+            .unwrap()
+            .is_empty()
+    );
+    assert!(f.registry.record_edit_staged(k, receipt, staged()).is_err());
+    let allocation = StageAllocation {
+        registry_incarnation: f.registry.incarnation().to_owned(),
+        parent: staged().parent,
+        reserved_bytes: MAX_EDIT_BYTES,
+    };
+    for bad in [
+        StageAllocation {
+            registry_incarnation: "0".repeat(64),
+            ..allocation.clone()
+        },
+        StageAllocation {
+            reserved_bytes: MAX_EDIT_BYTES + 1,
+            ..allocation.clone()
+        },
+    ] {
+        assert!(f.registry.allocate_edit_stage(k, receipt, bad).is_err());
+    }
+    let mut wrong = receipt.clone();
+    wrong.identity.push('x');
+    assert!(
+        f.registry
+            .allocate_edit_stage(k, &wrong, allocation.clone())
+            .is_err()
+    );
+    f.registry
+        .allocate_edit_stage(k, receipt, allocation.clone())
+        .unwrap();
+    assert!(
+        f.registry
+            .allocate_edit_stage(
+                k,
+                receipt,
+                StageAllocation {
+                    parent: identity(99),
+                    ..allocation.clone()
+                }
+            )
+            .is_err()
+    );
+    assert!(
+        f.registry
+            .record_edit_staged(
+                k,
+                receipt,
+                EditStaged {
+                    parent: identity(99),
+                    ..staged()
+                }
+            )
+            .is_err()
+    );
+    f.reopen();
+    assert_eq!(f.registry.claim(k).unwrap().start, claim.start);
+    assert_eq!(
+        f.registry.claim(k).unwrap().edit.unwrap().allocation,
+        Some(allocation)
+    );
+}
+
+#[test]
+fn terminal_pending_allocations_exhaust_quota_until_durable_disposal() {
+    let mut f = Fixture::new();
+    let mut claims = Vec::new();
+    for _ in 0..MAX_EDIT_ALLOCATIONS {
+        let claim = f.admit(key());
+        f.registry
+            .resolve_edit(
+                claim.key,
+                evidence(&claim, EffectSummary::NoMutation),
+                EditTermination::JoinedWithoutRename,
+            )
+            .unwrap();
+        claims.push(claim);
+    }
+    f.reopen();
+    assert!(f.registry.unresolved(None, 256).unwrap().is_empty());
+    assert_eq!(
+        f.registry.outstanding_edit_allocations().unwrap().len(),
+        MAX_EDIT_ALLOCATIONS
+    );
+    let k = key();
+    let first = &claims[0];
+    for authorized in [false, true] {
+        if authorized {
+            f.registry
+                .record_edit_disposal(
+                    first.key,
+                    first.start.as_ref().unwrap(),
+                    StageDisposal::Authorized,
+                )
+                .unwrap();
+        }
+        assert!(matches!(
+            f.registry.admit_edit(
+                &f.binding,
+                k,
+                WorkspaceResources::Files,
+                f.registry.revision(&f.binding).unwrap(),
+                action()
+            ),
+            Err(RegistryError::Capacity)
+        ));
+        assert!(f.registry.claim(k).is_err());
+    }
+    f.registry
+        .record_edit_disposal(
+            first.key,
+            first.start.as_ref().unwrap(),
+            StageDisposal::Disposed,
+        )
+        .unwrap();
+    f.reopen();
+    assert_eq!(
+        f.registry.outstanding_edit_allocations().unwrap().len(),
+        MAX_EDIT_ALLOCATIONS - 1
+    );
+    f.admit(k);
+    assert_eq!(
+        f.registry.outstanding_edit_allocations().unwrap().len(),
+        MAX_EDIT_ALLOCATIONS
+    );
+    assert_eq!(f.registry.revision(&f.binding).unwrap(), first.base);
+}
+
+#[test]
+fn allocation_and_disposal_failures_roll_back_quota_and_ack_loss_is_observable() {
+    for phase in 0..3 {
+        for commit_failure in [false, true] {
+            let mut f = Fixture::new();
+            let k = key();
+            let claim = f
+                .registry
+                .admit_edit(
+                    &f.binding,
+                    k,
+                    WorkspaceResources::Files,
+                    f.registry.revision(&f.binding).unwrap(),
+                    action(),
+                )
+                .unwrap();
+            let receipt = claim.start.as_ref().unwrap();
+            let allocation = StageAllocation {
+                registry_incarnation: f.registry.incarnation().to_owned(),
+                parent: staged().parent,
+                reserved_bytes: MAX_EDIT_BYTES,
+            };
+            if phase > 0 {
+                f.registry
+                    .allocate_edit_stage(k, receipt, allocation.clone())
+                    .unwrap();
+                f.registry
+                    .resolve_edit(
+                        k,
+                        evidence(&claim, EffectSummary::NoMutation),
+                        EditTermination::JoinedWithoutRename,
+                    )
+                    .unwrap();
+            }
+            if phase == 2 {
+                f.registry
+                    .record_edit_disposal(k, receipt, StageDisposal::Authorized)
+                    .unwrap();
+            }
+            let run = |registry: &mut WorkspaceRegistry| match phase {
+                0 => registry.allocate_edit_stage(k, receipt, allocation.clone()),
+                1 => registry.record_edit_disposal(k, receipt, StageDisposal::Authorized),
+                _ => registry.record_edit_disposal(k, receipt, StageDisposal::Disposed),
+            };
+            let before = f.registry.claim(k).unwrap();
+            let pending = f.registry.outstanding_edit_allocations().unwrap();
+            let body = if commit_failure {
+                f.registry.connection.execute_batch("CREATE TABLE fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED);").unwrap();
+                "INSERT INTO fault_child VALUES(1);"
+            } else {
+                "SELECT RAISE(ABORT, 'injected allocation/disposal write failure');"
+            };
+            f.registry
+                .connection
+                .execute_batch(&format!(
+                    "CREATE TRIGGER fault AFTER UPDATE ON claims BEGIN {body} END;"
+                ))
+                .unwrap();
+            assert!(matches!(run(&mut f.registry), Err(RegistryError::Sql(_))));
+            f.reopen();
+            assert_eq!(f.registry.claim(k).unwrap(), before);
+            assert_eq!(f.registry.outstanding_edit_allocations().unwrap(), pending);
+            f.registry
+                .connection
+                .execute_batch("DROP TRIGGER fault;")
+                .unwrap();
+            f.registry.lose_commit_ack();
+            assert!(matches!(run(&mut f.registry), Err(RegistryError::Io(_))));
+            f.reopen();
+            let after = f.registry.claim(k).unwrap();
+            assert_ne!(after, before);
+            assert_eq!(after.start, before.start);
+            assert_eq!(after.terminal, before.terminal);
+            assert_eq!(
+                f.registry.outstanding_edit_allocations().unwrap().len(),
+                usize::from(phase != 2)
+            );
+            run(&mut f.registry).unwrap();
+            assert_eq!(f.registry.claim(k).unwrap(), after);
+            assert_eq!(f.registry.revision(&f.binding).unwrap(), claim.base);
+        }
+    }
+}
+
+#[test]
+fn disposal_cannot_clear_armed_unknown_or_skip_authorization() {
+    let mut f = Fixture::new();
+    let claim = f.admit(key());
+    let receipt = claim.start.as_ref().unwrap();
+    f.arm(&claim);
+    for disposition in [StageDisposal::Authorized, StageDisposal::Disposed] {
+        assert!(
+            f.registry
+                .record_edit_disposal(claim.key, receipt, disposition)
+                .is_err()
+        );
+    }
+    assert!(f.registry.claim(claim.key).unwrap().terminal.is_none());
+    assert_eq!(f.registry.outstanding_edit_allocations().unwrap().len(), 1);
+    f.registry
+        .resolve_edit(
+            claim.key,
+            evidence(&claim, EffectSummary::NoMutation),
+            EditTermination::JoinedWithoutRename,
+        )
+        .unwrap();
+    assert!(
+        f.registry
+            .record_edit_disposal(claim.key, receipt, StageDisposal::Disposed)
+            .is_err()
+    );
+    assert_eq!(f.registry.outstanding_edit_allocations().unwrap().len(), 1);
+}
+
+#[test]
+fn fresh_registry_incarnation_never_reuses_receipt_or_slot() {
+    let mut f = Fixture::new();
+    let k = key();
+    let old = f.admit(k);
+    let mut other = WorkspaceRegistry::open(f.home.join("other-host")).unwrap();
+    let binding = other
+        .bind(&f.binding.id, &f.binding.canonical_root, &f.binding.backend)
+        .unwrap();
+    assert_eq!(binding, f.binding);
+    let new = other
+        .admit_edit(&binding, k, old.resources, old.base, action())
+        .unwrap();
+    assert_ne!(other.incarnation(), f.registry.incarnation());
+    assert_ne!(old.start, new.start);
+    assert_ne!(
+        old.edit.as_ref().unwrap().manifest.stage_slot,
+        new.edit.as_ref().unwrap().manifest.stage_slot
+    );
+    assert!(
+        other
+            .allocate_edit_stage(
+                k,
+                new.start.as_ref().unwrap(),
+                old.edit.unwrap().allocation.unwrap()
+            )
+            .is_err()
+    );
+    assert!(other.outstanding_edit_allocations().unwrap().is_empty());
+}
+
+#[test]
+fn original_v4_schema_and_artifacts_are_not_adopted() {
+    let f = Fixture::new();
+    let legacy = f.home.join("legacy");
+    fs::create_dir_all(legacy.join("staging")).unwrap();
+    let orphan = legacy.join("staging/edit-legacy-slot");
+    fs::write(&orphan, b"unrecorded partial or collision").unwrap();
+    let connection = Connection::open(legacy.join("workspace-registry.sqlite")).unwrap();
+    connection.execute_batch("CREATE TABLE bindings(id TEXT PRIMARY KEY, record TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE repositories(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
+        CREATE TABLE claims(key TEXT PRIMARY KEY, session TEXT NOT NULL, invocation INTEGER NOT NULL, active INTEGER NOT NULL, record TEXT NOT NULL);
+        CREATE INDEX active_claims ON claims(active);
+        PRAGMA application_id=1229934162; PRAGMA user_version=4;").unwrap();
+    assert!(matches!(
+        WorkspaceRegistry::open(&legacy),
+        Err(RegistryError::Unsupported)
+    ));
+    assert_eq!(
+        fs::read(&orphan).unwrap(),
+        b"unrecorded partial or collision"
+    );
+    assert_eq!(
+        connection
+            .query_row("PRAGMA user_version", [], |r| r.get::<_, i64>(0))
+            .unwrap(),
+        4
+    );
+    assert_eq!(connection.query_row("SELECT count(*) FROM sqlite_master WHERE name IN ('registry_identity','edit_allocations')", [], |r| r.get::<_, i64>(0)).unwrap(), 0);
+}
+
+#[test]
 fn lost_write_acknowledgements_require_durable_inspection_not_noop_inference() {
     let mut f = Fixture::new();
     let k = key();
@@ -1017,6 +1357,8 @@ fn lost_write_acknowledgements_require_durable_inspection_not_noop_inference() {
         Err(RegistryError::Io(_))
     ));
     f.reopen();
+    let claim = f.registry.claim(k).unwrap();
+    f.allocate(&claim, staged().parent);
     let claim = f.registry.claim(k).unwrap();
     assert_eq!(f.admit(k), claim);
     for phase in 1..=3 {

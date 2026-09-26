@@ -37,7 +37,8 @@ use thiserror::Error;
 mod edit;
 pub use edit::{
     EditAction, EditClaim, EditContent, EditManifest, EditPhysicalIdentity, EditRenameArmed,
-    EditStaged, EditTermination, MAX_EDIT_BYTES, MAX_EDIT_TARGET_BYTES,
+    EditStaged, EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES, MAX_EDIT_TARGET_BYTES,
+    StageAllocation, StageDisposal,
 };
 
 #[cfg(all(test, unix))]
@@ -147,6 +148,7 @@ struct BindingRecord {
 pub struct WorkspaceRegistry {
     connection: Connection,
     directory: PathBuf,
+    incarnation: String,
     #[cfg(test)]
     lose_next_commit_ack: bool,
 }
@@ -181,17 +183,33 @@ impl WorkspaceRegistry {
                 CREATE TABLE repositories(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE claims(key TEXT PRIMARY KEY, session TEXT NOT NULL, invocation INTEGER NOT NULL, active INTEGER NOT NULL, record TEXT NOT NULL);
                 CREATE INDEX active_claims ON claims(active);
-                PRAGMA application_id=1229934162; PRAGMA user_version=4;")?;
-        } else if version != 4 || application != 1229934162 {
+                CREATE TABLE registry_identity(incarnation TEXT NOT NULL);
+                INSERT INTO registry_identity VALUES(lower(hex(randomblob(32))));
+                CREATE TABLE edit_allocations(key TEXT PRIMARY KEY REFERENCES claims(key));
+                PRAGMA application_id=1229934162; PRAGMA user_version=5;")?;
+        } else if version != 5 || application != 1229934162 {
+            return Err(RegistryError::Unsupported);
+        }
+        let incarnation: String =
+            tx.query_row("SELECT incarnation FROM registry_identity", [], |r| {
+                r.get(0)
+            })?;
+        if incarnation.len() != 64 || !incarnation.bytes().all(|b| b.is_ascii_hexdigit()) {
             return Err(RegistryError::Unsupported);
         }
         tx.commit()?;
         Ok(Self {
             connection,
             directory,
+            incarnation,
             #[cfg(test)]
             lose_next_commit_ack: false,
         })
+    }
+
+    /// Durable random identity of this registry creation, not a pathname or schema version.
+    pub fn incarnation(&self) -> &str {
+        &self.incarnation
     }
 
     /// Freeze a local object. Reusing an id never adopts a replacement object.
@@ -336,6 +354,13 @@ impl WorkspaceRegistry {
                 };
             }
         }
+        if action.is_some() {
+            let outstanding: i64 =
+                tx.query_row("SELECT count(*) FROM edit_allocations", [], |r| r.get(0))?;
+            if outstanding >= MAX_EDIT_ALLOCATIONS as i64 {
+                return Err(RegistryError::Capacity);
+            }
+        }
         let record = checked_binding(&tx, binding)?;
         outside(&self.directory, &record.descriptor)?;
         if describe(Path::new(&binding.canonical_root)).ok().as_ref() != Some(&record.descriptor) {
@@ -389,7 +414,7 @@ impl WorkspaceRegistry {
             edit: None,
         };
         if let Some(action) = action {
-            edit::initialize(&mut claim, action)?;
+            edit::initialize(&mut claim, action, &self.incarnation)?;
         }
         tx.execute(
             "INSERT INTO claims(key,session,invocation,active,record) VALUES(?1,?2,?3,1,?4)",

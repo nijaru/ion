@@ -7,6 +7,34 @@ use super::*;
 
 pub const MAX_EDIT_BYTES: u64 = 16 * 1024;
 pub const MAX_EDIT_TARGET_BYTES: usize = 4096;
+/// Registry-wide outstanding reservations, including terminal cleanup failures.
+pub const MAX_EDIT_ALLOCATIONS: usize = 64;
+
+/// Immutable vacancy certificate for the enclosing claim's exact receipt and slot.
+/// Trusted host attests a no-follow absent-name check and parent durability barrier
+/// under permanent worker/staging custody BEFORE exclusive creation. Provenance
+/// remains valid only while the host continuously protects the namespace (0700 is
+/// not confinement against same-user writers). This is NOT rename eligibility.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StageAllocation {
+    pub registry_incarnation: String,
+    pub parent: EditPhysicalIdentity,
+    /// Reserve the full per-stage bound, including interrupted writes.
+    pub reserved_bytes: u64,
+}
+
+/// Independent of transcript/effect settlement; disposal never clears quarantine.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StageDisposal {
+    Reserved,
+    /// Exclusive create observed a collision after certified vacancy: custody was
+    /// violated. Never adopt/unlink this occupant or automatically retire quota.
+    Blocked,
+    /// Durable terminal proof has authorized cleanup; quota remains reserved.
+    Authorized,
+    /// Host attests unlink/absence AND a successful parent durability barrier.
+    Disposed,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditContent {
@@ -163,6 +191,8 @@ pub enum EditTermination {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct EditClaim {
     pub manifest: EditManifest,
+    pub allocation: Option<StageAllocation>,
+    pub disposal: Option<StageDisposal>,
     pub staged: Option<EditStaged>,
     pub rename_armed: Option<EditRenameArmed>,
     /// Proof supporting WorkspaceClaim::terminal, written atomically with it.
@@ -184,6 +214,46 @@ impl WorkspaceRegistry {
         action: EditAction,
     ) -> Result<WorkspaceClaim> {
         self.admit_claim(binding, key, resources, expected, Some(action))
+    }
+
+    /// Persist the host's vacancy certificate before O_EXCL creation. An uncertain
+    /// reply MUST be authoritatively read back before creation. Duplicate facts
+    /// are observations, never permission for another create or replay.
+    pub fn allocate_edit_stage(
+        &mut self,
+        key: ClaimKey,
+        receipt: &RegistryReceipt,
+        allocation: StageAllocation,
+    ) -> Result<()> {
+        self.record_edit_fact(key, receipt, EditFact::Allocation(allocation))
+    }
+
+    /// At most 64 outstanding allocations, discoverable without Session or workspace
+    /// access, including crashed workers and terminal cleanup-pending claims.
+    pub fn outstanding_edit_allocations(&self) -> Result<Vec<WorkspaceClaim>> {
+        let mut stmt = self.connection.prepare(
+            "SELECT claims.record FROM edit_allocations JOIN claims USING(key) ORDER BY key LIMIT ?1",
+        )?;
+        let rows = stmt.query_map([MAX_EDIT_ALLOCATIONS as i64 + 1], |r| r.get::<_, String>(0))?;
+        let claims: Vec<WorkspaceClaim> = rows.map(|r| decode(&r?)).collect::<Result<_>>()?;
+        if claims.len() > MAX_EDIT_ALLOCATIONS {
+            return Err(RegistryError::Capacity);
+        }
+        Ok(claims)
+    }
+
+    /// Record disposal authority before unlink, or completed durable disposal.
+    /// `Blocked` records a witnessed post-allocation custody violation and is
+    /// irreversible. It never grants disposal authority, even after settlement.
+    /// These trusted host attestations cannot settle effects or authorize cleanup
+    /// of an unresolved armed attempt. A failed reply requires readback.
+    pub fn record_edit_disposal(
+        &mut self,
+        key: ClaimKey,
+        receipt: &RegistryReceipt,
+        disposition: StageDisposal,
+    ) -> Result<()> {
+        self.record_edit_fact(key, receipt, EditFact::Disposal(disposition))
     }
 
     /// Append one immutable Staged fact. Exact duplicates remain observable after
@@ -226,10 +296,78 @@ impl WorkspaceRegistry {
         let terminal = claim.terminal.is_some();
         let arming = matches!(fact, EditFact::RenameArmed(_));
         let changed = match fact {
+            EditFact::Allocation(allocation) => {
+                allocation.parent.validate()?;
+                if allocation.registry_incarnation != self.incarnation
+                    || allocation.reserved_bytes != MAX_EDIT_BYTES
+                {
+                    return Err(RegistryError::EvidenceConflict);
+                }
+                let changed = append(&mut edit.allocation, allocation, terminal)?;
+                if changed {
+                    let count: i64 =
+                        tx.query_row("SELECT count(*) FROM edit_allocations", [], |r| r.get(0))?;
+                    if count >= MAX_EDIT_ALLOCATIONS as i64 {
+                        return Err(RegistryError::Capacity);
+                    }
+                    tx.execute(
+                        "INSERT INTO edit_allocations(key) VALUES(?1)",
+                        [encode(&key)?],
+                    )?;
+                    edit.disposal = Some(StageDisposal::Reserved);
+                }
+                changed
+            }
+            EditFact::Disposal(disposition) => {
+                if edit
+                    .allocation
+                    .as_ref()
+                    .is_none_or(|a| a.registry_incarnation != self.incarnation)
+                    || (disposition != StageDisposal::Blocked
+                        && (!terminal
+                            || !matches!(
+                                edit.termination,
+                                Some(
+                                    EditTermination::JoinedWithoutRename
+                                        | EditTermination::Replaced {
+                                            destination_parent_synced: true,
+                                            staging_parent_synced: true
+                                        }
+                                )
+                            )))
+                {
+                    return Err(RegistryError::EvidenceConflict);
+                }
+                if edit.disposal == Some(disposition) {
+                    false
+                } else {
+                    match (edit.disposal, disposition) {
+                        (Some(StageDisposal::Reserved), StageDisposal::Blocked)
+                            if edit.staged.is_none() && edit.rename_armed.is_none() => {}
+                        (Some(StageDisposal::Reserved), StageDisposal::Authorized) => {}
+                        (Some(StageDisposal::Authorized), StageDisposal::Disposed) => {
+                            tx.execute(
+                                "DELETE FROM edit_allocations WHERE key=?1",
+                                [encode(&key)?],
+                            )?;
+                        }
+                        _ => return Err(RegistryError::EvidenceConflict),
+                    }
+                    edit.disposal = Some(disposition);
+                    true
+                }
+            }
             EditFact::Staged(staged) => {
+                if edit.disposal == Some(StageDisposal::Blocked) {
+                    return Err(RegistryError::EvidenceConflict);
+                }
                 staged.file.validate()?;
                 staged.parent.validate()?;
-                if staged.content != edit.manifest.action.replacement
+                if edit
+                    .allocation
+                    .as_ref()
+                    .is_none_or(|a| a.parent != staged.parent)
+                    || staged.content != edit.manifest.action.replacement
                     || !staged.file_synced
                     || !staged.parent_synced
                     || staged.file.device != staged.parent.device
@@ -303,6 +441,8 @@ impl WorkspaceRegistry {
 }
 
 enum EditFact {
+    Allocation(StageAllocation),
+    Disposal(StageDisposal),
     Staged(EditStaged),
     RenameArmed(EditRenameArmed),
 }
@@ -318,10 +458,15 @@ fn append<T: PartialEq>(slot: &mut Option<T>, value: T, terminal: bool) -> Resul
     Ok(true)
 }
 
-pub(super) fn initialize(claim: &mut WorkspaceClaim, action: EditAction) -> Result<()> {
+pub(super) fn initialize(
+    claim: &mut WorkspaceClaim,
+    action: EditAction,
+    incarnation: &str,
+) -> Result<()> {
     let identity = ContentDigest::of_bytes(
         encode(&(
-            "registry-edit-attempt-v1",
+            "registry-edit-attempt-v2",
+            incarnation,
             claim.key,
             &claim.binding,
             claim.resources,
@@ -332,13 +477,15 @@ pub(super) fn initialize(claim: &mut WorkspaceClaim, action: EditAction) -> Resu
     );
     claim.start = Some(RegistryReceipt {
         backend: claim.binding.backend.clone(),
-        identity: format!("edit-attempt-v1:{identity}"),
+        identity: format!("edit-attempt-v2:{identity}"),
     });
     claim.edit = Some(EditClaim {
         manifest: EditManifest {
             action,
             stage_slot: format!("edit-{identity}"),
         },
+        allocation: None,
+        disposal: None,
         staged: None,
         rename_armed: None,
         termination: None,
@@ -351,6 +498,12 @@ pub(super) fn initialize(claim: &mut WorkspaceClaim, action: EditAction) -> Resu
 fn reserve_terminal_capacity(claim: &WorkspaceClaim) -> Result<()> {
     let mut largest = claim.clone();
     let edit = largest.edit.as_mut().ok_or(RegistryError::Invalid)?;
+    edit.allocation = Some(StageAllocation {
+        registry_incarnation: "f".repeat(64),
+        parent: EditPhysicalIdentity::MAX,
+        reserved_bytes: MAX_EDIT_BYTES,
+    });
+    edit.disposal = Some(StageDisposal::Authorized);
     edit.staged = Some(EditStaged {
         file: EditPhysicalIdentity::MAX,
         parent: EditPhysicalIdentity::MAX,

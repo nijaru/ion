@@ -112,17 +112,32 @@ on Linux), and on Linux the same mount identity.
 The host must protect staging, registry state, their ancestry and the workspace namespace;
 permissions and advisory locks do not confine untrusted same-user processes. The backend
 uses descriptor-relative no-follow access, permanent custody locks, registry-minted
-immutable receipts, durable staged/rename-armed facts and both directory sync barriers.
+immutable receipts, durable allocation/staged/rename-armed facts and both directory sync barriers.
 Only the original worker may rename; recovery never replays an uncertain replacement.
 Durability depends on the filesystem and hardware; process-loss tests are not power-loss
 qualification. The host must not delete or recreate the custody lock or staging directory.
-Ordinary pre-rename aborts clean up their authenticated private stage after terminal
-no-rename evidence; pre-arm process-loss recovery can settle `NoMutation` and remove
-a stage only when its physical identity was durably recorded. Unauthenticated
-partial-write crash survivors and cleanup failures remain under a hard 64-file/1-MiB
-ceiling; admission fails closed when full. General orphan GC is not implemented. A recovery-only
-constructor can adopt terminal evidence after the workspace disappears, but cannot prove
-an unresolved rename. No native edit is wired into the executable or live-provider tests.
+The experimental registry format is v5 and the frozen implementation is
+`native-edit-private-v3`; v4 registries are rejected, not migrated or adopted.
+Before exclusive create, a receipt-bound allocation records exact no-follow vacancy
+and a completed staging-parent barrier under custody. It binds the physical parent and
+registry incarnation. Under **continuous host protection**, it authenticates even a
+partial crash survivor; `Staged` remains necessary for rename eligibility. Preexisting
+collisions prevent allocation and are never removed. A witnessed collision after
+allocation blocks disposal permanently because it contradicts that protection.
+
+Pre-arm recovery commits `NoMutation` before cleanup. Registry-owned disposal remains
+discoverable after terminal settlement and Session/workspace loss. Unlink (or an absent-name
+retry) requires a parent sync; quota retires only after durable disposal. There are at most
+64 outstanding 16-KiB reservations, including cleanup failures and blocked attempts, plus
+a separate staging-directory count/size check. Admission fails closed at saturation.
+Trusted hosts can inspect `WorkspaceRegistry::outstanding_edit_allocations()` and call
+`NativeEditBoundary::recover_staging(registry_directory, staging_root)` after repairing
+storage. This bounded API acquires custody and returns remaining claim keys; it never
+replays an armed unknown, clears its quarantine, or deletes an unauthenticated occupant.
+Do not use it after registry restore/reset or loss of namespace protection; there is no
+force-clear or automatic namespace retirement. A recovery-only constructor can adopt
+terminal evidence after the workspace disappears, but cannot prove an unresolved rename.
+No native edit is wired into the executable or live-provider tests.
 
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
 with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient

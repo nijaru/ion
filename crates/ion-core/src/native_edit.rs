@@ -36,17 +36,18 @@ use crate::{
     ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
     workspace_registry::{
         ClaimKey, EditAction, EditContent, EditPhysicalIdentity, EditRenameArmed, EditStaged,
-        EditTermination, RegistryError, RegistryReceipt, TerminalEvidence, WorkspaceClaim,
-        WorkspaceRegistry, WorkspaceResources, WorkspaceRevision,
+        EditTermination, MAX_EDIT_ALLOCATIONS, MAX_EDIT_BYTES, RegistryError, RegistryReceipt,
+        StageAllocation, StageDisposal, TerminalEvidence, WorkspaceClaim, WorkspaceRegistry,
+        WorkspaceResources, WorkspaceRevision,
     },
 };
 
 /// Hard maximum for the complete source and replacement target.
-pub const MAX_NATIVE_EDIT_BYTES: usize = 16 * 1024;
+pub const MAX_NATIVE_EDIT_BYTES: usize = MAX_EDIT_BYTES as usize;
 
 const MAX_PATH_BYTES: usize = 4096;
-const IMPLEMENTATION_ID: &str = "native-edit-private-v2";
-const MAX_STAGE_FILES: usize = 64;
+const IMPLEMENTATION_ID: &str = "native-edit-private-v3";
+const MAX_STAGE_FILES: usize = MAX_EDIT_ALLOCATIONS;
 const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
 const AUTHORITY_ASK: u8 = 1;
@@ -72,6 +73,22 @@ const FAULT_CLEANUP_DIRECTORY_SYNC: u8 = 37;
 const FAULT_DESTINATION_DIRECTORY_SYNC: u8 = 38;
 #[cfg(test)]
 const FAULT_STAGING_DIRECTORY_SYNC: u8 = 39;
+#[cfg(test)]
+const FAULT_ALLOCATION_ACK: u8 = 43;
+#[cfg(test)]
+const FAULT_AFTER_ALLOCATION: u8 = 44;
+#[cfg(test)]
+const FAULT_VACANCY_DIRECTORY_SYNC: u8 = 45;
+#[cfg(test)]
+const FAULT_DISPOSAL_AUTH_ACK: u8 = 46;
+#[cfg(test)]
+const FAULT_DISPOSED_ACK: u8 = 47;
+#[cfg(test)]
+const FAULT_AFTER_CREATE: u8 = 48;
+#[cfg(test)]
+const FAULT_AFTER_DISPOSAL_UNLINK: u8 = 50;
+#[cfg(test)]
+const FAULT_AFTER_DISPOSAL_SYNC: u8 = 51;
 
 /// Native exact-text editor bound to one frozen tool and workspace.
 pub struct NativeEditBoundary {
@@ -112,8 +129,11 @@ impl NativeEditBoundary {
     /// `staging_root` must be preexisting, canonical, private (0700), a strict
     /// descendant of the registry's protected namespace, and on the same
     /// supported local filesystem. The host protects it and the permanent registry custody inode
-    /// from replacement, including by same-user tools. Retained staging is bounded;
-    /// this backend never cleans up unknown artifacts or falls back to workspace staging.
+    /// from replacement, including by same-user tools. Protection includes staging
+    /// contents and must continue across process death and terminal settlement;
+    /// allocation-authenticated cleanup is impossible without this host guarantee.
+    /// Retained staging is bounded; this backend never cleans up unknown artifacts
+    /// or falls back to workspace staging.
     pub fn new(
         registry: &WorkspaceRegistry,
         workspace: WorkspaceBinding,
@@ -292,23 +312,88 @@ impl NativeEditBoundary {
         (expected == *action && replacement.len() <= self.max_file_bytes).then_some(arguments)
     }
 
-    fn cleanup_staged(&self, staged: &EditStaged, slot: &str) {
-        let Some(stage_parent) = &self.staging else {
-            return;
-        };
-        if physical_identity(stage_parent).ok() == Some(staged.parent)
-            && let Ok(_stage_custody) = lock_staging(stage_parent)
+    fn cleanup_allocation(&self, registry: &mut WorkspaceRegistry, key: ClaimKey) {
+        if let Some(parent) = &self.staging
+            && let Ok(_stage_custody) = lock_staging(parent)
         {
-            // Only exact physical identity permits unlink. Reconciliation can
-            // retry a failed cleanup without changing terminal effect truth.
-            let _ = cleanup_stage_with_identity(
-                stage_parent,
-                slot,
-                staged.file,
+            // Disposal errors remain registry-discoverable, never effect evidence.
+            let _ = dispose_allocation(
+                registry,
+                key,
+                parent,
                 #[cfg(test)]
                 &self.fault,
             );
         }
+    }
+
+    /// Explicit, bounded host recovery/GC without Session or workspace access.
+    /// The caller MUST have continuously protected registry, permanent custody inode
+    /// and staging namespace since allocation, including against same-user tools.
+    /// Permissions do not establish this precondition. Never use after registry
+    /// reset/restore or namespace custody loss. Busy custody fails closed; no TTL,
+    /// replay or force-clear. At most 64 records are examined per call. Returned
+    /// keys still need repair/investigation (possibly in another staging parent).
+    pub fn recover_staging(
+        registry_directory: &Path,
+        staging_root: &Path,
+    ) -> Result<Vec<ClaimKey>, NativeEditError> {
+        let directory = registry_directory.canonicalize()?;
+        let _custody = acquire_custody(&directory)?;
+        let mut registry = WorkspaceRegistry::open(&directory)?;
+        let stage = open_absolute_directory(
+            staging_root
+                .to_str()
+                .ok_or(NativeEditError::InvalidStaging)?,
+        )?;
+        if staging_root.canonicalize()? != staging_root
+            || staging_root == directory
+            || !staging_root.starts_with(&directory)
+            || stage.metadata()?.permissions().mode() & 0o077 != 0
+        {
+            return Err(NativeEditError::InvalidStaging);
+        }
+        let _stage_custody = lock_staging(&stage)?;
+        let parent = physical_identity(&stage)?;
+        let binding =
+            ContentDigest::of(&native_edit_binding().map_err(NativeEditError::InvalidBinding)?)
+                .map_err(|_| NativeEditError::InvalidStaging)?;
+        for claim in registry.outstanding_edit_allocations()? {
+            let (Some(edit), Some(start)) = (&claim.edit, &claim.start) else {
+                continue;
+            };
+            if edit.manifest.action.tool_binding != binding
+                || edit.allocation.as_ref().is_none_or(|a| {
+                    a.parent != parent || a.registry_incarnation != registry.incarnation()
+                })
+            {
+                continue;
+            }
+            if claim.terminal.is_none()
+                && edit.rename_armed.is_none()
+                && !resolve_confirmed(
+                    &mut registry,
+                    claim.key,
+                    start,
+                    crate::EffectSummary::NoMutation,
+                    EditTermination::JoinedWithoutRename,
+                )
+            {
+                continue;
+            }
+            let _ = dispose_allocation(
+                &mut registry,
+                claim.key,
+                &stage,
+                #[cfg(test)]
+                &AtomicU8::new(0),
+            );
+        }
+        Ok(registry
+            .outstanding_edit_allocations()?
+            .into_iter()
+            .map(|c| c.key)
+            .collect())
     }
 
     fn sync_recovered_directory(&self, parent: &File, source: bool) -> std::io::Result<()> {
@@ -612,11 +697,6 @@ struct EditJob {
     pause: Arc<TestPause>,
 }
 
-struct OwnedStage {
-    file: File,
-    slot: String,
-}
-
 fn run_edit(job: EditJob) -> ToolAttemptState {
     // The permanent registry lock is opened independently for every operation.
     // The blocking owner retains it even if its async waiter is dropped.
@@ -647,8 +727,7 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
     }
     // Returning from the effect worker is the quiescence boundary. Only this
     // supervisor settles NoMutation; the worker cannot perform any later rename.
-    let mut owned_stage = None;
-    let state = run_effect_worker(&job, &mut registry, &mut owned_stage);
+    let state = run_effect_worker(&job, &mut registry);
     let ToolAttemptState::Settled {
         effect,
         receipt: Some(receipt),
@@ -675,28 +754,21 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
     if !resolve_confirmed(&mut registry, key, &start, effect.clone(), proof) {
         return indeterminate("workspace registry resolution is uncertain", Some(&start));
     }
-    if matches!(effect, crate::EffectSummary::NoMutation)
-        && let Some(stage) = &owned_stage
-    {
-        // Release host-private staging only after durable no-rename evidence.
-        // A failure leaves a bounded orphan, not a changed target verdict.
-        let _ = cleanup_owned_stage(
-            &job.staging,
-            stage,
-            #[cfg(test)]
-            &job.fault,
-        );
-    }
+    // Terminal truth precedes disposal, even after a successful rename. Failures
+    // retain quota independently of the Session and released workspace claim.
+    let _ = dispose_allocation(
+        &mut registry,
+        key,
+        &job.staging,
+        #[cfg(test)]
+        &job.fault,
+    );
     #[cfg(test)]
     trip_fault(&job.fault, FAULT_AFTER_REGISTRY_COMMIT);
     state
 }
 
-fn run_effect_worker(
-    job: &EditJob,
-    registry: &mut WorkspaceRegistry,
-    owned_stage: &mut Option<OwnedStage>,
-) -> ToolAttemptState {
+fn run_effect_worker(job: &EditJob, registry: &mut WorkspaceRegistry) -> ToolAttemptState {
     if job.stop.is_cancelled() {
         return not_started("edit cancelled before admission");
     }
@@ -794,7 +866,11 @@ fn run_effect_worker(
     };
     let start = claim.start.as_ref().expect("edit admission mints receipt");
     let edit = claim.edit.as_ref().expect("edit admission mints manifest");
-    if edit.staged.is_some() || edit.rename_armed.is_some() || claim.terminal.is_some() {
+    if edit.allocation.is_some()
+        || edit.staged.is_some()
+        || edit.rename_armed.is_some()
+        || claim.terminal.is_some()
+    {
         return indeterminate("existing edit cannot authorize execution", Some(start));
     }
     #[cfg(test)]
@@ -805,24 +881,83 @@ fn run_effect_worker(
     }
     let temporary = &edit.manifest.stage_slot;
     #[cfg(test)]
-    if job.fault.load(Ordering::SeqCst) == 10 {
-        create_temporary(&job.staging, temporary)
+    match job.fault.load(Ordering::SeqCst) {
+        10 => create_temporary(&job.staging, temporary)
             .unwrap()
             .write_all(b"occupant")
-            .unwrap();
+            .unwrap(),
+        40 => rustix::fs::symlinkat("missing", &job.staging, temporary).unwrap(),
+        41 => rustix::fs::mkdirat(
+            &job.staging,
+            temporary,
+            Mode::RUSR | Mode::WUSR | Mode::XUSR,
+        )
+        .unwrap(),
+        42 => assert!(
+            std::process::Command::new("mkfifo")
+                .arg(job.registry_directory.join("staging").join(temporary))
+                .status()
+                .unwrap()
+                .success()
+        ),
+        _ => {}
     }
-    let staged = match create_temporary(&job.staging, temporary) {
-        Ok(file) => file,
-        // An existing occupant is never opened, adopted, truncated or removed.
+    let allocation = match certify_vacancy(
+        &job.staging,
+        temporary,
+        registry.incarnation(),
+        #[cfg(test)]
+        &job.fault,
+    ) {
+        Ok(allocation) => allocation,
         Err(_) => return aborted_edit(start),
     };
-    *owned_stage = Some(OwnedStage {
-        file: staged,
-        slot: temporary.clone(),
-    });
-    let staged = &mut owned_stage.as_mut().expect("new stage is owned").file;
     #[cfg(test)]
-    if job.fault.load(Ordering::SeqCst) == 20 {
+    if job.fault.load(Ordering::SeqCst) == FAULT_ALLOCATION_ACK {
+        registry.lose_commit_ack();
+    }
+    if registry
+        .allocate_edit_stage(key, start, allocation.clone())
+        .is_err()
+        && !registry.claim(key).is_ok_and(|c| {
+            c.start.as_ref() == Some(start)
+                && c.edit
+                    .is_some_and(|e| e.allocation.as_ref() == Some(&allocation))
+        })
+    {
+        return aborted_edit(start);
+    }
+    #[cfg(test)]
+    test_phase(job, FAULT_AFTER_ALLOCATION);
+    #[cfg(test)]
+    if job.fault.load(Ordering::SeqCst) == 49 {
+        create_temporary(&job.staging, temporary)
+            .unwrap()
+            .write_all(b"custody violation")
+            .unwrap();
+    }
+    let mut staged = match create_temporary(&job.staging, temporary) {
+        Ok(file) => file,
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            // This contradicts continuous namespace protection. Preserve the
+            // witnessed collision, never adopt it using the vacancy certificate.
+            if confirm_disposal(registry, key, start, StageDisposal::Blocked).is_err() {
+                return indeterminate(
+                    "stage custody violation could not be recorded; host must stop recovery",
+                    Some(start),
+                );
+            }
+            return aborted_edit(start);
+        }
+        Err(_) => return aborted_edit(start),
+    };
+    #[cfg(test)]
+    trip_fault(&job.fault, FAULT_AFTER_CREATE);
+    #[cfg(test)]
+    if matches!(
+        job.fault.load(Ordering::SeqCst),
+        20 | FAULT_AFTER_DISPOSAL_UNLINK | FAULT_AFTER_DISPOSAL_SYNC
+    ) {
         staged.write_all(b"partial").unwrap();
         return aborted_edit(start);
     }
@@ -832,14 +967,14 @@ fn run_effect_worker(
         trip_fault(&job.fault, FAULT_DURING_STAGE_WRITE);
     }
     if staged.write_all(&replacement).is_err()
-        || fchmod(&*staged, Mode::from_raw_mode(base_mode as _)).is_err()
+        || fchmod(&staged, Mode::from_raw_mode(base_mode as _)).is_err()
         || staged.sync_all().is_err()
         || job.staging.sync_all().is_err()
     {
         return aborted_edit(start);
     }
     let (Ok(staged_identity), Ok(stage_parent), Ok(target_parent)) = (
-        physical_identity(staged),
+        physical_identity(&staged),
         physical_identity(&job.staging),
         physical_identity(&parent),
     ) else {
@@ -956,9 +1091,9 @@ async fn reconcile_edit(
         };
     let _custody = match acquire_custody(&boundary.registry_directory) {
         Ok(lock) => lock,
-        Err(_) => {
+        Err(error) => {
             return uncertain(
-                "edit worker still owns custody or custody is unavailable",
+                &format!("edit worker still owns custody or custody is unavailable: {error}"),
                 None,
             );
         }
@@ -1016,9 +1151,7 @@ async fn reconcile_edit(
         if terminal.receipt == *start {
             match (&terminal.effect, &edit.termination) {
                 (crate::EffectSummary::NoMutation, Some(EditTermination::JoinedWithoutRename)) => {
-                    if let Some(staged) = &edit.staged {
-                        boundary.cleanup_staged(staged, &edit.manifest.stage_slot);
-                    }
+                    boundary.cleanup_allocation(&mut registry, key);
                     return aborted_edit(start);
                 }
                 (
@@ -1028,6 +1161,7 @@ async fn reconcile_edit(
                         staging_parent_synced: true,
                     }),
                 ) if actual == &effect => {
+                    boundary.cleanup_allocation(&mut registry, key);
                     return settled_edit(&arguments, &replacement, effect, start);
                 }
                 _ => {}
@@ -1048,11 +1182,7 @@ async fn reconcile_edit(
         ) {
             return uncertain("pre-arm edit resolution is uncertain", Some(start));
         }
-        if let Some(staged) = &edit.staged {
-            // Without a durable Staged fact, an orphan name could be a
-            // preexisting collision. Never infer its ownership from the slot.
-            boundary.cleanup_staged(staged, &edit.manifest.stage_slot);
-        }
+        boundary.cleanup_allocation(&mut registry, key);
         return aborted_edit(start);
     }
     let (Some(staged), Some(armed), Some(root), Some(stage_parent)) = (
@@ -1109,6 +1239,13 @@ async fn reconcile_edit(
     ) {
         return uncertain("workspace registry resolution is uncertain", Some(start));
     }
+    let _ = dispose_allocation(
+        &mut registry,
+        key,
+        stage_parent,
+        #[cfg(test)]
+        &boundary.fault,
+    );
     settled_edit(&arguments, &replacement, effect, start)
 }
 
@@ -1242,9 +1379,23 @@ fn resolve_confirmed(
         })
 }
 
+/// Native edit never delegates effects to child processes. Release at worker
+/// quiescence explicitly: close alone can retain an OFD lock through descriptors
+/// temporarily inherited by an unrelated host fork/spawn. This guard is not
+/// cloneable and must remain in the blocking worker, not its async waiter.
+struct Custody(File);
+
+impl Drop for Custody {
+    fn drop(&mut self) {
+        // Unlock failure remains conservative exclusion until descriptor close;
+        // it cannot change already settled effect truth or authorize more I/O.
+        let _ = self.0.unlock();
+    }
+}
+
 /// Host must protect this permanent inode and its ancestors from removal and
 /// replacement. It is never unlinked, including on process loss or cleanup.
-fn acquire_custody(directory: &Path) -> std::io::Result<File> {
+fn acquire_custody(directory: &Path) -> std::io::Result<Custody> {
     let parent = open_absolute_directory(
         directory
             .to_str()
@@ -1266,11 +1417,12 @@ fn acquire_custody(directory: &Path) -> std::io::Result<File> {
     }
     lock.try_lock()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let custody = Custody(lock);
     parent.sync_all()?;
-    Ok(lock)
+    Ok(custody)
 }
 
-fn lock_staging(parent: &File) -> std::io::Result<File> {
+fn lock_staging(parent: &File) -> std::io::Result<Custody> {
     let lock = File::from(openat(
         parent,
         ".",
@@ -1279,7 +1431,7 @@ fn lock_staging(parent: &File) -> std::io::Result<File> {
     )?);
     lock.try_lock()
         .map_err(|error| std::io::Error::other(error.to_string()))?;
-    Ok(lock)
+    Ok(Custody(lock))
 }
 
 fn stage_capacity(parent: &File) -> std::io::Result<()> {
@@ -1540,24 +1692,112 @@ fn create_temporary(parent: &File, leaf: &str) -> std::io::Result<File> {
     Ok(File::from(fd))
 }
 
-fn cleanup_owned_stage(
-    parent: &File,
-    stage: &OwnedStage,
-    #[cfg(test)] fault: &AtomicU8,
-) -> std::io::Result<()> {
-    cleanup_stage_with_identity(
-        parent,
-        &stage.slot,
-        physical_identity(&stage.file)?,
-        #[cfg(test)]
-        fault,
-    )
-}
-
-fn cleanup_stage_with_identity(
+/// Called only under both permanent custody locks. ENOENT alone certifies
+/// vacancy; symlink/file/directory/FIFO and every lookup error refuse allocation.
+fn certify_vacancy(
     parent: &File,
     slot: &str,
-    expected: PhysicalIdentity,
+    incarnation: &str,
+    #[cfg(test)] fault: &AtomicU8,
+) -> std::io::Result<StageAllocation> {
+    match statat(parent, slot, AtFlags::SYMLINK_NOFOLLOW) {
+        Err(rustix::io::Errno::NOENT) => {}
+        _ => {
+            return Err(std::io::Error::other(
+                "stage slot is not authoritatively vacant",
+            ));
+        }
+    }
+    let identity = physical_identity(parent)?;
+    #[cfg(test)]
+    if fault.load(Ordering::SeqCst) == FAULT_VACANCY_DIRECTORY_SYNC {
+        return Err(std::io::Error::other(
+            "injected vacancy directory barrier failure",
+        ));
+    }
+    parent.sync_all()?;
+    Ok(StageAllocation {
+        registry_incarnation: incarnation.to_owned(),
+        parent: identity,
+        reserved_bytes: MAX_EDIT_BYTES,
+    })
+}
+
+/// Only terminal evidence authorizes disposal; no change to effect truth here.
+/// Caller holds registry and staging custody continuously through readback/unlink.
+fn dispose_allocation(
+    registry: &mut WorkspaceRegistry,
+    key: ClaimKey,
+    parent: &File,
+    #[cfg(test)] fault: &AtomicU8,
+) -> Result<(), NativeEditError> {
+    let claim = registry.claim(key)?;
+    let edit = claim.edit.as_ref().ok_or(RegistryError::EvidenceConflict)?;
+    let Some(allocation) = &edit.allocation else {
+        return Ok(());
+    };
+    if edit.disposal == Some(StageDisposal::Disposed) {
+        return Ok(());
+    }
+    if allocation.registry_incarnation != registry.incarnation()
+        || physical_identity(parent)? != allocation.parent
+    {
+        return Err(RegistryError::EvidenceConflict.into());
+    }
+    let receipt = claim
+        .start
+        .as_ref()
+        .ok_or(RegistryError::EvidenceConflict)?;
+    #[cfg(test)]
+    if fault.load(Ordering::SeqCst) == FAULT_DISPOSAL_AUTH_ACK {
+        registry.lose_commit_ack();
+    }
+    confirm_disposal(registry, key, receipt, StageDisposal::Authorized)?;
+    let expected = edit.staged.as_ref().map(|s| s.file);
+    cleanup_allocated_stage(
+        parent,
+        &edit.manifest.stage_slot,
+        expected,
+        matches!(edit.termination, Some(EditTermination::Replaced { .. })),
+        #[cfg(test)]
+        fault,
+    )?;
+    #[cfg(test)]
+    trip_fault(fault, FAULT_AFTER_DISPOSAL_SYNC);
+    #[cfg(test)]
+    if fault.load(Ordering::SeqCst) == FAULT_DISPOSED_ACK {
+        registry.lose_commit_ack();
+    }
+    confirm_disposal(registry, key, receipt, StageDisposal::Disposed)?;
+    Ok(())
+}
+
+fn confirm_disposal(
+    registry: &mut WorkspaceRegistry,
+    key: ClaimKey,
+    receipt: &RegistryReceipt,
+    disposition: StageDisposal,
+) -> Result<(), RegistryError> {
+    match registry.record_edit_disposal(key, receipt, disposition) {
+        Ok(()) => Ok(()),
+        Err(error) => {
+            if registry.claim(key).is_ok_and(|c| {
+                c.start.as_ref() == Some(receipt)
+                    && c.edit.is_some_and(|e| e.disposal == Some(disposition))
+            }) {
+                Ok(())
+            } else {
+                Err(error)
+            }
+        }
+    }
+}
+
+fn cleanup_allocated_stage(
+    parent: &File,
+    slot: &str,
+    expected: Option<PhysicalIdentity>,
+    replaced: bool,
     #[cfg(test)] fault: &AtomicU8,
 ) -> std::io::Result<()> {
     let candidate = match openat(
@@ -1569,11 +1809,20 @@ fn cleanup_stage_with_identity(
         Ok(fd) => File::from(fd),
         // A previous unlink may have succeeded before its directory sync
         // failed. Sync absence again before releasing the cleanup obligation.
-        Err(rustix::io::Errno::NOENT) => return parent.sync_all(),
+        Err(rustix::io::Errno::NOENT) => {
+            return sync_disposal_parent(
+                parent,
+                #[cfg(test)]
+                fault,
+            );
+        }
         Err(error) => return Err(error.into()),
     };
-    if FileType::from_raw_mode(fstat(&candidate)?.st_mode) != FileType::RegularFile
-        || physical_identity(&candidate)? != expected
+    if replaced
+        || FileType::from_raw_mode(fstat(&candidate)?.st_mode) != FileType::RegularFile
+        || candidate.metadata()?.nlink() != 1
+        || candidate.metadata()?.len() > MAX_EDIT_BYTES
+        || expected.is_some_and(|identity| physical_identity(&candidate).ok() != Some(identity))
     {
         return Err(std::io::Error::other(
             "staged file custody cannot be authenticated",
@@ -1583,7 +1832,20 @@ fn cleanup_stage_with_identity(
     if fault.load(Ordering::SeqCst) == FAULT_CLEANUP_UNLINK {
         return Err(std::io::Error::other("injected staging unlink failure"));
     }
-    unlinkat(parent, slot, AtFlags::empty())?;
+    match unlinkat(parent, slot, AtFlags::empty()) {
+        Ok(()) | Err(rustix::io::Errno::NOENT) => {}
+        Err(error) => return Err(error.into()),
+    }
+    #[cfg(test)]
+    trip_fault(fault, FAULT_AFTER_DISPOSAL_UNLINK);
+    sync_disposal_parent(
+        parent,
+        #[cfg(test)]
+        fault,
+    )
+}
+
+fn sync_disposal_parent(parent: &File, #[cfg(test)] fault: &AtomicU8) -> std::io::Result<()> {
     #[cfg(test)]
     if fault.load(Ordering::SeqCst) == FAULT_CLEANUP_DIRECTORY_SYNC {
         return Err(std::io::Error::other(
@@ -1758,7 +2020,13 @@ fn trip_fault(fault: &AtomicU8, point: u8) {
         || (std::env::var_os("ION_EDIT_TEST_HOST").is_some()
             && matches!(
                 point,
-                FAULT_AFTER_ADMIT | FAULT_AFTER_STAGE_FACT | FAULT_DURING_STAGE_WRITE
+                FAULT_AFTER_ADMIT
+                    | FAULT_AFTER_ALLOCATION
+                    | FAULT_AFTER_STAGE_FACT
+                    | FAULT_AFTER_CREATE
+                    | FAULT_DURING_STAGE_WRITE
+                    | FAULT_AFTER_DISPOSAL_UNLINK
+                    | FAULT_AFTER_DISPOSAL_SYNC
             )
             && fault.load(Ordering::SeqCst) == point)
     {
@@ -1886,6 +2154,32 @@ mod tests {
             progress: None,
             state,
         }
+    }
+
+    #[test]
+    fn quiescent_custody_releases_even_with_an_inherited_descriptor_alias() {
+        let fixture = Fixture::new(false);
+        let custody = acquire_custody(fixture.host.path()).unwrap();
+        // dup retains the same kernel open-file description as an inherited FD.
+        // It has no effect worker; native edit never delegates effects to children.
+        let inherited = custody.0.try_clone().unwrap();
+        assert!(acquire_custody(fixture.host.path()).is_err());
+        drop(custody);
+        let next = acquire_custody(fixture.host.path()).unwrap();
+        drop(inherited);
+        assert!(acquire_custody(fixture.host.path()).is_err());
+        drop(next);
+        assert!(acquire_custody(fixture.host.path()).is_ok());
+        let parent = fixture.boundary.staging.as_ref().unwrap();
+        let custody = lock_staging(parent).unwrap();
+        let inherited = custody.0.try_clone().unwrap();
+        assert!(lock_staging(parent).is_err());
+        drop(custody);
+        let next = lock_staging(parent).unwrap();
+        drop(inherited);
+        assert!(lock_staging(parent).is_err());
+        drop(next);
+        assert!(lock_staging(parent).is_ok());
     }
 
     #[tokio::test]
@@ -2517,7 +2811,15 @@ mod tests {
 
     #[tokio::test]
     async fn lost_commit_acknowledgements_are_read_back_at_every_phase() {
-        for point in [6, 7, 8, 9] {
+        for point in [
+            6,
+            7,
+            8,
+            9,
+            FAULT_ALLOCATION_ACK,
+            FAULT_DISPOSAL_AUTH_ACK,
+            FAULT_DISPOSED_ACK,
+        ] {
             let fixture = Fixture::new(false);
             let execution = fixture.execution(
                 fixture
@@ -2542,6 +2844,13 @@ mod tests {
             );
             let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
             assert!(claim.edit.unwrap().rename_armed.is_some());
+            assert!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(
                 fixture
                     .registry
@@ -2549,6 +2858,62 @@ mod tests {
                     .unwrap()
                     .files,
                 1
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn every_preallocation_collision_is_preserved() {
+        for fault in [10, 40, 41, 42] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture.boundary.inject_fault(fault);
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            assert!(
+                matches!(
+                    state,
+                    ToolAttemptState::Settled {
+                        effect: crate::EffectSummary::NoMutation,
+                        ..
+                    }
+                ),
+                "{fault}: {state:?}"
+            );
+            let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert!(claim.edit.as_ref().unwrap().allocation.is_none());
+            assert!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .is_empty()
+            );
+            let slot = fixture
+                .host
+                .path()
+                .join("staging")
+                .join(&claim.edit.as_ref().unwrap().manifest.stage_slot);
+            let before = fs::symlink_metadata(&slot).unwrap();
+            assert_eq!(
+                fixture
+                    .boundary
+                    .reconcile(execution.clone(), attempt(&execution, state.clone()))
+                    .await,
+                state
+            );
+            let after = fs::symlink_metadata(&slot).unwrap();
+            assert_eq!((before.ino(), before.mode()), (after.ino(), after.mode()));
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
             );
         }
     }
@@ -2614,7 +2979,11 @@ mod tests {
             &fixture.host.path().join("staging"),
         )
         .unwrap();
-        fixture.boundary.pause.point.store(5, Ordering::SeqCst);
+        fixture
+            .boundary
+            .pause
+            .point
+            .store(FAULT_AFTER_ALLOCATION, Ordering::SeqCst);
         let pause = Arc::clone(&fixture.boundary.pause);
         let boundary = Arc::new(fixture.boundary);
         let worker = Arc::clone(&boundary);
@@ -2631,6 +3000,13 @@ mod tests {
         task.abort();
         assert!(task.await.unwrap_err().is_cancelled());
         assert!(acquire_custody(fixture.host.path()).is_err());
+        assert!(
+            NativeEditBoundary::recover_staging(
+                fixture.host.path(),
+                &fixture.host.path().join("staging")
+            )
+            .is_err()
+        );
         let uncertain = ToolAttemptState::Indeterminate {
             reason: "waiter dropped".into(),
             receipt: None,
@@ -2905,6 +3281,8 @@ mod tests {
     async fn actual_pre_arm_process_loss_settles_without_rename_or_receipt_change() {
         for fault in [
             FAULT_AFTER_ADMIT,
+            FAULT_AFTER_ALLOCATION,
+            FAULT_AFTER_CREATE,
             FAULT_DURING_STAGE_WRITE,
             FAULT_AFTER_STAGE_FACT,
         ] {
@@ -2941,6 +3319,17 @@ mod tests {
                 fs::read_dir(fixture.host.path().join("staging"))
                     .unwrap()
                     .count(),
+                usize::from(matches!(
+                    fault,
+                    FAULT_AFTER_CREATE | FAULT_DURING_STAGE_WRITE | FAULT_AFTER_STAGE_FACT
+                ))
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .len(),
                 usize::from(fault != FAULT_AFTER_ADMIT)
             );
             let receipt = session_receipt(claim.start.as_ref().unwrap());
@@ -2961,6 +3350,14 @@ mod tests {
                 receipt: Some(ref saved), ..
             } if saved == &receipt));
             let terminal = fixture.registry.claim(claim_key(&execution)).unwrap();
+            assert_eq!(terminal.start, claim.start);
+            assert!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .is_empty()
+            );
             assert_eq!(
                 terminal.terminal.unwrap().effect,
                 crate::EffectSummary::NoMutation
@@ -2977,11 +3374,102 @@ mod tests {
                 fs::read_dir(fixture.host.path().join("staging"))
                     .unwrap()
                     .count(),
-                usize::from(fault == FAULT_DURING_STAGE_WRITE)
+                0,
             );
             assert_eq!(
                 fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
                 "alpha beta alpha\n"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn actual_disposal_process_loss_retires_quota_only_after_recovery_barrier() {
+        for fault in [FAULT_AFTER_DISPOSAL_UNLINK, FAULT_AFTER_DISPOSAL_SYNC] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            let status = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "native_edit::tests::process_loss_child",
+                    "--nocapture",
+                ])
+                .env("ION_EDIT_TEST_HOST", fixture.host.path())
+                .env(
+                    "ION_EDIT_TEST_WORKSPACE",
+                    serde_json::to_string(&execution.workspace).unwrap(),
+                )
+                .env(
+                    "ION_EDIT_TEST_SESSION",
+                    serde_json::to_string(&execution.session).unwrap(),
+                )
+                .env("ION_EDIT_TEST_FAULT", fault.to_string())
+                .status()
+                .unwrap();
+            assert_eq!(status.code(), Some(73));
+            let key = claim_key(&execution);
+            let claim = fixture.registry.claim(key).unwrap();
+            assert_eq!(
+                claim.terminal.as_ref().unwrap().effect,
+                crate::EffectSummary::NoMutation
+            );
+            assert_eq!(
+                claim.edit.as_ref().unwrap().disposal,
+                Some(StageDisposal::Authorized)
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .len(),
+                1
+            );
+            assert_eq!(
+                fs::read_dir(fixture.host.path().join("staging"))
+                    .unwrap()
+                    .count(),
+                0
+            );
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            assert_eq!(
+                fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+                "alpha beta alpha\n"
+            );
+            assert!(
+                NativeEditBoundary::recover_staging(
+                    fixture.host.path(),
+                    &fixture.host.path().join("staging")
+                )
+                .unwrap()
+                .is_empty()
+            );
+            let recovered = fixture.registry.claim(key).unwrap();
+            assert_eq!(recovered.start, claim.start);
+            assert_eq!(recovered.terminal, claim.terminal);
+            assert_eq!(
+                recovered.edit.as_ref().unwrap().disposal,
+                Some(StageDisposal::Disposed)
+            );
+            assert!(
+                NativeEditBoundary::recover_staging(
+                    fixture.host.path(),
+                    &fixture.host.path().join("staging")
+                )
+                .unwrap()
+                .is_empty()
             );
         }
     }
@@ -3105,6 +3593,14 @@ mod tests {
                     .await,
                 result
             );
+            assert_eq!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .len(),
+                1
+            );
             // Once the cleanup fault clears, the same terminal receipt can
             // release its authenticated stage without revising effect truth.
             boundary.inject_fault(0);
@@ -3113,6 +3609,13 @@ mod tests {
                     .reconcile(execution.clone(), attempt(&execution, result.clone()))
                     .await,
                 result
+            );
+            assert!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .is_empty()
             );
             assert_eq!(
                 fs::read_dir(fixture.host.path().join("staging"))
@@ -3173,6 +3676,322 @@ mod tests {
                 .unwrap()
                 .files,
             0
+        );
+    }
+
+    #[tokio::test]
+    async fn storage_faults_gate_creation_unlink_and_quota_retirement() {
+        for disposition in ["Reserved", "Authorized", "Disposed"] {
+            for commit_failure in [false, true] {
+                let fixture = Fixture::new(false);
+                let execution = fixture.execution(
+                    fixture
+                        .boundary
+                        .prepare(fixture.arguments("beta", "gamma"))
+                        .unwrap(),
+                );
+                let db = rusqlite::Connection::open(
+                    fixture.host.path().join("workspace-registry.sqlite"),
+                )
+                .unwrap();
+                let body = if commit_failure {
+                    db.execute_batch("CREATE TABLE fault_parent(id INTEGER PRIMARY KEY); CREATE TABLE fault_child(id INTEGER REFERENCES fault_parent(id) DEFERRABLE INITIALLY DEFERRED);").unwrap();
+                    "INSERT INTO fault_child VALUES(1);"
+                } else {
+                    "SELECT RAISE(ABORT, 'injected stage write failure');"
+                };
+                db.execute_batch(&format!("CREATE TRIGGER fault AFTER UPDATE ON claims WHEN json_extract(NEW.record, '$.edit.disposal') = '{disposition}' BEGIN {body} END;")).unwrap();
+                fixture.boundary.inject_fault(20); // Partial write, then owning-worker abort.
+                let state = fixture
+                    .boundary
+                    .execute(execution.clone(), CancellationToken::new())
+                    .await;
+                assert!(
+                    matches!(
+                        state,
+                        ToolAttemptState::Settled {
+                            effect: crate::EffectSummary::NoMutation,
+                            ..
+                        }
+                    ),
+                    "{disposition}: {state:?}"
+                );
+                let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+                let count = usize::from(disposition != "Reserved");
+                assert_eq!(
+                    fixture
+                        .registry
+                        .outstanding_edit_allocations()
+                        .unwrap()
+                        .len(),
+                    count
+                );
+                let stage = fixture.host.path().join("staging");
+                assert_eq!(
+                    fs::read_dir(&stage).unwrap().count(),
+                    usize::from(disposition == "Authorized")
+                );
+                // Even ENOENT after unlink cannot retire quota while the DB fails.
+                assert_eq!(
+                    NativeEditBoundary::recover_staging(fixture.host.path(), &stage)
+                        .unwrap()
+                        .len(),
+                    count
+                );
+                db.execute_batch("DROP TRIGGER fault;").unwrap();
+                fs::remove_file(fixture.root.path().join("file.txt")).unwrap();
+                fs::remove_dir(fixture.root.path()).unwrap();
+                assert!(
+                    NativeEditBoundary::recover_staging(fixture.host.path(), &stage)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+                let after = fixture.registry.claim(claim.key).unwrap();
+                assert_eq!(after.start, claim.start);
+                assert_eq!(after.terminal, claim.terminal);
+                assert_eq!(
+                    fixture
+                        .registry
+                        .revision(&execution.workspace)
+                        .unwrap()
+                        .files,
+                    0
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn witnessed_postallocation_collision_blocks_disposal_permanently() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(49);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                ..
+            }
+        ));
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        let edit = claim.edit.as_ref().unwrap();
+        assert_eq!(edit.disposal, Some(StageDisposal::Blocked));
+        let stage = fixture.host.path().join("staging");
+        assert_eq!(
+            NativeEditBoundary::recover_staging(fixture.host.path(), &stage).unwrap(),
+            vec![claim.key]
+        );
+        assert_eq!(
+            fixture
+                .boundary
+                .reconcile(execution.clone(), attempt(&execution, state.clone()))
+                .await,
+            state
+        );
+        assert_eq!(
+            fs::read(stage.join(&edit.manifest.stage_slot)).unwrap(),
+            b"custody violation"
+        );
+        assert_eq!(fixture.registry.claim(claim.key).unwrap(), claim);
+    }
+
+    #[tokio::test]
+    async fn vacancy_barrier_failure_never_allocates_or_creates() {
+        let fixture = Fixture::new(false);
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        fixture.boundary.inject_fault(FAULT_VACANCY_DIRECTORY_SYNC);
+        let state = fixture
+            .boundary
+            .execute(execution.clone(), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                ..
+            }
+        ));
+        let claim = fixture.registry.claim(claim_key(&execution)).unwrap();
+        assert!(claim.edit.unwrap().allocation.is_none());
+        assert!(
+            fixture
+                .registry
+                .outstanding_edit_allocations()
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            fs::read_dir(fixture.host.path().join("staging"))
+                .unwrap()
+                .count(),
+            0
+        );
+    }
+
+    #[tokio::test]
+    async fn host_gc_is_session_independent_and_refuses_replaced_parent_or_armed_unknown() {
+        for armed in [false, true] {
+            let fixture = Fixture::new(false);
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            fixture
+                .boundary
+                .inject_fault(if armed { 5 } else { FAULT_DURING_STAGE_WRITE });
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            assert!(matches!(state, ToolAttemptState::Indeterminate { .. }));
+            let before = fixture.registry.claim(claim_key(&execution)).unwrap();
+            let stage = fixture.host.path().join("staging");
+            let displaced = fixture.host.path().join("displaced");
+            fs::rename(&stage, &displaced).unwrap();
+            fs::create_dir(&stage).unwrap();
+            fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
+            let slot = &before.edit.as_ref().unwrap().manifest.stage_slot;
+            fs::write(stage.join(slot), b"unknown occupant").unwrap();
+            assert_eq!(
+                NativeEditBoundary::recover_staging(fixture.host.path(), &stage).unwrap(),
+                vec![before.key]
+            );
+            assert_eq!(fixture.registry.claim(before.key).unwrap(), before);
+            assert_eq!(fs::read(stage.join(slot)).unwrap(), b"unknown occupant");
+            // Simulate loss of the workspace and Session owner; neither is needed
+            // for allocation-authenticated cleanup under the original parent.
+            fs::remove_file(fixture.root.path().join("file.txt")).unwrap();
+            fs::remove_dir(fixture.root.path()).unwrap();
+            let pending =
+                NativeEditBoundary::recover_staging(fixture.host.path(), &displaced).unwrap();
+            assert_eq!(pending.len(), usize::from(armed));
+            let after = fixture.registry.claim(before.key).unwrap();
+            assert_eq!(after.start, before.start);
+            assert_eq!(
+                fixture
+                    .registry
+                    .revision(&execution.workspace)
+                    .unwrap()
+                    .files,
+                0
+            );
+            if armed {
+                assert_eq!(after, before);
+                assert!(displaced.join(slot).exists());
+            } else {
+                assert_eq!(
+                    after.terminal.unwrap().effect,
+                    crate::EffectSummary::NoMutation
+                );
+                assert!(!displaced.join(slot).exists());
+                // Retired allocations never authorize a second unlink/adoption.
+                fs::write(displaced.join(slot), b"later occupant").unwrap();
+                assert!(
+                    NativeEditBoundary::recover_staging(fixture.host.path(), &displaced)
+                        .unwrap()
+                        .is_empty()
+                );
+                assert_eq!(fs::read(displaced.join(slot)).unwrap(), b"later occupant");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn empty_staging_still_saturates_on_pending_disposal_until_host_gc() {
+        let fixture = Fixture::new(false);
+        let stage = fixture.host.path().join("staging");
+        let db = rusqlite::Connection::open(fixture.host.path().join("workspace-registry.sqlite"))
+            .unwrap();
+        db.execute_batch("CREATE TRIGGER fault AFTER UPDATE ON claims WHEN json_extract(NEW.record, '$.edit.disposal') = 'Disposed' BEGIN SELECT RAISE(ABORT, 'persistent disposal failure'); END;").unwrap();
+        fixture.boundary.inject_fault(20);
+        for n in 0..=MAX_EDIT_ALLOCATIONS {
+            let execution = fixture.execution(
+                fixture
+                    .boundary
+                    .prepare(fixture.arguments("beta", "gamma"))
+                    .unwrap(),
+            );
+            let state = fixture
+                .boundary
+                .execute(execution.clone(), CancellationToken::new())
+                .await;
+            if n == MAX_EDIT_ALLOCATIONS {
+                assert!(matches!(state, ToolAttemptState::NotStarted { .. }));
+                assert!(fixture.registry.claim(claim_key(&execution)).is_err());
+            } else {
+                assert!(matches!(
+                    state,
+                    ToolAttemptState::Settled {
+                        effect: crate::EffectSummary::NoMutation,
+                        ..
+                    }
+                ));
+            }
+            assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+            assert_eq!(
+                fixture
+                    .registry
+                    .outstanding_edit_allocations()
+                    .unwrap()
+                    .len(),
+                (n + 1).min(MAX_EDIT_ALLOCATIONS)
+            );
+        }
+        assert_eq!(
+            NativeEditBoundary::recover_staging(fixture.host.path(), &stage)
+                .unwrap()
+                .len(),
+            MAX_EDIT_ALLOCATIONS
+        );
+        db.execute_batch("DROP TRIGGER fault;").unwrap();
+        assert!(
+            NativeEditBoundary::recover_staging(fixture.host.path(), &stage)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("file.txt")).unwrap(),
+            "alpha beta alpha\n"
+        );
+        let execution = fixture.execution(
+            fixture
+                .boundary
+                .prepare(fixture.arguments("beta", "gamma"))
+                .unwrap(),
+        );
+        assert!(matches!(
+            fixture
+                .boundary
+                .execute(execution, CancellationToken::new())
+                .await,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::NoMutation,
+                ..
+            }
+        ));
+        assert!(
+            fixture
+                .registry
+                .outstanding_edit_allocations()
+                .unwrap()
+                .is_empty()
         );
     }
 
