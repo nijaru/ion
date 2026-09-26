@@ -1,7 +1,8 @@
 # Ion architecture
 
 Accepted contract, 2026-09-15; materially refined 2026-09-18 for external
-boundaries and 2026-09-25 for native edit/exec safety. [README.md](README.md)
+boundaries, 2026-09-25 for native edit safety, and 2026-09-26 for the
+command workspace boundary. [README.md](README.md)
 states what the current source implements; this file states the contracts the
 maintained engine must satisfy. Optional extensions in this document are design
 constraints if implemented, not prerequisites for the serial coding baseline.
@@ -636,11 +637,26 @@ command declarations do not count as working exec.
 A lifecycle scope alone is not filesystem or broker confinement. Commands must
 not be able to corrupt the host-owned Session, registry or edit staging whose
 integrity other tools rely on: a Linux cgroup, same-user permissions and advisory
-locks do not establish that separation. If an execution backend permits effects
-through a preexisting broker or remote service outside its scope, local process
-quiescence does not prove those effects stopped. Restrict such delegation where
-the stronger guarantee is claimed, or retain uncertainty and quarantine instead
-of treating a stopped shell as complete effect evidence.
+locks do not establish that separation. A direct workspace bind exposed a
+preexisting Unix-socket broker in a Fedora probe, which kept working after the
+command's local descendants stopped. Therefore the initial confined command
+path uses a host-private workspace view containing only ordinary source files
+and directories, with an explicit symlink policy; it does not bind the live
+checkout, host state, user bus or network into the command scope. The host owns
+bounded snapshot creation and the changed-file manifest. After positive scope
+stop it imports permitted regular-file changes through durable registry claims
+and staging, checking the captured base before each mutation. This applies even
+when the command exits nonzero. Report exact partial import and quarantine any
+unresolved outcome; never imply a failed command made no changes. Generic import
+does not write protected Git metadata. Git mutations require a separate
+repository-level operation or a truthful unsupported result. The snapshot,
+scope and importer are one tool boundary, not a second agent runtime.
+
+An explicitly unconfined backend may have wider effects, but its local process
+receipt proves only local-descendant quiescence. It cannot claim that remote or
+broker-delegated effects have finished. Its result remains `MayHaveMutated`, is
+never retried automatically, and must not release a workspace claim on the
+pretense that a stopped shell proves global effect completion.
 
 Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
 compare-and-swap against an uncooperative external editor. Report that limitation.
