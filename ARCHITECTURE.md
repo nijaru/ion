@@ -1,64 +1,21 @@
 # Ion architecture
 
-Accepted contract, 2026-09-15; materially refined 2026-09-18 after the current
-Pi/Pico and Codex review. [README.md](README.md) states what the current source
-implements; this file states the contracts the maintained engine must satisfy. Ion is
+Accepted contract, 2026-09-15; materially refined 2026-09-18 for external
+boundaries and 2026-09-25 for native edit/exec safety. [README.md](README.md)
+states what the current source implements; this file states the contracts the
+maintained engine must satisfy. Ion is
 unreleased v0: replace obsolete abstractions directly rather than preserving them
 through compatibility layers.
 
-The maintained runtime is being rewritten directly around this contract. R1A and the
-provider-side R1B foundation now implement the replacement durable vocabulary/schema,
-inline immutable TurnEnvironment, frozen provider/tool bindings, semantic request
-manifests, passive Session open, exact-commit observations, typed provider drive/effect
-admission, cancellation generation fencing, physical ModelAttempt evidence, provider
-start-receipt reconciliation, atomic ModelStep fallback supersession, exact provider realm
-matching and live host credential/egress admission before intent and adapter start. The old
-Session/task/tool/workspace runtime is not a compatibility layer underneath them.
-
-Atomic `submit_turn` now admits an Input and places its Turn in one Session commit; the
-remaining steering and targeted interaction controls still lack placement owners.
-
-The initial R1C tool boundary now connects frozen-schema preparation, persisted actions,
-physical attempt evidence, conservative reconciliation, closure reserves, source-order
-result materialization, exact durable per-invocation approval decisions, and truthful
-unavailable settlement of already-returned provider calls through sequential host-supplied
-tools. Tool results now distinguish complete inline, complete artifact and incomplete
-capture; oversized backend values preserve settled effects with explicit output loss rather
-than stranding the attempt. Session-integrated bounded auxiliary output publication uses
-attempt-scoped evidence, atomic reference links, verified pages and explicit GC exclusion
-through queued settlement. Whole-Session deletion and required-content consumers remain
-unimplemented. Active tool state participates in snapshot/watch coverage. Configured
-monetary ceilings currently park before dispatch because host CostQuote admission has not
-been implemented; request and terminal-response JSON capacity checks stop encoding at
-their frozen caps rather than materializing oversized buffers. A separate host-owned
-WorkspaceRegistry preserves physical workspace/repository identity and orphan quarantine;
-a scripted integration test kills the owner after mutation and recovers through the
-registry without replay.
-
-R1C acceptance is not complete: provider preflight is not network confinement; the
-OpenAI-compatible and Anthropic Messages streaming adapters have mock-HTTP tests and
-Session/native-read loopback exchanges. One synthetic OpenRouter Chat Completions
-headless read-and-answer run succeeded, while direct OpenAI returned HTTP 429; neither
-wire adapter has broad live qualification. Returned-model identity and frozen
-tool-choice/parallel controls now
-gate selection and tool admission, including persisted responses after reopen. There is no user-facing
-authenticated approval client, native edit/exec, native large-output capture or real
-parallel dispatch. A native bounded
-read boundary exists and checks its frozen binding against WorkspaceRegistry before
-pinning the root; its descriptor-relative walk is not a race-free beneath-root primitive.
-The host must protect the workspace namespace from concurrent renames; Git marker
-preflight rejects static symlinks and nonregular files. It does not provide an OS sandbox.
-Session ownership locks canonicalize database aliases and refuse hardlinks. Admitted
-start receipts reserve a bounded physical settlement envelope, so an oversized backend
-result cannot evict known terminal effect truth. The scripted
-approval store/drive boundary does not implement the host's live policy or confinement.
-The headless `ion` binary hosts the same Session and bounded read tool for
-submit/inspect/resume; its offline smoke tests no-credential preflight and passive
-reopen, not live-provider or terminal behavior. The headless executable selects
-one of the two frozen wire APIs at Session creation; it does not silently change
-an existing Session's provider. Context compaction/reset/forks, a terminal client
-and workers remain future work. Preserve useful prototype leaf behavior and failure scenarios as replacement
-tests, not obsolete owners or schema/API compatibility.
+The maintained Turn/Session runtime replaces the former generic task runtime
+rather than wrapping it. R1A/R1B foundations are implemented; R1C/C2 product
+acceptance is not complete. The headless host currently supports serial native
+read and two streaming wire adapters, with only one synthetic gateway exchange
+observed live. It has no integrated native edit/exec, terminal or general OS
+confinement. Host preflight and descriptor-relative access are not confinement;
+passing scripted recovery tests is not a qualified coding agent. For current
+capabilities, limitations and validation, use [README.md](README.md). The
+contracts below describe the target even where the implementation is incomplete.
 
 ## Product and boundaries
 
@@ -315,9 +272,11 @@ retains its reservation, and later price-catalog changes never rewrite historica
 attempt accounting. Provider-reported billed cost may be stored separately; host-side
 caps are not represented as provider billing guarantees.
 
-Reserve bounded control/settlement capacity at admission and before dispatch; new inputs
-and output growth cannot consume it. Managed quota refusal is not disk failure: actual
-I/O failure can still fence the session. Enforce limits while reading/writing, not after
+Reserve bounded control/settlement capacity, including admitted start receipts
+and terminal attempt evidence, before dispatch; new inputs and output growth
+cannot consume it. An oversized backend result may lose its captured output,
+not demote a known terminal effect into replayable intent. Managed quota
+refusal is not disk failure: actual I/O failure can still fence the session. Enforce limits while reading/writing, not after
 unlimited buffering. Durability remains conditional on the filesystem/platform.
 
 ## Context and model requests

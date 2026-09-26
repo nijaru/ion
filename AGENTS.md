@@ -12,10 +12,11 @@
   separate from transcript settlement, durable outcome staging for compatible parallel
   tool calls, typed drive exits, atomic commit update batches, ContextEpoch continuity and
   a host-owned workspace registry. Worker context/lifetime/workspace inheritance are
-  separate axes. The current Rust is **rewrite input, not an implementation shape to
-  migrate forward**: replace/refactor maintained production modules directly and delete
-  obsolete representations rather than adapting them. Do not reintroduce a generic
-  task/plan graph, resident semantic mirror or undo journal.
+  separate axes. The former task/runtime Rust is **rewrite input, not an
+  implementation shape to migrate forward**; the maintained R1 Turn/Session
+  modules are now the implementation owner. Replace obsolete representations
+  rather than adapting them. Do not reintroduce a generic task/plan graph,
+  resident semantic mirror or undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
   shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
   Git preserves old code and documents; retain useful failure scenarios as new tests.
