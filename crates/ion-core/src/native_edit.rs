@@ -610,11 +610,7 @@ fn run_edit(job: EditJob) -> ToolAttemptState {
         Err(_) => return indeterminate("staging file could not be created", None),
     };
     if staged.write_all(&replacement).is_err()
-        || fchmod(
-            &staged,
-            Mode::from_bits_truncate(u16::try_from(base_mode).expect("file mode is masked")),
-        )
-        .is_err()
+        || fchmod(&staged, Mode::from_raw_mode(base_mode as _)).is_err()
         || staged.sync_all().is_err()
     {
         return indeterminate("staging file could not be durably written", None);
