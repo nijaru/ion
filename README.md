@@ -328,7 +328,8 @@ parked before editing with an 8K context because Ion conservatively reserves
 serialized request bytes against the asserted input-token capacity. A live PTY
 `ion chat` run used `exec` to write a file, read it back and exited through
 `/quit`. A direct OpenAI attempt returned HTTP 429;
-the Anthropic adapter has only loopback tests. These checks do not qualify
+the Anthropic adapter also completed a synthetic loopback `ion run` read-and-answer
+exchange through its Messages wire API. These checks do not qualify
 public-provider behavior, macOS exec or the full
 range of terminal emulators. The excluded legacy `crates/ion/` remains
 reference material, not an alternative maintained runtime.
