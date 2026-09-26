@@ -8,6 +8,9 @@ pub struct ModelResponse {
     pub usage: Usage,
     /// A finished transport stream is not necessarily a complete answer.
     pub termination: ResponseTermination,
+    /// Actual server-selected model identity when exposed by the protocol.
+    #[serde(default)]
+    pub returned_model: Option<String>,
 }
 
 impl ModelResponse {

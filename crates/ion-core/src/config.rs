@@ -1,57 +1,406 @@
-//! Durable conversation configuration.
+//! Future-turn configuration and one Turn's frozen semantic environment.
 //!
-//! A conversation's model steps are captured from this record: the model, the
-//! resolved instruction text, the project context, the controls, the selected
-//! tools, the context policy and the run limits. It is committed as one
-//! complete typed replacement, never as a partial patch, so a request captured
-//! from it is reproducible.
-//!
-//! Instructions and project context are *resolved content*, not paths to read
-//! later: the host does discovery and file reading outside mutation authority,
-//! then commits the exact text it selected. Recovery reuses that text and never
-//! rereads a file, which is what makes a frozen request reproducible.
-//!
-//! Configuration is not authority. Selecting a tool here does not grant
-//! permission to run it, and instruction text is never execution authority.
+//! ConversationConfig is mutable only as a default for later Turns. Starting a Turn
+//! captures an immutable TurnEnvironment plus a constrained TurnSettings selection.
+//! Credentials and live authority are deliberately absent.
 
-use ion_ai::{GenerationControls, Message, ModelRef, ProviderError, Role};
+use std::collections::BTreeSet;
+
+use ion_ai::{GenerationControls, Message, ModelRef, Reasoning, Role, ToolChoice, ToolSpec};
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::CommitSeq;
+use crate::{CommitSeq, ContentDigest};
 
-/// The most attempts one step may be configured to make.
-///
-/// The attempt ceiling is a property of the frozen request, not of a provider:
-/// it bounds durable attempt evidence for one generation, so it is refused at
-/// configuration time rather than discovered while dispatching.
-pub const MAX_ATTEMPTS_PER_STEP: u32 = 10;
+const MAX_ID_BYTES: usize = 160;
 
-/// A conversation's complete generation configuration.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct ConversationConfig {
+macro_rules! string_id {
+    ($name:ident) => {
+        #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+        pub struct $name(String);
+
+        impl $name {
+            pub fn new(value: impl Into<String>) -> Result<Self, ConfigError> {
+                let value = value.into();
+                validate_id(stringify!($name), &value)?;
+                Ok(Self(value))
+            }
+
+            #[must_use]
+            pub fn as_str(&self) -> &str {
+                &self.0
+            }
+        }
+    };
+}
+
+string_id!(SemanticCompatibilityId);
+string_id!(ProviderBindingId);
+string_id!(ToolBindingId);
+
+fn validate_id(field: &'static str, value: &str) -> Result<(), ConfigError> {
+    if value.is_empty() {
+        return Err(ConfigError::EmptyIdentity { field });
+    }
+    if value.len() > MAX_ID_BYTES {
+        return Err(ConfigError::IdentityTooLong {
+            field,
+            length: value.len(),
+            maximum: MAX_ID_BYTES,
+        });
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum EgressRealm {
+    Local,
+    Remote(String),
+}
+
+impl EgressRealm {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if let Self::Remote(realm) = self {
+            validate_id("egress realm", realm)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReturnedModelPolicy {
+    Exact,
+    ServerRoute { allowed_family: Vec<String> },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderCapabilities {
+    pub max_input_tokens: u32,
+    pub max_output_tokens: u32,
+    pub tools: bool,
+    pub parallel_tool_calls: bool,
+    pub structured_output: bool,
+    pub replay: bool,
+    pub reasoning: bool,
+}
+
+impl ProviderCapabilities {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_input_tokens == 0 {
+            return Err(ConfigError::NonPositiveSetting {
+                setting: "provider.max_input_tokens",
+            });
+        }
+        if self.max_output_tokens == 0 {
+            return Err(ConfigError::NonPositiveSetting {
+                setting: "provider.max_output_tokens",
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StartReceiptCapability {
+    None,
+    Authoritative,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ProviderBinding {
+    pub id: ProviderBindingId,
     pub model: ModelRef,
-    /// The one exact instruction string: host-authorized base text followed by
-    /// selected project instruction text. Never empty-by-accident, because an
-    /// empty string is a real instruction ("none selected") and is preserved.
+    pub adapter: SemanticCompatibilityId,
+    pub request_encoding: SemanticCompatibilityId,
+    pub replay_family: Option<SemanticCompatibilityId>,
+    pub capabilities: ProviderCapabilities,
+    pub returned_model: ReturnedModelPolicy,
+    pub start_receipts: StartReceiptCapability,
+    pub egress: EgressRealm,
+}
+
+impl ProviderBinding {
+    /// Returned model names are exact frozen identities, not prefix/pattern grants.
+    /// Missing identity is not proof that a routed or explicitly selected model ran.
+    #[must_use]
+    pub fn permits_returned_model(&self, actual: Option<&str>) -> bool {
+        match (&self.returned_model, actual) {
+            (ReturnedModelPolicy::Exact, Some(model)) => model == self.model.model,
+            (ReturnedModelPolicy::ServerRoute { allowed_family }, Some(model)) => {
+                allowed_family.iter().any(|allowed| allowed == model)
+            }
+            (_, None) => false,
+        }
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.model.provider.is_empty() || self.model.model.is_empty() {
+            return Err(ConfigError::EmptyModel);
+        }
+        self.capabilities.validate()?;
+        self.egress.validate()?;
+        if let ReturnedModelPolicy::ServerRoute { allowed_family } = &self.returned_model
+            && (allowed_family.is_empty() || allowed_family.iter().any(String::is_empty))
+        {
+            return Err(ConfigError::EmptyReturnedModelFamily);
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolConcurrency {
+    Serial,
+    ParallelSafeReadOnly,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ToolRecoveryPolicy {
+    NeverRepeat,
+    RepeatAfterNotStartedOrNoMutation,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ToolBinding {
+    pub id: ToolBindingId,
+    pub spec: ToolSpec,
+    pub schema_digest: ContentDigest,
+    pub implementation: SemanticCompatibilityId,
+    pub concurrency: ToolConcurrency,
+    pub recovery: ToolRecoveryPolicy,
+    pub start_receipts: StartReceiptCapability,
+    pub egress: EgressRealm,
+}
+
+impl ToolBinding {
+    pub fn new(
+        id: ToolBindingId,
+        spec: ToolSpec,
+        implementation: SemanticCompatibilityId,
+        concurrency: ToolConcurrency,
+        recovery: ToolRecoveryPolicy,
+        egress: EgressRealm,
+    ) -> Result<Self, ConfigError> {
+        let schema_digest =
+            ContentDigest::of(&spec.input_schema).map_err(ConfigError::Serialization)?;
+        let binding = Self {
+            id,
+            spec,
+            schema_digest,
+            implementation,
+            concurrency,
+            recovery,
+            start_receipts: StartReceiptCapability::None,
+            egress,
+        };
+        binding.validate()?;
+        Ok(binding)
+    }
+
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.spec.name.is_empty() {
+            return Err(ConfigError::EmptyToolName);
+        }
+        self.egress.validate()?;
+        let actual =
+            ContentDigest::of(&self.spec.input_schema).map_err(ConfigError::Serialization)?;
+        if actual != self.schema_digest {
+            return Err(ConfigError::ToolSchemaDigestMismatch {
+                binding: self.id.as_str().to_owned(),
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkspaceBinding {
+    pub id: String,
+    pub canonical_root: String,
+    pub backend: String,
+    pub object_identity: String,
+}
+
+impl WorkspaceBinding {
+    fn validate(&self) -> Result<(), ConfigError> {
+        validate_id("workspace binding", &self.id)?;
+        if self.canonical_root.is_empty() {
+            return Err(ConfigError::EmptyIdentity {
+                field: "workspace canonical root",
+            });
+        }
+        validate_id("workspace backend", &self.backend)?;
+        validate_id("workspace object identity", &self.object_identity)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AuthorityCeiling {
+    pub workspace_mutation: bool,
+    pub unconfined_execution: bool,
+    pub remote_tools: bool,
+    pub egress_realms: Vec<EgressRealm>,
+}
+
+impl AuthorityCeiling {
+    fn validate(&self) -> Result<(), ConfigError> {
+        let mut seen = BTreeSet::new();
+        for realm in &self.egress_realms {
+            realm.validate()?;
+            let encoded = serde_json::to_string(realm).map_err(ConfigError::Serialization)?;
+            if !seen.insert(encoded) {
+                return Err(ConfigError::DuplicateEgressRealm);
+            }
+        }
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn permits(&self, realm: &EgressRealm) -> bool {
+        self.egress_realms.contains(realm)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextPolicy {
+    pub max_request_bytes: u32,
+    pub max_input_tokens: u32,
+    pub max_checkpoint_bytes: u32,
+    pub max_tail_bytes: u32,
+}
+
+impl ContextPolicy {
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (setting, value) in [
+            ("context.max_request_bytes", self.max_request_bytes),
+            ("context.max_input_tokens", self.max_input_tokens),
+            ("context.max_checkpoint_bytes", self.max_checkpoint_bytes),
+            ("context.max_tail_bytes", self.max_tail_bytes),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::NonPositiveSetting { setting });
+            }
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TurnLimits {
+    pub max_model_steps: u32,
+    pub max_model_attempts_per_step: u32,
+    pub max_tool_invocations: u32,
+    pub max_parallel_read_tools: u32,
+    pub max_response_bytes: u32,
+    pub max_tool_preview_bytes: u32,
+    pub max_cost_microusd: Option<u64>,
+}
+
+impl TurnLimits {
+    fn validate(&self) -> Result<(), ConfigError> {
+        for (setting, value) in [
+            ("limits.max_model_steps", u64::from(self.max_model_steps)),
+            (
+                "limits.max_model_attempts_per_step",
+                u64::from(self.max_model_attempts_per_step),
+            ),
+            (
+                "limits.max_tool_invocations",
+                u64::from(self.max_tool_invocations),
+            ),
+            (
+                "limits.max_parallel_read_tools",
+                u64::from(self.max_parallel_read_tools),
+            ),
+            (
+                "limits.max_response_bytes",
+                u64::from(self.max_response_bytes),
+            ),
+            (
+                "limits.max_tool_preview_bytes",
+                u64::from(self.max_tool_preview_bytes),
+            ),
+        ] {
+            if value == 0 {
+                return Err(ConfigError::NonPositiveSetting { setting });
+            }
+        }
+        if self.max_cost_microusd == Some(0) {
+            return Err(ConfigError::NonPositiveSetting {
+                setting: "limits.max_cost_microusd",
+            });
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ControlCeiling {
+    pub max_output_tokens: u32,
+    pub sampling: bool,
+    pub parallel_tool_calls: bool,
+    pub allowed_reasoning: Vec<Reasoning>,
+}
+
+impl ControlCeiling {
+    fn validate(&self) -> Result<(), ConfigError> {
+        if self.max_output_tokens == 0 {
+            return Err(ConfigError::NonPositiveSetting {
+                setting: "controls.max_output_tokens",
+            });
+        }
+        if self.allowed_reasoning.is_empty() {
+            return Err(ConfigError::NoReasoningMode);
+        }
+        Ok(())
+    }
+
+    fn permits(&self, controls: &GenerationControls) -> Result<(), ConfigError> {
+        controls.validate().map_err(ConfigError::Controls)?;
+        if controls.max_output_tokens > self.max_output_tokens {
+            return Err(ConfigError::ControlsOutsideCeiling(
+                "max_output_tokens exceeds the turn ceiling".to_owned(),
+            ));
+        }
+        if !self.sampling && (controls.temperature.is_some() || controls.top_p.is_some()) {
+            return Err(ConfigError::ControlsOutsideCeiling(
+                "sampling controls are outside the turn ceiling".to_owned(),
+            ));
+        }
+        if !self.parallel_tool_calls && controls.parallel_tool_calls {
+            return Err(ConfigError::ControlsOutsideCeiling(
+                "parallel tool calls are outside the turn ceiling".to_owned(),
+            ));
+        }
+        if !self.allowed_reasoning.contains(&controls.reasoning) {
+            return Err(ConfigError::ControlsOutsideCeiling(
+                "reasoning mode is outside the turn ceiling".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ConversationConfig {
     pub instructions: String,
-    pub controls: GenerationControls,
-    /// Bounded project context the host selected and resolved. These are user
-    /// messages, and they precede the transcript in the assembled request.
     pub project_context: Vec<Message>,
-    /// Names of the host tools this conversation selected. Specs are resolved
-    /// per request from the current catalog; a selected name that cannot be
-    /// resolved fails assembly instead of quietly dropping the tool.
-    pub tool_names: Vec<String>,
+    pub providers: Vec<ProviderBinding>,
+    pub default_provider: ProviderBindingId,
+    pub fallback_route: Vec<ProviderBindingId>,
+    pub compaction_route: Vec<ProviderBindingId>,
+    pub tools: Vec<ToolBinding>,
+    pub initial_tools: Vec<ToolBindingId>,
+    pub controls: GenerationControls,
+    pub control_ceiling: ControlCeiling,
     pub context: ContextPolicy,
-    pub limits: RunLimits,
+    pub workspace: WorkspaceBinding,
+    pub authority: AuthorityCeiling,
+    pub limits: TurnLimits,
 }
 
 impl ConversationConfig {
     pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.model.provider.is_empty() || self.model.model.is_empty() {
-            return Err(ConfigError::EmptyModel);
-        }
-        self.controls.validate().map_err(ConfigError::Controls)?;
         for (index, message) in self.project_context.iter().enumerate() {
             if message.role != Role::User {
                 return Err(ConfigError::ProjectContextNotUser { message: index });
@@ -62,288 +411,494 @@ impl ConversationConfig {
             if message
                 .content
                 .iter()
-                .any(|block| !matches!(block, ion_ai::Content::Text(_)))
+                .any(|content| !matches!(content, ion_ai::Content::Text(_)))
             {
                 return Err(ConfigError::ProjectContextNotText { message: index });
             }
         }
-        for (position, name) in self.tool_names.iter().enumerate() {
-            if name.is_empty() {
-                return Err(ConfigError::EmptyToolName { position });
+
+        if self.providers.is_empty() {
+            return Err(ConfigError::NoProviders);
+        }
+        let mut providers = BTreeSet::new();
+        for provider in &self.providers {
+            provider.validate()?;
+            if !providers.insert(provider.id.clone()) {
+                return Err(ConfigError::DuplicateProviderBinding(
+                    provider.id.as_str().to_owned(),
+                ));
             }
-            if self.tool_names[..position].contains(name) {
-                return Err(ConfigError::DuplicateToolName { name: name.clone() });
+            if !self.authority.permits(&provider.egress) {
+                return Err(ConfigError::EgressOutsideCeiling);
             }
         }
+        if !providers.contains(&self.default_provider) {
+            return Err(ConfigError::UnknownProviderBinding(
+                self.default_provider.as_str().to_owned(),
+            ));
+        }
+        for provider in self
+            .fallback_route
+            .iter()
+            .chain(self.compaction_route.iter())
+        {
+            if !providers.contains(provider) {
+                return Err(ConfigError::UnknownProviderBinding(
+                    provider.as_str().to_owned(),
+                ));
+            }
+        }
+
+        let mut tools = BTreeSet::new();
+        for tool in &self.tools {
+            tool.validate()?;
+            if !tools.insert(tool.id.clone()) {
+                return Err(ConfigError::DuplicateToolBinding(
+                    tool.id.as_str().to_owned(),
+                ));
+            }
+            if matches!(&tool.egress, EgressRealm::Remote(_)) && !self.authority.remote_tools {
+                return Err(ConfigError::RemoteToolOutsideCeiling);
+            }
+            if !self.authority.permits(&tool.egress) {
+                return Err(ConfigError::EgressOutsideCeiling);
+            }
+        }
+        let mut active = BTreeSet::new();
+        for tool in &self.initial_tools {
+            if !tools.contains(tool) {
+                return Err(ConfigError::UnknownToolBinding(tool.as_str().to_owned()));
+            }
+            if !active.insert(tool) {
+                return Err(ConfigError::DuplicateActiveTool(tool.as_str().to_owned()));
+            }
+        }
+
+        self.authority.validate()?;
+        self.workspace.validate()?;
         self.context.validate()?;
-        self.limits.validate()
+        self.limits.validate()?;
+        self.control_ceiling.validate()?;
+        self.control_ceiling.permits(&self.controls)?;
+
+        let environment = TurnEnvironment::from_config(CommitSeq::new(1).expect("positive"), self);
+        let settings = TurnSettings {
+            revision: 0,
+            provider: self.default_provider.clone(),
+            controls: self.controls.clone(),
+            active_tools: self.initial_tools.clone(),
+        };
+        settings.validate(&environment)
     }
 }
 
-/// How much context a request may carry.
-///
-/// Compaction is deliberately absent here: it is not implemented, and a
-/// configuration field that no owner reads would suggest otherwise.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct ContextPolicy {
-    pub max_request_bytes: u32,
-    /// The model's input budget. Required rather than defaulted: guessing a
-    /// context window from a model name would silently admit an over-budget
-    /// request, so the host must state the budget it is willing to fill.
-    pub max_input_tokens: u32,
-}
-
-impl ContextPolicy {
-    fn validate(&self) -> Result<(), ConfigError> {
-        for (setting, value) in [
-            ("max_request_bytes", u64::from(self.max_request_bytes)),
-            ("max_input_tokens", u64::from(self.max_input_tokens)),
-        ] {
-            if value == 0 {
-                return Err(ConfigError::NonPositiveSetting { setting });
-            }
-        }
-        Ok(())
-    }
-}
-
-/// Bounds that one admitted turn cannot exceed.
-#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
-pub struct RunLimits {
-    pub max_model_steps: u32,
-    /// Attempts per model step, including retries of the same frozen basis.
-    pub max_attempts_per_step: u32,
-    /// A monetary ceiling. `None` means no ceiling was supplied, which is
-    /// distinct from a ceiling of zero.
-    pub max_cost_microusd: Option<u64>,
-    /// The whole turn's deadline, measured from admission.
-    pub deadline_ms: u64,
-    pub max_response_bytes: u32,
-    pub max_tool_output_bytes: u32,
-}
-
-impl RunLimits {
-    fn validate(&self) -> Result<(), ConfigError> {
-        for (setting, value) in [
-            ("max_model_steps", u64::from(self.max_model_steps)),
-            (
-                "max_attempts_per_step",
-                u64::from(self.max_attempts_per_step),
-            ),
-            ("deadline_ms", self.deadline_ms),
-            ("max_response_bytes", u64::from(self.max_response_bytes)),
-            (
-                "max_tool_output_bytes",
-                u64::from(self.max_tool_output_bytes),
-            ),
-        ] {
-            if value == 0 {
-                return Err(ConfigError::NonPositiveSetting { setting });
-            }
-        }
-        if self.max_attempts_per_step > MAX_ATTEMPTS_PER_STEP {
-            return Err(ConfigError::AttemptsAboveCeiling {
-                configured: self.max_attempts_per_step,
-                ceiling: MAX_ATTEMPTS_PER_STEP,
-            });
-        }
-        if self.max_cost_microusd == Some(0) {
-            return Err(ConfigError::NonPositiveSetting {
-                setting: "max_cost_microusd",
-            });
-        }
-        Ok(())
-    }
-}
-
-/// Why a configuration was refused. Every rule names the setting it judged, so
-/// a client can point at the field it must change instead of guessing.
-#[derive(Debug, Error)]
-pub enum ConfigError {
-    #[error("the model must name both a provider and a model")]
-    EmptyModel,
-    #[error("{0}")]
-    Controls(ProviderError),
-    #[error("project context message {message} is not a user message")]
-    ProjectContextNotUser { message: usize },
-    #[error("project context message {message} carries provider replay material")]
-    ProjectContextReplay { message: usize },
-    #[error("project context message {message} is not text")]
-    ProjectContextNotText { message: usize },
-    #[error("tool name at position {position} is empty")]
-    EmptyToolName { position: usize },
-    #[error("tool name {name:?} is selected twice")]
-    DuplicateToolName { name: String },
-    #[error("{setting} must be positive")]
-    NonPositiveSetting { setting: &'static str },
-    #[error("{configured} attempts per step exceeds the {ceiling} attempt ceiling")]
-    AttemptsAboveCeiling { configured: u32, ceiling: u32 },
-}
-
-/// A configuration as it is installed on a conversation, with the commit that
-/// installed it.
-///
-/// The revision is the compare-and-set basis for reconfiguration. Only the
-/// writer stamps it.
-#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct InstalledConfig {
     pub revision: CommitSeq,
     pub config: ConversationConfig,
 }
 
-impl InstalledConfig {
-    #[must_use]
-    pub const fn new(revision: CommitSeq, config: ConversationConfig) -> Self {
-        Self { revision, config }
-    }
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnEnvironment {
+    pub config_revision: CommitSeq,
+    pub instructions: String,
+    pub project_context: Vec<Message>,
+    pub providers: Vec<ProviderBinding>,
+    pub default_provider: ProviderBindingId,
+    pub fallback_route: Vec<ProviderBindingId>,
+    pub compaction_route: Vec<ProviderBindingId>,
+    pub tools: Vec<ToolBinding>,
+    pub control_ceiling: ControlCeiling,
+    pub context: ContextPolicy,
+    pub workspace: WorkspaceBinding,
+    pub authority: AuthorityCeiling,
+    pub limits: TurnLimits,
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use ion_ai::{Content, Reasoning, ToolChoice};
-
-    fn context_message(text: &str) -> Message {
-        Message {
-            role: Role::User,
-            content: vec![Content::Text(text.to_owned())],
-            provider_replay: None,
+impl TurnEnvironment {
+    #[must_use]
+    pub fn from_config(revision: CommitSeq, config: &ConversationConfig) -> Self {
+        Self {
+            config_revision: revision,
+            instructions: config.instructions.clone(),
+            project_context: config.project_context.clone(),
+            providers: config.providers.clone(),
+            default_provider: config.default_provider.clone(),
+            fallback_route: config.fallback_route.clone(),
+            compaction_route: config.compaction_route.clone(),
+            tools: config.tools.clone(),
+            control_ceiling: config.control_ceiling.clone(),
+            context: config.context.clone(),
+            workspace: config.workspace.clone(),
+            authority: config.authority.clone(),
+            limits: config.limits.clone(),
         }
     }
 
-    fn sample() -> ConversationConfig {
-        ConversationConfig {
+    pub fn capture(installed: &InstalledConfig) -> Result<(Self, TurnSettings), ConfigError> {
+        installed.config.validate()?;
+        let environment = Self::from_config(installed.revision, &installed.config);
+        let settings = TurnSettings {
+            revision: 0,
+            provider: installed.config.default_provider.clone(),
+            controls: installed.config.controls.clone(),
+            active_tools: installed.config.initial_tools.clone(),
+        };
+        settings.validate(&environment)?;
+        Ok((environment, settings))
+    }
+
+    pub fn digest(&self) -> Result<ContentDigest, ConfigError> {
+        ContentDigest::of(self).map_err(ConfigError::Serialization)
+    }
+
+    #[must_use]
+    pub fn provider(&self, id: &ProviderBindingId) -> Option<&ProviderBinding> {
+        self.providers.iter().find(|provider| &provider.id == id)
+    }
+
+    #[must_use]
+    pub fn tool(&self, id: &ToolBindingId) -> Option<&ToolBinding> {
+        self.tools.iter().find(|tool| &tool.id == id)
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TurnSettings {
+    pub revision: u32,
+    pub provider: ProviderBindingId,
+    pub controls: GenerationControls,
+    pub active_tools: Vec<ToolBindingId>,
+}
+
+impl TurnSettings {
+    /// A complete response cannot widen the frozen tool-choice or parallel cap.
+    pub(crate) fn permits_tool_response(&self, response: &ion_ai::ModelResponse) -> bool {
+        self.controls
+            .permits_tool_calls(
+                response
+                    .message
+                    .content
+                    .iter()
+                    .filter_map(|item| match item {
+                        ion_ai::Content::ToolCall(call) => Some(call.name.as_str()),
+                        _ => None,
+                    }),
+            )
+    }
+
+    pub fn validate(&self, environment: &TurnEnvironment) -> Result<(), ConfigError> {
+        let provider = environment.provider(&self.provider).ok_or_else(|| {
+            ConfigError::UnknownProviderBinding(self.provider.as_str().to_owned())
+        })?;
+
+        environment.control_ceiling.permits(&self.controls)?;
+        if self.controls.max_output_tokens > provider.capabilities.max_output_tokens {
+            return Err(ConfigError::ProviderControlMismatch(
+                "requested output cap exceeds provider capability".to_owned(),
+            ));
+        }
+        if !provider.capabilities.reasoning
+            && !matches!(
+                self.controls.reasoning,
+                Reasoning::ProviderDefault | Reasoning::Off
+            )
+        {
+            return Err(ConfigError::ProviderControlMismatch(
+                "provider does not support requested reasoning".to_owned(),
+            ));
+        }
+
+        let mut active = BTreeSet::new();
+        let mut names = BTreeSet::new();
+        for id in &self.active_tools {
+            let binding = environment
+                .tool(id)
+                .ok_or_else(|| ConfigError::UnknownToolBinding(id.as_str().to_owned()))?;
+            if !active.insert(id) {
+                return Err(ConfigError::DuplicateActiveTool(id.as_str().to_owned()));
+            }
+            if !names.insert(&binding.spec.name) {
+                return Err(ConfigError::AmbiguousActiveToolName(
+                    binding.spec.name.clone(),
+                ));
+            }
+            if !provider.capabilities.tools {
+                return Err(ConfigError::ProviderControlMismatch(
+                    "provider does not support tools".to_owned(),
+                ));
+            }
+            if !environment.authority.permits(&binding.egress) {
+                return Err(ConfigError::EgressOutsideCeiling);
+            }
+        }
+
+        if matches!(self.controls.tool_choice, ToolChoice::Required) && self.active_tools.is_empty()
+        {
+            return Err(ConfigError::ProviderControlMismatch(
+                "required tool choice needs an active tool".into(),
+            ));
+        }
+        if let ToolChoice::Named(name) = &self.controls.tool_choice {
+            let offered = self.active_tools.iter().any(|id| {
+                environment
+                    .tool(id)
+                    .is_some_and(|binding| binding.spec.name == *name)
+            });
+            if !offered {
+                return Err(ConfigError::NamedToolNotActive(name.clone()));
+            }
+        }
+        if self.controls.parallel_tool_calls && !provider.capabilities.parallel_tool_calls {
+            return Err(ConfigError::ProviderControlMismatch(
+                "provider does not support parallel tool calls".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum ConfigError {
+    #[error("{field} must not be empty")]
+    EmptyIdentity { field: &'static str },
+    #[error("{field} is {length} bytes; maximum is {maximum}")]
+    IdentityTooLong {
+        field: &'static str,
+        length: usize,
+        maximum: usize,
+    },
+    #[error("provider binding must name both provider and model")]
+    EmptyModel,
+    #[error("a server-routed provider must name at least one returned-model family")]
+    EmptyReturnedModelFamily,
+    #[error("no provider bindings were configured")]
+    NoProviders,
+    #[error("provider binding {0:?} is unknown")]
+    UnknownProviderBinding(String),
+    #[error("tool binding {0:?} is unknown")]
+    UnknownToolBinding(String),
+    #[error("provider binding {0:?} is duplicated")]
+    DuplicateProviderBinding(String),
+    #[error("tool binding {0:?} is duplicated")]
+    DuplicateToolBinding(String),
+    #[error("active tool binding {0:?} is duplicated")]
+    DuplicateActiveTool(String),
+    #[error("active tool name {0:?} identifies multiple frozen bindings")]
+    AmbiguousActiveToolName(String),
+    #[error("tool declaration name must not be empty")]
+    EmptyToolName,
+    #[error("tool binding {binding:?} schema digest does not match its declaration")]
+    ToolSchemaDigestMismatch { binding: String },
+    #[error("project context message {message} is not a user message")]
+    ProjectContextNotUser { message: usize },
+    #[error("project context message {message} carries provider replay")]
+    ProjectContextReplay { message: usize },
+    #[error("project context message {message} is not text")]
+    ProjectContextNotText { message: usize },
+    #[error("{setting} must be positive")]
+    NonPositiveSetting { setting: &'static str },
+    #[error("the control ceiling must allow at least one reasoning mode")]
+    NoReasoningMode,
+    #[error("{0}")]
+    Controls(ion_ai::ProviderError),
+    #[error("generation controls exceed the turn ceiling: {0}")]
+    ControlsOutsideCeiling(String),
+    #[error("generation controls are incompatible with the selected provider: {0}")]
+    ProviderControlMismatch(String),
+    #[error("named tool {0:?} is not active")]
+    NamedToolNotActive(String),
+    #[error("egress realm is duplicated")]
+    DuplicateEgressRealm,
+    #[error("provider/tool egress lies outside the authority ceiling")]
+    EgressOutsideCeiling,
+    #[error("a remote tool is outside the authority ceiling")]
+    RemoteToolOutsideCeiling,
+    #[error("cannot encode durable semantic content: {0}")]
+    Serialization(serde_json::Error),
+}
+
+#[cfg(test)]
+pub(crate) mod tests {
+    use super::*;
+    use ion_ai::{Reasoning, ToolChoice};
+
+    fn provider() -> ProviderBinding {
+        ProviderBinding {
+            id: ProviderBindingId::new("scripted").expect("id"),
             model: ModelRef {
                 provider: "scripted".to_owned(),
-                model: "test-model".to_owned(),
+                model: "test".to_owned(),
             },
+            adapter: SemanticCompatibilityId::new("scripted-adapter-v1").expect("id"),
+            request_encoding: SemanticCompatibilityId::new("scripted-request-v1").expect("id"),
+            replay_family: None,
+            capabilities: ProviderCapabilities {
+                max_input_tokens: 100_000,
+                max_output_tokens: 8_192,
+                tools: true,
+                parallel_tool_calls: true,
+                structured_output: true,
+                replay: false,
+                reasoning: true,
+            },
+            returned_model: ReturnedModelPolicy::Exact,
+            start_receipts: StartReceiptCapability::None,
+            egress: EgressRealm::Local,
+        }
+    }
+
+    fn tool() -> ToolBinding {
+        ToolBinding::new(
+            ToolBindingId::new("read").expect("id"),
+            ToolSpec {
+                name: "read".to_owned(),
+                description: "read".to_owned(),
+                input_schema: serde_json::json!({"type":"object"}),
+            },
+            SemanticCompatibilityId::new("read-v1").expect("id"),
+            ToolConcurrency::ParallelSafeReadOnly,
+            ToolRecoveryPolicy::RepeatAfterNotStartedOrNoMutation,
+            EgressRealm::Local,
+        )
+        .expect("tool")
+    }
+
+    pub(crate) fn config() -> ConversationConfig {
+        ConversationConfig {
             instructions: "be careful".to_owned(),
+            project_context: Vec::new(),
+            providers: vec![provider()],
+            default_provider: ProviderBindingId::new("scripted").expect("id"),
+            fallback_route: Vec::new(),
+            compaction_route: Vec::new(),
+            tools: vec![tool()],
+            initial_tools: vec![ToolBindingId::new("read").expect("id")],
             controls: GenerationControls {
                 max_output_tokens: 4096,
                 temperature: None,
                 top_p: None,
                 reasoning: Reasoning::ProviderDefault,
                 tool_choice: ToolChoice::Auto,
-                parallel_tool_calls: false,
+                parallel_tool_calls: true,
             },
-            project_context: vec![context_message("project rules")],
-            tool_names: vec!["read".to_owned(), "edit".to_owned()],
+            control_ceiling: ControlCeiling {
+                max_output_tokens: 8192,
+                sampling: false,
+                parallel_tool_calls: true,
+                allowed_reasoning: vec![
+                    Reasoning::ProviderDefault,
+                    Reasoning::Off,
+                    Reasoning::Low,
+                    Reasoning::Medium,
+                    Reasoning::High,
+                ],
+            },
             context: ContextPolicy {
                 max_request_bytes: 4 * 1024 * 1024,
                 max_input_tokens: 100_000,
+                max_checkpoint_bytes: 128 * 1024,
+                max_tail_bytes: 1024 * 1024,
             },
-            limits: RunLimits {
-                max_model_steps: 20,
-                max_attempts_per_step: 3,
-                max_cost_microusd: None,
-                deadline_ms: 600_000,
+            workspace: WorkspaceBinding {
+                id: "workspace".to_owned(),
+                canonical_root: "/tmp/project".to_owned(),
+                backend: "local".to_owned(),
+                object_identity: "dev:ino".to_owned(),
+            },
+            authority: AuthorityCeiling {
+                workspace_mutation: true,
+                unconfined_execution: false,
+                remote_tools: false,
+                egress_realms: vec![EgressRealm::Local],
+            },
+            limits: TurnLimits {
+                max_model_steps: 32,
+                max_model_attempts_per_step: 4,
+                max_tool_invocations: 128,
+                max_parallel_read_tools: 8,
                 max_response_bytes: 1024 * 1024,
-                max_tool_output_bytes: 64 * 1024,
+                max_tool_preview_bytes: 64 * 1024,
+                max_cost_microusd: None,
             },
         }
     }
 
     #[test]
-    fn a_complete_configuration_is_valid() {
-        assert!(sample().validate().is_ok());
-    }
-
-    #[test]
-    fn an_unset_monetary_ceiling_is_not_a_zero_ceiling() {
-        let mut config = sample();
-        assert_eq!(config.limits.max_cost_microusd, None);
-        assert!(config.validate().is_ok());
-
-        config.limits.max_cost_microusd = Some(0);
+    fn required_tool_choice_cannot_be_frozen_without_an_active_tool() {
+        let mut config = config();
+        config.initial_tools.clear();
+        config.controls.tool_choice = ToolChoice::Required;
         assert!(matches!(
             config.validate(),
-            Err(ConfigError::NonPositiveSetting {
-                setting: "max_cost_microusd"
-            })
+            Err(ConfigError::ProviderControlMismatch(_))
         ));
     }
 
     #[test]
-    fn malformed_controls_are_refused_through_the_contract_validator() {
-        let mut config = sample();
-        config.controls.max_output_tokens = 0;
-        match config.validate() {
-            Err(ConfigError::Controls(error)) => {
-                assert_eq!(error.kind, ion_ai::ProviderErrorKind::InvalidRequest);
-            }
-            other => panic!("expected a control error, got {other:?}"),
-        }
+    fn capture_freezes_config_and_initial_settings() {
+        let installed = InstalledConfig {
+            revision: CommitSeq::new(7).expect("revision"),
+            config: config(),
+        };
+        let (environment, settings) = TurnEnvironment::capture(&installed).expect("capture");
+        assert_eq!(environment.config_revision.get(), 7);
+        assert_eq!(settings.provider.as_str(), "scripted");
+        assert_eq!(settings.active_tools[0].as_str(), "read");
+        assert!(settings.validate(&environment).is_ok());
+        assert_ne!(environment.digest().expect("digest").to_string(), "");
     }
 
     #[test]
-    fn project_context_is_user_text_only() {
-        let mut config = sample();
-        config.project_context[0].role = Role::Assistant;
+    fn a_changed_schema_cannot_keep_the_old_digest() {
+        let mut binding = tool();
+        binding.spec.input_schema = serde_json::json!({"type":"object","required":["path"]});
+        let mut cfg = config();
+        cfg.tools = vec![binding];
         assert!(matches!(
-            config.validate(),
-            Err(ConfigError::ProjectContextNotUser { message: 0 })
-        ));
-
-        let mut config = sample();
-        config.project_context[0].content = vec![Content::ToolCall(ion_ai::ToolCall {
-            id: "call-1".to_owned(),
-            name: "read".to_owned(),
-            arguments: serde_json::json!({}),
-        })];
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::ProjectContextNotText { message: 0 })
-        ));
-
-        let mut config = sample();
-        config.project_context[0].provider_replay = Some(ion_ai::ProviderReplay::new(
-            "other",
-            "thinking",
-            serde_json::json!({}),
-        ));
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::ProjectContextReplay { message: 0 })
+            cfg.validate(),
+            Err(ConfigError::ToolSchemaDigestMismatch { .. })
         ));
     }
 
     #[test]
-    fn a_tool_may_not_be_selected_twice() {
-        let mut config = sample();
-        config.tool_names = vec!["read".to_owned(), "edit".to_owned(), "read".to_owned()];
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::DuplicateToolName { name }) if name == "read"
-        ));
-
-        let mut config = sample();
-        config.tool_names = vec!["read".to_owned(), String::new()];
-        assert!(matches!(
-            config.validate(),
-            Err(ConfigError::EmptyToolName { position: 1 })
-        ));
+    fn active_tool_names_resolve_to_exactly_one_frozen_binding() {
+        let mut cfg = config();
+        let mut replacement = tool();
+        replacement.id = ToolBindingId::new("read-next").expect("id");
+        replacement.implementation = SemanticCompatibilityId::new("read-v2").expect("id");
+        cfg.tools.push(replacement.clone());
+        // Alternative same-name implementations may be frozen but dormant.
+        let installed = InstalledConfig {
+            revision: CommitSeq::new(1).expect("revision"),
+            config: cfg.clone(),
+        };
+        let (environment, mut settings) = TurnEnvironment::capture(&installed).expect("capture");
+        settings.active_tools.push(replacement.id.clone());
+        assert!(
+            settings.validate(&environment).is_err(),
+            "a provider call name must not choose between two implementations"
+        );
+        cfg.initial_tools.push(replacement.id.clone());
+        assert!(
+            cfg.validate().is_err(),
+            "ambiguous initial loadout is rejected"
+        );
+        settings.active_tools = vec![replacement.id];
+        assert!(settings.validate(&environment).is_ok());
     }
 
     #[test]
-    fn the_attempt_ceiling_bounds_the_frozen_request() {
-        let mut config = sample();
-        config.limits.max_attempts_per_step = MAX_ATTEMPTS_PER_STEP;
-        assert!(config.validate().is_ok());
-
-        config.limits.max_attempts_per_step = MAX_ATTEMPTS_PER_STEP + 1;
+    fn settings_cannot_introduce_a_new_binding() {
+        let installed = InstalledConfig {
+            revision: CommitSeq::new(1).expect("revision"),
+            config: config(),
+        };
+        let (environment, mut settings) = TurnEnvironment::capture(&installed).expect("capture");
+        settings.active_tools = vec![ToolBindingId::new("new-tool").expect("id")];
         assert!(matches!(
-            config.validate(),
-            Err(ConfigError::AttemptsAboveCeiling {
-                configured,
-                ceiling
-            }) if configured == MAX_ATTEMPTS_PER_STEP + 1 && ceiling == MAX_ATTEMPTS_PER_STEP
+            settings.validate(&environment),
+            Err(ConfigError::UnknownToolBinding(_))
         ));
-    }
-
-    #[test]
-    fn an_identity_field_may_not_be_empty() {
-        let mut config = sample();
-        config.model.model = String::new();
-        assert!(matches!(config.validate(), Err(ConfigError::EmptyModel)));
     }
 }

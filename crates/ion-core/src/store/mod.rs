@@ -1,196 +1,875 @@
-//! Persistence ownership.
-//!
-//! One session owns one database file. A dedicated thread owns the SQLite
-//! connection and every transaction; async callers submit typed commands over a
-//! bounded channel and receive owned results. No borrowed statement, row or
-//! transaction crosses that boundary, and a dropped reply receiver never
-//! cancels the mutation it asked for.
-//!
-//! SQLite is the only authority. There is no resident mirror, no undo journal
-//! and no second in-memory copy of semantic state to keep consistent.
+//! Dedicated SQLite database-thread ownership for one Session.
 
-pub(crate) mod sqlite;
+mod sqlite;
+pub(crate) use sqlite::Ownership;
 
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Weak};
 
+use crate::artifact::{PublicationScope, PublishedBlob, SessionArtifacts};
+
+use thiserror::Error;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::error::Error;
-use crate::limits::SessionLimits;
+use crate::observation::ObservationHub;
+use crate::session::{
+    AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
+    CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
+};
+use crate::{
+    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, CostQuote, Entry, EntryId,
+    EntryPage, InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming,
+    ModelStep, ProviderBindingId, RequestManifest, SessionId, SessionSnapshot, SnapshotRequest,
+    StepId, StepPurpose, Turn, TurnId, TurnSettings,
+};
 
-pub(crate) use sqlite::SqliteStore;
+const COMMAND_CAPACITY: usize = 64;
 
-/// A persistence operation failed, or was refused by a semantic rule.
-#[derive(Debug)]
-pub(crate) enum StoreError {
-    /// The store is healthy; the operation violated a rule the caller can act
-    /// on (busy conversation, conflicting request key, quota, stale revision).
-    Rejected(Error),
-    /// Persistence itself failed. The session is fenced: an unclear storage
-    /// outcome is not a state the engine may keep writing through.
-    Failed(String),
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolRecords {
+    pub turn: Turn,
+    pub invocations: Vec<crate::ToolInvocation>,
+    pub attempts: Vec<crate::ToolAttempt>,
 }
 
-impl StoreError {
-    pub(crate) fn failed(message: impl Into<String>) -> Self {
-        Self::Failed(message.into())
-    }
-
-    pub(crate) fn is_fenced(&self) -> bool {
-        matches!(self, Self::Failed(_))
-    }
-
-    pub(crate) fn into_error(self) -> Error {
-        match self {
-            Self::Rejected(error) => error,
-            Self::Failed(message) => Error::Persistence(message),
-        }
-    }
-
-    /// Whether this was a semantic refusal rather than a storage failure.
-    pub(crate) fn is_rejected(&self) -> bool {
-        matches!(self, Self::Rejected(_))
-    }
+pub(crate) enum ToolMutation {
+    Admit {
+        attempt: crate::AttemptId,
+        preparations: Vec<crate::ToolPreparation>,
+    },
+    RequestApproval {
+        step: StepId,
+        invocation: crate::InvocationId,
+        now_unix_ms: i64,
+    },
+    DecideApproval {
+        step: StepId,
+        invocation: crate::InvocationId,
+        action_digest: crate::ContentDigest,
+        decision: crate::ApprovalDecision,
+        executor: crate::SemanticCompatibilityId,
+        now_unix_ms: i64,
+    },
+    Intent {
+        step: StepId,
+        invocation: crate::InvocationId,
+        generation: u64,
+        executor: crate::SemanticCompatibilityId,
+        approval_required: bool,
+        now_unix_ms: i64,
+    },
+    Evidence {
+        step: StepId,
+        attempt: crate::AttemptId,
+        state: Box<crate::ToolAttemptState>,
+        publication: Option<PublishedBlob>,
+    },
+    Stage {
+        step: StepId,
+        invocation: crate::InvocationId,
+        source: crate::OutcomeSource,
+    },
+    Materialize {
+        step: StepId,
+    },
 }
 
-impl From<Error> for StoreError {
-    fn from(error: Error) -> Self {
-        Self::Rejected(error)
-    }
+pub(crate) struct ToolMutationResult {
+    pub(crate) attempt: Option<crate::ToolAttempt>,
+    /// An exact duplicate approval decision changes no durable state or cursor.
+    pub(crate) receipt: Option<CommitReceipt>,
 }
 
-/// A typed semantic operation.
-///
-/// Implementing this rather than matching a global command enum keeps each
-/// transaction's arguments and result in one place, and keeps the transport
-/// that carries them from becoming a second schema.
-pub(crate) trait Command: Send + 'static {
-    type Output: Send + 'static;
-
-    fn apply(self, store: &mut SqliteStore) -> Result<Self::Output, StoreError>;
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StoreMetadata {
+    pub(crate) session_id: SessionId,
+    pub(crate) primary_conversation: ConversationId,
 }
 
-type Job = Box<dyn FnOnce(&mut SqliteStore) -> Result<(), StoreError> + Send>;
-
-struct Inner {
-    /// `None` once the owning session has closed the queue.
-    commands: Mutex<Option<mpsc::Sender<Job>>>,
-    fenced: AtomicBool,
-    thread: Mutex<Option<std::thread::JoinHandle<()>>>,
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct DriveBasis {
+    pub(crate) turn: Turn,
+    pub(crate) entries: Vec<Entry>,
+    pub(crate) included_inputs: Vec<InputId>,
+    pub(crate) used_providers: Vec<ProviderBindingId>,
+    pub(crate) current_step: Option<ModelStep>,
+    pub(crate) attempts: Vec<ModelAttempt>,
 }
 
-/// The database thread and the bounded command queue in front of it.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreatedModelStep {
+    pub(crate) step: ModelStep,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct CreatedModelAttempt {
+    pub(crate) attempt: ModelAttempt,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum RecordedModelAttempt {
+    Committed {
+        attempt: ModelAttempt,
+        receipt: CommitReceipt,
+    },
+    Unchanged(ModelAttempt),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct SelectedModelResponse {
+    pub(crate) entry: Entry,
+    pub(crate) step: ModelStep,
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct FinishedTurn {
+    pub(crate) turn: Turn,
+    pub(crate) receipt: CommitReceipt,
+}
+
 #[derive(Clone)]
-pub(crate) struct Db {
-    inner: Arc<Inner>,
-    /// Only the handle that started the thread may close it.
-    owner: bool,
+pub(crate) struct SessionStore {
+    tx: mpsc::Sender<Command>,
+    artifacts: Weak<SessionArtifacts>,
 }
 
-impl std::fmt::Debug for Db {
+impl std::fmt::Debug for SessionStore {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
-            .debug_struct("Db")
-            .field("fenced", &self.inner.fenced.load(Ordering::Relaxed))
+            .debug_struct("SessionStore")
             .finish_non_exhaustive()
     }
 }
 
-impl Db {
-    /// Start the database thread over an already opened store.
-    ///
-    /// Starting does not read semantic state: a freshly created database has
-    /// none yet, and an existing one is read by the caller's first command.
-    pub(crate) fn start(store: SqliteStore, limits: SessionLimits) -> Result<Self, StoreError> {
-        let mut store = store;
-        let (commands, mut queue) = mpsc::channel::<Job>(limits.command_capacity);
-        let inner = Arc::new(Inner {
-            commands: Mutex::new(Some(commands)),
-            fenced: AtomicBool::new(false),
-            thread: Mutex::new(None),
-        });
-        let thread_inner = Arc::clone(&inner);
-        let thread = std::thread::Builder::new()
-            .name("ion-db".to_owned())
+impl SessionStore {
+    pub(crate) async fn create(
+        path: &Path,
+        session_id: SessionId,
+        config: ConversationConfig,
+        observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<(Self, StoreMetadata, CommitReceipt), StoreError> {
+        let path = path.to_path_buf();
+        let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        std::thread::Builder::new()
+            .name(format!("ion-db-{session_id}"))
             .spawn(move || {
-                while let Some(job) = queue.blocking_recv() {
-                    if thread_inner.fenced.load(Ordering::Relaxed) {
-                        continue;
+                let startup =
+                    sqlite::SqliteDatabase::create(&path, session_id, config, observations, limits);
+                match startup {
+                    Ok((database, metadata, receipt)) => {
+                        let _ = startup_tx.send(Ok((
+                            metadata,
+                            receipt,
+                            Arc::downgrade(&database.artifacts),
+                        )));
+                        run(database, rx);
                     }
-                    if (job)(&mut store).is_err() {
-                        thread_inner.fenced.store(true, Ordering::SeqCst);
+                    Err(error) => {
+                        let _ = startup_tx.send(Err(error));
                     }
                 }
             })
-            .map_err(|error| {
-                StoreError::failed(format!("cannot start database thread: {error}"))
-            })?;
-        *inner.thread.lock().expect("thread mutex") = Some(thread);
-        Ok(Self { inner, owner: true })
+            .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
+
+        let (metadata, receipt, artifacts) = startup_rx.await.map_err(|_| StoreError::Closed)??;
+        Ok((Self { tx, artifacts }, metadata, receipt))
     }
 
-    /// Whether a persistence failure has fenced this session.
-    pub(crate) fn is_fenced(&self) -> bool {
-        self.inner.fenced.load(Ordering::Relaxed)
+    pub(crate) async fn open(
+        path: &Path,
+        observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<(Self, StoreMetadata), StoreError> {
+        let path = path.to_path_buf();
+        let (tx, rx) = mpsc::channel(COMMAND_CAPACITY);
+        let (startup_tx, startup_rx) = oneshot::channel();
+
+        std::thread::Builder::new()
+            .name("ion-db-open".to_owned())
+            .spawn(move || {
+                let startup = sqlite::SqliteDatabase::open(&path, observations, limits);
+                match startup {
+                    Ok((database, metadata)) => {
+                        let _ =
+                            startup_tx.send(Ok((metadata, Arc::downgrade(&database.artifacts))));
+                        run(database, rx);
+                    }
+                    Err(error) => {
+                        let _ = startup_tx.send(Err(error));
+                    }
+                }
+            })
+            .map_err(|error| StoreError::Io(format!("cannot start database thread: {error}")))?;
+
+        let (metadata, artifacts) = startup_rx.await.map_err(|_| StoreError::Closed)??;
+        Ok((Self { tx, artifacts }, metadata))
     }
 
-    pub(crate) async fn run<C: Command>(&self, command: C) -> Result<C::Output, StoreError> {
-        if self.is_fenced() {
-            return Err(StoreError::failed(
-                "the session fenced after a persistence failure",
-            ));
-        }
+    pub(crate) async fn create_conversation(
+        &self,
+        config: ConversationConfig,
+    ) -> Result<CreatedConversation, StoreError> {
+        self.call(|reply| Command::CreateConversation { config, reply })
+            .await
+    }
+
+    pub(crate) async fn current_config(
+        &self,
+        conversation: ConversationId,
+    ) -> Result<InstalledConfig, StoreError> {
+        self.call(|reply| Command::CurrentConfig {
+            conversation,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn config_as_of(
+        &self,
+        conversation: ConversationId,
+        revision: CommitSeq,
+    ) -> Result<InstalledConfig, StoreError> {
+        self.call(|reply| Command::ConfigAsOf {
+            conversation,
+            revision,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn configure(
+        &self,
+        conversation: ConversationId,
+        expected_revision: CommitSeq,
+        config: ConversationConfig,
+    ) -> Result<ConfiguredConversation, StoreError> {
+        self.call(|reply| Command::Configure {
+            conversation,
+            expected_revision,
+            config,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn admit_input(
+        &self,
+        conversation: ConversationId,
+        request: AdmitInputRequest,
+    ) -> Result<Admission, StoreError> {
+        self.call(|reply| Command::AdmitInput {
+            conversation,
+            request,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn submit_turn(
+        &self,
+        request: SubmitTurnRequest,
+    ) -> Result<SubmittedTurn, StoreError> {
+        self.call(|reply| Command::SubmitTurn { request, reply })
+            .await
+    }
+
+    pub(crate) async fn start_turn(
+        &self,
+        request: StartTurnRequest,
+    ) -> Result<StartedTurn, StoreError> {
+        self.call(|reply| Command::StartTurn { request, reply })
+            .await
+    }
+
+    pub(crate) async fn cancel_turn(&self, turn: TurnId) -> Result<CancellationResult, StoreError> {
+        self.call(|reply| Command::CancelTurn { turn, reply }).await
+    }
+
+    pub(crate) async fn abandon_turn(&self, turn: TurnId) -> Result<AbandonResult, StoreError> {
+        self.call(|reply| Command::AbandonTurn { turn, reply })
+            .await
+    }
+
+    pub(crate) async fn drive_basis(&self, turn: TurnId) -> Result<DriveBasis, StoreError> {
+        self.call(|reply| Command::DriveBasis { turn, reply }).await
+    }
+
+    pub(crate) async fn create_initial_model_step(
+        &self,
+        turn: TurnId,
+        purpose: StepPurpose,
+        manifest: RequestManifest,
+    ) -> Result<CreatedModelStep, StoreError> {
+        self.call(|reply| Command::CreateInitialModelStep {
+            turn,
+            purpose,
+            manifest,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn create_fallback_model_step(
+        &self,
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+    ) -> Result<CreatedModelStep, StoreError> {
+        self.call(|reply| Command::CreateFallbackModelStep {
+            predecessor,
+            settings,
+            manifest,
+            reason,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn commit_model_attempt_intent(
+        &self,
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+        cost_quote: Option<CostQuote>,
+    ) -> Result<CreatedModelAttempt, StoreError> {
+        self.call(|reply| Command::CommitModelAttemptIntent {
+            step,
+            generation,
+            timing,
+            cost_quote,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn record_model_start_receipt(
+        &self,
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        self.call(|reply| Command::RecordModelStartReceipt {
+            attempt,
+            receipt_value,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn settle_model_attempt(
+        &self,
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        self.call(|reply| Command::SettleModelAttempt {
+            attempt,
+            state,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn select_final_model_response(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        self.call(|reply| Command::SelectFinalModelResponse { attempt, reply })
+            .await
+    }
+
+    pub(crate) async fn select_compaction_response(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        self.call(|reply| Command::SelectCompactionResponse { attempt, reply })
+            .await
+    }
+
+    pub(crate) async fn finish_cancelled_turn(
+        &self,
+        turn: TurnId,
+    ) -> Result<FinishedTurn, StoreError> {
+        self.call(|reply| Command::FinishCancelledTurn { turn, reply })
+            .await
+    }
+
+    pub(crate) async fn snapshot(
+        &self,
+        request: SnapshotRequest,
+    ) -> Result<SessionSnapshot, StoreError> {
+        self.call(|reply| Command::Snapshot { request, reply })
+            .await
+    }
+
+    pub(crate) async fn page_entries(
+        &self,
+        conversation: ConversationId,
+        before: Option<EntryId>,
+        limit: usize,
+    ) -> Result<EntryPage, StoreError> {
+        self.call(|reply| Command::PageEntries {
+            conversation,
+            before,
+            limit,
+            reply,
+        })
+        .await
+    }
+
+    pub(crate) async fn shutdown(&self) -> Result<(), StoreError> {
+        // Drain already-admitted artifact workers before releasing Session ownership.
+        // Waiters hold only the gate, not a namespace/ownership lease.
+        let _guard = self.artifact_gate()?.write_owned().await;
         let (reply, receive) = oneshot::channel();
-        let job: Job = Box::new(move |store| {
-            let result = command.apply(store);
-            let fail = result.as_ref().err().is_some_and(StoreError::is_fenced);
-            let _ = reply.send(result);
-            if fail {
-                Err(StoreError::failed("fenced"))
-            } else {
-                Ok(())
+        self.tx
+            .send(Command::Shutdown { reply: Some(reply) })
+            .await
+            .map_err(|_| StoreError::Closed)?;
+        receive.await.map_err(|_| StoreError::Closed)
+    }
+
+    pub(crate) async fn tool_records(&self, step: StepId) -> Result<ToolRecords, StoreError> {
+        self.call(|reply| Command::ToolRecords { step, reply })
+            .await
+    }
+
+    pub(crate) async fn tool_mutate(
+        &self,
+        operation: ToolMutation,
+    ) -> Result<ToolMutationResult, StoreError> {
+        self.call(|reply| Command::ToolMutate { operation, reply })
+            .await
+    }
+
+    pub(crate) async fn publication_scope(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<PublicationScope, StoreError> {
+        let guard = self.artifact_gate()?.read_owned().await;
+        let artifacts = self.artifacts.upgrade().ok_or(StoreError::Closed)?;
+        Ok(artifacts.scope(attempt, guard))
+    }
+
+    pub(crate) async fn read_artifact(
+        &self,
+        attempt: crate::AttemptId,
+        offset: u64,
+        max_length: usize,
+    ) -> Result<crate::ArtifactRead, StoreError> {
+        let guard = self.artifact_gate()?.read_owned().await;
+        let artifacts = self.artifacts.upgrade().ok_or(StoreError::Closed)?;
+        let reference = self
+            .call(|reply| Command::ArtifactReference { attempt, reply })
+            .await?;
+        // Verification hashes the whole bounded object, away from the database
+        // thread. The worker retains ownership/gating if its caller is dropped.
+        tokio::task::spawn_blocking(move || {
+            let _guard = guard;
+            artifacts.read(reference, offset, max_length)
+        })
+        .await
+        .map_err(|error| StoreError::Io(format!("artifact read task failed: {error}")))?
+    }
+
+    pub(crate) async fn collect_artifacts(&self) -> Result<crate::BlobStoreUsage, StoreError> {
+        let guard = self.artifact_gate()?.write_owned().await;
+        self.call(|reply| Command::CollectArtifacts { guard, reply })
+            .await
+    }
+
+    fn artifact_gate(&self) -> Result<Arc<tokio::sync::RwLock<()>>, StoreError> {
+        self.artifacts
+            .upgrade()
+            .map(|owner| Arc::clone(&owner.gate))
+            .ok_or(StoreError::Closed)
+    }
+
+    async fn call<T>(
+        &self,
+        build: impl FnOnce(oneshot::Sender<Result<T, StoreError>>) -> Command,
+    ) -> Result<T, StoreError> {
+        let (reply, receive) = oneshot::channel();
+        self.tx
+            .send(build(reply))
+            .await
+            .map_err(|_| StoreError::Closed)?;
+        receive.await.map_err(|_| StoreError::Closed)?
+    }
+}
+
+enum Command {
+    #[cfg(test)]
+    Pause {
+        reached: oneshot::Sender<()>,
+        release: std::sync::mpsc::Receiver<()>,
+    },
+    ArtifactReference {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<crate::BlobRef, StoreError>>,
+    },
+    CollectArtifacts {
+        guard: tokio::sync::OwnedRwLockWriteGuard<()>,
+        reply: oneshot::Sender<Result<crate::BlobStoreUsage, StoreError>>,
+    },
+    ToolRecords {
+        step: StepId,
+        reply: oneshot::Sender<Result<ToolRecords, StoreError>>,
+    },
+    ToolMutate {
+        operation: ToolMutation,
+        reply: oneshot::Sender<Result<ToolMutationResult, StoreError>>,
+    },
+    CreateConversation {
+        config: ConversationConfig,
+        reply: oneshot::Sender<Result<CreatedConversation, StoreError>>,
+    },
+    CurrentConfig {
+        conversation: ConversationId,
+        reply: oneshot::Sender<Result<InstalledConfig, StoreError>>,
+    },
+    ConfigAsOf {
+        conversation: ConversationId,
+        revision: CommitSeq,
+        reply: oneshot::Sender<Result<InstalledConfig, StoreError>>,
+    },
+    Configure {
+        conversation: ConversationId,
+        expected_revision: CommitSeq,
+        config: ConversationConfig,
+        reply: oneshot::Sender<Result<ConfiguredConversation, StoreError>>,
+    },
+    AdmitInput {
+        conversation: ConversationId,
+        request: AdmitInputRequest,
+        reply: oneshot::Sender<Result<Admission, StoreError>>,
+    },
+    StartTurn {
+        request: StartTurnRequest,
+        reply: oneshot::Sender<Result<StartedTurn, StoreError>>,
+    },
+    SubmitTurn {
+        request: SubmitTurnRequest,
+        reply: oneshot::Sender<Result<SubmittedTurn, StoreError>>,
+    },
+    CancelTurn {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<CancellationResult, StoreError>>,
+    },
+    AbandonTurn {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<AbandonResult, StoreError>>,
+    },
+    DriveBasis {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<DriveBasis, StoreError>>,
+    },
+    CreateInitialModelStep {
+        turn: TurnId,
+        purpose: StepPurpose,
+        manifest: RequestManifest,
+        reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
+    },
+    CreateFallbackModelStep {
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+        reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
+    },
+    CommitModelAttemptIntent {
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+        cost_quote: Option<CostQuote>,
+        reply: oneshot::Sender<Result<CreatedModelAttempt, StoreError>>,
+    },
+    RecordModelStartReceipt {
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+        reply: oneshot::Sender<Result<RecordedModelAttempt, StoreError>>,
+    },
+    SettleModelAttempt {
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+        reply: oneshot::Sender<Result<RecordedModelAttempt, StoreError>>,
+    },
+    SelectFinalModelResponse {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
+    },
+    SelectCompactionResponse {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
+    },
+    FinishCancelledTurn {
+        turn: TurnId,
+        reply: oneshot::Sender<Result<FinishedTurn, StoreError>>,
+    },
+    Snapshot {
+        request: SnapshotRequest,
+        reply: oneshot::Sender<Result<SessionSnapshot, StoreError>>,
+    },
+    PageEntries {
+        conversation: ConversationId,
+        before: Option<EntryId>,
+        limit: usize,
+        reply: oneshot::Sender<Result<EntryPage, StoreError>>,
+    },
+    Shutdown {
+        reply: Option<oneshot::Sender<()>>,
+    },
+}
+
+fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
+    while let Some(command) = rx.blocking_recv() {
+        match command {
+            #[cfg(test)]
+            Command::Pause { reached, release } => {
+                let _ = reached.send(());
+                let _ = release.recv();
             }
-        });
-        let sender = self
-            .inner
-            .commands
-            .lock()
-            .expect("command mutex")
-            .clone()
-            .ok_or_else(|| StoreError::failed("the session is closed"))?;
-        sender
-            .send(job)
-            .await
-            .map_err(|_| StoreError::failed("the database thread is gone"))?;
-        receive
-            .await
-            .map_err(|_| StoreError::failed("the database thread dropped the reply"))?
-    }
-
-    /// Stop accepting commands, drain the queue and release ownership.
-    ///
-    /// Only the creating handle may close the session; clones are clients and
-    /// may not end another holder's session.
-    pub(crate) async fn close(&self) {
-        if !self.owner {
-            return;
-        }
-        // Dropping the last sender lets the thread finish queued jobs and exit
-        // its loop; joining proves the connection is gone and the OS-owned
-        // session lock released.
-        self.inner.commands.lock().expect("command mutex").take();
-        let thread = self.inner.thread.lock().expect("thread mutex").take();
-        if let Some(thread) = thread {
-            let _ = tokio::task::spawn_blocking(move || thread.join()).await;
+            Command::ArtifactReference { attempt, reply } => {
+                let _ = reply.send(database.artifact_reference(attempt));
+            }
+            Command::CollectArtifacts { guard, reply } => {
+                let result = database.collect_artifacts();
+                drop(guard);
+                let _ = reply.send(result);
+            }
+            Command::ToolRecords { step, reply } => {
+                let _ = reply.send(database.tool_records(step));
+            }
+            Command::ToolMutate { operation, reply } => {
+                let _ = reply.send(database.tool_mutate(operation));
+            }
+            Command::CreateConversation { config, reply } => {
+                let _ = reply.send(database.create_conversation(config));
+            }
+            Command::CurrentConfig {
+                conversation,
+                reply,
+            } => {
+                let _ = reply.send(database.current_config(conversation));
+            }
+            Command::ConfigAsOf {
+                conversation,
+                revision,
+                reply,
+            } => {
+                let _ = reply.send(database.config_as_of(conversation, revision));
+            }
+            Command::Configure {
+                conversation,
+                expected_revision,
+                config,
+                reply,
+            } => {
+                let _ = reply.send(database.configure(conversation, expected_revision, config));
+            }
+            Command::AdmitInput {
+                conversation,
+                request,
+                reply,
+            } => {
+                let _ = reply.send(database.admit_input(conversation, request));
+            }
+            Command::StartTurn { request, reply } => {
+                let _ = reply.send(database.start_turn(request));
+            }
+            Command::SubmitTurn { request, reply } => {
+                let _ = reply.send(database.submit_turn(request));
+            }
+            Command::CancelTurn { turn, reply } => {
+                let _ = reply.send(database.cancel_turn(turn));
+            }
+            Command::AbandonTurn { turn, reply } => {
+                let _ = reply.send(database.abandon_turn(turn));
+            }
+            Command::DriveBasis { turn, reply } => {
+                let _ = reply.send(database.drive_basis(turn));
+            }
+            Command::CreateInitialModelStep {
+                turn,
+                purpose,
+                manifest,
+                reply,
+            } => {
+                let _ = reply.send(database.create_initial_model_step(turn, purpose, manifest));
+            }
+            Command::CreateFallbackModelStep {
+                predecessor,
+                settings,
+                manifest,
+                reason,
+                reply,
+            } => {
+                let _ = reply.send(database.create_fallback_model_step(
+                    predecessor,
+                    settings,
+                    manifest,
+                    reason,
+                ));
+            }
+            Command::CommitModelAttemptIntent {
+                step,
+                generation,
+                timing,
+                cost_quote,
+                reply,
+            } => {
+                let _ = reply.send(
+                    database.commit_model_attempt_intent(step, generation, timing, cost_quote),
+                );
+            }
+            Command::RecordModelStartReceipt {
+                attempt,
+                receipt_value,
+                reply,
+            } => {
+                let _ = reply.send(database.record_model_start_receipt(attempt, receipt_value));
+            }
+            Command::SettleModelAttempt {
+                attempt,
+                state,
+                reply,
+            } => {
+                let _ = reply.send(database.settle_model_attempt(attempt, state));
+            }
+            Command::SelectFinalModelResponse { attempt, reply } => {
+                let _ = reply.send(database.select_final_model_response(attempt));
+            }
+            Command::SelectCompactionResponse { attempt, reply } => {
+                let _ = reply.send(database.select_compaction_response(attempt));
+            }
+            Command::FinishCancelledTurn { turn, reply } => {
+                let _ = reply.send(database.finish_cancelled_turn(turn));
+            }
+            Command::Snapshot { request, reply } => {
+                let _ = reply.send(database.snapshot(request));
+            }
+            Command::PageEntries {
+                conversation,
+                before,
+                limit,
+                reply,
+            } => {
+                let _ = reply.send(database.page_entries(conversation, before, limit));
+            }
+            Command::Shutdown { reply } => {
+                drop(database);
+                if let Some(reply) = reply {
+                    let _ = reply.send(());
+                }
+                return;
+            }
         }
     }
 }
 
-/// Readable session identity, available as soon as the store is open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct SessionInfo {
-    pub(crate) session_id: crate::SessionId,
-    pub(crate) root: crate::ConversationId,
-    pub(crate) last_commit: Option<crate::CommitSeq>,
+#[derive(Debug, Error)]
+pub(crate) enum StoreError {
+    #[error("session database already exists: {0}")]
+    AlreadyExists(PathBuf),
+    #[error("session database does not exist: {0}")]
+    Unknown(PathBuf),
+    #[error("session database is owned by another process: {0}")]
+    InUse(PathBuf),
+    #[error("unsupported session schema {found}; expected {expected}")]
+    UnsupportedSchema { found: i64, expected: i64 },
+    #[error("request key {request_key:?} conflicts in conversation {conversation}")]
+    RequestKeyConflict {
+        conversation: ConversationId,
+        request_key: String,
+    },
+    #[error("conversation {0} already has an unfinished turn")]
+    ConversationBusy(ConversationId),
+    #[error("{kind} {id} was not found")]
+    NotFound { kind: &'static str, id: i64 },
+    #[error(
+        "conversation {conversation} configuration revision changed: expected {expected}, found {actual}"
+    )]
+    RevisionConflict {
+        conversation: ConversationId,
+        expected: CommitSeq,
+        actual: CommitSeq,
+    },
+    #[error("invalid session state: {0}")]
+    InvalidState(String),
+    #[error("invalid session request: {0}")]
+    InvalidRequest(String),
+    #[error("turn {0} was cancelled before this transition")]
+    Cancelled(TurnId),
+    #[error("turn context cannot be assembled within bounded runtime limits: {0}")]
+    ContextCapacity(String),
+    #[error("model compaction checkpoint is invalid: {0}")]
+    InvalidCheckpoint(String),
+    #[error("turn reached a configured limit: {0}")]
+    Limit(String),
+    #[error("no conservative host quote is available for a capped model attempt")]
+    CostQuoteUnavailable,
+    #[error("the model attempt exceeds the remaining monetary ceiling")]
+    MonetaryCapacity,
+    #[error("tool approval is missing, expired or does not match the frozen action")]
+    ApprovalRequired,
+    #[error("model response contains tool calls awaiting tool admission")]
+    ToolsPending,
+    #[error("snapshot mandatory state exceeds the requested {maximum}-byte bound")]
+    SnapshotTooLarge { maximum: usize },
+    #[error("session mutation is fenced after ambiguous persistence: {cause}")]
+    Fenced { cause: String },
+    #[error("session database command service is closed")]
+    Closed,
+    #[error("corrupt session database: {0}")]
+    Corrupt(String),
+    #[error("sqlite failure: {0}")]
+    Sqlite(String),
+    #[error("filesystem failure: {0}")]
+    Io(String),
+    #[error(transparent)]
+    Blob(#[from] crate::BlobStoreError),
 }
+
+impl StoreError {
+    pub(crate) fn requires_fence(&self) -> bool {
+        matches!(self, Self::Fenced { .. } | Self::Corrupt(_))
+    }
+
+    pub(crate) fn is_semantic_rejection(&self) -> bool {
+        matches!(
+            self,
+            Self::RequestKeyConflict { .. }
+                | Self::ConversationBusy(_)
+                | Self::NotFound { .. }
+                | Self::RevisionConflict { .. }
+                | Self::InvalidState(_)
+                | Self::InvalidRequest(_)
+                | Self::Cancelled(_)
+                | Self::ContextCapacity(_)
+                | Self::InvalidCheckpoint(_)
+                | Self::Limit(_)
+                | Self::CostQuoteUnavailable
+                | Self::MonetaryCapacity
+                | Self::ToolsPending
+                | Self::ApprovalRequired
+                | Self::SnapshotTooLarge { .. }
+        )
+    }
+}
+
+impl From<rusqlite::Error> for StoreError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Sqlite(error.to_string())
+    }
+}
+
+#[cfg(test)]
+mod artifact_tests;

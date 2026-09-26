@@ -1,0 +1,27 @@
+[package]
+name = "ion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+clap.workspace = true
+ion-ai.workspace = true
+ion-core.workspace = true
+ion-terminal.workspace = true
+ratatui = "0.30.2"
+reqwest = { version = "0.12.28", default-features = false }
+serde_json = "1.0.151"
+tokio.workspace = true
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+
+[dev-dependencies]
+nix = { version = "0.31.3", features = ["fs", "term"] }
+tempfile = "3.27.0"
+vt100 = "0.16.2"
+
+[lints]
+workspace = true

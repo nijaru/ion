@@ -1,184 +1,263 @@
 #!/usr/bin/env bash
-# Daily-driver smoke checklist (tk-670r): the flows a maintainer hits on
-# every real session, driven through a real terminal (tmux) against the
-# built binary with an isolated data root. Run this before any
-# readiness claim; green unit gates alone are not readiness evidence.
-#
-# Usage: scripts/smoke.sh [--release]
-# Requires: tmux, python3 (sqlite3 module), cargo.
-set -uo pipefail
+# Offline executable smoke for the maintained headless Session path.
+# This proves durable submit/reopen/idempotence and zero provider starts when
+# credentials are absent. It is NOT live-provider or terminal qualification.
+# Usage: scripts/smoke.sh [--release] (or ION_SMOKE_BIN=/path/to/ion ...)
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${ION_SMOKE_BIN:-$ROOT/target/debug/ion}"
-SESSION="ion-smoke"
-STEP=0
-
-if [[ "${1:-}" == "--release" ]]; then
-    BIN="$ROOT/target/release/ion"
-fi
-
-WORK="$(mktemp -d /tmp/ion-smoke.XXXXXX)"
-mkdir -p "$WORK/data/ion"
-printf '' > "$WORK/settings.toml"
-
-cleanup() {
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Kill only the ion this script launched (child of our panes).
-    [[ -n "${SMOKE_PID:-}" ]] && pkill -9 -P "$SMOKE_PID" 2>/dev/null
-    rm -rf "$WORK"
-}
-trap cleanup EXIT
-
-pass() { STEP=$((STEP + 1)); echo "ok $STEP - $1"; }
-fail() { STEP=$((STEP + 1)); echo "FAIL $STEP - $1"; tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 1; }
-
-capture() { tmux capture-pane -t "$SESSION" -p "$@" 2>/dev/null; }
-
-wait_for() { # $1 needle, $2 timeout seconds, remaining args passed to capture
-    local deadline=$((SECONDS + ${2:-15}))
-    until capture "${@:3}" | grep -q "$1"; do
-        (( SECONDS > deadline )) && return 1
-        sleep 0.2
-    done
-}
-
-wait_for_idle() { # $1 timeout seconds
-    local deadline=$((SECONDS + ${1:-15}))
-    local screen
-    while (( SECONDS <= deadline )); do
-        screen="$(capture)"
-        # The footer is the PTY-visible completion boundary. It is
-        # current-screen state, unlike streamed response text, which
-        # may already be present while OperationFinished is pending.
-        if grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]*$' <<<"$screen" \
-            && ! grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
-        then
-            return 0
-        fi
-        sleep 0.2
-    done
-    return 1
-}
-
-launch() { # $@ = ion args
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Explicit bash: tmux default-shell may be fish, where "$?" aborts.
-    # Keep-alive keeps the exit code visible after ion exits.
-    tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-        "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data $BIN $* 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-    SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-}
-
-ion_child_pid() {
-    # Pane pid is the tmux shell wrapper; ion is its child or grandchild.
-    local pid parent grandparent
-    for pid in $(pgrep -x ion); do
-        parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-        if [[ "$parent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-        grandparent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
-        if [[ "$grandparent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-    done
-}
-
-quit_and_check_exit_code() { # $1 = description
-    wait_for_idle 10 || fail "$1: ion did not reach an idle footer"
-    tmux send-keys -t "$SESSION" C-d
-    local deadline=$((SECONDS + 10))
-    until capture | grep -q "SMOKE_EXIT="; do
-        (( SECONDS > deadline )) && fail "$1: ion did not exit after ctrl+d"
-        sleep 0.2
-    done
-    capture | grep -q "SMOKE_EXIT=0" || fail "$1: exit code was not 0: $(capture | grep SMOKE_EXIT)"
-}
-
-type_line() { tmux send-keys -t "$SESSION" -l "$1"; tmux send-keys -t "$SESSION" Enter; }
-
+PROFILE=debug
+if [[ "${1:-}" == --release ]]; then PROFILE=release; shift; fi
+[[ $# == 0 ]] || { echo 'usage: scripts/smoke.sh [--release]' >&2; exit 2; }
+BIN="${ION_SMOKE_BIN:-$ROOT/target/$PROFILE/ion}"
 if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
-    echo "== building =="
-    cargo build -q -p ion || { echo "build failed"; exit 1; }
+    if [[ "$PROFILE" == release ]]; then
+        cargo build --quiet --locked --release -p ion
+    else
+        cargo build --quiet --locked -p ion
+    fi
 fi
-[[ -x "$BIN" ]] || { echo "binary missing at $BIN"; exit 1; }
+WORK="$(mktemp -d "${ION_SMOKE_TMPDIR:-/tmp}/ion-smoke.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+mkdir "$WORK/state" "$WORK/workspace"
+printf 'sample data\n' > "$WORK/workspace/data.txt"
 
-echo "== 1. fresh start =="
-launch
-wait_for "ion v" 15 || fail "fresh start: no quiet startup banner"
-pass "idle banner renders"
+common=(--state "$WORK/state" --workspace "$WORK/workspace"
+        --endpoint https://api.example.test/v1/chat/completions
+        --api-key-env ION_SMOKE_ABSENT_KEY)
+run=("${common[@]}" --model gpt-test --model-input-limit 8192
+     --model-output-limit 2048 --request-key exact-key 'Read data.txt')
 
-echo "== 2. submit a turn =="
-type_line "hello"
-wait_for "scripted provider" 15 || fail "turn: no scripted response"
-first_count=$(capture | grep -c "scripted provider")
-sleep 1
-second_count=$(capture | grep -c "scripted provider")
-[[ "$first_count" == "$second_count" ]] || fail "turn: response duplicated ($first_count -> $second_count)"
-pass "turn committed exactly once"
-
-echo "== 3. clean exit =="
-quit_and_check_exit_code "clean exit"
-pass "ctrl+d quits with code 0"
-
-echo "== 4. resume shows persisted history =="
-launch "--resume"
-wait_for "resumed" 15 || fail "resume: no resumed banner"
-capture | grep -qE "(> hello|hello)" || fail "resume: previous turn missing"
-pass "resume restores history"
-
-echo "== 5. kill -9 mid-operation recovers =="
-# Relaunch with the scripted provider held open so the operation is
-# deterministically in flight when the process dies.
-tmux kill-session -t "$SESSION" 2>/dev/null
-tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-    "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data ION_TEST_PROVIDER_DELAY_MS=8000 $BIN --resume 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner"
-type_line "interruptible"
-wait_for "> interruptible" 10 || fail "kill -9: submission not accepted"
-CHILD="$(ion_child_pid)"
-[[ -n "$CHILD" ]] && kill -9 "$CHILD" || fail "kill -9: no ion child found"
-launch "--resume"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner after crash"
-# Valid recoveries: the open model step either surfaces as
-# indeterminate/cancelled, or replays safely against the fresh provider
-# and completes. Either way nothing is lost and the session is usable.
-if ! capture | grep -qE "indeterminate|cancelled"; then
-    capture | grep -q "scripted provider:" \
-        || fail "kill -9: interrupted op neither surfaced nor replayed"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run "${run[@]}" > "$WORK/first.json" 2> "$WORK/first.err"; then
+    echo 'FAIL: absent credentials allowed dispatch' >&2; exit 1
 fi
-type_line "/help"
-# Help may exceed the viewport; verify committed terminal history.
-wait_for "/compact" 10 -S - || fail "kill -9: composer unusable after recovery"
-pass "interrupted operation settles and session stays usable"
+grep -q 'MissingCredentials' "$WORK/first.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/snapshot.json"
+TURN="$(python3 - "$WORK/snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['unfinished_turn'], 'submission did not create a durable Turn'
+assert s['model_attempts'] == [], 'preflight consumed a physical provider attempt'
+assert s['tool_attempts'] == [], 'preflight started a tool'
+assert len(s['transcript_tail']) == 1, 'user input did not project exactly once'
+print(s['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run "${run[@]}" > "$WORK/replay.json" 2> "$WORK/replay.err"; then
+    echo 'FAIL: absent credentials allowed replay dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/replay.err"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume "${common[@]}" --turn "$TURN" > "$WORK/resume.json" 2> "$WORK/resume.err"; then
+    echo 'FAIL: absent credentials allowed resume dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/resume.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/reopened.json"
+python3 - "$WORK/snapshot.json" "$WORK/reopened.json" <<'PY'
+import json, sys
+a, b = (json.load(open(path)) for path in sys.argv[1:])
+assert a == b, 'passive reopen, idempotent submit, or blocked resume changed durable state'
+PY
 
-echo "== 6. older schema store archives instead of refusing =="
-tmux kill-session -t "$SESSION" 2>/dev/null
-python3 - <<PYEOF || { echo "python3/sqlite3 unavailable"; exit 1; }
-import sqlite3
-conn = sqlite3.connect("$WORK/data/ion/sessions.db")
-conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT)")
-conn.execute("PRAGMA user_version = 6")
-conn.commit()
-conn.close()
-PYEOF
-launch
-wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "ion v" 15 || fail "schema bump: session did not start"
-ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
-pass "old store archived, notice shown, session starts"
+# An endpoint path is part of the frozen provider binding, not merely its HTTPS
+# origin. A same-origin path change must fail before any provider request.
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/other \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$TURN" \
+    > "$WORK/wrong-endpoint.out" 2> "$WORK/wrong-endpoint.err"; then
+    echo 'FAIL: same-origin endpoint path changed a frozen provider' >&2; exit 1
+fi
+grep -q 'host wire API or endpoint differs' "$WORK/wrong-endpoint.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/wrong-endpoint.snapshot"
+cmp "$WORK/snapshot.json" "$WORK/wrong-endpoint.snapshot"
 
-echo "== 7. resize storm stays interactive =="
-for _ in 1 2 3 4; do
-    tmux resize-window -t "$SESSION" -x 40 -y 15
-    sleep 0.05
-    tmux resize-window -t "$SESSION" -x 100 -y 30
-    sleep 0.05
+# An optional monetary ceiling cannot dispatch without a trusted operator's
+# all-in quote. A quote exceeding that ceiling parks before provider egress;
+# changing the frozen ceiling when replaying the same request is refused.
+mkdir "$WORK/priced-state"
+priced_common=(--state "$WORK/priced-state" --workspace "$WORK/workspace"
+               --endpoint https://api.example.test/v1/chat/completions
+               --api-key-env ION_SMOKE_SYNTHETIC_KEY)
+priced_run=("${priced_common[@]}" --model gpt-test --model-input-limit 8192
+            --model-output-limit 2048 --max-cost-microusd 25
+            --request-key priced-key 'synthetic priced request')
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" run "${priced_run[@]}" \
+    > "$WORK/priced.out" 2> "$WORK/priced.err"; then
+    echo 'FAIL: capped request dispatched without pricing' >&2; exit 1
+fi
+grep -q 'CostQuoteUnavailable' "$WORK/priced.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced.snapshot"
+priced_turn="$(python3 - "$WORK/priced.snapshot" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['config']['config']['limits']['max_cost_microusd'] == 25
+assert s['model_attempts'] == []
+assert s['unfinished_turn']['budget']['reserved_cost_microusd'] == 0
+print(s['unfinished_turn']['id'])
+PY
+)"
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" resume "${priced_common[@]}" \
+    --cost-quote-microusd 26 --turn "$priced_turn" \
+    > "$WORK/priced-over.out" 2> "$WORK/priced-over.err"; then
+    echo 'FAIL: over-budget cost quote reached provider dispatch' >&2; exit 1
+fi
+grep -q 'MonetaryCapacity' "$WORK/priced-over.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced-after.snapshot"
+cmp "$WORK/priced.snapshot" "$WORK/priced-after.snapshot"
+if ION_SMOKE_SYNTHETIC_KEY=synthetic "$BIN" run "${priced_common[@]}" \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    --max-cost-microusd 26 --request-key priced-key 'synthetic priced request' \
+    > "$WORK/priced-changed.out" 2> "$WORK/priced-changed.err"; then
+    echo 'FAIL: a resumed request changed its frozen monetary ceiling' >&2; exit 1
+fi
+grep -q 'monetary ceiling differs' "$WORK/priced-changed.err"
+"$BIN" inspect --state "$WORK/priced-state" > "$WORK/priced-after-changed.snapshot"
+cmp "$WORK/priced.snapshot" "$WORK/priced-after-changed.snapshot"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume "${common[@]}" \
+    --cost-quote-microusd 1 --turn "$TURN" \
+    > "$WORK/uncapped-quote.out" 2> "$WORK/uncapped-quote.err"; then
+    echo 'FAIL: uncapped Session accepted a priced host policy' >&2; exit 1
+fi
+grep -q 'cost quote requires a frozen monetary ceiling' "$WORK/uncapped-quote.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/uncapped-quote.snapshot"
+cmp "$WORK/snapshot.json" "$WORK/uncapped-quote.snapshot"
+
+# The second wire API must pass through the same Session and credential preflight.
+mkdir "$WORK/anthropic-state"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/anthropic-state" \
+    --workspace "$WORK/workspace" --wire anthropic-messages \
+    --endpoint https://api.anthropic.com/v1/messages \
+    --api-key-env ION_SMOKE_ABSENT_KEY --model claude-test \
+    --model-input-limit 8192 --model-output-limit 2048 \
+    'synthetic, no network' > "$WORK/anthropic.json" 2> "$WORK/anthropic.err"; then
+    echo 'FAIL: absent Anthropic credentials allowed dispatch' >&2; exit 1
+fi
+grep -q 'MissingCredentials' "$WORK/anthropic.err"
+"$BIN" inspect --state "$WORK/anthropic-state" > "$WORK/anthropic-snapshot.json"
+python3 - "$WORK/anthropic-snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['model_attempts'] == [], 'Anthropic preflight consumed a provider attempt'
+assert s['config']['config']['providers'][0]['id'].startswith('anthropic-messages-')
+PY
+anthropic_turn="$(python3 - "$WORK/anthropic-snapshot.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/anthropic-state" \
+    --workspace "$WORK/workspace" --wire chat-completions \
+    --endpoint https://api.anthropic.com/v1/messages \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$anthropic_turn" \
+    > "$WORK/mismatched-wire.json" 2> "$WORK/mismatched-wire.err"; then
+    echo 'FAIL: an existing Session changed its frozen wire API' >&2; exit 1
+fi
+grep -q 'host wire API or endpoint differs' "$WORK/mismatched-wire.err"
+"$BIN" inspect --state "$WORK/anthropic-state" > "$WORK/anthropic-after-mismatch.json"
+cmp "$WORK/anthropic-snapshot.json" "$WORK/anthropic-after-mismatch.json"
+
+# A serialized request that exceeds its frozen byte budget never reaches egress.
+mkdir "$WORK/byte-state"
+oversized_prompt="$(python3 -c 'print("X" * 8192)')"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/byte-state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --model gpt-test \
+    --model-input-limit 8192 --model-output-limit 2048 \
+    --max-request-bytes 4096 "$oversized_prompt" > "$WORK/byte.json" 2> "$WORK/byte.err"; then
+    echo 'FAIL: oversized request reached provider dispatch' >&2; exit 1
+fi
+grep -q 'ContextCapacity' "$WORK/byte.err"
+"$BIN" inspect --state "$WORK/byte-state" > "$WORK/byte-snapshot.json"
+python3 - "$WORK/byte-snapshot.json" <<'PY'
+import json, sys
+s = json.load(open(sys.argv[1]))
+assert s['model_attempts'] == [], 'request byte ceiling consumed a provider attempt'
+assert s['config']['config']['context']['max_request_bytes'] == 4096
+PY
+
+mkdir "$WORK/workspace/state"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/workspace/state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject in-workspace state' > "$WORK/unsafe.out" 2> "$WORK/unsafe.err"; then
+    echo 'FAIL: writable workspace accepted as host state' >&2; exit 1
+fi
+grep -q 'outside the writable workspace' "$WORK/unsafe.err"
+[[ -z "$(find "$WORK/workspace/state" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+mkdir "$WORK/state/registry/agent-root"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/state" \
+    --workspace "$WORK/state/registry/agent-root" \
+    --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject workspace inside registry' > "$WORK/registry-inside.out" 2> "$WORK/registry-inside.err"; then
+    echo 'FAIL: a registry child was accepted as agent workspace' >&2; exit 1
+fi
+grep -q 'registry namespace must be disjoint' "$WORK/registry-inside.err"
+mkdir "$WORK/alias-state" "$WORK/workspace/alias-target"
+ln -s "$WORK/workspace/alias-target" "$WORK/alias-state/registry"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/alias-state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject registry alias' > "$WORK/alias.out" 2> "$WORK/alias.err"; then
+    echo 'FAIL: registry alias into workspace was accepted' >&2; exit 1
+fi
+grep -q 'registry resolves into the writable workspace' "$WORK/alias.err"
+[[ -z "$(find "$WORK/workspace/alias-target" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+
+# An editable Session must use one explicitly shared, private registry. Fresh
+# states share its binding; a different registry incarnation cannot resume it.
+mkdir -m 700 "$WORK/shared-registry" "$WORK/other-registry"
+mkdir "$WORK/edit-one" "$WORK/edit-two"
+edit_common=(--workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions
+             --api-key-env ION_SMOKE_ABSENT_KEY --model gpt-test
+             --model-input-limit 8192 --model-output-limit 2048)
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/edit-one" --enable-edit \
+    "${edit_common[@]}" 'synthetic edit' > "$WORK/no-registry.out" 2> "$WORK/no-registry.err"; then
+    echo 'FAIL: edit without a shared registry was admitted' >&2; exit 1
+fi
+grep -q 'mutating tools require --registry' "$WORK/no-registry.err"
+[[ -z "$(find "$WORK/edit-one" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+for state in edit-one edit-two; do
+    if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/$state" \
+        --registry "$WORK/shared-registry" --enable-edit "${edit_common[@]}" \
+        'synthetic edit' > "$WORK/$state.out" 2> "$WORK/$state.err"; then
+        echo 'FAIL: missing credentials allowed editable dispatch' >&2; exit 1
+    fi
+    grep -q 'MissingCredentials' "$WORK/$state.err"
+    "$BIN" inspect --state "$WORK/$state" > "$WORK/$state.snapshot"
 done
-type_line "still here"
-wait_for "still here" 10 || fail "resize storm: input lost"
-pass "composer survives resize storm"
-
-echo "== 8. final clean exit =="
-quit_and_check_exit_code "post-storm exit"
-pass "clean exit after storm"
-
-echo
-echo "ALL $STEP CHECKS PASSED — safe to ask for maintainer dogfood."
+python3 - "$WORK/edit-one.snapshot" "$WORK/edit-two.snapshot" "$WORK/shared-registry/staging" <<'PY'
+import json, os, sys
+first, second = (json.load(open(path)) for path in sys.argv[1:3])
+for snapshot in (first, second):
+    config = snapshot['config']['config']
+    assert config['authority']['workspace_mutation']
+    assert config['initial_tools'] == ['list', 'read', 'edit', 'create']
+    assert [tool['id'] for tool in config['tools']] == ['list', 'read', 'edit', 'create']
+    assert snapshot['tool_attempts'] == []
+assert first['config']['config']['workspace'] == second['config']['config']['workspace']
+assert os.stat(sys.argv[3]).st_mode & 0o077 == 0
+PY
+edit_turn="$(python3 - "$WORK/edit-one.snapshot" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/edit-one" \
+    --registry "$WORK/other-registry" --enable-edit \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$edit_turn" \
+    > "$WORK/wrong-registry.out" 2> "$WORK/wrong-registry.err"; then
+    echo 'FAIL: a different registry resumed an editable Session' >&2; exit 1
+fi
+grep -q 'registry incarnation differs' "$WORK/wrong-registry.err"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/edit-one" \
+    --registry "$WORK/shared-registry" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$edit_turn" \
+    > "$WORK/no-edit.out" 2> "$WORK/no-edit.err"; then
+    echo 'FAIL: editable Session resumed without explicit edit enablement' >&2; exit 1
+fi
+grep -q 'mutating tool flags and host tools must match' "$WORK/no-edit.err"
+"$BIN" inspect --state "$WORK/edit-one" > "$WORK/edit-after-refusal.snapshot"
+cmp "$WORK/edit-one.snapshot" "$WORK/edit-after-refusal.snapshot"
+echo 'headless offline smoke passed (not live-provider or terminal qualification)'

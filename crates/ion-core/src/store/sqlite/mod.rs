@@ -1,134 +1,338 @@
-//! The SQLite implementation of the session store.
-//!
-//! Every module here owns one group of tables and the transactions that write
-//! them. Nothing outside this module imports `rusqlite`.
-//!
-//! Durability floor: WAL journalling with `synchronous = FULL`, foreign keys
-//! on. A committed transaction is durable across process death and OS failure
-//! to the extent the filesystem honours `fsync`.
+//! SQLite connection owner for the replacement Session runtime.
 
-mod codec;
+mod artifacts;
 mod connection;
-pub(crate) mod conversation;
-pub(crate) mod entry;
-pub(crate) mod input;
+mod model_state;
 mod ownership;
-mod schema;
-mod sequence;
-pub(crate) mod turn;
+pub(crate) use ownership::Ownership;
+pub(crate) mod schema;
+mod semantic;
+mod tool_state;
 
-use std::path::Path;
+use std::{path::Path, sync::Arc};
 
+use crate::artifact::SessionArtifacts;
 use rusqlite::Connection;
 
-use super::{SessionInfo, StoreError};
-use crate::error::Error;
-use crate::id::IdError;
+use super::{
+    CreatedModelAttempt, CreatedModelStep, DriveBasis, FinishedTurn, RecordedModelAttempt,
+    SelectedModelResponse, StoreError, StoreMetadata,
+};
+use crate::observation::ObservationHub;
+use crate::session::{
+    AbandonResult, Admission, AdmitInputRequest, CancellationResult, ConfiguredConversation,
+    CreatedConversation, StartTurnRequest, StartedTurn, SubmitTurnRequest, SubmittedTurn,
+};
+use crate::{
+    CommitReceipt, CommitSeq, ConversationConfig, ConversationId, EntryId, EntryPage,
+    InstalledConfig, ModelAttemptState, ModelAttemptTiming, RequestManifest, SessionId,
+    SessionSnapshot, SnapshotRequest, StepId, TurnId, TurnSettings,
+};
 
-/// One open session database, owned by the database thread.
-pub(crate) struct SqliteStore {
+pub(crate) struct SqliteDatabase {
     connection: Connection,
-    /// Writable ownership of the database file. Held, never read: dropping it
-    /// releases the OS lock.
-    _ownership: Option<ownership::Ownership>,
-    /// Test-only: the next committing transaction fails before it publishes.
-    #[cfg(test)]
-    fault: std::cell::Cell<bool>,
+    pub(crate) artifacts: Arc<SessionArtifacts>,
+    observations: ObservationHub,
+    fenced: bool,
 }
 
-impl std::fmt::Debug for SqliteStore {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("SqliteStore")
-            .finish_non_exhaustive()
+impl SqliteDatabase {
+    pub(crate) fn tool_records(&self, step: StepId) -> Result<super::ToolRecords, StoreError> {
+        tool_state::records(&self.connection, step)
     }
-}
 
-impl SqliteStore {
-    /// Create a new session database. Refuses a database that already has a
-    /// schema instead of overwriting one.
-    ///
-    /// Ownership is taken before the database is opened, so no pragma, schema
-    /// write or read can touch a session another live process owns.
-    pub(crate) fn create(path: &Path) -> Result<Self, StoreError> {
+    pub(crate) fn tool_mutate(
+        &mut self,
+        mut operation: super::ToolMutation,
+    ) -> Result<super::ToolMutationResult, StoreError> {
+        // Retain proof and its GC gate outside the transaction closure through
+        // commit/rollback, even if the queued command's waiter was dropped.
+        let publication = match &mut operation {
+            super::ToolMutation::Evidence { publication, .. } => publication.take(),
+            _ => None,
+        };
+        let artifacts = Arc::clone(&self.artifacts);
+        let result = self.mutate(|connection| {
+            tool_state::mutate(connection, operation, &artifacts, publication.as_ref())
+        })?;
+        if let Some(receipt) = &result.receipt {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+    pub(crate) fn create(
+        path: &Path,
+        session_id: SessionId,
+        config: ConversationConfig,
+        observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<(Self, StoreMetadata, CommitReceipt), StoreError> {
+        if path.exists() {
+            return Err(StoreError::AlreadyExists(path.to_path_buf()));
+        }
         let ownership = ownership::Ownership::acquire(path)?;
-        let connection = connection::create(path)?;
-        schema::initialize(&connection)?;
-        Ok(Self {
-            connection,
-            _ownership: Some(ownership),
-            #[cfg(test)]
-            fault: std::cell::Cell::new(false),
-        })
+        let mut connection = connection::create(path)?;
+        schema::initialize(&connection, session_id)?;
+        let (metadata, receipt) = semantic::create_primary(&mut connection, session_id, config)?;
+        let artifacts = SessionArtifacts::new(path, session_id, limits, ownership)?;
+        observations.publish(receipt.clone());
+        Ok((
+            Self {
+                connection,
+                artifacts,
+                observations,
+                fenced: false,
+            },
+            metadata,
+            receipt,
+        ))
     }
 
-    /// Open an existing session database.
-    ///
-    /// Opening reads identity and metadata only. It never reconstructs the
-    /// transcript, and it never starts work.
-    pub(crate) fn open(path: &Path) -> Result<Self, StoreError> {
+    pub(crate) fn open(
+        path: &Path,
+        observations: ObservationHub,
+        limits: crate::BlobStoreLimits,
+    ) -> Result<(Self, StoreMetadata), StoreError> {
         if !path.exists() {
-            return Err(StoreError::Rejected(Error::UnknownSession(
-                path.to_path_buf(),
-            )));
+            return Err(StoreError::Unknown(path.to_path_buf()));
         }
         let ownership = ownership::Ownership::acquire(path)?;
         let connection = connection::open(path)?;
         schema::verify(&connection)?;
-        Ok(Self {
-            connection,
-            _ownership: Some(ownership),
-            #[cfg(test)]
-            fault: std::cell::Cell::new(false),
-        })
+        let metadata = semantic::metadata(&connection)?;
+        Ok((
+            Self {
+                connection,
+                artifacts: SessionArtifacts::new(path, metadata.session_id, limits, ownership)?,
+                observations,
+                fenced: false,
+            },
+            metadata,
+        ))
     }
 
-    /// Read the durable session identity, refusing a database that was never
-    /// initialized or that cannot be decoded.
-    pub(crate) fn check_readable(&self) -> Result<SessionInfo, StoreError> {
-        connection::read_info(&self.connection)
+    pub(crate) fn create_conversation(
+        &mut self,
+        config: ConversationConfig,
+    ) -> Result<CreatedConversation, StoreError> {
+        let result = self.mutate(|connection| semantic::create_conversation(connection, config))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
     }
-}
 
-impl From<rusqlite::Error> for StoreError {
-    fn from(error: rusqlite::Error) -> Self {
-        Self::Failed(format!("sqlite: {error}"))
+    pub(crate) fn current_config(
+        &self,
+        conversation: ConversationId,
+    ) -> Result<InstalledConfig, StoreError> {
+        semantic::current_config(&self.connection, conversation)
     }
-}
 
-/// Test-only: make the next committing transaction fail before it publishes.
-#[cfg(test)]
-pub(crate) fn inject_commit_failure(store: &SqliteStore) {
-    store.fault.set(true);
-}
-
-/// Test-only: arm the next committing transaction to fail.
-#[cfg(test)]
-pub(crate) struct InjectFault;
-
-#[cfg(test)]
-impl crate::store::Command for InjectFault {
-    type Output = ();
-
-    fn apply(self, store: &mut SqliteStore) -> Result<(), StoreError> {
-        inject_commit_failure(store);
-        Ok(())
+    pub(crate) fn config_as_of(
+        &self,
+        conversation: ConversationId,
+        revision: CommitSeq,
+    ) -> Result<InstalledConfig, StoreError> {
+        semantic::config_as_of(&self.connection, conversation, revision)
     }
-}
 
-/// Fail a transaction that was asked to fail, before it publishes anything.
-///
-/// The flag is passed by field so a caller already holding a mutable borrow of
-/// the connection can still reach it.
-#[cfg(test)]
-pub(crate) fn check_fault(fault: &std::cell::Cell<bool>) -> Result<(), StoreError> {
-    if fault.replace(false) {
-        return Err(StoreError::Failed("injected commit failure".to_owned()));
+    pub(crate) fn configure(
+        &mut self,
+        conversation: ConversationId,
+        expected_revision: CommitSeq,
+        config: ConversationConfig,
+    ) -> Result<ConfiguredConversation, StoreError> {
+        let result = self.mutate(|connection| {
+            semantic::configure(connection, conversation, expected_revision, config)
+        })?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
     }
-    Ok(())
-}
 
-/// Map a local sequence into a typed identity.
-pub(crate) fn id_from<T: TryFrom<i64, Error = IdError>>(raw: i64) -> Result<T, StoreError> {
-    T::try_from(raw).map_err(|error| StoreError::Failed(format!("invalid local id {raw}: {error}")))
+    pub(crate) fn admit_input(
+        &mut self,
+        conversation: ConversationId,
+        request: AdmitInputRequest,
+    ) -> Result<Admission, StoreError> {
+        let result =
+            self.mutate(|connection| semantic::admit_input(connection, conversation, request))?;
+        if let Admission::Created { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn submit_turn(
+        &mut self,
+        request: SubmitTurnRequest,
+    ) -> Result<SubmittedTurn, StoreError> {
+        let result = self.mutate(|connection| semantic::submit_turn(connection, request))?;
+        if let SubmittedTurn::Created(started) = &result {
+            self.observations.publish(started.receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn start_turn(
+        &mut self,
+        request: StartTurnRequest,
+    ) -> Result<StartedTurn, StoreError> {
+        let result = self.mutate(|connection| semantic::start_turn(connection, request))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn cancel_turn(&mut self, turn: TurnId) -> Result<CancellationResult, StoreError> {
+        let result = self.mutate(|connection| semantic::cancel_turn(connection, turn))?;
+        if let CancellationResult::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn abandon_turn(&mut self, turn: TurnId) -> Result<AbandonResult, StoreError> {
+        let result = self.mutate(|connection| semantic::abandon_turn(connection, turn))?;
+        if let AbandonResult::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn drive_basis(&self, turn: TurnId) -> Result<DriveBasis, StoreError> {
+        model_state::drive_basis(&self.connection, turn)
+    }
+
+    pub(crate) fn create_initial_model_step(
+        &mut self,
+        turn: TurnId,
+        purpose: crate::StepPurpose,
+        manifest: RequestManifest,
+    ) -> Result<CreatedModelStep, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::create_initial_step(connection, turn, purpose, manifest)
+        })?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn create_fallback_model_step(
+        &mut self,
+        predecessor: StepId,
+        settings: TurnSettings,
+        manifest: RequestManifest,
+        reason: String,
+    ) -> Result<CreatedModelStep, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::create_fallback_step(connection, predecessor, settings, manifest, reason)
+        })?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn commit_model_attempt_intent(
+        &mut self,
+        step: StepId,
+        generation: u64,
+        timing: ModelAttemptTiming,
+        cost_quote: Option<crate::CostQuote>,
+    ) -> Result<CreatedModelAttempt, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::commit_attempt_intent(connection, step, generation, timing, cost_quote)
+        })?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn record_model_start_receipt(
+        &mut self,
+        attempt: crate::AttemptId,
+        receipt_value: crate::ProviderStartReceipt,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        let result = self.mutate(|connection| {
+            model_state::record_start_receipt(connection, attempt, receipt_value)
+        })?;
+        if let RecordedModelAttempt::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn settle_model_attempt(
+        &mut self,
+        attempt: crate::AttemptId,
+        state: ModelAttemptState,
+    ) -> Result<RecordedModelAttempt, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::settle_attempt(connection, attempt, state))?;
+        if let RecordedModelAttempt::Committed { receipt, .. } = &result {
+            self.observations.publish(receipt.clone());
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn select_final_model_response(
+        &mut self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::select_final_response(connection, attempt))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn select_compaction_response(
+        &mut self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::select_compaction_response(connection, attempt))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn finish_cancelled_turn(
+        &mut self,
+        turn: TurnId,
+    ) -> Result<FinishedTurn, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::finish_cancelled_turn(connection, turn))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn snapshot(
+        &mut self,
+        request: SnapshotRequest,
+    ) -> Result<SessionSnapshot, StoreError> {
+        semantic::snapshot(&mut self.connection, request)
+    }
+
+    pub(crate) fn page_entries(
+        &self,
+        conversation: ConversationId,
+        before: Option<EntryId>,
+        limit: usize,
+    ) -> Result<EntryPage, StoreError> {
+        semantic::page_entries(&self.connection, conversation, before, limit)
+    }
+
+    fn mutate<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Connection) -> Result<T, StoreError>,
+    ) -> Result<T, StoreError> {
+        if self.fenced {
+            return Err(StoreError::Fenced {
+                cause: "an earlier persistence operation was ambiguous".to_owned(),
+            });
+        }
+        match operation(&mut self.connection) {
+            Ok(value) => Ok(value),
+            Err(error) if error.is_semantic_rejection() => Err(error),
+            Err(error) => {
+                self.fenced = true;
+                Err(StoreError::Fenced {
+                    cause: error.to_string(),
+                })
+            }
+        }
+    }
 }
