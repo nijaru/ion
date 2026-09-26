@@ -3277,6 +3277,466 @@ mod tests {
         panic!("child must exit inside rename worker without destructors");
     }
 
+    // EXPERIMENTAL: actual Session ownership across pre-Staged process loss.
+    // These synthetic namespaces remain host-protected across child death. This
+    // exercises that conditional contract, not confinement or power-loss safety.
+    mod session_process_loss {
+        use super::*;
+        use crate::{
+            DriveExit, DrivePolicy, EffectSummary, EntryData, InputSender, ModelBoundaries,
+            ModelBoundary, ModelBoundaryIdentity, ModelStart, ProviderBinding, SemanticRequest,
+            Session, SubmitTurnRequest, ToolBoundaries, TranscriptRole, TurnOutcome,
+        };
+        use ion_ai::{
+            BoxFuture, Content, Message, ModelResponse, ModelStreamEvent, ProviderError,
+            ResponseTermination, Role, ToolCall, Usage,
+        };
+        use std::time::Duration;
+
+        struct Script {
+            provider: ProviderBinding,
+            expect_result: bool,
+        }
+
+        impl ModelBoundary for Script {
+            fn identity(&self) -> ModelBoundaryIdentity {
+                ModelBoundaryIdentity {
+                    binding: self.provider.id.clone(),
+                    adapter: self.provider.adapter.clone(),
+                    request_encoding: self.provider.request_encoding.clone(),
+                    egress: self.provider.egress.clone(),
+                }
+            }
+
+            fn fingerprint(
+                &self,
+                request: &SemanticRequest,
+                key: &str,
+            ) -> Result<ContentDigest, ProviderError> {
+                Ok(ContentDigest::of(&(request, key)).unwrap())
+            }
+
+            fn start<'a>(
+                &'a self,
+                _: AttemptId,
+                _: String,
+                request: SemanticRequest,
+                _: CancellationToken,
+            ) -> BoxFuture<'a, ModelStart> {
+                Box::pin(async move {
+                    assert_eq!(
+                        request
+                            .messages
+                            .iter()
+                            .filter(|m| m.role == TranscriptRole::Tool)
+                            .count(),
+                        usize::from(self.expect_result),
+                        "recovery must materialize exactly one tool result before continuation"
+                    );
+                    let content = if self.expect_result {
+                        Content::Text("done".into())
+                    } else {
+                        assert_eq!(request.tools.len(), 1);
+                        Content::ToolCall(ToolCall {
+                            id: "edit-once".into(),
+                            name: request.tools[0].name.clone(),
+                            arguments: json!({
+                                "path": "file.txt",
+                                "expected_content": "alpha beta alpha\n",
+                                "old_text": "beta", "new_text": "gamma",
+                                "workspace_revision": {"files": 0, "repository": 0}
+                            }),
+                        })
+                    };
+                    ModelStart::Started {
+                        stream: Box::pin(futures_util::stream::iter([Ok(
+                            ModelStreamEvent::Completed(ModelResponse {
+                                message: Message {
+                                    role: Role::Assistant,
+                                    content: vec![content],
+                                    provider_replay: None,
+                                },
+                                usage: Usage::known(10, 5),
+                                termination: ResponseTermination::Completed,
+                                returned_model: Some(self.provider.model.model.clone()),
+                            }),
+                        )])),
+                        start_receipt: None,
+                    }
+                })
+            }
+        }
+
+        fn models(expect_result: bool) -> ModelBoundaries {
+            ModelBoundaries::new(
+                [Arc::new(Script {
+                    provider: crate::config::tests::config().providers.remove(0),
+                    expect_result,
+                }) as Arc<dyn ModelBoundary>],
+                Arc::new(|_: &ProviderBinding| Ok(())),
+            )
+            .unwrap()
+        }
+
+        #[tokio::test]
+        async fn owner_child() {
+            let Some(host) = std::env::var_os("ION_EDIT_SESSION_TEST_HOST") else {
+                return;
+            };
+            let host = PathBuf::from(host);
+            let workspace: WorkspaceBinding =
+                serde_json::from_str(&std::env::var("ION_EDIT_TEST_WORKSPACE").unwrap()).unwrap();
+            let registry = WorkspaceRegistry::open(&host).unwrap();
+            let editor = Arc::new(
+                NativeEditBoundary::new(&registry, workspace.clone(), 1024, &host.join("staging"))
+                    .unwrap(),
+            );
+            editor.set_live_authority(LiveToolAuthority::Allow);
+            editor.inject_fault(
+                std::env::var("ION_EDIT_TEST_FAULT")
+                    .unwrap()
+                    .parse()
+                    .unwrap(),
+            );
+            let mut config = crate::config::tests::config();
+            config.workspace = workspace;
+            config.tools = vec![editor.binding()];
+            config.initial_tools = vec![editor.binding().id];
+            config.controls.parallel_tool_calls = false;
+            let session = Session::create(host.join("session.sqlite"), config)
+                .await
+                .unwrap()
+                .session;
+            let handle = session.handle();
+            let submitted = handle
+                .submit_turn(SubmitTurnRequest {
+                    conversation: session.primary_conversation(),
+                    sender: InputSender::User,
+                    request_key: None,
+                    text: "replace the synthetic marker once".into(),
+                    admitted_at_unix_ms: 0,
+                    wall_deadline_unix_ms: None,
+                })
+                .await
+                .unwrap();
+            let crate::SubmittedTurn::Created(started) = submitted else {
+                panic!("fresh Session submission must create a turn");
+            };
+            let exit = handle
+                .resume_with_tools(
+                    started.turn.id,
+                    models(false),
+                    ToolBoundaries::new([editor as Arc<dyn ToolBoundary>]).unwrap(),
+                    DrivePolicy::default(),
+                )
+                .await;
+            panic!(
+                "Session owner must exit inside native edit before receiving evidence: {exit:?}"
+            );
+        }
+
+        struct Child(std::process::Child);
+
+        impl Drop for Child {
+            fn drop(&mut self) {
+                let _ = self.0.kill();
+                let _ = self.0.wait();
+            }
+        }
+
+        #[tokio::test]
+        async fn actual_session_owner_loss_recovers_allocation_without_reexecution() {
+            for fault in [
+                FAULT_AFTER_ALLOCATION,
+                FAULT_AFTER_CREATE,
+                FAULT_DURING_STAGE_WRITE,
+                FAULT_AFTER_DISPOSAL_UNLINK,
+                FAULT_AFTER_DISPOSAL_SYNC,
+            ] {
+                let fixture = Fixture::new(false);
+                let workspace = fixture.boundary.workspace_binding();
+                let stage = fixture.host.path().join("staging");
+                let database = fixture.host.path().join("session.sqlite");
+                let original =
+                    physical_identity(&File::open(fixture.root.path().join("file.txt")).unwrap())
+                        .unwrap();
+                let mut child = Child(
+                    std::process::Command::new(std::env::current_exe().unwrap())
+                        .args([
+                            "--exact",
+                            "native_edit::tests::session_process_loss::owner_child",
+                            "--nocapture",
+                        ])
+                        .env("ION_EDIT_SESSION_TEST_HOST", fixture.host.path())
+                        .env("ION_EDIT_TEST_HOST", fixture.host.path())
+                        .env(
+                            "ION_EDIT_TEST_WORKSPACE",
+                            serde_json::to_string(workspace).unwrap(),
+                        )
+                        .env("ION_EDIT_TEST_FAULT", fault.to_string())
+                        .spawn()
+                        .unwrap(),
+                );
+                let status = tokio::time::timeout(Duration::from_secs(20), async {
+                    loop {
+                        if let Some(status) = child.0.try_wait().unwrap() {
+                            break status;
+                        }
+                        tokio::time::sleep(Duration::from_millis(10)).await;
+                    }
+                })
+                .await
+                .expect("Session owner did not reach its process-exit hook");
+                assert_eq!(status.code(), Some(73), "fault {fault}");
+
+                let allocations = fixture.registry.outstanding_edit_allocations().unwrap();
+                assert_eq!(allocations.len(), 1);
+                let claim = &allocations[0];
+                let edit = claim.edit.as_ref().unwrap();
+                assert!(edit.staged.is_none());
+                assert!(edit.rename_armed.is_none());
+                let allocation = edit.allocation.as_ref().unwrap();
+                assert_eq!(
+                    allocation.registry_incarnation,
+                    fixture.registry.incarnation()
+                );
+                assert_eq!(
+                    allocation.parent,
+                    physical_identity(&File::open(&stage).unwrap()).unwrap()
+                );
+                let disposal_cut = matches!(
+                    fault,
+                    FAULT_AFTER_DISPOSAL_UNLINK | FAULT_AFTER_DISPOSAL_SYNC
+                );
+                assert_eq!(claim.terminal.is_some(), disposal_cut);
+                assert_eq!(
+                    edit.disposal,
+                    Some(if disposal_cut {
+                        StageDisposal::Authorized
+                    } else {
+                        StageDisposal::Reserved
+                    })
+                );
+                let staged_bytes = match fault {
+                    FAULT_AFTER_CREATE => Some(b"".as_slice()),
+                    FAULT_DURING_STAGE_WRITE => Some(b"partial".as_slice()),
+                    _ => None,
+                };
+                let slot = stage.join(&edit.manifest.stage_slot);
+                assert_eq!(
+                    fs::read_dir(&stage).unwrap().count(),
+                    usize::from(staged_bytes.is_some())
+                );
+                if let Some(bytes) = staged_bytes {
+                    assert_eq!(fs::read(&slot).unwrap(), bytes);
+                } else {
+                    assert!(!slot.exists());
+                }
+
+                let session = Session::open(&database).await.unwrap();
+                let handle = session.handle();
+                let entries = handle
+                    .page_entries(session.primary_conversation(), None, 100)
+                    .await
+                    .unwrap();
+                let step = entries
+                    .entries
+                    .iter()
+                    .find_map(|entry| match entry.data {
+                        EntryData::Assistant { step } => Some(step),
+                        _ => None,
+                    })
+                    .unwrap();
+                let before = handle.tool_records(step).await.unwrap();
+                assert_eq!(before.invocations.len(), 1);
+                assert_eq!(before.attempts.len(), 1);
+                let intent = &before.attempts[0];
+                assert_eq!(
+                    claim.key,
+                    ClaimKey {
+                        session: session.session_id(),
+                        invocation: intent.invocation,
+                        attempt: intent.id,
+                    }
+                );
+                assert_eq!(intent.ordinal, 1);
+                assert_eq!(
+                    intent.state,
+                    ToolAttemptState::IntentCommitted {
+                        start_receipt: None
+                    }
+                );
+                assert_eq!(
+                    fixture.registry.claim(claim.key).unwrap(),
+                    *claim,
+                    "passive open must not recover"
+                );
+                if let Some(bytes) = staged_bytes {
+                    assert_eq!(
+                        fs::read(&slot).unwrap(),
+                        bytes,
+                        "passive open must not clean up"
+                    );
+                }
+
+                let editor = Arc::new(
+                    NativeEditBoundary::new(&fixture.registry, workspace.clone(), 1024, &stage)
+                        .unwrap(),
+                );
+                editor.set_live_authority(LiveToolAuthority::Allow);
+                let cleanup_pending = fault == FAULT_DURING_STAGE_WRITE;
+                if cleanup_pending {
+                    editor.inject_fault(FAULT_CLEANUP_UNLINK);
+                }
+                assert!(matches!(
+                    handle
+                        .resume_with_tools(
+                            before.turn.id,
+                            models(true),
+                            ToolBoundaries::new([editor as Arc<dyn ToolBoundary>]).unwrap(),
+                            DrivePolicy::default(),
+                        )
+                        .await
+                        .unwrap(),
+                    DriveExit::Settled(TurnOutcome::Completed { .. })
+                ));
+                let after = handle.tool_records(step).await.unwrap();
+                assert_eq!(after.invocations.len(), 1);
+                assert_eq!(
+                    after.attempts.len(),
+                    1,
+                    "recovery must not create a physical attempt"
+                );
+                let receipt = session_receipt(claim.start.as_ref().unwrap());
+                assert!(
+                    matches!(&after.attempts[0].state, ToolAttemptState::Settled {
+                    effect: EffectSummary::NoMutation, receipt: Some(saved), retryable: false, ..
+                } if saved == &receipt)
+                );
+                let mut expected_attempt = intent.clone();
+                expected_attempt.state = after.attempts[0].state.clone();
+                assert_eq!(
+                    after.attempts[0], expected_attempt,
+                    "only evidence may advance"
+                );
+                let terminal = fixture.registry.claim(claim.key).unwrap();
+                assert_eq!(terminal.start, claim.start);
+                assert_eq!(
+                    terminal.terminal.as_ref().unwrap(),
+                    &TerminalEvidence {
+                        receipt: claim.start.clone().unwrap(),
+                        effect: EffectSummary::NoMutation,
+                    }
+                );
+                if disposal_cut {
+                    assert_eq!(terminal.terminal, claim.terminal);
+                }
+                assert_eq!(
+                    terminal.edit.as_ref().unwrap().disposal,
+                    Some(if cleanup_pending {
+                        StageDisposal::Authorized
+                    } else {
+                        StageDisposal::Disposed
+                    })
+                );
+                assert_eq!(
+                    fixture
+                        .registry
+                        .outstanding_edit_allocations()
+                        .unwrap()
+                        .len(),
+                    usize::from(cleanup_pending)
+                );
+                assert_eq!(
+                    fs::read_dir(&stage).unwrap().count(),
+                    usize::from(cleanup_pending)
+                );
+                if cleanup_pending {
+                    assert_eq!(fs::read(&slot).unwrap(), b"partial");
+                }
+                let settled_entries = handle
+                    .page_entries(session.primary_conversation(), None, 100)
+                    .await
+                    .unwrap();
+                session.close().await.unwrap();
+
+                // A second passive open preserves both Session evidence and the
+                // independent cleanup debt. Explicit host recovery retires quota;
+                // it cannot rewrite the settled Session receipt or emit a result.
+                let session = Session::open(&database).await.unwrap();
+                let handle = session.handle();
+                assert_eq!(
+                    handle.tool_records(step).await.unwrap().attempts,
+                    after.attempts
+                );
+                assert_eq!(fixture.registry.claim(claim.key).unwrap(), terminal);
+                for _ in 0..2 {
+                    assert!(
+                        NativeEditBoundary::recover_staging(fixture.host.path(), &stage)
+                            .unwrap()
+                            .is_empty()
+                    );
+                }
+                let disposed = fixture.registry.claim(claim.key).unwrap();
+                assert_eq!(disposed.start, terminal.start);
+                assert_eq!(disposed.terminal, terminal.terminal);
+                assert_eq!(
+                    disposed.edit.as_ref().unwrap().disposal,
+                    Some(StageDisposal::Disposed)
+                );
+                assert!(
+                    fixture
+                        .registry
+                        .outstanding_edit_allocations()
+                        .unwrap()
+                        .is_empty()
+                );
+                assert!(fixture.registry.unresolved(None, 4).unwrap().is_empty());
+                assert_eq!(fs::read_dir(&stage).unwrap().count(), 0);
+                assert!(matches!(
+                    handle
+                        .resume_with_tools(
+                            before.turn.id,
+                            ModelBoundaries::default(),
+                            ToolBoundaries::default(),
+                            DrivePolicy::default(),
+                        )
+                        .await
+                        .unwrap(),
+                    DriveExit::Settled(TurnOutcome::Completed { .. })
+                ));
+                let reopened = handle.tool_records(step).await.unwrap();
+                assert_eq!(reopened.attempts, after.attempts);
+                assert_eq!(reopened.invocations, after.invocations);
+                assert_eq!(
+                    handle
+                        .page_entries(session.primary_conversation(), None, 100)
+                        .await
+                        .unwrap(),
+                    settled_entries
+                );
+                assert_eq!(
+                    fixture.registry.revision(workspace).unwrap(),
+                    WorkspaceRevision {
+                        files: 0,
+                        repository: 0
+                    }
+                );
+                assert_eq!(fs::read_dir(fixture.root.path()).unwrap().count(), 1);
+                assert_eq!(
+                    fs::read(fixture.root.path().join("file.txt")).unwrap(),
+                    b"alpha beta alpha\n"
+                );
+                assert_eq!(
+                    physical_identity(&File::open(fixture.root.path().join("file.txt")).unwrap())
+                        .unwrap(),
+                    original
+                );
+                session.close().await.unwrap();
+            }
+        }
+    }
+
     #[tokio::test]
     async fn actual_pre_arm_process_loss_settles_without_rename_or_receipt_change() {
         for fault in [
