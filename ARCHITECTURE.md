@@ -488,6 +488,10 @@ the exact preparer is unavailable *after a provider response has already arrived
 persists an unavailable disposition instead of inventing a PreparedAction or reinterpreting
 the call under newer code. It closes that invocation with a source-ordered unavailable
 result and no ToolAttempt; missing code before a new provider request parks.
+Invalid model-supplied arguments are a separate source-ordered error result with
+no PreparedAction or ToolAttempt; the model can correct them on continuation.
+An invalid frozen host schema or incompatible prepared action is not disguised
+as a model error.
 
 PreparedAction includes a digest-bound required authority class: read-only, workspace
 mutation, or unconfined execution. Unconfined execution requires both unconfined and
@@ -509,7 +513,7 @@ already-started action. Ordinary text is never approval.
 A ToolInvocation owns one assistant call and at most one model-visible result.
 Its `outcome_ready` state records provenance: the exact eligible ToolAttemptId that
 supplied the canonical result, or an explicit synthetic source such as
-cancelled-before-start/accepted-unknown/unavailable. Every physical run or replay begins at an
+cancelled-before-start/accepted-unknown/unavailable/invalid-arguments. Every physical run or replay begins at an
 execution-intent commit and has a distinct AttemptId
 with monotonic ToolAttempt evidence: ordinal, cancellation generation,
 implementation/executor binding, optional start receipt/progress checkpoint and
@@ -558,8 +562,12 @@ replacement binding.
 
 For native single-file edit, stage verified replacement content in a host-owned,
 rename-compatible filesystem namespace **outside** the agent-writable workspace.
-The registry atomically admits an edit manifest and one immutable attempt receipt;
-staging and rename eligibility are separate durable facts, not replacement receipts.
+The model supplies both the complete original file and the complete desired file.
+The backend derives the single exact replacement from old/new text and refuses
+inconsistent desired bytes **before** any workspace claim; a syntactically valid
+but malformed edit cannot silently duplicate surrounding text. The registry
+atomically admits an edit manifest and one immutable attempt receipt; staging
+and rename eligibility are separate durable facts, not replacement receipts.
 Under permanent worker/staging custody, an exact no-follow vacancy check and
 staging-parent durability barrier precede a receipt/slot/physical-parent/registry-
 incarnation-bound allocation. Only a confirmed allocation permits exclusive stage

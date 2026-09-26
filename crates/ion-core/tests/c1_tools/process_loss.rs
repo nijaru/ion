@@ -378,7 +378,7 @@ fn edit_model() -> Arc<Model> {
         starts: AtomicUsize::new(0),
         calls: 1,
         arguments: json!({
-            "path":"x", "expected_content":"before", "old_text":"before", "new_text":"after",
+            "path":"x", "expected_content":"before", "desired_content":"after", "old_text":"before", "new_text":"after",
             "workspace_revision":{"files":0,"repository":0}
         }),
     })

@@ -241,6 +241,9 @@ pub(crate) async fn admit(
                     Err(ToolBoundaryError::Unavailable | ToolBoundaryError::Incompatible) => {
                         ToolPreparation::Unavailable
                     }
+                    Err(ToolBoundaryError::InvalidArguments | ToolBoundaryError::Capacity) => {
+                        ToolPreparation::InvalidArguments
+                    }
                     Err(error) => return Err(StoreError::InvalidState(error.to_string())),
                 },
                 Err(_) => ToolPreparation::Unavailable,

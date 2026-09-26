@@ -156,12 +156,13 @@ pub struct BaseFact {
     pub digest: ContentDigest,
 }
 
-/// Immutable admission disposition for one provider tool call. An unavailable
-/// preparer cannot supply a PreparedAction, and no attempt may be derived from it.
+/// Immutable admission disposition for one provider tool call. Neither an
+/// unavailable preparer nor invalid model arguments authorize a physical attempt.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ToolPreparation {
     Ready(PreparedAction),
     Unavailable,
+    InvalidArguments,
 }
 
 impl ToolPreparation {
@@ -169,7 +170,7 @@ impl ToolPreparation {
     pub fn ready(&self) -> Option<&PreparedAction> {
         match self {
             Self::Ready(action) => Some(action),
-            Self::Unavailable => None,
+            Self::Unavailable | Self::InvalidArguments => None,
         }
     }
 }
@@ -254,6 +255,7 @@ pub enum OutcomeSource {
     CancelledBeforeStart,
     DeniedApproval,
     Unavailable,
+    InvalidArguments,
     AcceptedUnknown,
 }
 

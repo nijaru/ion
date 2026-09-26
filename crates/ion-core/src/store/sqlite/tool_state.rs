@@ -169,7 +169,12 @@ pub(super) fn mutate(
             }
             // Every admitted call must remain closable even if cancellation
             // wins before execution, or the backend outcome remains unknown.
-            for reason in [UNKNOWN_RESULT, CANCELLED_RESULT, UNAVAILABLE_RESULT] {
+            for reason in [
+                UNKNOWN_RESULT,
+                CANCELLED_RESULT,
+                UNAVAILABLE_RESULT,
+                INVALID_ARGUMENTS_RESULT,
+            ] {
                 validate_result(&error_result(reason), &turn)?;
             }
             let entry_id = seq.next()?;
@@ -208,6 +213,10 @@ pub(super) fn mutate(
                             ToolPreparation::Unavailable => ToolExchangeState::OutcomeReady {
                                 source: OutcomeSource::Unavailable,
                                 result: error_result(UNAVAILABLE_RESULT),
+                            },
+                            ToolPreparation::InvalidArguments => ToolExchangeState::OutcomeReady {
+                                source: OutcomeSource::InvalidArguments,
+                                result: error_result(INVALID_ARGUMENTS_RESULT),
                             },
                         };
                         let invocation_id = seq.next()?;
@@ -635,7 +644,9 @@ pub(super) fn mutate(
                     }
                     error_result(UNKNOWN_RESULT)
                 }
-                OutcomeSource::DeniedApproval | OutcomeSource::Unavailable => {
+                OutcomeSource::DeniedApproval
+                | OutcomeSource::Unavailable
+                | OutcomeSource::InvalidArguments => {
                     return Err(invalid("non-execution outcome is staged at admission"));
                 }
                 OutcomeSource::CancelledBeforeStart => {
@@ -713,6 +724,7 @@ pub(super) fn mutate(
 }
 
 const UNAVAILABLE_RESULT: &str = "Exact tool implementation unavailable for this response.";
+const INVALID_ARGUMENTS_RESULT: &str = "Tool arguments do not match the frozen schema or action requirements. Retry with corrected arguments.";
 
 fn reserve_storage(invocations: &[ToolInvocation], preview: u32) -> Result<(), StoreError> {
     use crate::tool_boundary::{MAX_TOOL_ATTEMPTS, MAX_TOOL_BATCH_BYTES, MAX_TOOL_RECORD_BYTES};

@@ -46,7 +46,7 @@ use crate::{
 pub const MAX_NATIVE_EDIT_BYTES: usize = MAX_EDIT_BYTES as usize;
 
 const MAX_PATH_BYTES: usize = 4096;
-const IMPLEMENTATION_ID: &str = "native-edit-private-v3";
+const IMPLEMENTATION_ID: &str = "native-edit-private-v4";
 const MAX_STAGE_FILES: usize = MAX_EDIT_ALLOCATIONS;
 const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
@@ -588,14 +588,15 @@ pub fn native_edit_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolBindingId::new("edit")?,
         ToolSpec {
             name: "edit".into(),
-            description: "Replace one exact occurrence in a regular file of at most 16 KiB under the bound workspace root. Provide the complete expected file and workspace_revision from read.".into(),
+            description: "Replace one exact occurrence in a regular workspace file (max 16 KiB). Copy expected_content (the ORIGINAL complete file) and workspace_revision from read. Supply desired_content as the COMPLETE intended file after editing. old_text must occur once; new_text replaces ONLY old_text. The tool refuses a replacement that differs from desired_content. Read again to verify.".into(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["path", "expected_content", "workspace_revision", "old_text", "new_text"],
+                "required": ["path", "expected_content", "desired_content", "workspace_revision", "old_text", "new_text"],
                 "properties": {
                     "path": {"type": "string", "minLength": 1, "maxLength": MAX_PATH_BYTES},
                     "expected_content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
+                    "desired_content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
                     "workspace_revision": {
                         "type": "object", "additionalProperties": false,
                         "required": ["files", "repository"],
@@ -642,6 +643,7 @@ pub enum NativeEditError {
 struct EditArguments {
     path: String,
     expected_content: String,
+    desired_content: String,
     #[serde(default)]
     expected_digest: String,
     #[serde(rename = "workspace_revision")]
@@ -1523,7 +1525,7 @@ fn replacement(arguments: &EditArguments, maximum: usize) -> Result<Vec<u8>, ()>
         || arguments.old_text == arguments.new_text
         || arguments.expected_content.len() > maximum
         || arguments.expected_digest != digest_text(&arguments.expected_content)
-        || arguments.expected_content.len() > maximum
+        || arguments.desired_content.len() > maximum
     {
         return Err(());
     }
@@ -1551,7 +1553,9 @@ fn replacement(arguments: &EditArguments, maximum: usize) -> Result<Vec<u8>, ()>
     target.push_str(&arguments.expected_content[..start]);
     target.push_str(&arguments.new_text);
     target.push_str(&arguments.expected_content[end..]);
-    Ok(target.into_bytes())
+    (target == arguments.desired_content)
+        .then(|| target.into_bytes())
+        .ok_or(())
 }
 
 fn digest_text(text: &str) -> String {
@@ -2115,6 +2119,7 @@ mod tests {
             let content = fs::read_to_string(self.root.path().join("file.txt")).unwrap();
             json!({
                 "path": "file.txt",
+                "desired_content": content.replacen(old_text, new_text, 1),
                 "expected_content": content,
                 "workspace_revision": revision,
                 "old_text": old_text,
@@ -2216,6 +2221,29 @@ mod tests {
     }
 
     #[test]
+    fn prepared_edit_refuses_a_replacement_that_differs_from_declared_desired_file() {
+        let fixture = Fixture::new(false);
+        let binding = fixture.boundary.binding();
+        let mut arguments = fixture.arguments("beta", "gamma");
+        arguments["new_text"] = json!("alpha gamma alpha\n");
+        assert!(matches!(
+            crate::tool_boundary::prepare_action(&fixture.boundary, &binding, arguments),
+            Err(ToolBoundaryError::InvalidArguments)
+        ));
+        let mut wrong_target = fixture.arguments("beta", "gamma");
+        wrong_target["desired_content"] = json!("alpha alpha alpha\n");
+        assert!(matches!(
+            crate::tool_boundary::prepare_action(&fixture.boundary, &binding, wrong_target),
+            Err(ToolBoundaryError::InvalidArguments)
+        ));
+        assert_eq!(
+            fs::read(fixture.root.path().join("file.txt")).unwrap(),
+            b"alpha beta alpha\n"
+        );
+        assert!(fixture.registry.unresolved(None, 4).unwrap().is_empty());
+    }
+
+    #[test]
     fn protected_git_metadata_cannot_be_prepared_for_mutation() {
         let fixture = Fixture::new(true);
         fs::write(
@@ -2258,6 +2286,7 @@ mod tests {
             let arguments = json!({
                 "path": path,
                 "expected_content": "alpha beta alpha\n",
+                "desired_content": "alpha gamma alpha\n",
                 "workspace_revision": revision,
                 "old_text": "beta",
                 "new_text": "gamma",
@@ -2274,6 +2303,7 @@ mod tests {
             let action = boundary
                 .prepare(json!({
                     "path": "ADMIN/config", "expected_content": "alpha beta alpha\n",
+                    "desired_content": "alpha gamma alpha\n",
                     "workspace_revision": revision, "old_text": "beta", "new_text": "gamma"
                 }))
                 .unwrap();
@@ -3343,6 +3373,7 @@ mod tests {
                             arguments: json!({
                                 "path": "file.txt",
                                 "expected_content": "alpha beta alpha\n",
+                                "desired_content": "alpha gamma alpha\n",
                                 "old_text": "beta", "new_text": "gamma",
                                 "workspace_revision": {"files": 0, "repository": 0}
                             }),

@@ -18,7 +18,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v9 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v10 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -57,8 +57,9 @@ turning suspended work into user cancellation.
 `resume_with_tools` accepts exact compatible host tool implementations; missing bindings
 park before a new provider dispatch. After a completed provider response is durable, a
 missing exact preparer instead records an unavailable invocation and a source-order error
-result without fabricating an action or physical attempt; subsequent requests still park
-until the selected loadout resolves. The host tool boundary checks live authority before
+result without fabricating an action or physical attempt; subsequent requests park until
+the selected loadout resolves. Invalid model tool arguments become a separate
+source-order error without an attempt, so the model can correct them on continuation. The host tool boundary checks live authority before
 execution intent; denial parks without spending a physical attempt. It must recheck at
 actual effect admission because permission can change between those points. `tool_records`
 inspects attempts, `accept_tool_unknown` settles an uncertain exchange, and
@@ -76,10 +77,10 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v8) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v9) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: a headless native-edit binding and qualified macOS/Linux native exec,
+Still missing: qualified macOS/Linux native exec,
 a user-facing approval client and host authentication/policy backend, parallel tool
 dispatch, context compaction/forking,
 Steer/InteractionReply placement, live qualification of both wire adapters,
@@ -112,8 +113,9 @@ Mac and Linux ARM guest synthetic process-loss/Session recovery tests pass; they
 not prove host confinement or power-loss durability. A trusted host must continuously
 protect the registry, custody inode and staging namespace from arbitrary same-user
 writers; `0700` and file locks alone do not establish that protection. Blocked
-allocations have no force-clear. No headless edit tool or live-model edit task has
-been qualified; registry v3/v4 files are refused without migration.
+allocations have no force-clear. The headless host can opt into the editor with an explicit shared registry. One
+synthetic read/edit/read task passed; there is no sustained coding qualification.
+Registry v3/v4 files are refused without migration.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
 with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient
@@ -166,13 +168,46 @@ and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint; use a n
 state directory to switch. Keys are read at dispatch and are not stored. A missing
 key parks without sending a request. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
-resumes a persisted Turn. The host currently allows only bounded serial file reads;
-it cannot edit files or execute commands. It does not sandbox workspace access or
-enforce a monetary ceiling. Provider calls can send workspace content and incur charges.
-This path passed a synthetic OpenRouter Chat Completions read-and-answer exchange
-(two model attempts and one native read) on 2026-09-25. A direct OpenAI attempt
-returned HTTP 429; the Anthropic adapter has only loopback tests. This is **not**
-broad provider, native-mutation or terminal qualification. The excluded legacy
+resumes a persisted Turn. A read-only Session uses `<state>/registry` by default.
+To enable single-file exact-match edits, give every Session touching the same
+workspace **one shared host-owned registry**, separate from its per-Session state
+and the workspace. Create it privately on the same supported local filesystem
+as the workspace, then pass `--registry <path> --enable-edit` to both `run` and
+`resume`. The read-only and editable tool loadouts are frozen when the Session
+is created; use a new state directory to change modes. The registry incarnation
+is frozen into the workspace binding, so resuming with another registry fails.
+
+```sh
+mkdir -m 700 -p "$HOME/.local/state/ion/shared-registry"
+mkdir -p "$HOME/.local/state/ion/edit-example"
+cargo run --locked -p ion -- run \
+  --state "$HOME/.local/state/ion/edit-example" \
+  --registry "$HOME/.local/state/ion/shared-registry" \
+  --workspace "$PWD" --enable-edit \
+  --endpoint 'https://api.example.com/v1/chat/completions' \
+  --model '<exact-model-id>' \
+  --model-input-limit '<model-input-tokens>' \
+  --model-output-limit '<model-output-tokens>' \
+  'Read one file, replace the requested text, then summarize the change'
+```
+
+The editor's `native-edit-private-v4` binding requires both the complete original
+file and the complete desired file. It refuses a proposed old/new replacement that
+does not produce those desired bytes before creating a workspace claim. It creates
+private staging inside the shared registry, refuses unsupported filesystem or
+mount combinations, and never falls back to workspace staging.
+The host must continuously protect the registry, its staging directory and the
+workspace namespace from arbitrary same-user writers; directory permissions and
+advisory locks are **not** a sandbox. There is no command-execution tool, automatic
+cleanup of blocked allocations or monetary-cap option. Provider calls can send
+workspace content and incur charges.
+A synthetic OpenRouter Chat Completions read-and-answer exchange passed on
+2026-09-25. On 2026-09-26 another synthetic workspace completed read → edit →
+read: the file held exactly the requested bytes, the registry had one terminal
+known-change claim and its stage was disposed. A direct OpenAI attempt returned
+HTTP 429; the Anthropic adapter has only loopback tests. These are isolated
+exchanges, **not** sustained coding, broad provider, native-exec or terminal
+qualification. The excluded legacy
 `crates/ion/` remains reference material, not an alternative maintained runtime.
 
 ## Development

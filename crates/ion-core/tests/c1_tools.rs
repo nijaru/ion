@@ -646,7 +646,7 @@ async fn native_edit_settles_session_exchange_with_registry_minted_receipt() {
     let model = Arc::new(Model {
         starts: AtomicUsize::new(0),
         calls: 1,
-        arguments: json!({"path":"x", "expected_content":"before", "old_text":"before", "new_text":"after", "workspace_revision": registry.revision(&binding).unwrap()}),
+        arguments: json!({"path":"x", "expected_content":"before", "desired_content":"after", "old_text":"before", "new_text":"after", "workspace_revision": registry.revision(&binding).unwrap()}),
     });
     // Lose terminal delivery, but retain the registry receipt in Session evidence.
     struct LoseReply(Arc<NativeEditBoundary>, AtomicBool);
@@ -1758,6 +1758,47 @@ async fn complete_tool_exchange_prepares_once_and_continues() {
 }
 
 #[tokio::test]
+async fn invalid_model_tool_arguments_become_a_result_without_an_attempt() {
+    let (session, _path, turn) = setup(config()).await;
+    let model = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        arguments: json!({"path":42}),
+        calls: 1,
+    });
+    let tool = Arc::new(Tool::new(success()));
+    assert!(matches!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let records = session
+        .handle()
+        .tool_records(tool_step(&session).await)
+        .await
+        .unwrap();
+    assert!(records.attempts.is_empty());
+    assert_eq!(records.invocations.len(), 1);
+    assert_eq!(
+        records.invocations[0].preparation,
+        ToolPreparation::InvalidArguments
+    );
+    assert!(matches!(
+        records.invocations[0].exchange,
+        ToolExchangeState::Materialized {
+            source: OutcomeSource::InvalidArguments,
+            ..
+        }
+    ));
+    assert_eq!(tool.prepares.load(Ordering::SeqCst), 0);
+    assert_eq!(tool.executes.load(Ordering::SeqCst), 0);
+    assert_eq!(model.starts.load(Ordering::SeqCst), 2);
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn completed_model_step_retains_its_quote_across_tool_continuation() {
     let mut cfg = config();
     cfg.limits.max_cost_microusd = Some(10);
@@ -2050,7 +2091,7 @@ async fn response_ready_without_any_backend_stages_only_unavailable_results() {
 }
 
 #[tokio::test]
-async fn missing_frozen_tool_blocks_provider_and_schema_error_blocks_execution() {
+async fn missing_frozen_tool_blocks_provider_but_invalid_arguments_can_continue() {
     let (s, _path, turn) = setup(config()).await;
     let m = model();
     assert_eq!(
@@ -2069,8 +2110,18 @@ async fn missing_frozen_tool_blocks_provider_and_schema_error_blocks_execution()
             .resume_with_tools(turn, models(&bad), tools(&t), DrivePolicy::default())
             .await
             .unwrap(),
-        DriveExit::Faulted { .. }
+        DriveExit::Settled(TurnOutcome::Completed { .. })
     ));
+    let records = s.handle().tool_records(tool_step(&s).await).await.unwrap();
+    assert!(records.attempts.is_empty());
+    assert!(matches!(
+        records.invocations[0].exchange,
+        ToolExchangeState::Materialized {
+            source: OutcomeSource::InvalidArguments,
+            ..
+        }
+    ));
+    assert_eq!(bad.starts.load(Ordering::SeqCst), 2);
     assert_eq!(t.prepares.load(Ordering::SeqCst), 0);
     assert_eq!(t.executes.load(Ordering::SeqCst), 0);
     s.close().await.unwrap();

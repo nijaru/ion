@@ -17,7 +17,7 @@ if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
         cargo build --quiet --locked -p ion
     fi
 fi
-WORK="$(mktemp -d /tmp/ion-smoke.XXXXXX)"
+WORK="$(mktemp -d "${ION_SMOKE_TMPDIR:-/tmp}/ion-smoke.XXXXXX")"
 trap 'rm -rf "$WORK"' EXIT
 mkdir "$WORK/state" "$WORK/workspace"
 printf 'sample data\n' > "$WORK/workspace/data.txt"
@@ -139,4 +139,62 @@ if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/alias-state" \
 fi
 grep -q 'registry resolves into the writable workspace' "$WORK/alias.err"
 [[ -z "$(find "$WORK/workspace/alias-target" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+
+# An editable Session must use one explicitly shared, private registry. Fresh
+# states share its binding; a different registry incarnation cannot resume it.
+mkdir -m 700 "$WORK/shared-registry" "$WORK/other-registry"
+mkdir "$WORK/edit-one" "$WORK/edit-two"
+edit_common=(--workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions
+             --api-key-env ION_SMOKE_ABSENT_KEY --model gpt-test
+             --model-input-limit 8192 --model-output-limit 2048)
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/edit-one" --enable-edit \
+    "${edit_common[@]}" 'synthetic edit' > "$WORK/no-registry.out" 2> "$WORK/no-registry.err"; then
+    echo 'FAIL: edit without a shared registry was admitted' >&2; exit 1
+fi
+grep -q -- '--enable-edit requires --registry' "$WORK/no-registry.err"
+[[ -z "$(find "$WORK/edit-one" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+for state in edit-one edit-two; do
+    if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/$state" \
+        --registry "$WORK/shared-registry" --enable-edit "${edit_common[@]}" \
+        'synthetic edit' > "$WORK/$state.out" 2> "$WORK/$state.err"; then
+        echo 'FAIL: missing credentials allowed editable dispatch' >&2; exit 1
+    fi
+    grep -q 'MissingCredentials' "$WORK/$state.err"
+    "$BIN" inspect --state "$WORK/$state" > "$WORK/$state.snapshot"
+done
+python3 - "$WORK/edit-one.snapshot" "$WORK/edit-two.snapshot" "$WORK/shared-registry/staging" <<'PY'
+import json, os, sys
+first, second = (json.load(open(path)) for path in sys.argv[1:3])
+for snapshot in (first, second):
+    config = snapshot['config']['config']
+    assert config['authority']['workspace_mutation']
+    assert config['initial_tools'] == ['read', 'edit']
+    assert [tool['id'] for tool in config['tools']] == ['read', 'edit']
+    assert snapshot['tool_attempts'] == []
+assert first['config']['config']['workspace'] == second['config']['config']['workspace']
+assert os.stat(sys.argv[3]).st_mode & 0o077 == 0
+PY
+edit_turn="$(python3 - "$WORK/edit-one.snapshot" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/edit-one" \
+    --registry "$WORK/other-registry" --enable-edit \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$edit_turn" \
+    > "$WORK/wrong-registry.out" 2> "$WORK/wrong-registry.err"; then
+    echo 'FAIL: a different registry resumed an editable Session' >&2; exit 1
+fi
+grep -q 'registry incarnation differs' "$WORK/wrong-registry.err"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/edit-one" \
+    --registry "$WORK/shared-registry" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/chat/completions \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$edit_turn" \
+    > "$WORK/no-edit.out" 2> "$WORK/no-edit.err"; then
+    echo 'FAIL: editable Session resumed without explicit edit enablement' >&2; exit 1
+fi
+grep -q -- '--enable-edit and host tools must match' "$WORK/no-edit.err"
+"$BIN" inspect --state "$WORK/edit-one" > "$WORK/edit-after-refusal.snapshot"
+cmp "$WORK/edit-one.snapshot" "$WORK/edit-after-refusal.snapshot"
 echo 'headless offline smoke passed (not live-provider or terminal qualification)'
