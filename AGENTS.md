@@ -2,21 +2,15 @@
 
 ## Direction and ownership
 
-- `ARCHITECTURE.md` owns the accepted turn-engine contracts. `README.md` describes
+- `ARCHITECTURE.md` owns the accepted coding-agent contracts. `README.md` describes
   what currently works. Target, implemented and validated are different states.
-- The 2026-09-15 design replaced the former generic task runtime. The 2026-09-18
-  review deliberately reopens the *external-boundary internals* while keeping the coding
-  Turn as continuation owner. The accepted target now includes a stable TurnEnvironment,
-  frozen provider/tool bindings, versioned request manifests, effect-gated dispatch,
-  logical tool invocations with immutable physical ToolAttempts, execution evidence
-  separate from transcript settlement, durable outcome staging for compatible parallel
-  tool calls, typed drive exits, atomic commit update batches, ContextEpoch continuity and
-  a host-owned workspace registry. Worker context/lifetime/workspace inheritance are
-  separate axes. The former task/runtime Rust is **rewrite input, not an
-  implementation shape to migrate forward**; the maintained R1 Turn/Session
-  modules are now the implementation owner. Replace obsolete representations
-  rather than adapting them. Do not reintroduce a generic task/plan graph,
-  resident semantic mirror or undo journal.
+- The maintained Turn/Session engine owns one coding loop for TUI and headless
+  clients. Preserve truthful attempt evidence and avoid replaying uncertain
+  effects, but do not require a VM, sandbox, protected workspace registry or
+  all-descendant quiescence for ordinary host commands. Local shell execution
+  uses the live checkout and native toolchains on macOS and Linux; cancellation
+  is best effort and must be described as such. Do not reintroduce a generic
+  task/plan graph, resident semantic mirror or undo journal.
 - Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
   shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
   Git preserves old code and documents; retain useful failure scenarios as new tests.
@@ -33,12 +27,11 @@
 - Decide consequential boundaries before implementing them. Update the architecture
   when evidence changes a contract; do not conceal a disagreement with an adapter.
   Keep research, working rationale and rewrite tracking with their knowledge owner.
-- Add the boundary regression before marking a defect repaired. During the v0 rewrite,
-  test the new owner/invariant first rather than patching races into superseded modules.
+- Add the boundary regression before marking a defect repaired. During v0 work,
+  test the new owner/invariant first rather than patching superseded modules.
   Rewrite checkpoints may be staged as commits for review, but no checkpoint is a
-  compatibility/migration layer and no old+new production runtime may coexist. Preserve
-  uncertainty, immutable attempt evidence, effect-admission
-  fencing, durable admission and bounded resources when deleting APIs.
+  compatibility/migration layer and no old+new production runtime may coexist.
+  Preserve uncertainty, no-blind-replay and bounded resources when deleting APIs.
 - Do not equate declared capabilities with confinement, future cancellation with stopped
   external effects, or green scripted tests with a working live coding agent.
 - Keep this as the only repository agent-instruction file. Add a project skill only
