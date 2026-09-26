@@ -76,6 +76,21 @@ s = json.load(open(sys.argv[1]))
 assert s['model_attempts'] == [], 'Anthropic preflight consumed a provider attempt'
 assert s['config']['config']['providers'][0]['id'] == 'anthropic-messages'
 PY
+anthropic_turn="$(python3 - "$WORK/anthropic-snapshot.json" <<'PY'
+import json, sys
+print(json.load(open(sys.argv[1]))['unfinished_turn']['id'])
+PY
+)"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/anthropic-state" \
+    --workspace "$WORK/workspace" --wire chat-completions \
+    --endpoint https://api.anthropic.com/v1/messages \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$anthropic_turn" \
+    > "$WORK/mismatched-wire.json" 2> "$WORK/mismatched-wire.err"; then
+    echo 'FAIL: an existing Session changed its frozen wire API' >&2; exit 1
+fi
+grep -q 'host wire API or endpoint differs' "$WORK/mismatched-wire.err"
+"$BIN" inspect --state "$WORK/anthropic-state" > "$WORK/anthropic-after-mismatch.json"
+cmp "$WORK/anthropic-snapshot.json" "$WORK/anthropic-after-mismatch.json"
 
 # A serialized request that exceeds its frozen byte budget never reaches egress.
 mkdir "$WORK/byte-state"
