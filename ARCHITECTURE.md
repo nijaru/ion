@@ -3,7 +3,9 @@
 Accepted contract, 2026-09-15; materially refined 2026-09-18 for external
 boundaries and 2026-09-25 for native edit/exec safety. [README.md](README.md)
 states what the current source implements; this file states the contracts the
-maintained engine must satisfy. Ion is unreleased v0: replace obsolete
+maintained engine must satisfy. Optional extensions in this document are design
+constraints if implemented, not prerequisites for the serial coding baseline.
+Ion is unreleased v0: replace obsolete
 abstractions directly rather than preserving them through compatibility layers.
 
 The maintained Turn/Session runtime replaces the former generic task runtime
@@ -89,12 +91,13 @@ admit input → prepare request → call model → validate response
 ```
 
 The turn owns continuation. A logical step/invocation is distinct from each physical
-provider/tool attempt so retries never erase earlier uncertainty or spend. Core does not
-grow a generic batch resource scheduler: each frozen ToolBinding is either `Serial`
-(default) or host-proven `ParallelSafeReadOnly`. Execute maximal contiguous source-order
-runs of `ParallelSafeReadOnly` calls with a hard concurrency limit; every `Serial` call
-is a barrier that waits for the preceding run, executes alone, and settles before later
-calls start. Mutating/unknown/remote-effect tools are Serial in baseline. Before any tool in an admitted assistant batch crosses the effect boundary, the batch
+provider/tool attempt so retries never erase earlier uncertainty or spend. The usable
+single-agent baseline executes tool calls serially in assistant source order. Keep
+parallel scheduling optional until coding-task measurements justify it; if enabled,
+only host-proven independent read-only calls may overlap under a hard bound, and
+mutating or unknown-effect calls remain serial barriers. Core does not grow a generic
+batch resource scheduler. Before any tool in an admitted assistant batch crosses the
+effect boundary, the batch
 must be **continuation-representable**. Reserve/model-bound one minimal truthful result
 envelope plus bounded preview per call and verify that, after legal compaction of older
 history, at least one frozen allowed next-step ProviderBinding can hold the active exact
@@ -561,12 +564,21 @@ orphan quarantine, not a cleared claim. Baseline has no TTL or force-clear for
 possibly-live attempts; reconcile with execution evidence or continue in an isolated
 replacement binding.
 
-For native single-file edit, stage verified replacement content in a host-owned,
+For native single-file edit, the model supplies a concise change tied to an exact
+base identity returned by `read`, rather than echoing both complete file versions.
+Preparation verifies that identity against a bounded regular file, constructs the
+complete expected and replacement bytes, and persists them in the PreparedAction;
+execution rechecks the base before mutation. A create action names an absent base
+and must commit only if the destination is still absent. Both operations retain
+the same workspace claim, effect evidence and recovery rules. The model-facing
+encoding remains versioned and must be evaluated on coding tasks; exact base
+validation does not prove the model understood the user's intended change.
+
+Stage verified replacement content in a host-owned,
 rename-compatible filesystem namespace **outside** the agent-writable workspace.
 Bind an exact original base and deterministically validate the proposed target
 before any workspace claim; reject internally inconsistent arguments before an
-effect. The model-facing encoding is a versioned implementation choice, and a
-consistent proposal is not proof that the model understood the user's intent.
+effect.
 The registry atomically admits an edit manifest and one immutable attempt
 receipt; staging and rename eligibility are separate durable facts, not
 replacement receipts.
@@ -658,46 +670,11 @@ handle graphemes/display widths, and keep paste distinct from submission. Render
 never waits on external I/O; output must not steal focus or destroy scroll anchors.
 Real-terminal and PTY tests are required in addition to reducer tests.
 
-Workers are optional conversations using the same Turn engine. Context shape and
-lifetime are independent axes:
-
-- **Delegate/Fresh:** bounded delegation packet, no parent transcript; use for focused
-  research/review/tests.
-- **Fork:** explicit complete parent history/ContextEpoch cutoff; use when the child needs
-  most parent context.
-- **Joined:** creator turn owns result/cancellation reach.
-- **Retained:** child survives the creator turn and remains separately addressable.
-
-Read-only children may share the parent's workspace binding; mutating children default to
-an isolated worktree/workspace. Shared mutation requires explicit serialization. Worker
-messages are Conversation-attributed input, never User authority or approval. A joined
-child returns a bounded result/evidence packet rather than automatically injecting its
-whole transcript into the parent. History inheritance, lifetime ownership and permission
-inheritance remain separate.
-
-Budgets are **transferred, not shared through a live parent pointer**. Joined spawn
-atomically carves a typed WorkerBudgetSlice from the creator Turn's remaining fungible
-allowance—baseline model-step slots, tool-invocation slots and optional monetary
-allowance—and installs it in the child; the creator can no longer spend it. Nested worker
-allocation must come out of the slice the child actually received. Non-fungible safety
-caps (per-step retry count, context/result/output sizes, concrete timeouts) are inherited
-equal-or-narrower rather than carved. Baseline accounting is monotonic and does not
-reclaim unused child allowance. Model-driven spawn is Joined by default. An authenticated
-host/user may create a Retained worker directly with an independent budget/configuration,
-because it may outlive the originating request. Baseline has no Joined→Retained promotion;
-continuity uses an explicit new retained Fresh/Fork conversation instead of transferring a
-live cancellation edge.
-
-Fan-out also has explicit durable limits: per-Turn child count, worker-origin depth and
-Session active-worker count. Worker depth follows creator/origin metadata rather than
-history ancestry, so a fresh parentless delegated conversation still consumes one depth
-level. Spawn admission checks limits, records origin/lifetime, transfers budget and
-creates the child Turn atomically; refusal leaves neither a child nor a consumed
-allocation.
-
-Existing workers remain inspectable when new spawning is disabled. Single-agent requests
-carry no mandatory worker instructions/tools/team state. Worker expansion follows a
-measured coding baseline, not an arbitrary workflow abstraction.
+Workers are optional and outside the usable single-agent baseline. If measured tasks
+justify them, use the same Turn engine with explicit history/context inheritance,
+lifetime/cancellation ownership, bounded budgets and workspace isolation. Worker messages
+never become User authority or approval. Single-agent requests carry no worker prompt,
+tool or coordination cost.
 
 ## Acceptance and change
 
@@ -711,8 +688,11 @@ format effectiveness and performance thresholds require evidence. Change this co
 again when evidence changes an invariant rather than preserving an early decision by
 inertia.
 
-A usable baseline requires real provider requests, bounded read/edit/exec, externally
-verified coding tasks and the same behavior headlessly and through the terminal.
+A usable baseline requires real provider requests, file discovery, bounded
+read/create/edit/exec, externally verified coding tasks and the same behavior
+headlessly and through the terminal. Model routing, parallel tool scheduling, workers,
+advanced compaction and automatic price discovery are options to validate after the
+serial coding loop; they are not prerequisites to shipping that loop.
 Deterministic crash/cancellation/corruption/overload tests establish failure contracts;
 live evaluation establishes effectiveness. Neither green unit tests nor resemblance
 to another agent establishes state-of-the-art performance.

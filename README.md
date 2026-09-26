@@ -80,11 +80,11 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v10) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing: qualified native macOS/Linux exec, a user-facing cancellation and
-approval client with host authentication/policy, streaming progress in the executable,
-parallel tool dispatch, context compaction/forking, Steer/InteractionReply placement,
-live qualification of both wire adapters, the terminal UI, and workers. Ordinary
-file creation and sustained multi-turn coding have not been qualified.
+Still missing for a usable coding agent: file discovery and creation, qualified native
+macOS/Linux exec, a user-facing cancellation and approval client, streaming progress,
+the terminal UI, and sustained coding-task evidence. Both provider wires need broader
+live qualification. Parallel tool dispatch, context compaction/forking,
+Steer/InteractionReply placement and workers remain optional later work.
 
 Known limits before prerelease: absolute Turn wall deadlines are not implemented;
 the library now rejects non-`None` deadlines at admission and the CLI supplies
@@ -114,9 +114,10 @@ The host must keep that namespace outside agent-writable workspace state and pro
 its filesystem ancestry from untrusted same-user processes. Session ownership locks
 resolve database symlink aliases; hard-linked database aliases are refused.
 A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
-persisted tool exchange. Read results now include the host registry's before/after-
-checked workspace revision, under the frozen `native-read-v2` binding; old v1
-bindings cannot silently receive the revised result. It is serial, not an OS
+persisted tool exchange. A complete read from offset zero returns the host registry's
+before/after-checked workspace revision and a SHA-256 `base_digest` for exact edits;
+partial reads return no base digest. This result uses the frozen `native-read-v3`
+binding. It is serial, not an OS
 sandbox: the host must protect the workspace namespace against concurrent renames
 and enforce its promised read authority.
 The library also has an experimental single-file `NativeEditBoundary` on registry
@@ -223,13 +224,13 @@ cargo run --locked -p ion -- run \
   'Read one file, replace the requested text, then summarize the change'
 ```
 
-The current `native-edit-private-v4` tool edits existing regular files up to 16 KiB;
-it does not create files. Its model-facing format requires both the complete
-original file and the complete desired file plus old/new text. This duplicates
-model output to catch inconsistent proposals; it does not prove that the model
-chose the right change and needs comparative coding-task evaluation. The tool
-refuses a replacement that differs from those desired bytes before creating a
-workspace claim. It creates private staging inside the shared registry,
+The current `native-edit-private-v5` tool edits existing regular files up to 16 KiB;
+it does not create files. The model supplies the `base_digest` and
+`workspace_revision` from a complete read, plus text that occurs once and its
+replacement. The host verifies the digest, builds the complete replacement and
+freezes both file versions before creating a workspace claim. This reduces model
+output, but still needs comparative coding-task evaluation: exact matching does not
+prove that the model chose the right change. The tool creates private staging inside the shared registry,
 refuses unsupported filesystem or mount combinations, and never falls back
 to workspace staging.
 The host must continuously protect the registry, its staging directory and the

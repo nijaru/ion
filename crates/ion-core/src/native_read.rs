@@ -25,9 +25,10 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    ApprovalState, EgressRealm, LiveToolAuthority, PreparedAction, SemanticCompatibilityId,
-    ToolAttemptState, ToolAuthority, ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError,
-    ToolConcurrency, ToolExecution, ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
+    ApprovalState, ContentDigest, EgressRealm, LiveToolAuthority, PreparedAction,
+    SemanticCompatibilityId, ToolAttemptState, ToolAuthority, ToolBinding, ToolBindingId,
+    ToolBoundary, ToolBoundaryError, ToolConcurrency, ToolExecution, ToolRecoveryPolicy,
+    ToolResult, WorkspaceBinding,
     workspace_registry::{RegistryError, WorkspaceRegistry, WorkspaceRevision},
 };
 
@@ -37,9 +38,8 @@ pub const MAX_NATIVE_READ_BYTES: usize = crate::MAX_TOOL_RECORD_BYTES;
 const MAX_PATH_BYTES: usize = 4096;
 const MAX_CONCURRENT_READS: usize = 4;
 const READ_CHUNK_BYTES: usize = 8192;
-// The result now includes a registry revision for exact-base native edit; old
-// read-v1 Sessions must not silently receive a different frozen tool result.
-const IMPLEMENTATION_ID: &str = "native-read-v2";
+// The complete-file digest changes the frozen result semantics.
+const IMPLEMENTATION_ID: &str = "native-read-v3";
 const AUTHORITY_ALLOW: u8 = 0;
 const AUTHORITY_ASK: u8 = 1;
 const AUTHORITY_DENY: u8 = 2;
@@ -305,7 +305,7 @@ pub fn native_read_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolSpec {
             name: "read".into(),
             description:
-                "Read a bounded byte range from a regular workspace file; returns the current workspace_revision needed for exact-base edits."
+                "Read a bounded byte range from a regular workspace file. A complete read from offset 0 returns base_digest and workspace_revision for an exact-base edit."
                     .into(),
             input_schema: json!({
                 "type": "object",
@@ -478,9 +478,11 @@ fn read_result(
     capture: crate::OutputCapture,
     workspace_revision: WorkspaceRevision,
 ) -> ToolResult {
+    let base_digest =
+        (offset == 0 && !has_more).then(|| ContentDigest::of_bytes(content.as_bytes()).to_string());
     ToolResult {
         value: json!({"content": content, "offset": offset, "bytes_read": bytes_read,
-        "has_more": has_more, "workspace_revision": {
+        "has_more": has_more, "base_digest": base_digest, "workspace_revision": {
             "files": workspace_revision.files,
             "repository": workspace_revision.repository,
         }}),
@@ -1056,6 +1058,22 @@ mod tests {
         ));
         assert!(!result.value["content"].as_str().unwrap().is_empty());
         assert!(serde_json::to_vec(&result).unwrap().len() <= 512);
+    }
+
+    #[tokio::test]
+    async fn only_complete_read_from_start_supplies_edit_base_digest() {
+        let root = TestRoot::new();
+        fs::write(root.path().join("data.txt"), "alpha beta\n").unwrap();
+        let boundary = boundary(root.path(), 32);
+        let complete = result(read(&boundary, json!({"path":"data.txt"}), 4096).await);
+        assert_eq!(
+            complete.value["base_digest"],
+            ContentDigest::of_bytes(b"alpha beta\n").to_string()
+        );
+        let ranged = result(read(&boundary, json!({"path":"data.txt", "offset":1}), 4096).await);
+        assert!(ranged.value["base_digest"].is_null());
+        let partial = result(read(&boundary, json!({"path":"data.txt", "limit":5}), 4096).await);
+        assert!(partial.value["base_digest"].is_null());
     }
 
     #[tokio::test]

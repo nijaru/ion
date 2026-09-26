@@ -46,7 +46,7 @@ use crate::{
 pub const MAX_NATIVE_EDIT_BYTES: usize = MAX_EDIT_BYTES as usize;
 
 const MAX_PATH_BYTES: usize = 4096;
-const IMPLEMENTATION_ID: &str = "native-edit-private-v4";
+const IMPLEMENTATION_ID: &str = "native-edit-private-v5";
 const MAX_STAGE_FILES: usize = MAX_EDIT_ALLOCATIONS;
 const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
@@ -454,20 +454,46 @@ impl ToolBoundary for NativeEditBoundary {
     }
 
     fn prepare(&self, arguments: Value) -> Result<PreparedAction, ToolBoundaryError> {
-        let mut arguments: EditArguments =
+        let proposal: EditProposal =
             serde_json::from_value(arguments).map_err(|_| ToolBoundaryError::InvalidArguments)?;
-        // The model supplies the exact base, not a redundant digest it cannot
-        // reliably compute. Freeze the digest in the canonical prepared action.
-        arguments.expected_digest = digest_text(&arguments.expected_content);
-        if !self.ordinary_path(&arguments.path)
-            || arguments.path.len() > MAX_PATH_BYTES
-            || arguments.expected_content.len() > self.max_file_bytes
-            || arguments.old_text.len() > self.max_file_bytes
-            || arguments.new_text.len() > self.max_file_bytes
-            || arguments.expected_digest != digest_text(&arguments.expected_content)
+        if !self.ordinary_path(&proposal.path)
+            || proposal.path.len() > MAX_PATH_BYTES
+            || proposal.base_digest.len() != 64
+            || !proposal
+                .base_digest
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+            || proposal.old_text.len() > self.max_file_bytes
+            || proposal.new_text.len() > self.max_file_bytes
         {
             return Err(ToolBoundaryError::InvalidArguments);
         }
+        let root = self.root.as_ref().ok_or(ToolBoundaryError::InvalidAction)?;
+        let (parent, leaf) = open_relative_parent(root, &proposal.path)
+            .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+        let (_, _, base) = read_target(&parent, &leaf, self.max_file_bytes)
+            .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+        if digest_text_bytes(&base) != proposal.base_digest {
+            return Err(ToolBoundaryError::InvalidArguments);
+        }
+        let expected_content =
+            String::from_utf8(base).map_err(|_| ToolBoundaryError::InvalidArguments)?;
+        let desired_content = derive_replacement(
+            &expected_content,
+            &proposal.old_text,
+            &proposal.new_text,
+            self.max_file_bytes,
+        )
+        .map_err(|_| ToolBoundaryError::InvalidArguments)?;
+        let arguments = EditArguments {
+            path: proposal.path,
+            expected_content,
+            desired_content,
+            expected_digest: proposal.base_digest,
+            base_revision: proposal.base_revision,
+            old_text: proposal.old_text,
+            new_text: proposal.new_text,
+        };
         replacement(&arguments, self.max_file_bytes)
             .map_err(|_| ToolBoundaryError::InvalidArguments)?;
         let facts = vec![BaseFact {
@@ -588,15 +614,14 @@ pub fn native_edit_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolBindingId::new("edit")?,
         ToolSpec {
             name: "edit".into(),
-            description: "Replace one exact occurrence in a regular workspace file (max 16 KiB). Copy expected_content (the ORIGINAL complete file) and workspace_revision from read. Supply desired_content as the COMPLETE intended file after editing. old_text must occur once; new_text replaces ONLY old_text. The tool refuses a replacement that differs from desired_content. Read again to verify.".into(),
+            description: "Replace one exact occurrence in an existing regular workspace file (max 16 KiB). Copy base_digest and workspace_revision from a complete read starting at offset 0. old_text must occur exactly once; new_text replaces only that occurrence. Read again to verify.".into(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["path", "expected_content", "desired_content", "workspace_revision", "old_text", "new_text"],
+                "required": ["path", "base_digest", "workspace_revision", "old_text", "new_text"],
                 "properties": {
                     "path": {"type": "string", "minLength": 1, "maxLength": MAX_PATH_BYTES},
-                    "expected_content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
-                    "desired_content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
+                    "base_digest": {"type": "string", "minLength": 64, "maxLength": 64},
                     "workspace_revision": {
                         "type": "object", "additionalProperties": false,
                         "required": ["files", "repository"],
@@ -646,6 +671,17 @@ struct EditArguments {
     desired_content: String,
     #[serde(default)]
     expected_digest: String,
+    #[serde(rename = "workspace_revision")]
+    base_revision: EditRevision,
+    old_text: String,
+    new_text: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditProposal {
+    path: String,
+    base_digest: String,
     #[serde(rename = "workspace_revision")]
     base_revision: EditRevision,
     old_text: String,
@@ -1521,41 +1557,54 @@ fn known_change(path: &str) -> crate::EffectSummary {
 }
 
 fn replacement(arguments: &EditArguments, maximum: usize) -> Result<Vec<u8>, ()> {
-    if arguments.old_text.is_empty()
-        || arguments.old_text == arguments.new_text
-        || arguments.expected_content.len() > maximum
+    if arguments.expected_content.len() > maximum
         || arguments.expected_digest != digest_text(&arguments.expected_content)
         || arguments.desired_content.len() > maximum
     {
         return Err(());
     }
+    let target = derive_replacement(
+        &arguments.expected_content,
+        &arguments.old_text,
+        &arguments.new_text,
+        maximum,
+    )?;
+    (target == arguments.desired_content)
+        .then(|| target.into_bytes())
+        .ok_or(())
+}
+
+fn derive_replacement(
+    expected_content: &str,
+    old_text: &str,
+    new_text: &str,
+    maximum: usize,
+) -> Result<String, ()> {
+    if old_text.is_empty() || old_text == new_text || expected_content.len() > maximum {
+        return Err(());
+    }
     let mut found = None;
-    for (index, _) in arguments.expected_content.char_indices() {
-        if arguments.expected_content[index..].starts_with(&arguments.old_text)
-            && found.replace(index).is_some()
-        {
+    for (index, _) in expected_content.char_indices() {
+        if expected_content[index..].starts_with(old_text) && found.replace(index).is_some() {
             return Err(());
         }
     }
     let start = found.ok_or(())?;
-    let end = start.checked_add(arguments.old_text.len()).ok_or(())?;
-    let target_len = arguments
-        .expected_content
+    let end = start.checked_add(old_text.len()).ok_or(())?;
+    let target_len = expected_content
         .len()
-        .checked_sub(arguments.old_text.len())
-        .and_then(|length| length.checked_add(arguments.new_text.len()))
+        .checked_sub(old_text.len())
+        .and_then(|length| length.checked_add(new_text.len()))
         .filter(|length| *length <= maximum)
         .ok_or(())?;
-    if arguments.expected_content[start..end] != arguments.old_text {
+    if expected_content[start..end] != *old_text {
         return Err(());
     }
     let mut target = String::with_capacity(target_len);
-    target.push_str(&arguments.expected_content[..start]);
-    target.push_str(&arguments.new_text);
-    target.push_str(&arguments.expected_content[end..]);
-    (target == arguments.desired_content)
-        .then(|| target.into_bytes())
-        .ok_or(())
+    target.push_str(&expected_content[..start]);
+    target.push_str(new_text);
+    target.push_str(&expected_content[end..]);
+    Ok(target)
 }
 
 fn digest_text(text: &str) -> String {
@@ -2119,8 +2168,7 @@ mod tests {
             let content = fs::read_to_string(self.root.path().join("file.txt")).unwrap();
             json!({
                 "path": "file.txt",
-                "desired_content": content.replacen(old_text, new_text, 1),
-                "expected_content": content,
+                "base_digest": digest_text(&content),
                 "workspace_revision": revision,
                 "old_text": old_text,
                 "new_text": new_text,
@@ -2188,7 +2236,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn edit_requires_exact_expected_content_and_one_occurrence() {
+    async fn edit_requires_exact_base_and_one_occurrence() {
         let fixture = Fixture::new(false);
         let binding = fixture.boundary.binding();
         let arguments = fixture.arguments("alpha", "gamma");
@@ -2221,17 +2269,17 @@ mod tests {
     }
 
     #[test]
-    fn prepared_edit_refuses_a_replacement_that_differs_from_declared_desired_file() {
+    fn prepared_edit_refuses_stale_base_and_invalid_replacement() {
         let fixture = Fixture::new(false);
         let binding = fixture.boundary.binding();
         let mut arguments = fixture.arguments("beta", "gamma");
-        arguments["new_text"] = json!("alpha gamma alpha\n");
+        arguments["base_digest"] = json!(digest_text("stale content\n"));
         assert!(matches!(
             crate::tool_boundary::prepare_action(&fixture.boundary, &binding, arguments),
             Err(ToolBoundaryError::InvalidArguments)
         ));
         let mut wrong_target = fixture.arguments("beta", "gamma");
-        wrong_target["desired_content"] = json!("alpha alpha alpha\n");
+        wrong_target["old_text"] = json!("missing");
         assert!(matches!(
             crate::tool_boundary::prepare_action(&fixture.boundary, &binding, wrong_target),
             Err(ToolBoundaryError::InvalidArguments)
@@ -2285,8 +2333,7 @@ mod tests {
         for path in ["admin/config", "shared/HEAD", ".git"] {
             let arguments = json!({
                 "path": path,
-                "expected_content": "alpha beta alpha\n",
-                "desired_content": "alpha gamma alpha\n",
+                "base_digest": digest_text("alpha beta alpha\n"),
                 "workspace_revision": revision,
                 "old_text": "beta",
                 "new_text": "gamma",
@@ -2302,8 +2349,7 @@ mod tests {
             boundary.set_live_authority(LiveToolAuthority::Allow);
             let action = boundary
                 .prepare(json!({
-                    "path": "ADMIN/config", "expected_content": "alpha beta alpha\n",
-                    "desired_content": "alpha gamma alpha\n",
+                    "path": "ADMIN/config", "base_digest": digest_text("alpha beta alpha\n"),
                     "workspace_revision": revision, "old_text": "beta", "new_text": "gamma"
                 }))
                 .unwrap();
@@ -3372,8 +3418,7 @@ mod tests {
                             name: request.tools[0].name.clone(),
                             arguments: json!({
                                 "path": "file.txt",
-                                "expected_content": "alpha beta alpha\n",
-                                "desired_content": "alpha gamma alpha\n",
+                                "base_digest": digest_text("alpha beta alpha\n"),
                                 "old_text": "beta", "new_text": "gamma",
                                 "workspace_revision": {"files": 0, "repository": 0}
                             }),
