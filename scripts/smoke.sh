@@ -120,6 +120,15 @@ if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/workspace/state" \
 fi
 grep -q 'outside the writable workspace' "$WORK/unsafe.err"
 [[ -z "$(find "$WORK/workspace/state" -mindepth 1 -maxdepth 1 -print -quit)" ]]
+mkdir "$WORK/state/registry/agent-root"
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/state" \
+    --workspace "$WORK/state/registry/agent-root" \
+    --endpoint https://api.example.test/v1/chat/completions \
+    --model gpt-test --model-input-limit 8192 --model-output-limit 2048 \
+    'reject workspace inside registry' > "$WORK/registry-inside.out" 2> "$WORK/registry-inside.err"; then
+    echo 'FAIL: a registry child was accepted as agent workspace' >&2; exit 1
+fi
+grep -q 'registry namespace must be disjoint' "$WORK/registry-inside.err"
 mkdir "$WORK/alias-state" "$WORK/workspace/alias-target"
 ln -s "$WORK/workspace/alias-target" "$WORK/alias-state/registry"
 if env -u ION_SMOKE_ABSENT_KEY "$BIN" run --state "$WORK/alias-state" \

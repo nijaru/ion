@@ -40,7 +40,7 @@ const MAX_BINDINGS: i64 = 4096;
 pub enum RegistryError {
     #[error("workspace binding changed")]
     BindingChanged,
-    #[error("registry must be outside every registered workspace and repository")]
+    #[error("registry namespace must be disjoint from every bound workspace and repository")]
     RegistryInWorkspace,
     #[error("conflicting unresolved claim")]
     Conflict,
@@ -562,7 +562,7 @@ fn outside(directory: &Path, descriptor: &Descriptor) -> Result<()> {
         .chain(descriptor.git.iter())
         .chain(descriptor.common.iter())
     {
-        if directory.starts_with(&object.path) {
+        if directory.starts_with(&object.path) || object.path.starts_with(directory) {
             return Err(RegistryError::RegistryInWorkspace);
         }
     }

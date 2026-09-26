@@ -573,7 +573,10 @@ coordinator is host-owned outside the agent-writable checkout and addressed thro
 WorkspaceBindingId backed by a frozen descriptor: canonical root, execution-backend
 identity and platform filesystem/repository/common-dir identity where available. A path
 string alone is not durable workspace identity. Do not put final claim authority in
-`.ion/claims.sqlite` or another file normal workspace tools can delete. Claims are keyed by invocation/attempt identity. Safety-critical registry records are
+`.ion/claims.sqlite` or another file normal workspace tools can delete. The
+registry namespace and every bound workspace/repository-admin namespace are
+mutually disjoint; a workspace rooted *inside* registry state is also refused.
+Claims are keyed by invocation/attempt identity. Safety-critical registry records are
 bounded and self-contained: binding/resource claim, start/termination receipt identity
 and effect-certainty summary cannot depend on Session SQLite or Session BlobRefs for
 quarantine/release decisions. Session/Invocation/Attempt IDs are attribution only; large
