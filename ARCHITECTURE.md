@@ -597,6 +597,12 @@ resource claims separately from workspace-file claims; shared ref/config mutatio
 serialize or use an isolated repository clone.
 
 Arbitrary exec is treated as mutating unless an enforceable backend restricts it.
+The first qualified prerelease must support native command execution on **both macOS
+and Linux** through a host-owned enforceable scope that can stop and prove quiescence
+of the child and its descendants before terminal settlement. Process groups alone
+do not establish that guarantee for detached descendants. If platform enforcement
+or stopped-effect evidence is unavailable, refuse dispatch or retain quarantine;
+preparation-only command declarations do not count as working exec.
 Cooperating Ion writers serialize, but ordinary filesystem replacement is not atomic
 compare-and-swap against an uncooperative external editor. Report that limitation.
 Multi-file edits preflight all targets/bases and use per-file atomic replacement where
