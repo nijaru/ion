@@ -188,6 +188,66 @@ fn submission(conversation: ion_core::ConversationId, key: &str, text: &str) -> 
 }
 
 #[tokio::test]
+async fn unsupported_turn_deadlines_never_commit_an_input_or_turn() {
+    let (dir, path) = database("unsupported-deadline");
+    let session = Session::create(&path, config("v1")).await.unwrap().session;
+    let handle = session.handle();
+    let conversation = session.primary_conversation();
+    let before = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+
+    let mut submitted = submission(conversation, "deadline", "hello");
+    submitted.wall_deadline_unix_ms = Some(99);
+    assert!(matches!(
+        handle.submit_turn(submitted).await,
+        Err(SessionError::InvalidState(message)) if message.contains("wall deadlines are unsupported")
+    ));
+    let after = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    assert_eq!(after.coverage, before.coverage);
+    assert!(after.queued_inputs.is_empty());
+    assert!(after.unfinished_turn.is_none());
+
+    let queued = match handle
+        .admit_input(conversation, input("queued", "hello"))
+        .await
+        .unwrap()
+    {
+        Admission::Created { input, .. } => input,
+        Admission::Replayed { .. } => panic!("new input unexpectedly replayed"),
+    };
+    let before_start = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    let mut start = start_request(conversation, queued.id, 42);
+    start.wall_deadline_unix_ms = Some(99);
+    assert!(matches!(
+        handle.start_turn(start).await,
+        Err(SessionError::InvalidState(message)) if message.contains("wall deadlines are unsupported")
+    ));
+    let after_start = handle
+        .snapshot(snapshot_request(conversation))
+        .await
+        .unwrap();
+    assert_eq!(after_start.coverage, before_start.coverage);
+    assert_eq!(after_start.queued_inputs.len(), 1);
+    assert!(after_start.unfinished_turn.is_none());
+    assert_eq!(handle.health(), SessionHealth::Open);
+    assert!(
+        handle
+            .start_turn(start_request(conversation, queued.id, 42))
+            .await
+            .is_ok()
+    );
+    cleanup(session, dir).await;
+}
+
+#[tokio::test]
 async fn atomic_submit_places_one_turn_with_exact_watch_coverage_and_idempotent_replay() {
     let (dir, path) = database("atomic-submit");
     let session = Session::create(&path, config("v1")).await.unwrap().session;

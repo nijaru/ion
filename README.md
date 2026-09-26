@@ -86,14 +86,14 @@ parallel tool dispatch, context compaction/forking, Steer/InteractionReply place
 live qualification of both wire adapters, the terminal UI, and workers. Ordinary
 file creation and sustained multi-turn coding have not been qualified.
 
-Known limits before prerelease: the library accepts and persists an optional absolute
-Turn wall deadline but does **not** enforce it; the CLI always supplies `None`.
-Library hosts must not rely on a non-`None` deadline until it is implemented or
-rejected at admission. The headless host freezes the provider wire API and HTTPS
-**origin**, not the entire endpoint URL: changing the path on that origin may
-change future requests, although replay of an existing sealed step detects a
-fingerprint mismatch. Use the same exact URL when resuming. Tool admission also
-reserves the configured full 64 KiB preview per call and compares request bytes
+Known limits before prerelease: absolute Turn wall deadlines are not implemented;
+the library now rejects non-`None` deadlines at admission and the CLI supplies
+`None`. Previously persisted experimental deadlines are not retroactively
+enforced. The headless host freezes the selected wire API and canonical HTTPS
+endpoint in its provider binding. Sessions created by earlier experimental
+headless builds with unscoped binding IDs require a fresh state directory.
+Tool admission still reserves the configured full 64 KiB preview per call and
+compares request bytes
 to an asserted input-token capacity. Small-context models can reject even a
 tiny read; this is not tokenizer-backed context admission.
 
@@ -162,8 +162,8 @@ The current request admission enforces a serialized-byte ceiling (`--max-request
 default 1 MiB), **not** an exact tokenizer-backed input-token bound; a provider may
 reject an oversized context.
 The endpoint's returned model ID must match the supplied ID. `run` supports
-`--request-key` for idempotent resubmission after a lost reply. Keep the exact
-endpoint URL when resuming; the host currently verifies only its HTTPS origin.
+`--request-key` for idempotent resubmission after a lost reply. Resuming with
+a different endpoint path—even on the same HTTPS origin—is refused.
 
 ```sh
 mkdir -p "$HOME/.local/state/ion/example"
@@ -194,8 +194,8 @@ authoritative upper bound for your provider and route.
 
 The default `--wire chat-completions` reads `OPENAI_API_KEY`. For Anthropic's
 `/v1/messages`, use `--wire anthropic-messages`, an exact Anthropic endpoint/model,
-and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and endpoint origin,
-not the full URL path; use a new state directory to switch endpoints. Keys are
+and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and canonical
+endpoint URL; use a new state directory to switch endpoints. Keys are
 read at dispatch and are not stored. A missing key parks without sending a
 request. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly

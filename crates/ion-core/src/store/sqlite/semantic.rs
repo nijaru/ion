@@ -388,10 +388,20 @@ pub(super) fn admit_input(
     })
 }
 
+fn validate_turn_deadline(deadline: Option<i64>) -> Result<(), StoreError> {
+    if deadline.is_some() {
+        return Err(StoreError::InvalidRequest(
+            "wall deadlines are unsupported until the drive enforces them".into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(super) fn start_turn(
     connection: &mut Connection,
     request: StartTurnRequest,
 ) -> Result<StartedTurn, StoreError> {
+    validate_turn_deadline(request.wall_deadline_unix_ms)?;
     let transaction = connection.transaction()?;
     let conversation = load_conversation(&transaction, request.conversation)?;
     let (input, _) = load_input(&transaction, request.input)?;
@@ -419,6 +429,7 @@ pub(super) fn submit_turn(
     connection: &mut Connection,
     request: SubmitTurnRequest,
 ) -> Result<SubmittedTurn, StoreError> {
+    validate_turn_deadline(request.wall_deadline_unix_ms)?;
     if request.text.len() > MAX_INPUT_TEXT_BYTES {
         return Err(StoreError::Limit("input text bytes".into()));
     }

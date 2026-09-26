@@ -58,6 +58,18 @@ a, b = (json.load(open(path)) for path in sys.argv[1:])
 assert a == b, 'passive reopen, idempotent submit, or blocked resume changed durable state'
 PY
 
+# An endpoint path is part of the frozen provider binding, not merely its HTTPS
+# origin. A same-origin path change must fail before any provider request.
+if env -u ION_SMOKE_ABSENT_KEY "$BIN" resume --state "$WORK/state" \
+    --workspace "$WORK/workspace" --endpoint https://api.example.test/v1/other \
+    --api-key-env ION_SMOKE_ABSENT_KEY --turn "$TURN" \
+    > "$WORK/wrong-endpoint.out" 2> "$WORK/wrong-endpoint.err"; then
+    echo 'FAIL: same-origin endpoint path changed a frozen provider' >&2; exit 1
+fi
+grep -q 'host wire API or endpoint differs' "$WORK/wrong-endpoint.err"
+"$BIN" inspect --state "$WORK/state" > "$WORK/wrong-endpoint.snapshot"
+cmp "$WORK/snapshot.json" "$WORK/wrong-endpoint.snapshot"
+
 # An optional monetary ceiling cannot dispatch without a trusted operator's
 # all-in quote. A quote exceeding that ceiling parks before provider egress;
 # changing the frozen ceiling when replaying the same request is refused.
@@ -125,7 +137,7 @@ python3 - "$WORK/anthropic-snapshot.json" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))
 assert s['model_attempts'] == [], 'Anthropic preflight consumed a provider attempt'
-assert s['config']['config']['providers'][0]['id'] == 'anthropic-messages'
+assert s['config']['config']['providers'][0]['id'].startswith('anthropic-messages-')
 PY
 anthropic_turn="$(python3 - "$WORK/anthropic-snapshot.json" <<'PY'
 import json, sys
