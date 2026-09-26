@@ -122,8 +122,9 @@ struct RunArgs {
     /// Explicit host assertion of the model's output token capacity.
     #[arg(long)]
     model_output_limit: u32,
-    #[arg(long, default_value_t = 1024)]
-    max_output_tokens: u32,
+    /// Output cap for each model request; defaults to the asserted model capacity.
+    #[arg(long)]
+    max_output_tokens: Option<u32>,
     /// Frozen serialized request byte ceiling; this is not a token estimate.
     #[arg(long, default_value_t = 1024 * 1024, value_parser = clap::value_parser!(u32).range(4096..=1048576))]
     max_request_bytes: u32,
@@ -253,8 +254,9 @@ fn initial_config(
         args.model_input_limit > 0 && args.model_output_limit > 0,
         "model capacities must be positive host assertions"
     );
+    let max_output_tokens = args.max_output_tokens.unwrap_or(args.model_output_limit);
     ensure!(
-        args.max_output_tokens > 0 && args.max_output_tokens <= args.model_output_limit,
+        max_output_tokens > 0 && max_output_tokens <= args.model_output_limit,
         "requested output exceeds asserted model capacity"
     );
     let identity = provider_identity(realm.clone(), args.host.wire, &args.host.endpoint)?;
@@ -295,7 +297,7 @@ fn initial_config(
         initial_tools: tools.iter().map(|tool| tool.id.clone()).collect(),
         tools,
         controls: GenerationControls {
-            max_output_tokens: args.max_output_tokens,
+            max_output_tokens,
             temperature: None,
             top_p: None,
             reasoning: Reasoning::ProviderDefault,

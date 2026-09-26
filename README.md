@@ -173,9 +173,11 @@ Create a host-state directory outside the writable workspace, then supply an exa
 HTTPS Chat Completions endpoint or literal loopback HTTP endpoint and a model ID.
 The host must assert the model's
 input and output token capacities; the client cannot discover or verify them.
-The current request admission enforces a serialized-byte ceiling (`--max-request-bytes`,
-default 1 MiB), **not** an exact tokenizer-backed input-token bound; a provider may
-reject an oversized context.
+The current request admission caps serialized bytes by `--max-request-bytes`
+(default 1 MiB) and the asserted input-token capacity. This conservative byte
+proxy is **not** a tokenizer-backed bound; a provider may still reject a request.
+The per-request output cap defaults to the asserted model output capacity;
+`--max-output-tokens` can narrow it.
 The endpoint's returned model ID must match the supplied ID. `run` supports
 `--request-key` for idempotent resubmission after a lost reply. Resuming with
 a different endpoint path—even on the same origin—is refused.
