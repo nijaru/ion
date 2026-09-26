@@ -74,7 +74,10 @@ pub use observation::{
     MAX_WATCH_BYTES, MAX_WATCH_RECEIPTS, ObservationError, SessionChange, SessionSnapshot,
     SessionUpdate, SessionWatch, SnapshotRequest, SnapshotWatch, WatchQueueLimits, WatchRequest,
 };
-pub use progress::{MAX_MODEL_PROGRESS_BYTES, ModelProgress, ModelProgressUpdate};
+pub use progress::{
+    MAX_PROGRESS_PREVIEW_BYTES, ProgressUpdate, SessionProgress, ToolOutputStream,
+    ToolProgressPublisher,
+};
 pub use provider::{
     ApiKeySource, ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity,
     ModelStart, ProviderAdmission, ProviderAdmissionError, ProviderCostQuoter, StartReconciliation,

@@ -34,6 +34,8 @@ pub struct ToolExecution {
     /// Exact persisted decision, not an exemption from the backend's live recheck.
     pub approval: ApprovalState,
     pub output_limit: usize,
+    /// Bounded, process-local preview capability, revoked when this backend call ends.
+    pub progress: crate::ToolProgressPublisher,
     /// Attempt-scoped publication capability, revoked when this backend call returns.
     pub artifacts: crate::ArtifactPublisher,
 }
@@ -366,6 +368,7 @@ mod tests {
             },
             approval: ApprovalState::NotRequired,
             output_limit: 1024,
+            progress: crate::ToolProgressPublisher::disabled(),
             artifacts: crate::ArtifactPublisher::closed(),
         };
         let new = NoRecovery.reconcile(execution, attempt).await;

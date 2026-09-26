@@ -653,10 +653,10 @@ impl SessionHandle {
         self.observe(self.inner.store.snapshot(request).await)
     }
 
-    /// Subscribe to bounded, provisional model text for this process attachment.
+    /// Subscribe to bounded, provisional model text and tool output for this attachment.
     /// Progress is not durable evidence and may be dropped under backpressure.
     #[must_use]
-    pub fn subscribe_model_progress(&self) -> broadcast::Receiver<crate::ModelProgress> {
+    pub fn subscribe_progress(&self) -> broadcast::Receiver<crate::SessionProgress> {
         self.inner.progress.subscribe()
     }
 

@@ -10,8 +10,8 @@ use ion_ai::{
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
     ConversationConfig, CostQuote, DriveExit, EgressRealm, InputBody, InputMode, InputSender,
-    ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelProgressUpdate,
-    ModelStart, ObservationError, ParkReason, ProviderAdmissionError, ProviderBinding,
+    ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelStart,
+    ObservationError, ParkReason, ProgressUpdate, ProviderAdmissionError, ProviderBinding,
     ProviderBindingId, ProviderCapabilities, ProviderStartReceipt, RequestKey, ReturnedModelPolicy,
     SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
     StartReceiptCapability, StartReconciliation, StartTurnRequest, StepDisposition, StepPurpose,
@@ -516,7 +516,7 @@ async fn model_text_progress_is_provisional_and_attempt_scoped() {
     let (dir, path) = database("model-progress");
     let session = Session::create(&path, config()).await.unwrap().session;
     let (handle, turn) = started_turn(&session, "progress", "answer").await;
-    let mut progress = handle.subscribe_model_progress();
+    let mut progress = handle.subscribe_progress();
     let boundary = CompleteBoundary::with_delta("live text");
     let boundaries = allowed_boundaries([boundary as Arc<dyn ModelBoundary>]);
     assert!(matches!(
@@ -527,11 +527,11 @@ async fn model_text_progress_is_provisional_and_attempt_scoped() {
     assert_eq!(preview.turn, turn);
     assert!(matches!(
         preview.update,
-        ModelProgressUpdate::Preview { text, omitted_prefix: false } if text == "live text"
+        ProgressUpdate::ModelText { text, omitted_prefix: false } if text == "live text"
     ));
     let end = progress.try_recv().unwrap();
     assert_eq!(end.attempt, preview.attempt);
-    assert!(matches!(end.update, ModelProgressUpdate::End));
+    assert!(matches!(end.update, ProgressUpdate::End));
     session.close().await.unwrap();
     std::fs::remove_dir_all(dir).unwrap();
 }

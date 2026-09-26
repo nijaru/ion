@@ -9,9 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_core::{
-    AttemptId, DriveExit, DrivePolicy, Entry, EntryData, InputSender, ModelProgress,
-    ModelProgressUpdate, SessionSnapshot, SnapshotRequest, SubmitTurnRequest, SubmittedTurn,
-    TranscriptContent, TurnId, TurnPhase,
+    AttemptId, DriveExit, DrivePolicy, Entry, EntryData, InputSender, ProgressUpdate,
+    SessionProgress, SessionSnapshot, SnapshotRequest, SubmitTurnRequest, SubmittedTurn,
+    ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
 };
 use ion_terminal::{
     Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession,
@@ -40,10 +40,23 @@ struct Frontend {
     exit_status: Option<(TurnId, String)>,
     unfinished: Option<TurnId>,
     progress: Option<ProgressPreview>,
+    tool_progress: Option<ToolProgressPreview>,
 }
 
 struct ProgressPreview {
     attempt: AttemptId,
+    text: String,
+    omitted_prefix: bool,
+}
+
+struct ToolProgressPreview {
+    attempt: AttemptId,
+    latest: ToolOutputStream,
+    stdout: Option<OutputPreview>,
+    stderr: Option<OutputPreview>,
+}
+
+struct OutputPreview {
     text: String,
     omitted_prefix: bool,
 }
@@ -209,28 +222,65 @@ impl Frontend {
         };
     }
 
-    fn observe_progress(&mut self, turn: TurnId, event: ModelProgress) {
+    fn observe_progress(&mut self, turn: TurnId, event: SessionProgress) {
         if event.turn != turn {
             return;
         }
         match event.update {
-            ModelProgressUpdate::Preview {
+            ProgressUpdate::ModelText {
                 text,
                 omitted_prefix,
             } => {
+                self.tool_progress = None;
                 self.progress = Some(ProgressPreview {
                     attempt: event.attempt,
                     text,
                     omitted_prefix,
                 });
             }
-            ModelProgressUpdate::End => {
+            ProgressUpdate::ToolOutput {
+                stream,
+                text,
+                omitted_prefix,
+            } => {
+                self.progress = None;
+                if self
+                    .tool_progress
+                    .as_ref()
+                    .is_none_or(|preview| preview.attempt != event.attempt)
+                {
+                    self.tool_progress = Some(ToolProgressPreview {
+                        attempt: event.attempt,
+                        latest: stream,
+                        stdout: None,
+                        stderr: None,
+                    });
+                }
+                let preview = self.tool_progress.as_mut().expect("inserted tool preview");
+                preview.latest = stream;
+                let output = Some(OutputPreview {
+                    text,
+                    omitted_prefix,
+                });
+                match stream {
+                    ToolOutputStream::Stdout => preview.stdout = output,
+                    ToolOutputStream::Stderr => preview.stderr = output,
+                }
+            }
+            ProgressUpdate::End => {
                 if self
                     .progress
                     .as_ref()
                     .is_some_and(|preview| preview.attempt == event.attempt)
                 {
                     self.progress = None;
+                }
+                if self
+                    .tool_progress
+                    .as_ref()
+                    .is_some_and(|preview| preview.attempt == event.attempt)
+                {
+                    self.tool_progress = None;
                 }
             }
         }
@@ -258,12 +308,30 @@ impl Frontend {
             Line::from(truncate_cells(&self.status, width)),
             Line::from(truncate_cells(hint, width)),
         ];
-        if driving && let Some(progress) = &self.progress {
-            let mut preview = clean_display(&progress.text, MAX_ENTRY_CHARS);
-            if progress.omitted_prefix {
-                preview.insert(0, '…');
+        if driving {
+            let mut rows = Vec::new();
+            if let Some(progress) = &self.progress {
+                rows.extend(progress_lines(
+                    "ion",
+                    &progress.text,
+                    progress.omitted_prefix,
+                    width,
+                ));
             }
-            let (rows, _) = wrap(&preview, width, None);
+            if let Some(progress) = &self.tool_progress {
+                let (label, output) = match progress.latest {
+                    ToolOutputStream::Stdout => ("stdout", &progress.stdout),
+                    ToolOutputStream::Stderr => ("stderr", &progress.stderr),
+                };
+                if let Some(output) = output {
+                    rows.extend(progress_lines(
+                        label,
+                        &output.text,
+                        output.omitted_prefix,
+                        width,
+                    ));
+                }
+            }
             let mut visible: Vec<_> = rows.into_iter().rev().take(3).collect();
             visible.reverse();
             for row in visible {
@@ -291,6 +359,14 @@ impl Frontend {
         )?;
         Ok(())
     }
+}
+
+fn progress_lines(label: &str, text: &str, omitted_prefix: bool, width: usize) -> Vec<String> {
+    let mut preview = clean_display(text, MAX_ENTRY_CHARS);
+    if omitted_prefix {
+        preview.insert(0, '…');
+    }
+    wrap(&format!("{label} › {preview}"), width, None).0
 }
 
 pub(super) async fn chat(args: RunArgs) -> Result<()> {
@@ -462,10 +538,11 @@ async fn run_turn(
     ui.exit_status = None;
     ui.unfinished = Some(turn);
     ui.progress = None;
+    ui.tool_progress = None;
     ui.status = format!("Turn {}: running", turn.get());
     ui.render(terminal, screen, true)?;
     let handle = current.session.handle();
-    let mut progress = handle.subscribe_model_progress();
+    let mut progress = handle.subscribe_progress();
     let mut progress_open = true;
     enum Wait {
         Exit(Result<DriveExit, ion_core::SessionError>),
@@ -493,10 +570,12 @@ async fn run_turn(
                     Ok(event) => ui.observe_progress(turn, event),
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
                         ui.progress = None;
+                        ui.tool_progress = None;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => {
                         progress_open = false;
                         ui.progress = None;
+                        ui.tool_progress = None;
                     }
                 },
                 _ = tick.tick() => {
@@ -517,6 +596,7 @@ async fn run_turn(
     let view = snapshot(&current.session).await?;
     ui.observe(&view, usize::from(screen.size().0));
     ui.progress = None;
+    ui.tool_progress = None;
     ui.status = match exit {
         Ok(DriveExit::Settled(outcome)) => format!("Turn {}: {outcome:?}", turn.get()),
         Ok(other) => format!(
@@ -801,11 +881,11 @@ mod tests {
         let mut ui = Frontend::default();
         ui.observe_progress(
             turn,
-            ModelProgress {
+            SessionProgress {
                 attachment_epoch: epoch,
                 turn,
                 attempt,
-                update: ModelProgressUpdate::Preview {
+                update: ProgressUpdate::ModelText {
                     text: "live answer".into(),
                     omitted_prefix: false,
                 },
@@ -814,24 +894,57 @@ mod tests {
         assert_eq!(ui.progress.as_ref().unwrap().text, "live answer");
         ui.observe_progress(
             turn,
-            ModelProgress {
+            SessionProgress {
                 attachment_epoch: epoch,
                 turn,
                 attempt: AttemptId::new(3).unwrap(),
-                update: ModelProgressUpdate::End,
+                update: ProgressUpdate::End,
             },
         );
         assert!(ui.progress.is_some());
         ui.observe_progress(
             turn,
-            ModelProgress {
+            SessionProgress {
                 attachment_epoch: epoch,
                 turn,
                 attempt,
-                update: ModelProgressUpdate::End,
+                update: ProgressUpdate::End,
             },
         );
         assert!(ui.progress.is_none());
+        ui.observe_progress(
+            turn,
+            SessionProgress {
+                attachment_epoch: epoch,
+                turn,
+                attempt: AttemptId::new(4).unwrap(),
+                update: ProgressUpdate::ToolOutput {
+                    stream: ToolOutputStream::Stderr,
+                    text: "compiling".into(),
+                    omitted_prefix: false,
+                },
+            },
+        );
+        assert_eq!(
+            ui.tool_progress
+                .as_ref()
+                .unwrap()
+                .stderr
+                .as_ref()
+                .unwrap()
+                .text,
+            "compiling"
+        );
+        ui.observe_progress(
+            turn,
+            SessionProgress {
+                attachment_epoch: epoch,
+                turn,
+                attempt: AttemptId::new(4).unwrap(),
+                update: ProgressUpdate::End,
+            },
+        );
+        assert!(ui.tool_progress.is_none());
     }
 
     #[test]

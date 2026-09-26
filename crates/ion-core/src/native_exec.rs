@@ -57,7 +57,7 @@ use crate::{
     ApprovalState, EffectSummary, EgressRealm, LiveToolAuthority, OutputCapture, OutputLoss,
     PreparedAction, SemanticCompatibilityId, StartReceipt, ToolAttemptState, ToolAuthority,
     ToolBinding, ToolBindingId, ToolBoundary, ToolBoundaryError, ToolConcurrency, ToolExecution,
-    ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
+    ToolOutputStream, ToolProgressPublisher, ToolRecoveryPolicy, ToolResult, WorkspaceBinding,
     workspace_registry::{
         ClaimKey, RegistryError, RegistryReceipt, TerminalEvidence, WorkspaceRegistry,
         WorkspaceResources, WorkspaceRevision,
@@ -726,8 +726,24 @@ fn run_exec(job: ExecJob) -> ToolAttemptState {
     }
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
-    let stdout_thread = thread::spawn(move || collect(stdout, output_cap / 2));
-    let stderr_thread = thread::spawn(move || collect(stderr, output_cap / 2));
+    let stdout_progress = job.execution.progress.clone();
+    let stderr_progress = job.execution.progress.clone();
+    let stdout_thread = thread::spawn(move || {
+        collect(
+            stdout,
+            output_cap / 2,
+            ToolOutputStream::Stdout,
+            &stdout_progress,
+        )
+    });
+    let stderr_thread = thread::spawn(move || {
+        collect(
+            stderr,
+            output_cap / 2,
+            ToolOutputStream::Stderr,
+            &stderr_progress,
+        )
+    });
     let deadline = Instant::now() + Duration::from_millis(job.arguments.timeout_ms);
     let mut timed_out = false;
     let mut cancelled = false;
@@ -1039,7 +1055,12 @@ struct Captured {
     truncated: bool,
 }
 
-fn collect(mut stream: impl Read, capacity: usize) -> Captured {
+fn collect(
+    mut stream: impl Read,
+    capacity: usize,
+    output_stream: ToolOutputStream,
+    progress: &ToolProgressPublisher,
+) -> Captured {
     let mut result = Captured {
         bytes: Vec::new(),
         observed: 0,
@@ -1050,6 +1071,7 @@ fn collect(mut stream: impl Read, capacity: usize) -> Captured {
         match stream.read(&mut chunk) {
             Ok(0) => break,
             Ok(count) => {
+                progress.output(output_stream, &chunk[..count]);
                 result.observed = result.observed.saturating_add(count as u64);
                 let keep = capacity.saturating_sub(result.bytes.len()).min(count);
                 result.bytes.extend_from_slice(&chunk[..keep]);
@@ -1304,7 +1326,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{AttemptId, AuthorityCeiling, InvocationId, SessionId};
+    use crate::{AttemptId, AuthorityCeiling, InvocationId, ProgressUpdate, SessionId, TurnId};
 
     static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
@@ -1392,6 +1414,7 @@ mod tests {
                 },
                 approval: ApprovalState::NotRequired,
                 output_limit: 4096,
+                progress: crate::ToolProgressPublisher::disabled(),
                 artifacts: crate::ArtifactPublisher::closed(),
             }
         }
@@ -1405,6 +1428,46 @@ mod tests {
                 })
                 .unwrap()
         }
+    }
+
+    #[tokio::test]
+    async fn command_output_is_visible_before_scope_settlement() {
+        let Some(fixture) = Fixture::new() else {
+            return;
+        };
+        let hub = crate::progress::ProgressHub::new();
+        let mut receiver = hub.subscribe();
+        let mut execution = fixture.execution("printf ready; sleep 2; printf done", 5000);
+        let (publisher, guard) = hub.tool_attempt(TurnId::new(1).unwrap(), execution.attempt);
+        execution.progress = publisher;
+        let boundary = Arc::clone(&fixture.boundary);
+        let task =
+            tokio::spawn(
+                async move { boundary.execute(execution, CancellationToken::new()).await },
+            );
+        let preview = tokio::time::timeout(Duration::from_secs(5), receiver.recv())
+            .await
+            .expect("command preview before timeout")
+            .expect("progress channel open");
+        assert!(matches!(
+            preview.update,
+            ProgressUpdate::ToolOutput {
+                stream: ToolOutputStream::Stdout,
+                text,
+                ..
+            } if text == "ready"
+        ));
+        assert!(!task.is_finished(), "command must still be running");
+        let settled = task.await.unwrap();
+        assert!(matches!(settled, ToolAttemptState::Settled { .. }));
+        drop(guard);
+        let mut saw_end = false;
+        while let Ok(event) = receiver.try_recv() {
+            if matches!(event.update, ProgressUpdate::End) {
+                saw_end = true;
+            }
+        }
+        assert!(saw_end, "attempt end must clear provisional output");
     }
 
     #[test]

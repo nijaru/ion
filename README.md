@@ -87,7 +87,7 @@ scenarios are being restored against the replacement owners.
 
 The CLI now exposes bounded `list`, `read`, `create`, and exact-base `edit` tools,
 an opt-in Linux `exec` tool, and an inline terminal client with transcript display,
-bounded live model-text preview and Ctrl-C cancellation.
+bounded live model-text and command-output previews, and Ctrl-C cancellation.
 Two synthetic workspace tasks completed against a local Qwen model through the
 OpenAI-compatible loopback endpoint: read/edit/re-read and list/read/create/re-read.
 A terminal session also completed a live model exchange and restored the terminal.
@@ -196,7 +196,8 @@ provider API has been qualified live.
 multiline paste; Enter submits, Shift-Enter inserts a newline, Ctrl-C requests
 cancellation, and `/resume` retries an unfinished Turn. Model text appears as a
 bounded provisional preview while a response streams; completed content comes
-from the durable transcript. It requires a terminal.
+from the durable transcript. Linux `exec` stdout and stderr also appear as a
+bounded provisional preview while a command runs. It requires a terminal.
 Create a host-state directory outside the writable workspace, then supply an exact
 HTTPS Chat Completions endpoint or literal loopback HTTP endpoint and a model ID.
 The host must assert the model's

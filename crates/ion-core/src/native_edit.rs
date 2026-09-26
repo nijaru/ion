@@ -2349,6 +2349,7 @@ mod tests {
                 },
                 approval: ApprovalState::NotRequired,
                 output_limit: 4096,
+                progress: crate::ToolProgressPublisher::disabled(),
                 artifacts: crate::ArtifactPublisher::closed(),
             }
         }
@@ -2768,6 +2769,7 @@ mod tests {
                 },
                 approval: ApprovalState::NotRequired,
                 output_limit: 4096,
+                progress: crate::ToolProgressPublisher::disabled(),
                 artifacts: crate::ArtifactPublisher::closed(),
             };
             assert!(matches!(

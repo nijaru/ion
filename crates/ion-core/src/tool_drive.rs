@@ -260,6 +260,7 @@ fn execution(
     call: &ToolInvocation,
     attempt: &ToolAttempt,
     scope: &crate::artifact::PublicationScope,
+    progress: crate::ToolProgressPublisher,
 ) -> ToolExecution {
     ToolExecution {
         session: inner.session_id(),
@@ -280,6 +281,7 @@ fn execution(
         ceiling: turn.environment.authority.clone(),
         approval: call.approval.clone(),
         output_limit: call.result_limit_bytes as usize,
+        progress,
         artifacts: scope.publisher(),
     }
 }
@@ -313,7 +315,14 @@ pub(crate) async fn reconcile(
         let scope = inner.store().publication_scope(attempt.id).await?;
         let state = boundary
             .reconcile(
-                execution(inner, &records.turn, call, attempt, &scope),
+                execution(
+                    inner,
+                    &records.turn,
+                    call,
+                    attempt,
+                    &scope,
+                    crate::ToolProgressPublisher::disabled(),
+                ),
                 attempt.clone(),
             )
             .await;
@@ -409,7 +418,14 @@ pub(crate) async fn drive(
                     let scope = inner.store().publication_scope(attempt.id).await?;
                     let state = boundary
                         .reconcile(
-                            execution(inner, &basis.turn, call, attempt, &scope),
+                            execution(
+                                inner,
+                                &basis.turn,
+                                call,
+                                attempt,
+                                &scope,
+                                crate::ToolProgressPublisher::disabled(),
+                            ),
                             attempt.clone(),
                         )
                         .await;
@@ -528,6 +544,7 @@ pub(crate) async fn drive(
             .attempt
             .ok_or_else(|| StoreError::Corrupt("intent missing attempt".into()))?;
         let scope = inner.store().publication_scope(attempt.id).await?;
+        let (progress, progress_guard) = inner.progress().tool_attempt(basis.turn.id, attempt.id);
         let gate = inner.effect_gate(basis.turn.id);
         let permit = gate.admit();
         let state = if let Some(permit) = permit {
@@ -535,7 +552,7 @@ pub(crate) async fn drive(
             // Keep this permit through that join; cancellation never drops the future.
             let state = boundary
                 .execute(
-                    execution(inner, &basis.turn, call, &attempt, &scope),
+                    execution(inner, &basis.turn, call, &attempt, &scope, progress),
                     permit.stop(),
                 )
                 .await;
@@ -546,6 +563,7 @@ pub(crate) async fn drive(
                 reason: "effect gate closed before admission".into(),
             }
         };
+        drop(progress_guard);
         record_evidence(inner, step, &attempt, state, call.result_limit_bytes, scope).await?;
         return Ok(None);
     }

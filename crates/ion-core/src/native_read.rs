@@ -872,6 +872,7 @@ mod tests {
             },
             approval: ApprovalState::NotRequired,
             output_limit,
+            progress: crate::ToolProgressPublisher::disabled(),
             artifacts: crate::ArtifactPublisher::closed(),
         }
     }
