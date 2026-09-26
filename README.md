@@ -7,12 +7,12 @@ compatibility targets.
 
 ## Current status
 
-The workspace builds a headless `ion` executable and three libraries:
+The workspace builds a headless and inline terminal `ion` executable and three libraries:
 
 - `ion-core`: the replacement durable Turn runtime and storage layer.
 - `ion-ai`: provider-neutral model contracts and scripted provider fixtures.
 - `ion-terminal`: low-level terminal components.
-- `crates/ion-app`: a headless Session host using the same library path.
+- `crates/ion-app`: a headless and inline terminal host using the same Session path.
 
 The maintained `ion-core` no longer contains the prototype Session/task/tool/workspace
 runtime. The replacement branch implements the R1 durable domain, Session/provider
@@ -80,17 +80,21 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 (v1–v10) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
-Still missing for a usable coding agent: file discovery and creation, qualified native
-macOS/Linux exec, a user-facing cancellation and approval client, streaming progress,
-the terminal UI, and sustained coding-task evidence. Both provider wires need broader
-live qualification. Parallel tool dispatch, context compaction/forking,
+The CLI now exposes bounded `list`, `read`, `create`, and exact-base `edit` tools,
+plus an inline terminal client with transcript display and Ctrl-C cancellation.
+Two synthetic workspace tasks completed against a local Qwen model through the
+OpenAI-compatible loopback endpoint: read/edit/re-read and list/read/create/re-read.
+A terminal session also completed a live model exchange and restored the terminal.
+This is narrow functional evidence; native command execution, user-facing approval,
+broader provider qualification, and sustained coding-task evidence remain open.
+Parallel tool dispatch, context compaction/forking,
 Steer/InteractionReply placement and workers remain optional later work.
 
 Known limits before prerelease: absolute Turn wall deadlines are not implemented;
 the library now rejects non-`None` deadlines at admission and the CLI supplies
 `None`. Previously persisted experimental deadlines are not retroactively
-enforced. The headless host freezes the selected wire API and canonical HTTPS
-endpoint in its provider binding. Sessions created by earlier experimental
+enforced. The host freezes the selected wire API and canonical endpoint in its
+provider binding. Sessions created by earlier experimental
 headless builds with unscoped binding IDs require a fresh state directory.
 Tool admission now assigns a durable per-call result allowance from the actual
 batch and remaining context headroom, rather than reserving 64 KiB for a tiny
@@ -119,21 +123,23 @@ before/after-checked workspace revision and a SHA-256 `base_digest` for exact ed
 partial reads return no base digest. This result uses the frozen `native-read-v3`
 binding. It is serial, not an OS
 sandbox: the host must protect the workspace namespace against concurrent renames
-and enforce its promised read authority.
+and enforce its promised read authority. Native `list` returns a bounded, sorted
+page from one directory with a workspace revision; it does not follow symlinks
+or promise a snapshot across pages.
 The library also has an experimental single-file `NativeEditBoundary` on registry
-format v5, with protected private staging, pre-create allocation, immutable receipts,
+format v6, with protected private staging, pre-create allocation, immutable receipts,
 joined worker custody, durable rename phases and discoverable cleanup obligations.
 Mac and Linux ARM guest synthetic process-loss/Session recovery tests pass; they do
 not prove host confinement or power-loss durability. A trusted host must continuously
 protect the registry, custody inode and staging namespace from arbitrary same-user
 writers; `0700` and file locks alone do not establish that protection. Blocked
-allocations have no force-clear. The headless host can opt into the editor with
-an explicit shared registry. One synthetic read/edit/read task passed; there is
-no sustained coding qualification.
-Registry v3/v4 files are refused without migration.
+allocations have no force-clear. The host can opt into edit and create with
+an explicit shared registry. Creation requires an absent target and uses an
+atomic no-clobber rename. There is no sustained coding qualification.
+Registry v3/v4/v5 files are refused without migration.
 Git marker discovery refuses symlinked/nonregular marker files rather than opening them.
 The OpenAI-compatible Chat Completions adapter streams text, function calls and usage
-with bounded SSE parsing. It binds to a frozen HTTPS origin, disables redirects and ambient
+with bounded SSE parsing. It binds to a frozen HTTPS or literal loopback HTTP origin, disables redirects and ambient
 proxies, and obtains an API key from a live host callback at dispatch. Returned-model IDs
 must match the exact binding or a frozen list of allowed route models; missing or unexpected
 IDs park without selecting a response or admitting tools. Returned calls also must
@@ -154,18 +160,22 @@ opaque replay, provider-hosted tools and explicit sampling/reasoning controls fa
 Isolated synthetic OpenRouter Chat Completions exchanges passed; neither official
 provider API has been qualified live.
 
-## Headless use (experimental)
+## Terminal and headless use (experimental)
 
-`cargo run --locked -p ion -- --help` exposes `run`, `resume`, and passive `inspect`.
+`cargo run --locked -p ion -- --help` exposes interactive `chat`, headless `run`,
+`resume`, and passive `inspect`. `chat` uses the same durable Session and accepts
+multiline paste; Enter submits, Shift-Enter inserts a newline, Ctrl-C requests
+cancellation, and `/resume` retries an unfinished Turn. It requires a terminal.
 Create a host-state directory outside the writable workspace, then supply an exact
-HTTPS Chat Completions endpoint and a model ID. The host must assert the model's
+HTTPS Chat Completions endpoint or literal loopback HTTP endpoint and a model ID.
+The host must assert the model's
 input and output token capacities; the client cannot discover or verify them.
 The current request admission enforces a serialized-byte ceiling (`--max-request-bytes`,
 default 1 MiB), **not** an exact tokenizer-backed input-token bound; a provider may
 reject an oversized context.
 The endpoint's returned model ID must match the supplied ID. `run` supports
 `--request-key` for idempotent resubmission after a lost reply. Resuming with
-a different endpoint path—even on the same HTTPS origin—is refused.
+a different endpoint path—even on the same origin—is refused.
 
 ```sh
 mkdir -p "$HOME/.local/state/ion/example"
@@ -179,7 +189,9 @@ cargo run --locked -p ion -- run \
   --request-key example-1 'Read the project entry point and summarize it'
 ```
 
-Replace the example endpoint and capacity placeholders with values for your provider.
+Use `chat` in place of `run` for the terminal client, with the same host and model
+arguments. Replace the example endpoint and capacity placeholders with values
+for your provider.
 For a Turn-wide reservation ceiling, set `--max-cost-microusd <positive-total>`
 on `run` and `--cost-quote-microusd <trusted-per-attempt-upper-bound>` on `run`
 and each `resume`. Both are in millionths of a US dollar. The latter must
@@ -198,11 +210,11 @@ The default `--wire chat-completions` reads `OPENAI_API_KEY`. For Anthropic's
 `/v1/messages`, use `--wire anthropic-messages`, an exact Anthropic endpoint/model,
 and `ANTHROPIC_API_KEY`. Each Session freezes its wire API and canonical
 endpoint URL; use a new state directory to switch endpoints. Keys are
-read at dispatch and are not stored. A missing key parks without sending a
-request. `ion inspect --state ...` shows a bounded snapshot;
+read at dispatch and are not stored. Literal-loopback HTTP providers may run
+without a key; public HTTPS providers park if their key is missing. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
 resumes a persisted Turn. A read-only Session uses `<state>/registry` by default.
-To enable single-file exact-match edits, give every Session touching the same
+To enable single-file exact-match edits and no-clobber creation, give every Session touching the same
 workspace **one shared host-owned registry**, separate from its per-Session state
 and the workspace. Create it privately on the same supported local filesystem
 as the workspace, then pass `--registry <path> --enable-edit` to both `run` and
@@ -224,28 +236,31 @@ cargo run --locked -p ion -- run \
   'Read one file, replace the requested text, then summarize the change'
 ```
 
-The current `native-edit-private-v5` tool edits existing regular files up to 16 KiB;
-it does not create files. The model supplies the `base_digest` and
+The current `native-edit-private-v5` tool edits existing regular files up to 16 KiB.
+The model supplies the `base_digest` and
 `workspace_revision` from a complete read, plus text that occurs once and its
 replacement. The host verifies the digest, builds the complete replacement and
 freezes both file versions before creating a workspace claim. This reduces model
 output, but still needs comparative coding-task evaluation: exact matching does not
-prove that the model chose the right change. The tool creates private staging inside the shared registry,
-refuses unsupported filesystem or mount combinations, and never falls back
-to workspace staging.
+prove that the model chose the right change. `create` takes an absent path,
+content and the workspace revision from `list` or `read`. New files are created
+with mode `0600`. Both tools create private staging inside the shared registry,
+refuse unsupported filesystem or mount combinations, and never fall back to
+workspace staging.
 The host must continuously protect the registry, its staging directory and the
 workspace namespace from arbitrary same-user writers; directory permissions and
 advisory locks are **not** a sandbox. There is no command-execution tool or
 automatic cleanup of blocked allocations. Provider calls can send workspace
 content and incur charges.
 A synthetic OpenRouter Chat Completions read-and-answer exchange passed on
-2026-09-25. On 2026-09-26 another synthetic workspace completed read → edit →
-read: the file held exactly the requested bytes, the registry had one terminal
-known-change claim and its stage was disposed. A direct OpenAI attempt returned
-HTTP 429; the Anthropic adapter has only loopback tests. These are isolated
-exchanges, **not** sustained coding, broad provider, native-exec or terminal
-qualification. The excluded legacy `crates/ion/` remains reference material,
-not an alternative maintained runtime.
+2026-09-25. On 2026-09-26, a local Qwen model over loopback completed isolated
+headless read/edit/read and list/read/create/read tasks; externally inspected
+files held the requested bytes. It also completed a read-and-answer exchange
+through `ion chat` in a PTY without an API key. A direct OpenAI attempt returned
+HTTP 429; the Anthropic adapter has only loopback tests. These checks do not
+qualify sustained coding, public-provider behavior, native exec or the full
+range of terminal emulators. The excluded legacy `crates/ion/` remains
+reference material, not an alternative maintained runtime.
 
 ## Development
 

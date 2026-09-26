@@ -26,7 +26,7 @@ use crate::{
 
 mod streaming;
 
-/// HTTPS-only, exact-origin Messages adapter. Supply the full `/v1/messages` URL
+/// Exact-origin Messages adapter. Supply the full `/v1/messages` URL
 /// and a matching frozen remote egress realm. Redirects, proxies and retries are
 /// disabled. The host owns attempt timeouts and live egress admission.
 ///
@@ -45,38 +45,19 @@ impl AnthropicMessages {
         endpoint: &str,
         key: Arc<dyn ApiKeySource>,
     ) -> Result<Self, String> {
-        Self::build(identity, endpoint, key, false)
-    }
-
-    #[cfg(test)]
-    fn test_local(
-        identity: ModelBoundaryIdentity,
-        endpoint: &str,
-        key: Arc<dyn ApiKeySource>,
-    ) -> Result<Self, String> {
-        Self::build(identity, endpoint, key, true)
-    }
-
-    fn build(
-        identity: ModelBoundaryIdentity,
-        endpoint: &str,
-        key: Arc<dyn ApiKeySource>,
-        allow_local: bool,
-    ) -> Result<Self, String> {
         let endpoint = Url::parse(endpoint).map_err(|_| "invalid endpoint URL")?;
         let local = endpoint
             .host_str()
-            .is_some_and(|h| matches!(h, "localhost" | "127.0.0.1" | "[::1]"));
+            .is_some_and(|h| matches!(h, "127.0.0.1" | "[::1]"));
         if !endpoint.username().is_empty()
             || endpoint.password().is_some()
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
             || endpoint.path() != "/v1/messages"
-            || !(endpoint.scheme() == "https"
-                || (allow_local && local && endpoint.scheme() == "http"))
+            || !(endpoint.scheme() == "https" || (local && endpoint.scheme() == "http"))
         {
             return Err(
-                "endpoint must be HTTPS /v1/messages without userinfo/query/fragment".into(),
+                "endpoint must be HTTPS or literal-loopback HTTP /v1/messages without userinfo/query/fragment".into(),
             );
         }
         if identity.egress != EgressRealm::Remote(endpoint.origin().ascii_serialization()) {
@@ -278,28 +259,31 @@ impl ModelBoundary for AnthropicMessages {
                     reason: "cancelled before HTTP dispatch".into(),
                 };
             }
-            let Some(key) = self.key.api_key() else {
+            let key = self.key.api_key();
+            if key.is_none() && self.endpoint.scheme() != "http" {
                 return ModelStart::NotStarted {
                     reason: "provider credential unavailable".into(),
                 };
-            };
-            let mut key = match HeaderValue::from_str(&key) {
-                Ok(key) if !key.is_empty() => key,
-                _ => {
-                    return ModelStart::NotStarted {
-                        reason: "invalid provider credential".into(),
-                    };
-                }
-            };
-            key.set_sensitive(true);
-            let sent = self
+            }
+            let mut request = self
                 .client
                 .post(self.endpoint.clone())
-                .header("x-api-key", key)
                 .header("anthropic-version", "2023-06-01")
                 .header("accept", "text/event-stream")
-                .json(&body)
-                .send();
+                .json(&body);
+            if let Some(key) = key {
+                let mut key = match HeaderValue::from_str(&key) {
+                    Ok(key) if !key.is_empty() => key,
+                    _ => {
+                        return ModelStart::NotStarted {
+                            reason: "invalid provider credential".into(),
+                        };
+                    }
+                };
+                key.set_sensitive(true);
+                request = request.header("x-api-key", key);
+            }
+            let sent = request.send();
             if stop.is_cancelled() {
                 return ModelStart::NotStarted {
                     reason: "cancelled before HTTP dispatch".into(),

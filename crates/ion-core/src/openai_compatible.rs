@@ -31,35 +31,18 @@ impl OpenAiCompatible {
         endpoint: &str,
         key: Arc<dyn ApiKeySource>,
     ) -> Result<Self, String> {
-        Self::build(identity, endpoint, key, false)
-    }
-    #[cfg(test)]
-    fn test_local(
-        identity: ModelBoundaryIdentity,
-        endpoint: &str,
-        key: Arc<dyn ApiKeySource>,
-    ) -> Result<Self, String> {
-        Self::build(identity, endpoint, key, true)
-    }
-    fn build(
-        identity: ModelBoundaryIdentity,
-        endpoint: &str,
-        key: Arc<dyn ApiKeySource>,
-        allow_local: bool,
-    ) -> Result<Self, String> {
         let endpoint = Url::parse(endpoint).map_err(|_| "invalid endpoint URL".to_owned())?;
         let local = endpoint
             .host_str()
-            .is_some_and(|h| h == "localhost" || h == "127.0.0.1" || h == "::1");
+            .is_some_and(|h| h == "127.0.0.1" || h == "[::1]");
         if endpoint.username() != ""
             || endpoint.password().is_some()
             || endpoint.query().is_some()
             || endpoint.fragment().is_some()
-            || !(endpoint.scheme() == "https"
-                || (allow_local && local && endpoint.scheme() == "http"))
+            || !(endpoint.scheme() == "https" || (local && endpoint.scheme() == "http"))
         {
             return Err(
-                "endpoint must be HTTPS without userinfo/query/fragment (HTTP is test-local only)"
+                "endpoint must be HTTPS or literal-loopback HTTP without userinfo/query/fragment"
                     .to_owned(),
             );
         }
@@ -69,15 +52,7 @@ impl OpenAiCompatible {
                 return Err("OpenAI-compatible endpoint requires a remote egress realm".to_owned());
             }
         };
-        let host = endpoint
-            .host_str()
-            .ok_or_else(|| "endpoint has no host".to_owned())?;
-        let origin = format!(
-            "{}://{}{}",
-            endpoint.scheme(),
-            host,
-            endpoint.port().map(|p| format!(":{p}")).unwrap_or_default()
-        );
+        let origin = endpoint.origin().ascii_serialization();
         if realm != &origin {
             return Err("endpoint origin does not match frozen remote egress realm".to_owned());
         }
@@ -227,11 +202,12 @@ impl ModelBoundary for OpenAiCompatible {
         stop: CancellationToken,
     ) -> ion_ai::BoxFuture<'a, ModelStart> {
         Box::pin(async move {
-            let Some(key) = self.key.api_key() else {
+            let key = self.key.api_key();
+            if key.is_none() && self.endpoint.scheme() != "http" {
                 return ModelStart::NotStarted {
                     reason: "provider credential unavailable".into(),
                 };
-            };
+            }
             let body = match Self::payload(&request) {
                 Ok(body) => body,
                 Err(error) => {
@@ -245,13 +221,15 @@ impl ModelBoundary for OpenAiCompatible {
                     reason: "cancelled before HTTP dispatch".into(),
                 };
             }
-            let sent = self
+            let mut request = self
                 .client
                 .post(self.endpoint.clone())
                 .header("Idempotency-Key", effect_key)
-                .bearer_auth(key)
-                .json(&body)
-                .send();
+                .json(&body);
+            if let Some(key) = key {
+                request = request.bearer_auth(key);
+            }
+            let sent = request.send();
             // Once the send future is polled, cancellation cannot prove no bytes
             // crossed the boundary. Preserve uncertain physical-start evidence.
             let response = tokio::select! {
@@ -604,13 +582,57 @@ mod tests {
             .is_err()
         );
         assert!(
-            OpenAiCompatible::test_local(
+            OpenAiCompatible::new(
                 identity(local.clone()),
                 &local,
                 Arc::new(|| Some("secret".into()))
             )
             .is_ok()
         );
+        assert!(
+            OpenAiCompatible::new(
+                identity("http://localhost:8080".into()),
+                "http://localhost:8080/v1/chat/completions",
+                Arc::new(|| Some("secret".into()))
+            )
+            .is_err()
+        );
+    }
+    #[tokio::test]
+    async fn literal_loopback_chat_dispatches_without_authorization() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut socket, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 4096];
+            while !request.windows(4).any(|part| part == b"\r\n\r\n") {
+                let n = socket.read(&mut chunk).unwrap();
+                assert!(n > 0);
+                request.extend_from_slice(&chunk[..n]);
+            }
+            socket
+                .write_all(
+                    b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                )
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+        let boundary =
+            OpenAiCompatible::new(identity(url.clone()), &url, Arc::new(|| None)).unwrap();
+        assert!(matches!(
+            boundary
+                .start(
+                    crate::AttemptId::new(1).unwrap(),
+                    "effect".into(),
+                    request(),
+                    CancellationToken::new(),
+                )
+                .await,
+            ModelStart::Started { .. }
+        ));
+        let request = server.join().unwrap().to_ascii_lowercase();
+        assert!(!request.contains("authorization:"));
     }
     #[tokio::test]
     async fn streamed_text_function_calls_usage_and_returned_model() {
@@ -631,7 +653,7 @@ mod tests {
         );
         let url = server(response);
         let origin = url.clone();
-        let boundary = OpenAiCompatible::test_local(
+        let boundary = OpenAiCompatible::new(
             identity(origin),
             &url,
             Arc::new(|| Some("top-secret".into())),
@@ -684,7 +706,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
         ];
         for raw in cases {
             let url = server(raw.into());
-            let boundary = OpenAiCompatible::test_local(
+            let boundary = OpenAiCompatible::new(
                 identity(url.clone()),
                 &url,
                 Arc::new(|| Some("secret".into())),
@@ -722,7 +744,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
             "HTTP/1.1 401 Unauthorized\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ));
-        let boundary = OpenAiCompatible::test_local(
+        let boundary = OpenAiCompatible::new(
             identity(url.clone()),
             &url,
             Arc::new(|| Some("top-secret".into())),
@@ -756,7 +778,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
                 "HTTP/1.1 429 Too Many Requests\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ));
-            let boundary = OpenAiCompatible::test_local(
+            let boundary = OpenAiCompatible::new(
                 identity(url.clone()), &url, Arc::new(|| Some("top-secret".into())),
             ).unwrap();
             let ModelStart::Started { mut stream, .. } = boundary.start(
@@ -782,7 +804,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
             released.recv().unwrap();
         });
         let boundary = Arc::new(
-            OpenAiCompatible::test_local(
+            OpenAiCompatible::new(
                 identity(url.clone()),
                 &url,
                 Arc::new(|| Some("secret".into())),
@@ -828,7 +850,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{sse}",
             sse.len()
         ));
-        let boundary = OpenAiCompatible::test_local(
+        let boundary = OpenAiCompatible::new(
             identity(url.clone()),
             &url,
             Arc::new(|| Some("secret".into())),
@@ -876,7 +898,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
             "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         ));
-        let boundary = OpenAiCompatible::test_local(
+        let boundary = OpenAiCompatible::new(
             identity(url.clone()),
             &url,
             Arc::new(|| Some("synthetic".into())),
@@ -932,7 +954,7 @@ data: {"choices":[{"delta":{"content":"partial"},"finish_reason":null}]}
                 "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             ));
-            let boundary = OpenAiCompatible::test_local(
+            let boundary = OpenAiCompatible::new(
                 identity(url.clone()),
                 &url,
                 Arc::new(|| Some("secret".into())),

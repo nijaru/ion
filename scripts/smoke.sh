@@ -231,8 +231,8 @@ first, second = (json.load(open(path)) for path in sys.argv[1:3])
 for snapshot in (first, second):
     config = snapshot['config']['config']
     assert config['authority']['workspace_mutation']
-    assert config['initial_tools'] == ['read', 'edit']
-    assert [tool['id'] for tool in config['tools']] == ['read', 'edit']
+    assert config['initial_tools'] == ['list', 'read', 'edit', 'create']
+    assert [tool['id'] for tool in config['tools']] == ['list', 'read', 'edit', 'create']
     assert snapshot['tool_attempts'] == []
 assert first['config']['config']['workspace'] == second['config']['config']['workspace']
 assert os.stat(sys.argv[3]).st_mode & 0o077 == 0

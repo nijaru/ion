@@ -102,7 +102,7 @@ async fn loopback_provider_calls_native_read_and_replays_its_result_without_reex
         egress: EgressRealm::Remote(origin.clone()),
     };
     let provider = Arc::new(
-        OpenAiCompatible::test_local(
+        OpenAiCompatible::new(
             identity.clone(),
             &origin,
             Arc::new(|| Some("test-key".into())),

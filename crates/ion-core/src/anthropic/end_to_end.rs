@@ -54,7 +54,7 @@ async fn session_native_read_replays_paired_result_and_reopen_does_not_reexecute
     });
     let identity = identity(origin.clone());
     let provider = Arc::new(
-        AnthropicMessages::test_local(
+        AnthropicMessages::new(
             identity.clone(),
             &format!("{origin}/v1/messages"),
             Arc::new(|| Some("test-key".into())),

@@ -632,6 +632,22 @@ fn endpoint_is_exact_https_origin_and_messages_path() {
         )
         .is_ok()
     );
+    assert!(
+        AnthropicMessages::new(
+            identity("http://127.0.0.1:8080".into()),
+            "http://127.0.0.1:8080/v1/messages",
+            Arc::new(|| None)
+        )
+        .is_ok()
+    );
+    assert!(
+        AnthropicMessages::new(
+            identity("http://localhost:8080".into()),
+            "http://localhost:8080/v1/messages",
+            Arc::new(|| None)
+        )
+        .is_err()
+    );
     let mut local = identity("https://api.example.test".into());
     local.egress = EgressRealm::Local;
     assert!(
@@ -756,7 +772,7 @@ fn mock(raw: String) -> (AnthropicMessages, std::thread::JoinHandle<(String, Val
         request
     });
     (
-        AnthropicMessages::test_local(
+        AnthropicMessages::new(
             identity(origin.clone()),
             &format!("{origin}/v1/messages"),
             Arc::new(|| Some("test-secret".into())),
@@ -808,19 +824,7 @@ async fn http_request_has_correct_headers_body_and_live_key_lookup() {
     assert!(!headers.contains("idempotency"));
     assert_eq!(body, AnthropicMessages::payload(&request()).unwrap());
     assert_eq!(lookups.load(Ordering::SeqCst), 1);
-    boundary.key = Arc::new(|| None);
     assert_eq!(digest, boundary.fingerprint(&request(), "effect").unwrap());
-    assert!(matches!(
-        boundary
-            .start(
-                AttemptId::new(2).unwrap(),
-                "effect".into(),
-                request(),
-                CancellationToken::new()
-            )
-            .await,
-        ModelStart::NotStarted { .. }
-    ));
     boundary.key = Arc::new(|| Some("invalid\r\nsecret".into()));
     let ModelStart::NotStarted { reason } = boundary
         .start(
@@ -834,6 +838,26 @@ async fn http_request_has_correct_headers_body_and_live_key_lookup() {
         panic!("invalid key dispatched")
     };
     assert!(!reason.contains("secret"));
+}
+
+#[tokio::test]
+async fn literal_loopback_messages_dispatches_without_a_key_header() {
+    let (mut boundary, server) = mock(http(&sse(&text_response())));
+    boundary.key = Arc::new(|| None);
+    let ModelStart::Started { stream, .. } = boundary
+        .start(
+            AttemptId::new(1).unwrap(),
+            "effect".into(),
+            request(),
+            CancellationToken::new(),
+        )
+        .await
+    else {
+        panic!("local request did not dispatch")
+    };
+    assert!(stream.collect::<Vec<_>>().await.iter().all(Result::is_ok));
+    let (headers, _) = server.join().unwrap();
+    assert!(!headers.to_ascii_lowercase().contains("x-api-key:"));
 }
 
 #[tokio::test]
@@ -910,7 +934,7 @@ async fn cancellation_after_send_is_indeterminate_and_stream_cancellation_preser
         released.recv_timeout(Duration::from_secs(5)).unwrap();
     });
     let boundary = Arc::new(
-        AnthropicMessages::test_local(
+        AnthropicMessages::new(
             identity(origin.clone()),
             &format!("{origin}/v1/messages"),
             Arc::new(|| Some("secret".into())),
