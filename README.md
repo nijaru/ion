@@ -96,10 +96,14 @@ GCC through `exec`, and read the imported source back. A Fedora local-Qwen
 two-turn C task fixed a parser, added regression tests, then added and tested a
 formatting API in the same Session across context boundaries; independent host
 tests passed. An opt-in terminal approval flow has synthetic PTY coverage and
-local-model create/read and exec/edit/exec coding checks on Fedora;
-native macOS command execution and broader provider qualification remain open.
-Parallel tool dispatch, context reset/forking,
-Steer/InteractionReply placement and workers remain optional later work.
+local-model create/read and exec/edit/exec coding checks on Fedora.
+A macOS APFS headless task using that local model over a loopback SSH tunnel
+read and repaired a C parser, then reread it; an independent macOS `make test`
+passed. A live macOS terminal task used exact mutation approval to create and
+read back a file, exited cleanly, and left no unresolved workspace claim.
+Native macOS command execution and broader provider qualification remain open.
+Parallel tool dispatch, context reset/forking, Steer/InteractionReply placement
+and workers remain optional later work.
 
 With the text checkpoint, a separate Fedora PTY run completed a `make test`
 Turn and a test-edit/`make test` Turn in one Session, crossed three context
