@@ -184,6 +184,8 @@ pub struct ToolInvocation {
     pub origin_provider_call_id: Option<String>,
     pub binding: ToolBindingId,
     pub preparation: ToolPreparation,
+    /// Frozen serialized ToolResult byte allowance for this logical call.
+    pub result_limit_bytes: u32,
     pub approval: ApprovalState,
     pub exchange: ToolExchangeState,
 }
@@ -333,6 +335,21 @@ pub struct ToolResult {
     /// Model-visible tool failure, independent of execution/effect certainty.
     pub is_error: bool,
     pub capture: OutputCapture,
+}
+
+/// Truthful result if a backend exceeds its frozen model-visible allowance.
+pub(crate) fn output_capacity_result() -> ToolResult {
+    ToolResult {
+        value: Value::String(
+            "Tool output exceeded bounded retention; execution evidence is preserved.".into(),
+        ),
+        is_error: true,
+        capture: OutputCapture::Incomplete {
+            reason: OutputLoss::BackendCapacity,
+            retained_bytes: 0,
+            observed_bytes: None,
+        },
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

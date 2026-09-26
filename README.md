@@ -18,7 +18,7 @@ The maintained `ion-core` no longer contains the prototype Session/task/tool/wor
 runtime. The replacement branch implements the R1 durable domain, Session/provider
 foundation, and an initial tool-execution boundary:
 
-- fresh SQLite schema v10 with one Session-local identity sequence and exact commit cursor;
+- fresh SQLite schema v11 with one Session-local identity sequence and exact commit cursor;
 - revisioned conversation configuration, conversation-scoped idempotent input admission,
   inline immutable `TurnEnvironment`, constrained `TurnSettings`, and one unfinished Turn
   per conversation;
@@ -77,7 +77,7 @@ A host backend must enforce current authority, workspace claims, and stop/join b
 The deleted `.ion/claims.sqlite` wrapper is not part of the replacement runtime.
 
 There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased schemas
-(v1–v9) are refused rather than migrated; Git retains the prototype and its useful failure
+(v1–v10) are refused rather than migrated; Git retains the prototype and its useful failure
 scenarios are being restored against the replacement owners.
 
 Still missing: qualified native macOS/Linux exec, a user-facing cancellation and
@@ -92,10 +92,11 @@ the library now rejects non-`None` deadlines at admission and the CLI supplies
 enforced. The headless host freezes the selected wire API and canonical HTTPS
 endpoint in its provider binding. Sessions created by earlier experimental
 headless builds with unscoped binding IDs require a fresh state directory.
-Tool admission still reserves the configured full 64 KiB preview per call and
-compares request bytes
-to an asserted input-token capacity. Small-context models can reject even a
-tiny read; this is not tokenizer-backed context admission.
+Tool admission now assigns a durable per-call result allowance from the actual
+batch and remaining context headroom, rather than reserving 64 KiB for a tiny
+read. It still compares serialized request **bytes** to an asserted input-token
+capacity, not an exact tokenizer-backed bound; a provider may reject a context
+that passes this conservative proxy.
 
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.

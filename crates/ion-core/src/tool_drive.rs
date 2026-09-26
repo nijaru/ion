@@ -110,16 +110,7 @@ fn bounded_effect(
     else {
         unreachable!()
     };
-    let message = "Tool output exceeded bounded retention; execution evidence is preserved.";
-    let fallback = ToolResult {
-        value: serde_json::Value::String(message.into()),
-        is_error: true,
-        capture: OutputCapture::Incomplete {
-            reason: OutputLoss::BackendCapacity,
-            retained_bytes: 0,
-            observed_bytes: None,
-        },
-    };
+    let fallback = crate::tool_exec::output_capacity_result();
     let effect = if !receipt_conflict
         && crate::tool_boundary::bounded_to(&effect, MAX_TOOL_RECORD_BYTES / 4).is_ok()
     {
@@ -288,8 +279,7 @@ fn execution(
         workspace: turn.environment.workspace.clone(),
         ceiling: turn.environment.authority.clone(),
         approval: call.approval.clone(),
-        output_limit: (turn.environment.limits.max_tool_preview_bytes as usize)
-            .min(MAX_TOOL_RECORD_BYTES),
+        output_limit: call.result_limit_bytes as usize,
         artifacts: scope.publisher(),
     }
 }
@@ -332,15 +322,7 @@ pub(crate) async fn reconcile(
         {
             continue;
         }
-        record_evidence(
-            inner,
-            step,
-            attempt,
-            state,
-            records.turn.environment.limits.max_tool_preview_bytes,
-            scope,
-        )
-        .await?;
+        record_evidence(inner, step, attempt, state, call.result_limit_bytes, scope).await?;
     }
     Ok(())
 }
@@ -452,15 +434,8 @@ pub(crate) async fn drive(
                         ToolAttemptState::IntentCommitted { .. }
                             | ToolAttemptState::Indeterminate { .. }
                     );
-                    record_evidence(
-                        inner,
-                        step,
-                        attempt,
-                        state,
-                        basis.turn.environment.limits.max_tool_preview_bytes,
-                        scope,
-                    )
-                    .await?;
+                    record_evidence(inner, step, attempt, state, call.result_limit_bytes, scope)
+                        .await?;
                     if unresolved {
                         return Ok(Some(ParkReason::RecoveryRequired));
                     }
@@ -571,15 +546,7 @@ pub(crate) async fn drive(
                 reason: "effect gate closed before admission".into(),
             }
         };
-        record_evidence(
-            inner,
-            step,
-            &attempt,
-            state,
-            basis.turn.environment.limits.max_tool_preview_bytes,
-            scope,
-        )
-        .await?;
+        record_evidence(inner, step, &attempt, state, call.result_limit_bytes, scope).await?;
         return Ok(None);
     }
     if !basis.turn.cancellation.requested {

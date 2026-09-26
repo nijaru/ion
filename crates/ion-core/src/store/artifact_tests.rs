@@ -90,7 +90,7 @@ impl Fixture {
             vec![],
         )
         .unwrap();
-        connection.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,binding_id,prepared_action,approval,exchange_state) VALUES (?1,?2,?3,0,'read',?4,?5,?6)", params![invocation.get(),step.get(),entry.get(),serde_json::to_string(&ToolPreparation::Ready(action)).unwrap(),serde_json::to_string(&ApprovalState::NotRequired).unwrap(),serde_json::to_string(&ToolExchangeState::Pending).unwrap()]).unwrap();
+        connection.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,binding_id,prepared_action,result_limit_bytes,approval,exchange_state) VALUES (?1,?2,?3,0,'read',?4,1024,?5,?6)", params![invocation.get(),step.get(),entry.get(),serde_json::to_string(&ToolPreparation::Ready(action)).unwrap(),serde_json::to_string(&ApprovalState::NotRequired).unwrap(),serde_json::to_string(&ToolExchangeState::Pending).unwrap()]).unwrap();
         connection.execute("INSERT INTO tool_attempts (id,invocation_id,ordinal,generation,executor,state) VALUES (?1,?2,1,0,?3,?4)", params![attempt.get(),invocation.get(),serde_json::to_string(&SemanticCompatibilityId::new("local").unwrap()).unwrap(),serde_json::to_string(&ToolAttemptState::IntentCommitted { start_receipt: None }).unwrap()]).unwrap();
         connection
             .execute("UPDATE session_meta SET last_seq=1003,last_commit=1003", [])

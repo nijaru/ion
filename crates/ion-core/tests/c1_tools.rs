@@ -580,6 +580,11 @@ async fn native_read_settles_a_durable_tool_exchange_and_reopens_without_rereadi
     cfg.workspace = binding;
     cfg.tools = vec![reader.tool_binding().clone()];
     cfg.initial_tools = vec![reader.tool_binding().id.clone()];
+    // The CLI retains up to 64 KiB, but a tiny read must still fit an 8K
+    // asserted context and remain replayable after reopening the Session.
+    cfg.limits.max_tool_preview_bytes = 64 * 1024;
+    cfg.context.max_input_tokens = 8192;
+    cfg.providers[0].capabilities.max_input_tokens = 8192;
     let (session, db, turn) = setup(cfg).await;
     let model = model();
     let tools = ToolBoundaries::new([reader as Arc<dyn ToolBoundary>]).unwrap();
@@ -618,6 +623,75 @@ async fn native_read_settles_a_durable_tool_exchange_and_reopens_without_rereadi
     drop(registry);
     std::fs::remove_dir_all(dir).unwrap();
     std::fs::remove_file(db).unwrap();
+}
+
+#[tokio::test]
+async fn small_context_preserves_escaped_results_or_truthful_capacity_fallback() {
+    for (length, expected_incomplete, max_request_bytes) in [
+        (100, false, 1_000_000),
+        (5000, true, 1_000_000),
+        (3000, true, 4096),
+    ] {
+        let mut cfg = config();
+        cfg.context.max_request_bytes = max_request_bytes;
+        cfg.context.max_input_tokens = 8192;
+        cfg.providers[0].capabilities.max_input_tokens = 8192;
+        cfg.limits.max_tool_preview_bytes = 64 * 1024;
+        let (session, db, turn) = setup(cfg).await;
+        let model = model();
+        let mut state = success();
+        if let ToolAttemptState::Settled { result, .. } = &mut state {
+            result.value = json!("\0".repeat(length));
+        }
+        let tool = Arc::new(Tool::new(state));
+        assert!(matches!(
+            session
+                .handle()
+                .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+                .await
+                .unwrap(),
+            DriveExit::Settled(TurnOutcome::Completed { .. })
+        ));
+        let step = tool_step(&session).await;
+        let before = session.handle().tool_records(step).await.unwrap();
+        let cap = before.invocations[0].result_limit_bytes;
+        assert!(
+            (256..8192).contains(&cap),
+            "bounded result allowance: {cap}"
+        );
+        assert!(cap < max_request_bytes);
+        let ToolAttemptState::Settled { result, effect, .. } = &before.attempts[0].state else {
+            panic!("missing terminal effect evidence");
+        };
+        assert_eq!(*effect, EffectSummary::NoMutation);
+        if expected_incomplete {
+            assert!(matches!(
+                result.capture,
+                OutputCapture::Incomplete {
+                    reason: OutputLoss::BackendCapacity,
+                    ..
+                }
+            ));
+            assert!(result.is_error);
+        } else {
+            assert!(matches!(result.capture, OutputCapture::CompleteInline));
+            assert_eq!(result.value, json!("\0".repeat(length)));
+        }
+        session.close().await.unwrap();
+        let reopened = Session::open(&db).await.unwrap();
+        assert_eq!(reopened.handle().tool_records(step).await.unwrap(), before);
+        assert!(matches!(
+            reopened
+                .handle()
+                .resume(turn, models(&model))
+                .await
+                .unwrap(),
+            DriveExit::Settled(_)
+        ));
+        assert_eq!(tool.executes.load(Ordering::SeqCst), 1);
+        reopened.close().await.unwrap();
+        std::fs::remove_file(db).unwrap();
+    }
 }
 
 #[tokio::test]
@@ -1851,6 +1925,9 @@ async fn completed_model_step_retains_its_quote_across_tool_continuation() {
 #[tokio::test]
 async fn response_ready_settles_mixed_unavailable_calls_without_inventing_actions() {
     let mut c = parallel_config();
+    c.context.max_input_tokens = 8192;
+    c.providers[0].capabilities.max_input_tokens = 8192;
+    c.limits.max_tool_preview_bytes = 64 * 1024;
     c.tools.push(alternate_binding());
     c.initial_tools.push(alternate_binding().id);
     let (s, path, turn) = setup(c).await;
@@ -1889,6 +1966,11 @@ async fn response_ready_settles_mixed_unavailable_calls_without_inventing_action
     let step = tool_step(&s).await;
     let records = s.handle().tool_records(step).await.unwrap();
     assert_eq!(records.invocations.len(), 2);
+    assert_eq!(
+        records.invocations[0].result_limit_bytes,
+        records.invocations[1].result_limit_bytes
+    );
+    assert!(records.invocations[0].result_limit_bytes < 8192);
     assert!(matches!(
         records.invocations[0].preparation,
         ToolPreparation::Ready(_)
@@ -2129,7 +2211,11 @@ async fn missing_frozen_tool_blocks_provider_but_invalid_arguments_can_continue(
 
 #[tokio::test]
 async fn unknown_survives_passive_reopen_and_late_evidence_does_not_rewrite_result() {
-    let (s, path, turn) = setup(config()).await;
+    let mut cfg = config();
+    cfg.context.max_input_tokens = 8192;
+    cfg.providers[0].capabilities.max_input_tokens = 8192;
+    cfg.limits.max_tool_preview_bytes = 64 * 1024;
+    let (s, path, turn) = setup(cfg).await;
     let m = model();
     let t = Arc::new(Tool::new(unknown()));
     assert_eq!(
@@ -2141,6 +2227,7 @@ async fn unknown_survives_passive_reopen_and_late_evidence_does_not_rewrite_resu
     );
     let step = tool_step(&s).await;
     let before = s.handle().tool_records(step).await.unwrap();
+    assert!((256..8192).contains(&before.invocations[0].result_limit_bytes));
     s.close().await.unwrap();
     let reconciles = t.reconciles.load(Ordering::SeqCst);
     let s = Session::open(&path).await.unwrap();
@@ -2167,14 +2254,28 @@ async fn unknown_survives_passive_reopen_and_late_evidence_does_not_rewrite_resu
         DriveExit::Settled(_)
     ));
     let settled = s.handle().tool_records(step).await.unwrap();
-    *t.recovery.lock().unwrap() = success();
+    let mut oversized = success();
+    if let ToolAttemptState::Settled { result, .. } = &mut oversized {
+        result.value = json!("\0".repeat(5000));
+    }
+    *t.recovery.lock().unwrap() = oversized;
     s.handle().reconcile_tools(step, tools(&t)).await.unwrap();
     let late = s.handle().tool_records(step).await.unwrap();
     assert_eq!(late.turn, settled.turn);
     assert_eq!(late.invocations, settled.invocations);
     assert!(matches!(
-        late.attempts[0].state,
-        ToolAttemptState::Settled { .. }
+        &late.attempts[0].state,
+        ToolAttemptState::Settled {
+            result: ToolResult {
+                capture: OutputCapture::Incomplete {
+                    reason: OutputLoss::BackendCapacity,
+                    ..
+                },
+                ..
+            },
+            effect: EffectSummary::NoMutation,
+            ..
+        }
     ));
     assert_eq!(t.executes.load(Ordering::SeqCst), 1);
     s.close().await.unwrap();
@@ -2229,8 +2330,8 @@ async fn active_tool_snapshot_and_watch_share_exact_commit_coverage() {
 #[tokio::test]
 async fn actual_batch_closure_refuses_before_any_tool_attempt() {
     let mut c = parallel_config();
-    c.context.max_input_tokens = 2000;
-    c.providers[0].capabilities.max_input_tokens = 2000;
+    c.context.max_input_tokens = 950;
+    c.providers[0].capabilities.max_input_tokens = 950;
     let (s, _path, turn) = setup(c).await;
     let m = Arc::new(Model {
         starts: AtomicUsize::new(0),
@@ -2245,6 +2346,7 @@ async fn actual_batch_closure_refuses_before_any_tool_attempt() {
             .unwrap(),
         DriveExit::Parked(ParkReason::Capacity)
     ));
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
     assert_eq!(t.executes.load(Ordering::SeqCst), 0);
     let entries = s
         .handle()

@@ -101,7 +101,10 @@ history, at least one frozen allowed next-step ProviderBinding can hold the acti
 input + complete current exchange. If even the minimum exchange cannot fit, do not start
 the effects; settle/park with bounded truthful not-started/context-capacity results.
 Complete tool output may spill to BlobStore; only the reserved preview enters model
-context. A TurnSettings change to a smaller binding is rejected if the required current
+context. Freeze each logical invocation's effective serialized-result allowance with
+batch admission and apply it to execution, staged evidence and model projection after
+reopen; a retention ceiling is not a mandatory per-call context allocation. A
+TurnSettings change to a smaller binding is rejected if the required current
 continuation cannot fit it.
 
 A complete result is durably staged as

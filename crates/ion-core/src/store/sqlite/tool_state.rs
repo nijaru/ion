@@ -21,7 +21,7 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
     if bytes < 0 || bytes as u64 > crate::tool_boundary::MAX_TOOL_BATCH_BYTES as u64 {
         return Err(StoreError::Limit("tool batch evidence capacity".into()));
     }
-    let mut stmt = connection.prepare("SELECT id, assistant_entry, source_index, origin_provider_call_id, binding_id, prepared_action, approval, exchange_state FROM tool_invocations WHERE step_id=?1 ORDER BY source_index LIMIT 129")?;
+    let mut stmt = connection.prepare("SELECT id, assistant_entry, source_index, origin_provider_call_id, binding_id, prepared_action, result_limit_bytes, approval, exchange_state FROM tool_invocations WHERE step_id=?1 ORDER BY source_index LIMIT 129")?;
     let rows = stmt.query_map([step.get()], |r| {
         Ok((
             r.get::<_, i64>(0)?,
@@ -30,8 +30,9 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
             r.get::<_, Option<String>>(3)?,
             r.get::<_, String>(4)?,
             r.get::<_, String>(5)?,
-            r.get::<_, String>(6)?,
+            r.get::<_, u32>(6)?,
             r.get::<_, String>(7)?,
+            r.get::<_, String>(8)?,
         ))
     })?;
     let mut invocations = Vec::new();
@@ -44,6 +45,7 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
             origin_provider_call_id,
             binding,
             prepared,
+            result_limit_bytes,
             approval,
             exchange,
         ) = row?;
@@ -58,6 +60,7 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
             origin_provider_call_id,
             binding: ToolBindingId::new(binding).map_err(|e| invalid(&e.to_string()))?,
             preparation: json_from(&prepared)?,
+            result_limit_bytes,
             approval: json_from(&approval)?,
             exchange: json_from(&exchange)?,
         };
@@ -99,8 +102,22 @@ pub(super) fn records(connection: &Connection, step: StepId) -> Result<ToolRecor
     if bytes > crate::tool_boundary::MAX_TOOL_BATCH_BYTES {
         return Err(StoreError::Limit("tool batch evidence capacity".into()));
     }
+    let turn = load_turn(connection, load_step(connection, step)?.turn)?;
+    let frozen_ceiling = turn
+        .environment
+        .limits
+        .max_tool_preview_bytes
+        .min((crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2) as u32);
+    if invocations
+        .iter()
+        .any(|call| call.result_limit_bytes == 0 || call.result_limit_bytes > frozen_ceiling)
+    {
+        return Err(StoreError::Corrupt(
+            "tool result cap outside frozen ceiling".into(),
+        ));
+    }
     Ok(ToolRecords {
-        turn: load_turn(connection, load_step(connection, step)?.turn)?,
+        turn,
         invocations,
         attempts,
     })
@@ -167,16 +184,6 @@ pub(super) fn mutate(
             if total > turn.environment.limits.max_tool_invocations {
                 return Err(StoreError::Limit("tool invocation limit".into()));
             }
-            // Every admitted call must remain closable even if cancellation
-            // wins before execution, or the backend outcome remains unknown.
-            for reason in [
-                UNKNOWN_RESULT,
-                CANCELLED_RESULT,
-                UNAVAILABLE_RESULT,
-                INVALID_ARGUMENTS_RESULT,
-            ] {
-                validate_result(&error_result(reason), &turn)?;
-            }
             let entry_id = seq.next()?;
             let mut content = Vec::new();
             let mut invocations = Vec::new();
@@ -235,6 +242,7 @@ pub(super) fn mutate(
                             origin_provider_call_id: Some(call.id.clone()),
                             binding: binding.id.clone(),
                             preparation,
+                            result_limit_bytes: 0, // assigned atomically with batch admission
                             approval: ApprovalState::NotRequired,
                             exchange,
                         });
@@ -242,7 +250,6 @@ pub(super) fn mutate(
                     _ => return Err(invalid("unexpected provider tool result")),
                 }
             }
-            reserve_storage(&invocations, turn.environment.limits.max_tool_preview_bytes)?;
             let entry = Entry {
                 id: entry_id,
                 conversation: turn.conversation,
@@ -253,55 +260,72 @@ pub(super) fn mutate(
                     provider_replay: response.message.provider_replay.clone(),
                 }],
             };
-            // Actual complete batch, including every result envelope and the full
-            // per-call reserved preview. No older-history compaction in this baseline.
+            // Reserve the largest truthful synthetic result and the bounded
+            // backend-capacity fallback for every call. The serialized result is
+            // embedded unchanged in each request envelope; its remaining bytes
+            // can be shared equally across this batch without guessing a token
+            // count or committing to a 64 KiB hypothetical preview per call.
+            let minimum = [
+                error_result(UNKNOWN_RESULT),
+                error_result(CANCELLED_RESULT),
+                error_result(UNAVAILABLE_RESULT),
+                error_result(INVALID_ARGUMENTS_RESULT),
+                error_result(DENIED_RESULT),
+                error_result(NOT_STARTED_RESULT),
+                crate::tool_exec::output_capacity_result(),
+            ]
+            .into_iter()
+            .max_by_key(|result| json_to(result).expect("fixed result is serializable").len())
+            .expect("nonempty synthetic result set");
+            let minimum_bytes = json_to(&minimum)?.len();
+            let preview = (turn.environment.limits.max_tool_preview_bytes as usize)
+                .min(crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2);
+            if preview < minimum_bytes {
+                return Err(StoreError::Limit("tool batch result minimum".into()));
+            }
             let mut closure = load_turn_entries(&tx, &turn)?;
             closure.push(entry.clone());
-            let preview = usize::try_from(turn.environment.limits.max_tool_preview_bytes)
-                .map_err(|_| invalid("preview cap"))?
-                .min(crate::tool_boundary::MAX_TOOL_RECORD_BYTES);
-            if preview < 256
-                || preview
-                    .checked_mul(invocations.len())
-                    .is_none_or(|n| n > crate::tool_boundary::MAX_TOOL_BATCH_BYTES / 2)
-            {
-                return Err(StoreError::Limit("tool batch preview reserve".into()));
-            }
             for invocation in &invocations {
-                let result = ToolResult {
-                    value: serde_json::Value::String("x".repeat(preview)),
-                    is_error: true,
-                    capture: OutputCapture::CompleteInline,
-                };
                 closure.push(result_entry(
                     seq.next()?,
                     turn.conversation,
                     invocation,
-                    &result,
+                    &minimum,
                     &turn,
                 )?);
             }
-            let fits = turn.environment.providers.iter().any(|provider| {
-                let mut settings = turn.settings.clone();
-                settings.provider = provider.id.clone();
-                assemble(&turn.environment, &settings, &closure, None).is_ok_and(|r| {
-                    r.bytes
-                        <= u64::from(
-                            provider
-                                .capabilities
-                                .max_input_tokens
-                                .min(turn.environment.context.max_input_tokens),
-                        )
+            let available = turn
+                .environment
+                .providers
+                .iter()
+                .filter_map(|provider| {
+                    let mut settings = turn.settings.clone();
+                    settings.provider = provider.id.clone();
+                    let request = assemble(&turn.environment, &settings, &closure, None).ok()?;
+                    let capacity = u64::from(
+                        provider
+                            .capabilities
+                            .max_input_tokens
+                            .min(turn.environment.context.max_input_tokens)
+                            .min(turn.environment.context.max_request_bytes),
+                    );
+                    capacity.checked_sub(request.bytes)
                 })
-            });
-            if !fits {
-                return Err(StoreError::Limit("tool batch continuation capacity".into()));
+                .max()
+                .ok_or_else(|| StoreError::Limit("tool batch continuation capacity".into()))?;
+            let cap =
+                (minimum_bytes as u64 + available / invocations.len() as u64).min(preview as u64);
+            let cap = u32::try_from(cap).map_err(|_| invalid("result cap overflow"))?;
+            for invocation in &mut invocations {
+                invocation.result_limit_bytes = cap;
+                validate_result(&minimum, invocation)?;
             }
+            reserve_storage(&invocations, cap)?;
             let commit = seq.next()?;
             insert_entry(&tx, &entry, commit)?;
             changes.push(SessionChange::Entry(entry));
             for invocation in invocations {
-                tx.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,origin_provider_call_id,binding_id,prepared_action,approval,exchange_state) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)", params![invocation.id.get(),invocation.step.get(),invocation.assistant_entry.get(),invocation.source_index,invocation.origin_provider_call_id,invocation.binding.as_str(),json_to(&invocation.preparation)?,json_to(&invocation.approval)?,json_to(&invocation.exchange)?])?;
+                tx.execute("INSERT INTO tool_invocations (id,step_id,assistant_entry,source_index,origin_provider_call_id,binding_id,prepared_action,result_limit_bytes,approval,exchange_state) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)", params![invocation.id.get(),invocation.step.get(),invocation.assistant_entry.get(),invocation.source_index,invocation.origin_provider_call_id,invocation.binding.as_str(),json_to(&invocation.preparation)?,invocation.result_limit_bytes,json_to(&invocation.approval)?,json_to(&invocation.exchange)?])?;
                 changes.push(SessionChange::ToolInvocation(invocation));
             }
             step.disposition = StepDisposition::Selected(attempt);
@@ -454,7 +478,7 @@ pub(super) fn mutate(
                     call.approval = ApprovalState::Denied { reason };
                     call.exchange = ToolExchangeState::OutcomeReady {
                         source: OutcomeSource::DeniedApproval,
-                        result: error_result("User denied this tool action before execution."),
+                        result: error_result(DENIED_RESULT),
                     };
                 }
             }
@@ -561,8 +585,12 @@ pub(super) fn mutate(
                 return Err(invalid("tool evidence cannot be rewritten"));
             }
             if let ToolAttemptState::Settled { result, .. } = &state {
-                let turn = load_turn(&tx, load_step(&tx, step)?.turn)?;
-                validate_result(result, &turn)?;
+                let call = records
+                    .invocations
+                    .iter()
+                    .find(|c| c.id == prior.invocation)
+                    .ok_or_else(|| invalid("missing tool invocation"))?;
+                validate_result(result, call)?;
                 if let OutputCapture::CompleteArtifact { full_output } = &result.capture {
                     if !publication
                         .is_some_and(|proof| proof.matches(artifacts, attempt, full_output))
@@ -627,7 +655,14 @@ pub(super) fn mutate(
                     }
                     match &attempt.state {
                         ToolAttemptState::Settled { result, .. } => result.clone(),
-                        ToolAttemptState::NotStarted { reason } => error_result(reason),
+                        ToolAttemptState::NotStarted { reason } => {
+                            let result = error_result(reason);
+                            if validate_result(&result, &call).is_ok() {
+                                result
+                            } else {
+                                error_result(NOT_STARTED_RESULT)
+                            }
+                        }
                         _ => return Err(invalid("attempt has no known result")),
                     }
                 }
@@ -661,7 +696,7 @@ pub(super) fn mutate(
                     error_result(CANCELLED_RESULT)
                 }
             };
-            validate_result(&result, &turn)?;
+            validate_result(&result, &call)?;
             call.exchange = ToolExchangeState::OutcomeReady { source, result };
             update_call(&tx, &call)?;
             self::records(&tx, step)?;
@@ -811,9 +846,11 @@ fn result_entry(
         }],
     })
 }
-fn validate_result(result: &ToolResult, turn: &Turn) -> Result<(), StoreError> {
-    let limit = (turn.environment.limits.max_tool_preview_bytes as usize)
-        .min(crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2);
+fn validate_result(result: &ToolResult, call: &ToolInvocation) -> Result<(), StoreError> {
+    let limit = call.result_limit_bytes as usize;
+    if limit == 0 || limit > crate::tool_boundary::MAX_TOOL_RECORD_BYTES / 2 {
+        return Err(invalid("invalid tool result cap"));
+    }
     if let OutputCapture::Incomplete {
         retained_bytes,
         observed_bytes,
@@ -829,6 +866,8 @@ fn validate_result(result: &ToolResult, turn: &Turn) -> Result<(), StoreError> {
     crate::tool_boundary::bounded_to(result, limit)
         .map_err(|_| StoreError::Limit("tool result preview capacity".into()))
 }
+const DENIED_RESULT: &str = "User denied this tool action before execution.";
+const NOT_STARTED_RESULT: &str = "Tool did not start; see immutable attempt evidence.";
 const UNKNOWN_RESULT: &str =
     "Execution outcome unknown; effects may have occurred and may still be live.";
 const CANCELLED_RESULT: &str = "Cancelled before execution started.";

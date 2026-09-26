@@ -8,7 +8,7 @@ use rusqlite::Connection;
 use super::super::StoreError;
 use crate::SessionId;
 
-pub(crate) const SCHEMA_VERSION: i64 = 10;
+pub(crate) const SCHEMA_VERSION: i64 = 11;
 
 const DDL: &str = r#"
 CREATE TABLE session_meta (
@@ -118,6 +118,7 @@ CREATE TABLE tool_invocations (
     origin_provider_call_id TEXT,
     binding_id              TEXT    NOT NULL,
     prepared_action         TEXT    NOT NULL,
+    result_limit_bytes      INTEGER NOT NULL CHECK (result_limit_bytes > 0),
     approval                TEXT    NOT NULL,
     exchange_state          TEXT    NOT NULL,
     UNIQUE (assistant_entry, source_index)
@@ -194,6 +195,7 @@ pub(super) fn verify(connection: &Connection) -> Result<(), StoreError> {
             "projection",
         ],
     )?;
+    verify_columns(connection, "tool_invocations", &["result_limit_bytes"])?;
     verify_columns(
         connection,
         "tool_artifacts",
@@ -266,7 +268,7 @@ mod tests {
 
     #[test]
     fn old_schema_version_is_refused_not_migrated() {
-        for version in [1, 2] {
+        for version in [1, 2, 10] {
             let connection = Connection::open_in_memory().expect("sqlite");
             connection
                 .pragma_update(None, "user_version", version)
