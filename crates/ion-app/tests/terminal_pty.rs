@@ -205,6 +205,7 @@ fn inline_chat_keeps_paste_as_a_draft_and_restores_terminal() {
         .set_nonblocking(true)
         .expect("nonblocking listener");
     let (request_sender, request_receiver) = mpsc::channel();
+    let (finish_sender, finish_receiver) = mpsc::channel();
     let server = thread::spawn(move || {
         let deadline = Instant::now() + Duration::from_secs(10);
         let mut connection = loop {
@@ -245,8 +246,16 @@ fn inline_chat_keeps_paste_as_a_draft_and_restores_terminal() {
             assert!(request.len() < 1024 * 1024, "bounded request");
         }
         request_sender.send(request).expect("request channel");
-        let body = "data: {\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"test answer\"},\"finish_reason\":\"stop\"}]}\n\ndata: {\"model\":\"synthetic\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
-        write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).expect("provider response");
+        let first = "data: {\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"test answer\"},\"finish_reason\":null}]}\n\n";
+        let last = "data: {\"model\":\"synthetic\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\ndata: {\"model\":\"synthetic\",\"choices\":[],\"usage\":{\"prompt_tokens\":5,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n";
+        write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{first}", first.len() + last.len()).expect("provider first delta");
+        connection.flush().expect("flush first delta");
+        finish_receiver
+            .recv_timeout(Duration::from_secs(5))
+            .expect("terminal displayed provisional text");
+        connection
+            .write_all(last.as_bytes())
+            .expect("provider terminal");
     });
 
     let pty = openpty(
@@ -345,6 +354,13 @@ fn inline_chat_keeps_paste_as_a_draft_and_restores_terminal() {
         b"test answer",
         Duration::from_secs(5),
     );
+    assert!(
+        !output
+            .windows(b"Completed".len())
+            .any(|part| part == b"Completed"),
+        "text must appear before the provider's terminal event"
+    );
+    finish_sender.send(()).expect("finish provider response");
     wait_for(&receiver, &mut output, b"Completed", Duration::from_secs(5));
     writer.write_all(b"\x04").expect("quit");
 

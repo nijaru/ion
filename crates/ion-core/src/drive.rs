@@ -761,6 +761,10 @@ async fn dispatch(
         }
         Err(error) => return DispatchAction::Exit(store_exit(basis.turn.id, error)),
     };
+    let mut progress =
+        inner
+            .progress()
+            .model_attempt(basis.turn.id, created.attempt.id, &prepared.purpose);
 
     let gate = inner.effect_gate(basis.turn.id);
     let Some(permit) = gate.admit() else {
@@ -956,7 +960,8 @@ async fn dispatch(
 
                 match event {
                     ModelStreamEvent::Usage(value) => usage = value,
-                    ModelStreamEvent::TextDelta(_) | ModelStreamEvent::ToolCall(_) => {}
+                    ModelStreamEvent::TextDelta(fragment) => progress.text(&fragment),
+                    ModelStreamEvent::ToolCall(_) => {}
                     ModelStreamEvent::Completed(response) => {
                         // The provider may hand us a large already-materialized response.
                         // Do not create a second unbounded JSON allocation merely to

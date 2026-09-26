@@ -20,6 +20,7 @@ mod native_list;
 mod native_read;
 mod observation;
 pub mod openai_compatible;
+mod progress;
 mod provider;
 mod request;
 mod session;
@@ -73,6 +74,7 @@ pub use observation::{
     MAX_WATCH_BYTES, MAX_WATCH_RECEIPTS, ObservationError, SessionChange, SessionSnapshot,
     SessionUpdate, SessionWatch, SnapshotRequest, SnapshotWatch, WatchQueueLimits, WatchRequest,
 };
+pub use progress::{MAX_MODEL_PROGRESS_BYTES, ModelProgress, ModelProgressUpdate};
 pub use provider::{
     ApiKeySource, ModelBoundaries, ModelBoundary, ModelBoundaryError, ModelBoundaryIdentity,
     ModelStart, ProviderAdmission, ProviderAdmissionError, ProviderCostQuoter, StartReconciliation,

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::FutureExt;
 use thiserror::Error;
-use tokio::sync::watch;
+use tokio::sync::{broadcast, watch};
 use tokio::task::JoinHandle;
 
 use crate::effect_gate::{EffectGate, EffectGates, signal};
@@ -56,6 +56,7 @@ pub(crate) struct SessionInner {
     primary_conversation: ConversationId,
     store: SessionStore,
     observations: ObservationHub,
+    progress: crate::progress::ProgressHub,
     health: AtomicU8,
     effects: EffectGates,
     drives: Mutex<HashMap<TurnId, watch::Receiver<Option<DriveExit>>>>,
@@ -218,6 +219,7 @@ impl Session {
                 primary_conversation: metadata.primary_conversation,
                 store,
                 observations,
+                progress: crate::progress::ProgressHub::new(),
                 health: AtomicU8::new(HEALTH_OPEN),
                 effects: EffectGates::default(),
                 drives: Mutex::new(HashMap::new()),
@@ -248,6 +250,7 @@ impl Session {
                 primary_conversation: metadata.primary_conversation,
                 store,
                 observations,
+                progress: crate::progress::ProgressHub::new(),
                 health: AtomicU8::new(HEALTH_OPEN),
                 effects: EffectGates::default(),
                 drives: Mutex::new(HashMap::new()),
@@ -650,6 +653,13 @@ impl SessionHandle {
         self.observe(self.inner.store.snapshot(request).await)
     }
 
+    /// Subscribe to bounded, provisional model text for this process attachment.
+    /// Progress is not durable evidence and may be dropped under backpressure.
+    #[must_use]
+    pub fn subscribe_model_progress(&self) -> broadcast::Receiver<crate::ModelProgress> {
+        self.inner.progress.subscribe()
+    }
+
     pub async fn snapshot_and_watch(
         &self,
         request: WatchRequest,
@@ -710,6 +720,10 @@ impl SessionInner {
 
     pub(crate) fn store(&self) -> &SessionStore {
         &self.store
+    }
+
+    pub(crate) fn progress(&self) -> &crate::progress::ProgressHub {
+        &self.progress
     }
 
     pub(crate) fn effect_gate(&self, turn: TurnId) -> Arc<EffectGate> {

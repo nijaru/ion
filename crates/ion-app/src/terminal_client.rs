@@ -9,8 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_core::{
-    DriveExit, DrivePolicy, Entry, EntryData, InputSender, SessionSnapshot, SnapshotRequest,
-    SubmitTurnRequest, SubmittedTurn, TranscriptContent, TurnId, TurnPhase,
+    AttemptId, DriveExit, DrivePolicy, Entry, EntryData, InputSender, ModelProgress,
+    ModelProgressUpdate, SessionSnapshot, SnapshotRequest, SubmitTurnRequest, SubmittedTurn,
+    TranscriptContent, TurnId, TurnPhase,
 };
 use ion_terminal::{
     Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession,
@@ -38,6 +39,13 @@ struct Frontend {
     /// A drive exit carries information that a structural snapshot cannot recover.
     exit_status: Option<(TurnId, String)>,
     unfinished: Option<TurnId>,
+    progress: Option<ProgressPreview>,
+}
+
+struct ProgressPreview {
+    attempt: AttemptId,
+    text: String,
+    omitted_prefix: bool,
 }
 
 enum Action {
@@ -201,6 +209,33 @@ impl Frontend {
         };
     }
 
+    fn observe_progress(&mut self, turn: TurnId, event: ModelProgress) {
+        if event.turn != turn {
+            return;
+        }
+        match event.update {
+            ModelProgressUpdate::Preview {
+                text,
+                omitted_prefix,
+            } => {
+                self.progress = Some(ProgressPreview {
+                    attempt: event.attempt,
+                    text,
+                    omitted_prefix,
+                });
+            }
+            ModelProgressUpdate::End => {
+                if self
+                    .progress
+                    .as_ref()
+                    .is_some_and(|preview| preview.attempt == event.attempt)
+                {
+                    self.progress = None;
+                }
+            }
+        }
+    }
+
     fn render(
         &self,
         terminal: &mut TerminalSession,
@@ -223,15 +258,28 @@ impl Frontend {
             Line::from(truncate_cells(&self.status, width)),
             Line::from(truncate_cells(hint, width)),
         ];
+        if driving && let Some(progress) = &self.progress {
+            let mut preview = clean_display(&progress.text, MAX_ENTRY_CHARS);
+            if progress.omitted_prefix {
+                preview.insert(0, '…');
+            }
+            let (rows, _) = wrap(&preview, width, None);
+            let mut visible: Vec<_> = rows.into_iter().rev().take(3).collect();
+            visible.reverse();
+            for row in visible {
+                live.push(Line::from(row));
+            }
+        }
+        let progress_rows = live.len() - 2;
         let display = format!("› {}", self.draft);
         let (wrapped, cursor) = wrap(&display, width, Some(self.cursor + "› ".len()));
-        let shown = wrapped.len().min(6);
+        let shown = wrapped.len().min(if driving { 3 } else { 6 });
         let skip = wrapped.len() - shown;
         for row in wrapped.into_iter().skip(skip) {
             live.push(Line::from(row));
         }
         let cursor = cursor.and_then(|(row, column)| {
-            (row >= skip).then_some((committed.len() + 2 + row - skip, column))
+            (row >= skip).then_some((committed.len() + 2 + progress_rows + row - skip, column))
         });
         terminal.render(
             screen,
@@ -413,9 +461,12 @@ async fn run_turn(
 ) -> Result<Option<Host>> {
     ui.exit_status = None;
     ui.unfinished = Some(turn);
+    ui.progress = None;
     ui.status = format!("Turn {}: running", turn.get());
     ui.render(terminal, screen, true)?;
     let handle = current.session.handle();
+    let mut progress = handle.subscribe_model_progress();
+    let mut progress_open = true;
     enum Wait {
         Exit(Result<DriveExit, ion_core::SessionError>),
         InputClosed,
@@ -438,6 +489,16 @@ async fn run_turn(
                     }
                     ui.render(terminal, screen, true)?;
                 },
+                event = progress.recv(), if progress_open => match event {
+                    Ok(event) => ui.observe_progress(turn, event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        ui.progress = None;
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        progress_open = false;
+                        ui.progress = None;
+                    }
+                },
                 _ = tick.tick() => {
                     let view = snapshot(&current.session).await?;
                     ui.observe(&view, usize::from(screen.size().0));
@@ -455,6 +516,7 @@ async fn run_turn(
     };
     let view = snapshot(&current.session).await?;
     ui.observe(&view, usize::from(screen.size().0));
+    ui.progress = None;
     ui.status = match exit {
         Ok(DriveExit::Settled(outcome)) => format!("Turn {}: {outcome:?}", turn.get()),
         Ok(other) => format!(
@@ -729,6 +791,47 @@ mod tests {
     fn control_sequences_cannot_enter_terminal_output() {
         let cleaned = clean_display("hi\u{1b}[31m\u{7}ok", 100);
         assert_eq!(cleaned, "hi�[31m�ok");
+    }
+
+    #[test]
+    fn provisional_progress_is_attempt_scoped_and_clears() {
+        let turn = TurnId::new(1).unwrap();
+        let attempt = AttemptId::new(2).unwrap();
+        let epoch = ion_core::SessionId::new().as_uuid();
+        let mut ui = Frontend::default();
+        ui.observe_progress(
+            turn,
+            ModelProgress {
+                attachment_epoch: epoch,
+                turn,
+                attempt,
+                update: ModelProgressUpdate::Preview {
+                    text: "live answer".into(),
+                    omitted_prefix: false,
+                },
+            },
+        );
+        assert_eq!(ui.progress.as_ref().unwrap().text, "live answer");
+        ui.observe_progress(
+            turn,
+            ModelProgress {
+                attachment_epoch: epoch,
+                turn,
+                attempt: AttemptId::new(3).unwrap(),
+                update: ModelProgressUpdate::End,
+            },
+        );
+        assert!(ui.progress.is_some());
+        ui.observe_progress(
+            turn,
+            ModelProgress {
+                attachment_epoch: epoch,
+                turn,
+                attempt,
+                update: ModelProgressUpdate::End,
+            },
+        );
+        assert!(ui.progress.is_none());
     }
 
     #[test]

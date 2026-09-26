@@ -10,9 +10,9 @@ use ion_ai::{
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
     ConversationConfig, CostQuote, DriveExit, EgressRealm, InputBody, InputMode, InputSender,
-    ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelStart,
-    ObservationError, ParkReason, ProviderAdmissionError, ProviderBinding, ProviderBindingId,
-    ProviderCapabilities, ProviderStartReceipt, RequestKey, ReturnedModelPolicy,
+    ModelAttemptState, ModelBoundaries, ModelBoundary, ModelBoundaryIdentity, ModelProgressUpdate,
+    ModelStart, ObservationError, ParkReason, ProviderAdmissionError, ProviderBinding,
+    ProviderBindingId, ProviderCapabilities, ProviderStartReceipt, RequestKey, ReturnedModelPolicy,
     SemanticCompatibilityId, Session, SessionChange, SessionId, SnapshotRequest,
     StartReceiptCapability, StartReconciliation, StartTurnRequest, StepDisposition, StepPurpose,
     TurnLimits, TurnOutcome, WatchQueueLimits, WatchRequest, WorkspaceBinding,
@@ -172,6 +172,7 @@ fn fingerprint(
 struct CompleteBoundary {
     egress: EgressRealm,
     response_text: String,
+    delta: Option<String>,
     returned_model: Option<String>,
     starts: AtomicUsize,
     stream_dropped: CancellationToken,
@@ -256,6 +257,7 @@ impl CompleteBoundary {
         Arc::new(Self {
             egress,
             response_text: "done".into(),
+            delta: None,
             returned_model: Some("test".into()),
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
@@ -266,6 +268,7 @@ impl CompleteBoundary {
         Arc::new(Self {
             egress: EgressRealm::Local,
             response_text: "done".into(),
+            delta: None,
             returned_model: actual.map(str::to_owned),
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
@@ -276,6 +279,18 @@ impl CompleteBoundary {
         Arc::new(Self {
             egress: EgressRealm::Local,
             response_text: text,
+            delta: None,
+            returned_model: Some("test".into()),
+            starts: AtomicUsize::new(0),
+            stream_dropped: CancellationToken::new(),
+        })
+    }
+
+    fn with_delta(delta: &str) -> Arc<Self> {
+        Arc::new(Self {
+            egress: EgressRealm::Local,
+            response_text: delta.into(),
+            delta: Some(delta.into()),
             returned_model: Some("test".into()),
             starts: AtomicUsize::new(0),
             stream_dropped: CancellationToken::new(),
@@ -346,10 +361,17 @@ impl ModelBoundary for CompleteBoundary {
                 termination: ResponseTermination::Completed,
                 returned_model: self.returned_model.clone(),
             };
-            let stream: ion_ai::ModelStream = Box::pin(TerminalWithoutEof {
-                response: Some(response),
-                dropped: self.stream_dropped.clone(),
-            });
+            let stream: ion_ai::ModelStream = if let Some(delta) = &self.delta {
+                Box::pin(futures_util::stream::iter([
+                    Ok(ModelStreamEvent::TextDelta(delta.clone())),
+                    Ok(ModelStreamEvent::Completed(response)),
+                ]))
+            } else {
+                Box::pin(TerminalWithoutEof {
+                    response: Some(response),
+                    dropped: self.stream_dropped.clone(),
+                })
+            };
             ModelStart::Started {
                 stream,
                 start_receipt: None,
@@ -487,6 +509,31 @@ fn compaction_config() -> ConversationConfig {
     configured.context.max_request_bytes = 8000;
     configured.compaction_route = vec![configured.default_provider.clone()];
     configured
+}
+
+#[tokio::test]
+async fn model_text_progress_is_provisional_and_attempt_scoped() {
+    let (dir, path) = database("model-progress");
+    let session = Session::create(&path, config()).await.unwrap().session;
+    let (handle, turn) = started_turn(&session, "progress", "answer").await;
+    let mut progress = handle.subscribe_model_progress();
+    let boundary = CompleteBoundary::with_delta("live text");
+    let boundaries = allowed_boundaries([boundary as Arc<dyn ModelBoundary>]);
+    assert!(matches!(
+        handle.resume(turn, boundaries).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let preview = progress.try_recv().unwrap();
+    assert_eq!(preview.turn, turn);
+    assert!(matches!(
+        preview.update,
+        ModelProgressUpdate::Preview { text, omitted_prefix: false } if text == "live text"
+    ));
+    let end = progress.try_recv().unwrap();
+    assert_eq!(end.attempt, preview.attempt);
+    assert!(matches!(end.update, ModelProgressUpdate::End));
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]

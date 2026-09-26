@@ -2,7 +2,7 @@
 //!
 //! Durable updates are structural batches emitted only after their semantic
 //! transaction commits. Provisional provider/tool progress belongs on a
-//! separate future channel.
+//! separate bounded process-local channel.
 
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, Weak};

@@ -86,8 +86,8 @@ There is no compatibility bridge or hybrid old/new runtime. Earlier unreleased s
 scenarios are being restored against the replacement owners.
 
 The CLI now exposes bounded `list`, `read`, `create`, and exact-base `edit` tools,
-an opt-in Linux `exec` tool, and an inline terminal client with transcript display
-and Ctrl-C cancellation.
+an opt-in Linux `exec` tool, and an inline terminal client with transcript display,
+bounded live model-text preview and Ctrl-C cancellation.
 Two synthetic workspace tasks completed against a local Qwen model through the
 OpenAI-compatible loopback endpoint: read/edit/re-read and list/read/create/re-read.
 A terminal session also completed a live model exchange and restored the terminal.
@@ -194,7 +194,9 @@ provider API has been qualified live.
 `cargo run --locked -p ion -- --help` exposes interactive `chat`, headless `run`,
 `resume`, and passive `inspect`. `chat` uses the same durable Session and accepts
 multiline paste; Enter submits, Shift-Enter inserts a newline, Ctrl-C requests
-cancellation, and `/resume` retries an unfinished Turn. It requires a terminal.
+cancellation, and `/resume` retries an unfinished Turn. Model text appears as a
+bounded provisional preview while a response streams; completed content comes
+from the durable transcript. It requires a terminal.
 Create a host-state directory outside the writable workspace, then supply an exact
 HTTPS Chat Completions endpoint or literal loopback HTTP endpoint and a model ID.
 The host must assert the model's
