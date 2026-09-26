@@ -1,6 +1,9 @@
 //! Bounded, process-local model and tool progress. This never enters durable history.
 
-use std::sync::{Arc, Mutex};
+use std::{
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use tokio::sync::broadcast;
 use uuid::Uuid;
 
@@ -8,6 +11,7 @@ use crate::{AttemptId, StepPurpose, TurnId};
 
 pub const MAX_PROGRESS_PREVIEW_BYTES: usize = 4096;
 const PROGRESS_EVENTS: usize = 64;
+const TOOL_PREVIEW_INTERVAL: Duration = Duration::from_millis(50);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionProgress {
@@ -192,6 +196,9 @@ impl ToolProgressPublisher {
             ToolOutputStream::Stderr => &mut inner.stderr,
         };
         preview.append(chunk);
+        if !preview.should_publish() {
+            return;
+        }
         let (text, omitted_prefix) = preview.render();
         let _ = state.sender.send(SessionProgress {
             attachment_epoch: state.epoch,
@@ -226,6 +233,7 @@ struct ToolProgressInner {
 struct BytePreview {
     bytes: Vec<u8>,
     omitted_prefix: bool,
+    last_sent: Option<Instant>,
 }
 
 impl BytePreview {
@@ -255,6 +263,18 @@ impl BytePreview {
             start += 1;
         }
         (text[start..].to_owned(), true)
+    }
+
+    fn should_publish(&mut self) -> bool {
+        let now = Instant::now();
+        if self
+            .last_sent
+            .is_some_and(|previous| now.duration_since(previous) < TOOL_PREVIEW_INTERVAL)
+        {
+            return false;
+        }
+        self.last_sent = Some(now);
+        true
     }
 }
 
@@ -357,5 +377,28 @@ mod tests {
             receiver.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[test]
+    fn output_flood_does_not_overflow_the_progress_queue() {
+        let hub = ProgressHub::new();
+        let mut receiver = hub.subscribe();
+        let (publisher, guard) =
+            hub.tool_attempt(TurnId::new(1).unwrap(), AttemptId::new(1).unwrap());
+        for _ in 0..1000 {
+            publisher.output(ToolOutputStream::Stdout, b"many output chunks");
+        }
+        drop(guard);
+        let mut previews = 0;
+        let mut ended = false;
+        while let Ok(event) = receiver.try_recv() {
+            match event.update {
+                ProgressUpdate::ToolOutput { .. } => previews += 1,
+                ProgressUpdate::End => ended = true,
+                ProgressUpdate::ModelText { .. } => panic!("tool publisher sent model text"),
+            }
+        }
+        assert!(previews > 0 && previews < PROGRESS_EVENTS);
+        assert!(ended, "the end event must survive output flood");
     }
 }
