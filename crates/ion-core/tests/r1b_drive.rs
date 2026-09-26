@@ -387,6 +387,29 @@ async fn resume_selects_terminal_response_without_waiting_for_transport_eof() {
 }
 
 #[tokio::test]
+async fn oversized_input_parks_before_provider_start() {
+    let (dir, path) = database("input-capacity");
+    let mut configured = config();
+    configured.providers[0].capabilities.max_input_tokens = 512;
+    let session = Session::create(&path, configured)
+        .await
+        .expect("create")
+        .session;
+    let (handle, turn) = started_turn(&session, "one", &"x".repeat(2048)).await;
+    let boundary = CompleteBoundary::new();
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
+
+    assert_eq!(
+        handle.resume(turn, boundaries).await.expect("resume"),
+        DriveExit::Parked(ParkReason::ContextCapacity)
+    );
+    assert_eq!(boundary.starts.load(Ordering::SeqCst), 0);
+
+    session.close().await.expect("close");
+    std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+#[tokio::test]
 async fn cancelled_before_resume_never_calls_provider() {
     let (dir, path) = database("cancel-before");
     let created = Session::create(&path, config()).await.expect("create");

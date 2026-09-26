@@ -2358,6 +2358,34 @@ async fn actual_batch_closure_refuses_before_any_tool_attempt() {
 }
 
 #[tokio::test]
+async fn unrelated_allowed_provider_cannot_reserve_the_tool_continuation() {
+    let mut c = parallel_config();
+    c.providers[0].capabilities.max_input_tokens = 950;
+    let mut unrelated = c.providers[0].clone();
+    unrelated.id = ProviderBindingId::new("unselected").unwrap();
+    unrelated.capabilities.max_input_tokens = 100_000;
+    c.providers.push(unrelated);
+
+    let (s, _path, turn) = setup(c).await;
+    let m = Arc::new(Model {
+        starts: AtomicUsize::new(0),
+        arguments: json!({"path":"x"}),
+        calls: 3,
+    });
+    let t = Arc::new(Tool::new(success()));
+    assert!(matches!(
+        s.handle()
+            .resume_with_tools(turn, models(&m), tools(&t), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::Capacity)
+    ));
+    assert_eq!(m.starts.load(Ordering::SeqCst), 1);
+    assert_eq!(t.executes.load(Ordering::SeqCst), 0);
+    s.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn batch_reserves_durable_attempt_and_staging_capacity_before_effects() {
     let mut cfg = parallel_config();
     cfg.context.max_request_bytes = 32 * 1024 * 1024;

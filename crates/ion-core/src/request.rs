@@ -158,7 +158,14 @@ pub fn assemble(
         tools,
         controls: settings.controls.clone(),
     };
-    let limit = environment.context.max_request_bytes;
+    // Without a qualified provider tokenizer, serialized bytes are the
+    // conservative admission proxy for the selected model's input limit.
+    // The same bound is used when reserving a tool batch's continuation.
+    let limit = environment
+        .context
+        .max_request_bytes
+        .min(environment.context.max_input_tokens)
+        .min(provider.capabilities.max_input_tokens);
     let mut encoded = BoundedRequest::new(limit);
     let result = serde_json::to_writer(&mut encoded, &request);
     if let Some(lower_bound) = encoded.exceeded_at {
@@ -391,6 +398,28 @@ mod tests {
             encoded.semantic_digest
         );
         environment.context.max_request_bytes = exact - 1;
+        assert!(matches!(assemble(&environment, &settings, &[], None),
+            Err(RequestError::TooLarge { limit, .. }) if limit == exact - 1));
+    }
+
+    #[test]
+    fn selected_model_input_limit_is_enforced_before_dispatch() {
+        let (mut environment, settings) = environment();
+        let exact = assemble(&environment, &settings, &[], None)
+            .expect("request")
+            .bytes as u32;
+
+        environment.providers[0].capabilities.max_input_tokens = exact - 1;
+        assert!(matches!(assemble(&environment, &settings, &[], None),
+            Err(RequestError::TooLarge { limit, .. }) if limit == exact - 1));
+
+        environment.providers[0].capabilities.max_input_tokens = exact;
+        assert_eq!(
+            assemble(&environment, &settings, &[], None).unwrap().bytes,
+            u64::from(exact)
+        );
+
+        environment.context.max_input_tokens = exact - 1;
         assert!(matches!(assemble(&environment, &settings, &[], None),
             Err(RequestError::TooLarge { limit, .. }) if limit == exact - 1));
     }

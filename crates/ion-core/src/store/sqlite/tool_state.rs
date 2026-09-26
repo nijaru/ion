@@ -294,24 +294,21 @@ pub(super) fn mutate(
                     &turn,
                 )?);
             }
-            let available = turn
+            let request = assemble(&turn.environment, &turn.settings, &closure, None)
+                .map_err(|_| StoreError::Limit("tool batch continuation capacity".into()))?;
+            let provider = turn
                 .environment
-                .providers
-                .iter()
-                .filter_map(|provider| {
-                    let mut settings = turn.settings.clone();
-                    settings.provider = provider.id.clone();
-                    let request = assemble(&turn.environment, &settings, &closure, None).ok()?;
-                    let capacity = u64::from(
-                        provider
-                            .capabilities
-                            .max_input_tokens
-                            .min(turn.environment.context.max_input_tokens)
-                            .min(turn.environment.context.max_request_bytes),
-                    );
-                    capacity.checked_sub(request.bytes)
-                })
-                .max()
+                .provider(&turn.settings.provider)
+                .ok_or_else(|| StoreError::Corrupt("selected provider binding missing".into()))?;
+            let capacity = u64::from(
+                provider
+                    .capabilities
+                    .max_input_tokens
+                    .min(turn.environment.context.max_input_tokens)
+                    .min(turn.environment.context.max_request_bytes),
+            );
+            let available = capacity
+                .checked_sub(request.bytes)
                 .ok_or_else(|| StoreError::Limit("tool batch continuation capacity".into()))?;
             let cap =
                 (minimum_bytes as u64 + available / invocations.len() as u64).min(preview as u64);

@@ -104,7 +104,7 @@ batch resource scheduler. Before any tool in an admitted assistant batch crosses
 effect boundary, the batch
 must be **continuation-representable**. Reserve/model-bound one minimal truthful result
 envelope plus bounded preview per call and verify that, after legal compaction of older
-history, at least one frozen allowed next-step ProviderBinding can hold the active exact
+history, the selected next-step ProviderBinding can hold the active exact
 input + complete current exchange. If even the minimum exchange cannot fit, do not start
 the effects; settle/park with bounded truthful not-started/context-capacity results.
 Complete tool output may spill to BlobStore; only the reserved preview enters model
@@ -346,6 +346,10 @@ assembled request**, including newly placed input, tool results, exact active-tu
 retained input and tail, rather than stale last-provider usage. Never evict retained
 current-turn input merely to fit: compact/trim older history/tail first, then refuse or
 defer further growth if the exact active request still cannot fit.
+Until a provider-specific token and wire-format bound is qualified, serialized request
+bytes also cap admission against the selected provider's asserted input-token limit.
+This conservative proxy can park early and does not prove a provider will accept the
+request; a wire-specific encoding may add overhead.
 
 Compaction is **incremental from the current projection**: previous typed checkpoint plus
 selected complete exchanges from the current tail/new suffix. It never reloads and
