@@ -121,11 +121,11 @@ The host must keep that namespace outside agent-writable workspace state and pro
 its filesystem ancestry from untrusted same-user processes. Session ownership locks
 resolve database symlink aliases; hard-linked database aliases are refused.
 A registry-authenticated native `read` ToolBoundary supports bounded file ranges and a
-persisted tool exchange. A complete read from offset zero returns the host registry's
-before/after-checked workspace revision and a SHA-256 `base_digest` for exact edits;
-partial reads return no base digest. This result uses the frozen `native-read-v3`
-binding. It is serial, not an OS
-sandbox: the host must protect the workspace namespace against concurrent renames
+persisted tool exchange. A complete read from offset zero returns a SHA-256
+`base_digest` for exact edits and a before/after-checked registry revision.
+Partial reads return no base digest. This result uses the frozen `native-read-v3`
+binding. It is serial, not an OS sandbox: the host must protect the workspace
+namespace against concurrent renames
 and enforce its promised read authority. Native `list` returns a bounded, sorted
 page from one directory with a workspace revision; it does not follow symlinks
 or promise a snapshot across pages.
@@ -239,15 +239,16 @@ cargo run --locked -p ion -- run \
   'Read one file, replace the requested text, then summarize the change'
 ```
 
-The current `native-edit-private-v5` tool edits existing regular files up to 16 KiB.
-The model supplies the `base_digest` and
-`workspace_revision` from a complete read, plus text that occurs once and its
-replacement. The host verifies the digest, builds the complete replacement and
-freezes both file versions before creating a workspace claim. This reduces model
-output, but still needs comparative coding-task evaluation: exact matching does not
-prove that the model chose the right change. `create` takes an absent path,
-content and the workspace revision from `list` or `read`. New files are created
-with mode `0600`. Both tools create private staging inside the shared registry,
+The current `native-edit-private-v6` tool edits existing regular files up to 16 KiB.
+The model supplies the `base_digest` from a complete read, plus text that occurs
+once and its replacement. The host verifies the digest, captures the current
+workspace revision, builds the complete replacement and freezes both file versions
+before creating a workspace claim. An unrelated earlier edit does not invalidate
+an unchanged target file's digest. This reduces model output, but still needs
+comparative coding-task evaluation: exact matching does not
+prove that the model chose the right change. `create` takes an absent path and
+content; the host captures the revision. New files are created with mode `0600`.
+Both tools create private staging inside the shared registry,
 refuse unsupported filesystem or mount combinations, and never fall back to
 workspace staging.
 The host must continuously protect the registry, its staging directory and the

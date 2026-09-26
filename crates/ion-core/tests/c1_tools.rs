@@ -720,7 +720,7 @@ async fn native_edit_settles_session_exchange_with_registry_minted_receipt() {
     let model = Arc::new(Model {
         starts: AtomicUsize::new(0),
         calls: 1,
-        arguments: json!({"path":"x", "base_digest":ContentDigest::of_bytes(b"before").to_string(), "old_text":"before", "new_text":"after", "workspace_revision": registry.revision(&binding).unwrap()}),
+        arguments: json!({"path":"x", "base_digest":ContentDigest::of_bytes(b"before").to_string(), "old_text":"before", "new_text":"after"}),
     });
     // Lose terminal delivery, but retain the registry receipt in Session evidence.
     struct LoseReply(Arc<NativeEditBoundary>, AtomicBool);

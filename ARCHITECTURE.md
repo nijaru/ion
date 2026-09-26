@@ -581,7 +581,10 @@ For native single-file edit, the model supplies a concise change tied to an exac
 base identity returned by `read`, rather than echoing both complete file versions.
 Preparation verifies that identity against a bounded regular file, constructs the
 complete expected and replacement bytes, and persists them in the PreparedAction;
-execution rechecks the base before mutation. A create action names an absent base
+the host captures the current workspace revision at preparation, then execution
+rechecks that revision and the exact file base before mutation. The model does not
+echo a workspace-wide revision: an unrelated earlier edit must not invalidate an
+unchanged target file's digest. A create action names an absent base
 and must commit only if the destination is still absent. Both operations retain
 the same workspace claim, effect evidence and recovery rules. The model-facing
 encoding remains versioned and must be evaluated on coding tasks; exact base

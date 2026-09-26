@@ -305,7 +305,7 @@ pub fn native_read_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolSpec {
             name: "read".into(),
             description:
-                "Read a bounded byte range from a regular workspace file. A complete read from offset 0 returns base_digest and workspace_revision for an exact-base edit."
+                "Read a bounded byte range from a regular workspace file. A complete read from offset 0 returns base_digest for an exact-base edit and the observed workspace revision."
                     .into(),
             input_schema: json!({
                 "type": "object",

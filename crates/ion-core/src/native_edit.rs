@@ -47,8 +47,8 @@ use crate::{
 pub const MAX_NATIVE_EDIT_BYTES: usize = MAX_EDIT_BYTES as usize;
 
 const MAX_PATH_BYTES: usize = 4096;
-const IMPLEMENTATION_ID: &str = "native-edit-private-v5";
-const CREATE_IMPLEMENTATION_ID: &str = "native-create-private-v1";
+const IMPLEMENTATION_ID: &str = "native-edit-private-v6";
+const CREATE_IMPLEMENTATION_ID: &str = "native-create-private-v2";
 const MAX_STAGE_FILES: usize = MAX_EDIT_ALLOCATIONS;
 const CUSTODY_LEAF: &str = "native-edit-custody.lock";
 const AUTHORITY_ALLOW: u8 = 0;
@@ -311,6 +311,18 @@ impl NativeEditBoundary {
             })
     }
 
+    fn current_revision(&self) -> Result<EditRevision, ToolBoundaryError> {
+        let registry = WorkspaceRegistry::open(&self.registry_directory)
+            .map_err(|_| ToolBoundaryError::Unavailable)?;
+        registry
+            .verify_current(&self.workspace)
+            .map_err(|_| ToolBoundaryError::Unavailable)?;
+        registry
+            .revision(&self.workspace)
+            .map(EditRevision::from)
+            .map_err(|_| ToolBoundaryError::Unavailable)
+    }
+
     fn prepared_arguments(&self, action: &PreparedAction) -> Option<EditArguments> {
         if action.binding != self.binding.id
             || action.authority != ToolAuthority::WorkspaceMutation
@@ -516,7 +528,7 @@ impl ToolBoundary for NativeEditBoundary {
                 expected_content: String::new(),
                 desired_content: proposal.content.clone(),
                 expected_digest: digest_text(""),
-                base_revision: proposal.base_revision,
+                base_revision: self.current_revision()?,
                 old_text: String::new(),
                 new_text: proposal.content,
             };
@@ -559,7 +571,7 @@ impl ToolBoundary for NativeEditBoundary {
             expected_content,
             desired_content,
             expected_digest: proposal.base_digest,
-            base_revision: proposal.base_revision,
+            base_revision: self.current_revision()?,
             old_text: proposal.old_text,
             new_text: proposal.new_text,
         };
@@ -696,21 +708,13 @@ pub fn native_create_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolBindingId::new("create")?,
         ToolSpec {
             name: "create".into(),
-            description: "Create one new regular workspace file (max 16 KiB). The parent directory must exist and the destination must be absent. Supply workspace_revision from a recent read; existing destinations are never overwritten. Read the new file to verify.".into(),
+            description: "Create one new regular workspace file (max 16 KiB). The parent directory must exist and the destination must be absent. Existing destinations are never overwritten. Read the new file to verify.".into(),
             input_schema: json!({
                 "type": "object", "additionalProperties": false,
-                "required": ["path", "content", "workspace_revision"],
+                "required": ["path", "content"],
                 "properties": {
                     "path": {"type": "string", "minLength": 1, "maxLength": MAX_PATH_BYTES},
-                    "content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES},
-                    "workspace_revision": {
-                        "type": "object", "additionalProperties": false,
-                        "required": ["files", "repository"],
-                        "properties": {
-                            "files": {"type": "integer", "minimum": 0, "maximum": i64::MAX},
-                            "repository": {"type": "integer", "minimum": 0, "maximum": i64::MAX}
-                        }
-                    }
+                    "content": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES}
                 }
             }),
         },
@@ -727,22 +731,14 @@ pub fn native_edit_binding() -> Result<ToolBinding, crate::ConfigError> {
         ToolBindingId::new("edit")?,
         ToolSpec {
             name: "edit".into(),
-            description: "Replace one exact occurrence in an existing regular workspace file (max 16 KiB). Copy base_digest and workspace_revision from a complete read starting at offset 0. old_text must occur exactly once; new_text replaces only that occurrence. Read again to verify.".into(),
+            description: "Replace one exact occurrence in an existing regular workspace file (max 16 KiB). Copy base_digest from a complete read starting at offset 0. old_text must occur exactly once; new_text replaces only that occurrence. Read again to verify.".into(),
             input_schema: json!({
                 "type": "object",
                 "additionalProperties": false,
-                "required": ["path", "base_digest", "workspace_revision", "old_text", "new_text"],
+                "required": ["path", "base_digest", "old_text", "new_text"],
                 "properties": {
                     "path": {"type": "string", "minLength": 1, "maxLength": MAX_PATH_BYTES},
                     "base_digest": {"type": "string", "minLength": 64, "maxLength": 64},
-                    "workspace_revision": {
-                        "type": "object", "additionalProperties": false,
-                        "required": ["files", "repository"],
-                        "properties": {
-                            "files": {"type": "integer", "minimum": 0, "maximum": i64::MAX},
-                            "repository": {"type": "integer", "minimum": 0, "maximum": i64::MAX}
-                        }
-                    },
                     "old_text": {"type": "string", "minLength": 1, "maxLength": MAX_NATIVE_EDIT_BYTES},
                     "new_text": {"type": "string", "maxLength": MAX_NATIVE_EDIT_BYTES}
                 }
@@ -796,8 +792,6 @@ struct EditArguments {
 struct EditProposal {
     path: String,
     base_digest: String,
-    #[serde(rename = "workspace_revision")]
-    base_revision: EditRevision,
     old_text: String,
     new_text: String,
 }
@@ -807,8 +801,6 @@ struct EditProposal {
 struct CreateProposal {
     path: String,
     content: String,
-    #[serde(rename = "workspace_revision")]
-    base_revision: EditRevision,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
@@ -2331,15 +2323,10 @@ mod tests {
         }
 
         fn arguments(&self, old_text: &str, new_text: &str) -> Value {
-            let revision = self
-                .registry
-                .revision(self.boundary.workspace_binding())
-                .unwrap();
             let content = fs::read_to_string(self.root.path().join("file.txt")).unwrap();
             json!({
                 "path": "file.txt",
                 "base_digest": digest_text(&content),
-                "workspace_revision": revision,
                 "old_text": old_text,
                 "new_text": new_text,
             })
@@ -2411,7 +2398,7 @@ mod tests {
             .unwrap();
         let action = create
             .prepare(json!({
-                "path": "new.txt", "content": "created\n", "workspace_revision": revision,
+                "path": "new.txt", "content": "created\n",
             }))
             .unwrap();
         assert!(action.base_facts.is_empty());
@@ -2452,7 +2439,7 @@ mod tests {
         assert!(
             create
                 .prepare(json!({
-                    "path": "new.txt", "content": "overwrite", "workspace_revision": revision,
+                    "path": "new.txt", "content": "overwrite",
                 }))
                 .is_err()
         );
@@ -2462,13 +2449,9 @@ mod tests {
     async fn create_rechecks_absence_before_admission_and_never_overwrites() {
         let fixture = Fixture::new(false);
         let create = create_boundary(&fixture);
-        let revision = fixture
-            .registry
-            .revision(create.workspace_binding())
-            .unwrap();
         let action = create
             .prepare(json!({
-                "path": "new.txt", "content": "created", "workspace_revision": revision,
+                "path": "new.txt", "content": "created",
             }))
             .unwrap();
         fs::write(fixture.root.path().join("new.txt"), "other").unwrap();
@@ -2495,7 +2478,7 @@ mod tests {
             .unwrap();
         let action = create
             .prepare(json!({
-                "path": "new.txt", "content": "created", "workspace_revision": revision,
+                "path": "new.txt", "content": "created",
             }))
             .unwrap();
         let execution = create_execution(&fixture, &create, action);
@@ -2538,7 +2521,7 @@ mod tests {
             .unwrap();
         let action = create
             .prepare(json!({
-                "path": "new.txt", "content": "created", "workspace_revision": revision,
+                "path": "new.txt", "content": "created",
             }))
             .unwrap();
         let execution = create_execution(&fixture, &create, action);
@@ -2625,6 +2608,67 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn unchanged_second_file_edits_after_workspace_revision_advances() {
+        let fixture = Fixture::new(false);
+        fs::write(
+            fixture.root.path().join("second.txt"),
+            "left middle right\n",
+        )
+        .unwrap();
+        let second_digest = digest_text("left middle right\n");
+
+        let first = fixture
+            .boundary
+            .prepare(fixture.arguments("beta", "gamma"))
+            .unwrap();
+        let first_state = fixture
+            .boundary
+            .execute(fixture.execution(first), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            first_state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::KnownChanges { .. },
+                ..
+            }
+        ));
+
+        let second = fixture
+            .boundary
+            .prepare(json!({
+                "path": "second.txt",
+                "base_digest": second_digest,
+                "old_text": "middle",
+                "new_text": "center"
+            }))
+            .unwrap();
+        assert_eq!(second.workspace_revision, Some(1));
+        let second_state = fixture
+            .boundary
+            .execute(fixture.execution(second), CancellationToken::new())
+            .await;
+        assert!(matches!(
+            second_state,
+            ToolAttemptState::Settled {
+                effect: crate::EffectSummary::KnownChanges { .. },
+                ..
+            }
+        ));
+        assert_eq!(
+            fs::read_to_string(fixture.root.path().join("second.txt")).unwrap(),
+            "left center right\n"
+        );
+        assert_eq!(
+            fixture
+                .registry
+                .revision(fixture.boundary.workspace_binding())
+                .unwrap()
+                .files,
+            2
+        );
+    }
+
     #[test]
     fn prepared_edit_refuses_stale_base_and_invalid_replacement() {
         let fixture = Fixture::new(false);
@@ -2682,7 +2726,6 @@ mod tests {
         fs::write(root.path().join("shared/HEAD"), "alpha beta alpha\n").unwrap();
         let mut registry = WorkspaceRegistry::open(host.path()).unwrap();
         let workspace = registry.bind("workspace", root.path(), "local-v1").unwrap();
-        let revision = registry.revision(&workspace).unwrap();
         let stage = host.path().join("staging");
         fs::create_dir(&stage).unwrap();
         fs::set_permissions(&stage, fs::Permissions::from_mode(0o700)).unwrap();
@@ -2691,7 +2734,6 @@ mod tests {
             let arguments = json!({
                 "path": path,
                 "base_digest": digest_text("alpha beta alpha\n"),
-                "workspace_revision": revision,
                 "old_text": "beta",
                 "new_text": "gamma",
             });
@@ -2707,7 +2749,7 @@ mod tests {
             let action = boundary
                 .prepare(json!({
                     "path": "ADMIN/config", "base_digest": digest_text("alpha beta alpha\n"),
-                    "workspace_revision": revision, "old_text": "beta", "new_text": "gamma"
+                    "old_text": "beta", "new_text": "gamma"
                 }))
                 .unwrap();
             let execution = ToolExecution {
@@ -3776,8 +3818,7 @@ mod tests {
                             arguments: json!({
                                 "path": "file.txt",
                                 "base_digest": digest_text("alpha beta alpha\n"),
-                                "old_text": "beta", "new_text": "gamma",
-                                "workspace_revision": {"files": 0, "repository": 0}
+                                "old_text": "beta", "new_text": "gamma"
                             }),
                         })
                     };
