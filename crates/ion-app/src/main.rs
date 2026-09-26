@@ -41,6 +41,8 @@ enum Action {
     Run(RunArgs),
     /// Explicitly resume a persisted Turn; passive open itself never dispatches.
     Resume(ResumeArgs),
+    /// Request cancellation and reconcile a persisted Turn.
+    Cancel(ResumeArgs),
     /// Inspect a bounded snapshot without provider or tool work.
     Inspect {
         #[arg(long)]
@@ -177,6 +179,7 @@ async fn main() {
         Action::Chat(args) => terminal_client::chat(args).await,
         Action::Run(args) => run(args).await,
         Action::Resume(args) => resume(args).await,
+        Action::Cancel(args) => cancel(args).await,
         Action::Inspect { state } => inspect(&state).await,
         Action::Claims {
             registry,
@@ -618,7 +621,7 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>, ask_mutations: bool) ->
     })
 }
 
-async fn drive(host: Host, turn: TurnId) -> Result<()> {
+async fn drive(host: Host, turn: TurnId, accepting_cancellation: bool) -> Result<()> {
     let handle = host.session.handle();
     let result = handle
         .resume_with_tools(turn, host.models, host.tools, DrivePolicy::default())
@@ -647,6 +650,9 @@ async fn drive(host: Host, turn: TurnId) -> Result<()> {
     snapshot.close().await?;
     match exit {
         DriveExit::Settled(ion_core::TurnOutcome::Completed { .. }) => Ok(()),
+        DriveExit::Settled(ion_core::TurnOutcome::Cancelled { .. }) if accepting_cancellation => {
+            Ok(())
+        }
         DriveExit::Settled(outcome) => bail!("Turn settled without completion: {outcome:?}"),
         DriveExit::Parked(ParkReason::AwaitingApproval) => bail!(
             "Turn awaits an exact tool decision; reopen this Session with `ion chat --ask-mutations` and the same host/tool flags"
@@ -685,12 +691,19 @@ async fn run(args: RunArgs) -> Result<()> {
         SubmittedTurn::Created(started) => started.turn.id,
         SubmittedTurn::Replayed { turn, .. } => turn.id,
     };
-    drive(host, turn).await
+    drive(host, turn, false).await
 }
 
 async fn resume(args: ResumeArgs) -> Result<()> {
     let host = host(&args.host, None, false).await?;
-    drive(host, TurnId::new(args.turn)?).await
+    drive(host, TurnId::new(args.turn)?, false).await
+}
+
+async fn cancel(args: ResumeArgs) -> Result<()> {
+    let host = host(&args.host, None, false).await?;
+    let turn = TurnId::new(args.turn)?;
+    host.session.handle().cancel_turn(turn).await?;
+    drive(host, turn, true).await
 }
 
 async fn inspect(state: &Path) -> Result<()> {

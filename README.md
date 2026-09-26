@@ -131,6 +131,13 @@ an asserted 4096-token output cap; the drive parks incomplete responses as
 task completed across two boundaries and passed independent `make test`; an
 8192-cap two-turn task also passed. These are task observations, not universal
 output-cap recommendations or provider guarantees.
+In another 16K/4096 local-Qwen C repair on 2026-09-26, Ion imported a parser
+fix and regression test and an independent host `make test` passed, but the
+model exhausted the output cap while preparing its final answer. The headless
+`cancel` command settled that parked Turn without replaying tools, and the same
+Session accepted and completed a new Turn. Its answer copied part of the
+advisory checkpoint before the requested word, so exact response obedience
+after compaction remains unqualified on this model route.
 
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
@@ -262,6 +269,12 @@ read at dispatch and are not stored. Literal-loopback HTTP providers may run
 without a key; public HTTPS providers park if their key is missing. `ion inspect --state ...` shows a bounded snapshot;
 `ion resume --state ... --workspace ... --endpoint ... --turn <id>` explicitly
 resumes a persisted Turn. A read-only Session uses `<state>/registry` by default.
+If a headless Turn parks on an incomplete model response or another condition
+that cannot be resumed, `ion cancel` with the same host/tool flags and `--turn
+<id>` requests cancellation and drives reconciliation without repeating tool
+effects. A settled cancellation reports unresolved attempt IDs when external
+completion is uncertain. A subsequent `run` can submit a new Turn once the
+previous Turn is terminal.
 To enable mutation tools, give every Session touching the same
 workspace **one shared host-owned registry**, separate from its per-Session state
 and the workspace. Create it privately on the same supported local filesystem
