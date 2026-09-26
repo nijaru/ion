@@ -528,6 +528,8 @@ invocation/prepared-action digest, binding/executor revision, resources/workspac
 and expiry. Policy never silently rewrites an approved action; a changed action needs a
 new digest/decision. Recheck live authority at effect admission; revocation cannot undo an
 already-started action. Ordinary text is never approval.
+Once a request for an exact invocation is Pending, a later broad `Allow` policy
+does not silently discharge that request; the exact decision remains required.
 
 A ToolInvocation owns one assistant call and at most one model-visible result.
 Its `outcome_ready` state records provenance: the exact eligible ToolAttemptId that
@@ -725,6 +727,11 @@ restoration; one reducer owns frontend state. Sanitize untrusted control sequenc
 handle graphemes/display widths, and keep paste distinct from submission. Rendering
 never waits on external I/O; output must not steal focus or destroy scroll anchors.
 Real-terminal and PTY tests are required in addition to reducer tests.
+When a trusted host selects `Ask` for a tool, the terminal presents the complete
+frozen PreparedAction and digest before offering a separate approval control.
+The control rechecks the currently pending invocation and installed executor;
+stale or incomplete displays cannot authorize an effect. A denial is an exact
+decision on that invocation, not ordinary model/user transcript text.
 
 Workers are optional and outside the usable single-agent baseline. If measured tasks
 justify them, use the same Turn engine with explicit history/context inheritance,

@@ -499,7 +499,12 @@ pub(crate) async fn drive(
             return Ok(Some(ParkReason::AuthorityDenied));
         }
         let now = now_unix_ms()?;
-        if policy == crate::LiveToolAuthority::Ask {
+        let approval_required = policy == crate::LiveToolAuthority::Ask
+            || matches!(
+                call.approval,
+                ApprovalState::Pending | ApprovalState::Approved { .. }
+            );
+        if approval_required {
             let grant_valid = call.approval.permits(
                 action,
                 &binding.implementation,
@@ -531,7 +536,7 @@ pub(crate) async fn drive(
                     invocation: call.id,
                     generation: basis.turn.cancellation.generation,
                     executor: boundary.executor(),
-                    approval_required: policy == crate::LiveToolAuthority::Ask,
+                    approval_required,
                     now_unix_ms: now_unix_ms()?,
                 })
                 .await,

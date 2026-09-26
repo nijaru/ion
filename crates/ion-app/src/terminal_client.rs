@@ -9,9 +9,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_core::{
-    AttemptId, DriveExit, DrivePolicy, Entry, EntryData, InputSender, ProgressUpdate,
-    SessionProgress, SessionSnapshot, SnapshotRequest, SubmitTurnRequest, SubmittedTurn,
-    ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
+    ApprovalDecision, ApprovalState, AttemptId, ContentDigest, DriveExit, DrivePolicy, Entry,
+    EntryData, InputSender, InvocationId, PreparedAction, ProgressUpdate, SessionProgress,
+    SessionSnapshot, SnapshotRequest, StepId, SubmitTurnRequest, SubmittedTurn, ToolExchangeState,
+    ToolInvocation, ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
 };
 use ion_terminal::{
     Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession,
@@ -22,12 +23,13 @@ use tokio::time::{Duration, interval};
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{Host, RunArgs, host};
+use super::{ChatArgs, Host, host};
 
 const MAX_DRAFT_BYTES: usize = 64 * 1024;
 const MAX_ENTRY_CHARS: usize = 8 * 1024;
 const MAX_DISPLAY_ROWS: usize = 4096;
 const SNAPSHOT_ENTRIES: usize = 128;
+const APPROVAL_TTL_MS: i64 = 10 * 60 * 1000;
 
 #[derive(Default)]
 struct Frontend {
@@ -41,6 +43,14 @@ struct Frontend {
     unfinished: Option<TurnId>,
     progress: Option<ProgressPreview>,
     tool_progress: Option<ToolProgressPreview>,
+    reviewed_approval: Option<ApprovalIdentity>,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct ApprovalIdentity {
+    step: StepId,
+    invocation: InvocationId,
+    digest: ContentDigest,
 }
 
 struct ProgressPreview {
@@ -66,6 +76,7 @@ enum Action {
     Submit(String),
     Resume,
     Cancel,
+    DecideApproval { digest: String, approve: bool },
     Quit,
 }
 
@@ -120,6 +131,16 @@ impl Frontend {
                     "/quit" | "/exit" => Action::Quit,
                     "/resume" => Action::Resume,
                     "/cancel" => Action::Cancel,
+                    _ if text == "/approve" || text.starts_with("/approve ") => {
+                        Action::DecideApproval {
+                            digest: text["/approve".len()..].trim().into(),
+                            approve: true,
+                        }
+                    }
+                    _ if text == "/deny" || text.starts_with("/deny ") => Action::DecideApproval {
+                        digest: text["/deny".len()..].trim().into(),
+                        approve: false,
+                    },
                     _ => Action::Submit(text),
                 }
             }
@@ -208,6 +229,61 @@ impl Frontend {
         if let Some(turn) = &snapshot.unfinished_turn {
             self.update_turn_status(turn.id, turn.is_cancelling(), &turn.phase);
         }
+    }
+
+    fn present_approval(&mut self, snapshot: &SessionSnapshot, width: usize) -> Result<()> {
+        let Some((call, action)) = pending_approval(snapshot) else {
+            self.reviewed_approval = None;
+            return Ok(());
+        };
+        let identity = ApprovalIdentity {
+            step: call.step,
+            invocation: call.id,
+            digest: action.digest,
+        };
+        if self.reviewed_approval == Some(identity) {
+            self.status = format!(
+                "Approval required for {}; review action above",
+                call.binding.as_str()
+            );
+            return Ok(());
+        }
+        let turn = snapshot
+            .unfinished_turn
+            .as_ref()
+            .context("pending approval has no unfinished turn")?;
+        let binding = turn
+            .environment
+            .tool(&call.binding)
+            .context("pending invocation has no frozen binding")?;
+        let digest = action.digest.to_string();
+        let review = format!(
+            "Approval required for {} (invocation {})\nWorkspace: {}\nImplementation: {}\nExecutor: {}\nPrepared action:\n{}\nType /approve {digest} or /deny {digest}",
+            binding.spec.name,
+            call.id.get(),
+            turn.environment.workspace.canonical_root,
+            binding.implementation.as_str(),
+            turn.environment.workspace.backend,
+            serde_json::to_string_pretty(action)?,
+        );
+        let (lines, _) = wrap(&safe_review(&review), width, None);
+        if lines.len() > MAX_DISPLAY_ROWS / 2 {
+            self.status =
+                "Approval action exceeds terminal review capacity; widen the terminal".into();
+            return Ok(());
+        }
+        for line in lines {
+            self.rows.push_back(line);
+        }
+        while self.rows.len() > MAX_DISPLAY_ROWS {
+            self.rows.pop_front();
+        }
+        self.reviewed_approval = Some(identity);
+        self.status = format!(
+            "Approval required for {}; review action above",
+            binding.spec.name
+        );
+        Ok(())
     }
 
     fn update_turn_status(&mut self, id: TurnId, cancelling: bool, phase: &TurnPhase) {
@@ -369,12 +445,42 @@ fn progress_lines(label: &str, text: &str, omitted_prefix: bool, width: usize) -
     wrap(&format!("{label} › {preview}"), width, None).0
 }
 
-pub(super) async fn chat(args: RunArgs) -> Result<()> {
+fn pending_approval(snapshot: &SessionSnapshot) -> Option<(&ToolInvocation, &PreparedAction)> {
+    let turn = snapshot.unfinished_turn.as_ref()?;
+    let TurnPhase::Tools(step) = &turn.phase else {
+        return None;
+    };
+    let call = snapshot.tool_invocations.iter().find(|call| {
+        call.step == *step
+            && call.approval == ApprovalState::Pending
+            && call.exchange == ToolExchangeState::Pending
+    })?;
+    Some((call, call.preparation.ready()?))
+}
+
+fn safe_review(text: &str) -> String {
+    let mut review = String::with_capacity(text.len());
+    for ch in text.chars() {
+        if matches!(ch, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
+        {
+            review.push_str(&format!("\\u{:04x}", ch as u32));
+        } else if ch == '\n' || ch == '\t' {
+            review.push(ch);
+        } else if ch.is_control() {
+            review.push('�');
+        } else {
+            review.push(ch);
+        }
+    }
+    review
+}
+
+pub(super) async fn chat(args: ChatArgs) -> Result<()> {
     ensure!(
         std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
         "interactive chat requires a terminal on stdin and stdout"
     );
-    let mut current = host(&args.host, Some(&args)).await?;
+    let mut current = host(&args.run.host, Some(&args.run), args.ask_mutations).await?;
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
     let (columns, rows) = terminal.size()?;
@@ -390,8 +496,15 @@ pub(super) async fn chat(args: RunArgs) -> Result<()> {
     if let Some(turn) = ui.unfinished {
         ui.status = format!("Turn {} unfinished; /resume or /cancel", turn.get());
     }
+    if args.ask_mutations {
+        ui.present_approval(&initial, usize::from(columns))?;
+    }
     ui.render(&mut terminal, &mut screen, false)?;
-    let mut initial_prompt = args.prompt.clone().filter(|text| !text.trim().is_empty());
+    let mut initial_prompt = args
+        .run
+        .prompt
+        .clone()
+        .filter(|text| !text.trim().is_empty());
     loop {
         let action = if let Some(prompt) = initial_prompt.take() {
             Action::Submit(prompt)
@@ -453,9 +566,46 @@ pub(super) async fn chat(args: RunArgs) -> Result<()> {
                     ui.status = "No unfinished turn".into();
                 }
             }
+            Action::DecideApproval { digest, approve } => {
+                let decided = if !args.ask_mutations {
+                    ui.status = "Approval controls require --ask-mutations".into();
+                    None
+                } else {
+                    decide_pending_approval(&current, &mut ui, &digest, approve).await?
+                };
+                if let Some(turn) = decided {
+                    let Some(next) = run_turn(
+                        current,
+                        &args,
+                        turn,
+                        &mut ui,
+                        &mut terminal,
+                        &mut screen,
+                        &mut input,
+                    )
+                    .await?
+                    else {
+                        return Ok(());
+                    };
+                    current = next;
+                } else {
+                    let feedback = ui.status.clone();
+                    let view = snapshot(&current.session).await?;
+                    ui.observe(&view, usize::from(screen.size().0));
+                    if args.ask_mutations {
+                        ui.present_approval(&view, usize::from(screen.size().0))?;
+                    }
+                    ui.status = feedback;
+                    ui.render(&mut terminal, &mut screen, false)?;
+                    continue;
+                }
+            }
         }
         let view = snapshot(&current.session).await?;
         ui.observe(&view, usize::from(screen.size().0));
+        if args.ask_mutations {
+            ui.present_approval(&view, usize::from(screen.size().0))?;
+        }
         ui.render(&mut terminal, &mut screen, false)?;
     }
     screen.finish(terminal.output())?;
@@ -528,7 +678,7 @@ fn handle_event(
 
 async fn run_turn(
     current: Host,
-    args: &RunArgs,
+    args: &ChatArgs,
     turn: TurnId,
     ui: &mut Frontend,
     terminal: &mut TerminalSession,
@@ -613,7 +763,7 @@ async fn run_turn(
     }
     ui.render(terminal, screen, false)?;
     current.session.close().await?;
-    Ok(Some(host(&args.host, None).await?))
+    Ok(Some(host(&args.run.host, None, args.ask_mutations).await?))
 }
 
 async fn snapshot(session: &ion_core::Session) -> Result<SessionSnapshot> {
@@ -650,6 +800,87 @@ async fn submit(host: &Host, text: String) -> Result<TurnId> {
         SubmittedTurn::Created(started) => started.turn.id,
         SubmittedTurn::Replayed { turn, .. } => turn.id,
     })
+}
+
+async fn decide_pending_approval(
+    host: &Host,
+    ui: &mut Frontend,
+    digest: &str,
+    approve: bool,
+) -> Result<Option<TurnId>> {
+    let view = snapshot(&host.session).await?;
+    let Some((call, action)) = pending_approval(&view) else {
+        ui.reviewed_approval = None;
+        ui.status = "No pending tool approval".into();
+        return Ok(None);
+    };
+    let identity = ApprovalIdentity {
+        step: call.step,
+        invocation: call.id,
+        digest: action.digest,
+    };
+    if ui.reviewed_approval != Some(identity) || digest != action.digest.to_string() {
+        ui.status = "Approval digest does not match the reviewed action".into();
+        return Ok(None);
+    }
+    let turn = view
+        .unfinished_turn
+        .as_ref()
+        .context("pending approval has no unfinished turn")?;
+    let binding = turn
+        .environment
+        .tool(&call.binding)
+        .context("pending invocation has no frozen binding")?;
+    let boundary = match host.tools.resolve(binding, &turn.environment.workspace) {
+        Ok(boundary) => boundary,
+        Err(error) => {
+            ui.status = format!("Tool executor unavailable for approval: {error}");
+            return Ok(None);
+        }
+    };
+    let decision = if approve {
+        let now_unix_ms: i64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
+            .as_millis()
+            .try_into()?;
+        ApprovalDecision::Approve {
+            expires_at_unix_ms: now_unix_ms
+                .checked_add(APPROVAL_TTL_MS)
+                .context("approval expiry overflow")?,
+        }
+    } else {
+        ApprovalDecision::Deny {
+            reason: "denied by terminal user".into(),
+        }
+    };
+    match host
+        .session
+        .handle()
+        .decide_tool_approval(
+            call.step,
+            call.id,
+            action.digest,
+            decision,
+            boundary.executor(),
+        )
+        .await
+    {
+        Ok(_) => {
+            ui.reviewed_approval = None;
+            ui.exit_status = None;
+            ui.status = if approve {
+                "Tool action approved; resuming Turn".into()
+            } else {
+                "Tool action denied; resuming Turn".into()
+            };
+            Ok(Some(turn.id))
+        }
+        Err(error) => {
+            ui.reviewed_approval = None;
+            ui.status = format!("Approval decision was not recorded: {error}");
+            Ok(None)
+        }
+    }
 }
 
 fn display_entry(entry: &Entry, width: usize) -> Vec<String> {

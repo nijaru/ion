@@ -36,7 +36,7 @@ struct Cli {
 #[derive(Subcommand)]
 enum Action {
     /// Open an inline terminal conversation on the durable Session.
-    Chat(RunArgs),
+    Chat(ChatArgs),
     /// Create or reopen a Session, atomically submit a prompt, and drive its Turn.
     Run(RunArgs),
     /// Explicitly resume a persisted Turn; passive open itself never dispatches.
@@ -140,6 +140,15 @@ struct RunArgs {
     #[arg(long)]
     request_key: Option<String>,
     prompt: Option<String>,
+}
+
+#[derive(Args)]
+struct ChatArgs {
+    #[command(flatten)]
+    run: RunArgs,
+    /// Require an exact terminal decision before edit, create or exec.
+    #[arg(long)]
+    ask_mutations: bool,
 }
 
 #[derive(Args)]
@@ -388,7 +397,7 @@ struct Host {
     _registry: WorkspaceRegistry,
 }
 
-async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
+async fn host(args: &HostArgs, create: Option<&RunArgs>, ask_mutations: bool) -> Result<Host> {
     let (state, workspace) = existing_host_roots(&args.state, &args.workspace)?;
     let realm = EgressRealm::Remote(origin(&args.endpoint)?);
     let registry_root = registry_path(args, &state, &workspace)?;
@@ -407,6 +416,11 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
     )?);
     reader.set_live_authority(LiveToolAuthority::Allow);
     let mut tool_bindings = vec![lister.binding(), reader.tool_binding().clone()];
+    let mutation_authority = if ask_mutations {
+        LiveToolAuthority::Ask
+    } else {
+        LiveToolAuthority::Allow
+    };
     let mut boundaries = vec![
         lister as Arc<dyn ToolBoundary>,
         reader as Arc<dyn ToolBoundary>,
@@ -418,7 +432,7 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
             16 * 1024,
             &staging_root(&registry_root)?,
         )?);
-        editor.set_live_authority(LiveToolAuthority::Allow);
+        editor.set_live_authority(mutation_authority);
         tool_bindings.push(editor.tool_binding().clone());
         boundaries.push(editor as Arc<dyn ToolBoundary>);
         let creator = Arc::new(NativeEditBoundary::new_create(
@@ -427,7 +441,7 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
             16 * 1024,
             &staging_root(&registry_root)?,
         )?);
-        creator.set_live_authority(LiveToolAuthority::Allow);
+        creator.set_live_authority(mutation_authority);
         tool_bindings.push(creator.tool_binding().clone());
         boundaries.push(creator as Arc<dyn ToolBoundary>);
     }
@@ -441,7 +455,7 @@ async fn host(args: &HostArgs, create: Option<&RunArgs>) -> Result<Host> {
                 args.exec_rust_toolchain.as_deref(),
                 args.exec_cargo_registry.as_deref(),
             )?);
-            executor.set_live_authority(LiveToolAuthority::Allow);
+            executor.set_live_authority(mutation_authority);
             tool_bindings.push(executor.tool_binding().clone());
             boundaries.push(executor as Arc<dyn ToolBoundary>);
         }
@@ -606,7 +620,7 @@ async fn drive(host: Host, turn: TurnId) -> Result<()> {
 async fn run(args: RunArgs) -> Result<()> {
     let prompt = args.prompt.clone().context("run requires a prompt")?;
     ensure!(!prompt.is_empty(), "prompt must be nonempty");
-    let host = host(&args.host, Some(&args)).await?;
+    let host = host(&args.host, Some(&args), false).await?;
     let admitted_at_unix_ms: i64 = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
@@ -635,7 +649,7 @@ async fn run(args: RunArgs) -> Result<()> {
 }
 
 async fn resume(args: ResumeArgs) -> Result<()> {
-    let host = host(&args.host, None).await?;
+    let host = host(&args.host, None, false).await?;
     drive(host, TurnId::new(args.turn)?).await
 }
 

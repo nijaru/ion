@@ -4,6 +4,7 @@ use std::{
     fs::File,
     io::{Read, Write},
     net::TcpListener,
+    os::unix::fs::PermissionsExt,
     process::{Command, Stdio},
     sync::{
         Arc,
@@ -392,6 +393,230 @@ fn inline_chat_keeps_paste_as_a_draft_and_restores_terminal() {
     let first_rows: Vec<_> = screen.screen().rows(0, 80).collect();
     assert!(first_rows[0].contains("shell-old-one"), "{first_rows:?}");
     assert!(first_rows[1].contains("shell-old-two"), "{first_rows:?}");
+}
+
+#[test]
+fn terminal_approval_requires_the_reviewed_digest_before_create() {
+    let directory = tempfile::tempdir().expect("temporary directory");
+    let state = directory.path().join("state");
+    let workspace = directory.path().join("workspace");
+    let registry = directory.path().join("registry");
+    for path in [&state, &workspace, &registry] {
+        std::fs::create_dir(path).expect("host directory");
+    }
+    std::fs::set_permissions(&registry, std::fs::Permissions::from_mode(0o700))
+        .expect("private registry");
+    let listener = TcpListener::bind("127.0.0.1:0").expect("provider listener");
+    let endpoint = format!(
+        "http://{}/v1/chat/completions",
+        listener.local_addr().expect("address")
+    );
+    listener
+        .set_nonblocking(true)
+        .expect("nonblocking listener");
+    let (request_sender, request_receiver) = mpsc::channel();
+    let server = thread::spawn(move || {
+        let tool = serde_json::json!({
+            "model":"synthetic", "choices":[{"index":0,
+                "delta":{"tool_calls":[{"index":0,"id":"call_1",
+                    "function":{"name":"create","arguments":"{\"path\":\"note.txt\",\"content\":\"hello\\n\"}"}}]},
+                "finish_reason":"tool_calls"}],
+            "usage":{"prompt_tokens":5,"completion_tokens":3}
+        });
+        let answer = serde_json::json!({
+            "model":"synthetic", "choices":[{"index":0,
+                "delta":{"content":"Created note.txt."},"finish_reason":"stop"}],
+            "usage":{"prompt_tokens":8,"completion_tokens":4}
+        });
+        for (index, frame) in [tool, answer].into_iter().enumerate() {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let mut connection = loop {
+                match listener.accept() {
+                    Ok((stream, _)) => break stream,
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            && Instant::now() < deadline =>
+                    {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("provider accept: {error}"),
+                }
+            };
+            read_http_request(&mut connection);
+            request_sender.send(index).expect("request notice");
+            let body = format!("data: {frame}\n\ndata: [DONE]\n\n");
+            write!(connection, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len())
+                .expect("provider response");
+        }
+    });
+
+    let pty = openpty(
+        Some(&Winsize {
+            ws_row: 24,
+            ws_col: 100,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        }),
+        None,
+    )
+    .expect("pty");
+    let slave = File::from(pty.slave);
+    let stdout = slave.try_clone().expect("stdout");
+    let stderr = slave.try_clone().expect("stderr");
+    let mut child = Command::new(env!("CARGO_BIN_EXE_ion"))
+        .args([
+            "chat",
+            "--state",
+            state.to_str().expect("state path"),
+            "--workspace",
+            workspace.to_str().expect("workspace path"),
+            "--registry",
+            registry.to_str().expect("registry path"),
+            "--enable-edit",
+            "--ask-mutations",
+            "--endpoint",
+            &endpoint,
+            "--model",
+            "synthetic",
+            "--model-input-limit",
+            "8192",
+            "--model-output-limit",
+            "1024",
+            "create note.txt",
+        ])
+        .env("TERM", "xterm-256color")
+        .stdin(Stdio::from(slave))
+        .stdout(Stdio::from(stdout))
+        .stderr(Stdio::from(stderr))
+        .spawn()
+        .expect("spawn ion");
+    let mut writer = File::from(pty.master);
+    let mut reader = writer.try_clone().expect("reader");
+    let mut responder = writer.try_clone().expect("cursor responder");
+    let (sender, receiver) = mpsc::channel();
+    let reader_task = thread::spawn(move || {
+        let mut chunk = [0u8; 4096];
+        let mut query_tail = Vec::new();
+        while let Ok(length) = reader.read(&mut chunk) {
+            if length == 0 || sender.send(chunk[..length].to_vec()).is_err() {
+                break;
+            }
+            query_tail.extend_from_slice(&chunk[..length]);
+            if query_tail
+                .windows(b"\x1b[6n".len())
+                .any(|part| part == b"\x1b[6n")
+            {
+                responder.write_all(b"\x1b[1;1R").expect("cursor reply");
+                query_tail.clear();
+            }
+            if query_tail.len() > 16 {
+                query_tail.drain(..query_tail.len() - 16);
+            }
+        }
+    });
+    let mut output = Vec::new();
+    let digest = wait_for_approval_digest(&receiver, &mut output, Duration::from_secs(8));
+    assert_eq!(
+        request_receiver
+            .recv_timeout(Duration::from_secs(2))
+            .unwrap(),
+        0
+    );
+    assert!(!workspace.join("note.txt").exists());
+    let wrong = "0".repeat(64);
+    assert_ne!(digest, wrong);
+    writer
+        .write_all(format!("/approve {wrong}\r").as_bytes())
+        .expect("wrong digest");
+    wait_for(
+        &receiver,
+        &mut output,
+        b"Approval digest does not match",
+        Duration::from_secs(5),
+    );
+    assert!(!workspace.join("note.txt").exists());
+    assert!(request_receiver.try_recv().is_err());
+    writer
+        .write_all(format!("/approve {digest}\r").as_bytes())
+        .expect("exact approval");
+    assert_eq!(
+        request_receiver
+            .recv_timeout(Duration::from_secs(8))
+            .unwrap(),
+        1
+    );
+    wait_for(&receiver, &mut output, b"Completed", Duration::from_secs(5));
+    assert_eq!(
+        std::fs::read(workspace.join("note.txt")).expect("created file"),
+        b"hello\n"
+    );
+    writer.write_all(b"\x04").expect("quit");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let status = loop {
+        if let Some(status) = child.try_wait().expect("poll child") {
+            break status;
+        }
+        if Instant::now() >= deadline {
+            child.kill().expect("kill hung child");
+            panic!("approval chat did not quit");
+        }
+        thread::sleep(Duration::from_millis(20));
+    };
+    assert!(status.success(), "child exited: {status}");
+    server.join().expect("provider server");
+    drop(writer);
+    reader_task.join().expect("reader thread");
+}
+
+fn read_http_request(connection: &mut impl Read) {
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 4096];
+    loop {
+        let size = connection.read(&mut chunk).expect("provider request");
+        assert!(size > 0, "provider request ended early");
+        request.extend_from_slice(&chunk[..size]);
+        if let Some(header_end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+            let headers = String::from_utf8_lossy(&request[..header_end]);
+            let length = headers
+                .lines()
+                .find_map(|line| {
+                    line.to_ascii_lowercase()
+                        .strip_prefix("content-length: ")
+                        .and_then(|value| value.trim().parse::<usize>().ok())
+                })
+                .expect("content length");
+            if request.len() >= header_end + 4 + length {
+                return;
+            }
+        }
+        assert!(request.len() < 1024 * 1024, "bounded request");
+    }
+}
+
+fn wait_for_approval_digest(
+    receiver: &mpsc::Receiver<Vec<u8>>,
+    output: &mut Vec<u8>,
+    timeout: Duration,
+) -> String {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Some(at) = output
+            .windows(b"/approve ".len())
+            .position(|part| part == b"/approve ")
+        {
+            let start = at + b"/approve ".len();
+            if let Some(bytes) = output.get(start..start + 64)
+                && bytes.iter().all(u8::is_ascii_hexdigit)
+            {
+                return String::from_utf8(bytes.to_vec()).expect("digest hex");
+            }
+        }
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let chunk = receiver
+            .recv_timeout(remaining)
+            .expect("approval review before timeout");
+        output.extend(chunk);
+    }
 }
 
 fn wait_for(

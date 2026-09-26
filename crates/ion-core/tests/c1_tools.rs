@@ -1065,6 +1065,78 @@ async fn revocation_after_preflight_does_not_burn_retry_attempts() {
 }
 
 #[tokio::test]
+async fn pending_approval_survives_a_later_broad_allow_policy() {
+    let (session, _path, turn) = setup(config()).await;
+    let model = model();
+    let tool = Arc::new(Tool::new(success()));
+    tool.ask.store(true, Ordering::SeqCst);
+    assert_eq!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    let step = tool_step(&session).await;
+    let call = session
+        .handle()
+        .tool_records(step)
+        .await
+        .unwrap()
+        .invocations[0]
+        .clone();
+    tool.ask.store(false, Ordering::SeqCst);
+    assert_eq!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Parked(ParkReason::AwaitingApproval)
+    );
+    assert!(
+        session
+            .handle()
+            .tool_records(step)
+            .await
+            .unwrap()
+            .attempts
+            .is_empty()
+    );
+    assert_eq!(tool.executes.load(Ordering::SeqCst), 0);
+    let now: i64 = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis()
+        .try_into()
+        .unwrap();
+    session
+        .handle()
+        .decide_tool_approval(
+            step,
+            call.id,
+            call.preparation.ready().unwrap().digest,
+            ApprovalDecision::Approve {
+                expires_at_unix_ms: now + 60_000,
+            },
+            tool.executor(),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(
+        session
+            .handle()
+            .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+            .await
+            .unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    assert_eq!(tool.executes.load(Ordering::SeqCst), 1);
+    session.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn exact_approval_survives_passive_reopen_and_rejects_stale_decisions() {
     let (s, path, turn) = setup(config()).await;
     let m = model();

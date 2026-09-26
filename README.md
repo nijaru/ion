@@ -226,6 +226,14 @@ cargo run --locked -p ion -- run \
 Use `chat` in place of `run` for the terminal client, with the same host and model
 arguments. Replace the example endpoint and capacity placeholders with values
 for your provider.
+Add `--ask-mutations` to `chat` to review each `edit`, `create` or `exec`
+PreparedAction before execution. The terminal prints the complete frozen action
+and its digest; type `/approve <digest>` or `/deny <digest>` to decide that
+invocation. A changed or incomplete review cannot authorize execution. This
+host policy applies to the current chat process; pass the flag again when
+reopening the Session if you want the same policy. An already pending approval
+still requires its exact decision after reopening. Headless `run` and `resume`
+do not request new interactive approvals.
 For a Turn-wide reservation ceiling, set `--max-cost-microusd <positive-total>`
 on `run` and `--cost-quote-microusd <trusted-per-attempt-upper-bound>` on `run`
 and each `resume`. Both are in millionths of a US dollar. The latter must
