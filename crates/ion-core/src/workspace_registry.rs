@@ -15,6 +15,10 @@
 //! exact effects must be conservatively summarized before resolution.
 //! Git discovery supports ordinary `.git` directories and linked-worktree
 //! `gitdir`/`commondir` files, not environment-selected or bare repositories.
+//! Edit-phase APIs below are a registry foundation only: no staging or rename
+//! backend is implemented here. Any failed write reply can be ambiguous; inspect
+//! `claim` (reopening if necessary) before deciding whether a fact committed. An
+//! error is never evidence of NoMutation or permission to repeat an external effect.
 //! Non-Unix object binding fails closed. Filesystem identity uses device/inode and
 //! creation time where available; this is not a race-free filesystem capability.
 
@@ -29,6 +33,12 @@ use std::{
     time::Duration,
 };
 use thiserror::Error;
+
+mod edit;
+pub use edit::{
+    EditAction, EditClaim, EditContent, EditManifest, EditPhysicalIdentity, EditRenameArmed,
+    EditStaged, EditTermination, MAX_EDIT_BYTES, MAX_EDIT_TARGET_BYTES,
+};
 
 #[cfg(all(test, unix))]
 mod tests;
@@ -107,6 +117,8 @@ pub struct WorkspaceClaim {
     pub base: WorkspaceRevision,
     pub start: Option<RegistryReceipt>,
     pub terminal: Option<TerminalEvidence>,
+    /// None for ordinary backend claims; edit claims cannot use generic settlement.
+    pub edit: Option<EditClaim>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,6 +147,8 @@ struct BindingRecord {
 pub struct WorkspaceRegistry {
     connection: Connection,
     directory: PathBuf,
+    #[cfg(test)]
+    lose_next_commit_ack: bool,
 }
 
 impl WorkspaceRegistry {
@@ -167,14 +181,16 @@ impl WorkspaceRegistry {
                 CREATE TABLE repositories(id TEXT PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0);
                 CREATE TABLE claims(key TEXT PRIMARY KEY, session TEXT NOT NULL, invocation INTEGER NOT NULL, active INTEGER NOT NULL, record TEXT NOT NULL);
                 CREATE INDEX active_claims ON claims(active);
-                PRAGMA application_id=1229934162; PRAGMA user_version=3;")?;
-        } else if version != 3 || application != 1229934162 {
+                PRAGMA application_id=1229934162; PRAGMA user_version=4;")?;
+        } else if version != 4 || application != 1229934162 {
             return Err(RegistryError::Unsupported);
         }
         tx.commit()?;
         Ok(Self {
             connection,
             directory,
+            #[cfg(test)]
+            lose_next_commit_ack: false,
         })
     }
 
@@ -288,13 +304,45 @@ impl WorkspaceRegistry {
         resources: WorkspaceResources,
         expected: WorkspaceRevision,
     ) -> Result<WorkspaceClaim> {
+        self.admit_claim(binding, key, resources, expected, None)
+    }
+
+    fn admit_claim(
+        &mut self,
+        binding: &WorkspaceBinding,
+        key: ClaimKey,
+        resources: WorkspaceResources,
+        expected: WorkspaceRevision,
+        action: Option<EditAction>,
+    ) -> Result<WorkspaceClaim> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
+        if let Some(action) = &action {
+            action.validate()?;
+            if let Some(old) = find_claim(&tx, key)? {
+                // Observation of the original admission, not renewed authority.
+                return if old.binding == *binding
+                    && old.resources == resources
+                    && old.base == expected
+                    && old
+                        .edit
+                        .as_ref()
+                        .is_some_and(|edit| edit.manifest.action == *action)
+                {
+                    Ok(old)
+                } else {
+                    Err(RegistryError::EvidenceConflict)
+                };
+            }
+        }
         let record = checked_binding(&tx, binding)?;
         outside(&self.directory, &record.descriptor)?;
         if describe(Path::new(&binding.canonical_root)).ok().as_ref() != Some(&record.descriptor) {
             return Err(RegistryError::BindingChanged);
+        }
+        if let Some(action) = &action {
+            action.validate_target(&record.descriptor)?;
         }
         if resources == WorkspaceResources::FilesAndRepository && record.descriptor.common.is_none()
         {
@@ -331,14 +379,18 @@ impl WorkspaceRegistry {
             }
         }
         drop(statement);
-        let claim = WorkspaceClaim {
+        let mut claim = WorkspaceClaim {
             key,
             binding: binding.clone(),
             resources,
             base: expected,
             start: None,
             terminal: None,
+            edit: None,
         };
+        if let Some(action) = action {
+            edit::initialize(&mut claim, action)?;
+        }
         tx.execute(
             "INSERT INTO claims(key,session,invocation,active,record) VALUES(?1,?2,?3,1,?4)",
             params![
@@ -348,7 +400,11 @@ impl WorkspaceRegistry {
                 encode(&claim)?
             ],
         )?;
-        tx.commit()?;
+        commit_claim_write(
+            tx,
+            #[cfg(test)]
+            &mut self.lose_next_commit_ack,
+        )?;
         Ok(claim)
     }
 
@@ -405,12 +461,23 @@ impl WorkspaceRegistry {
     /// NoMutation). Unknown/accepted-unknown has no resolution API. Receipt effects
     /// are conservatively revision-advancing; no binding-specific interpretation.
     /// Exact duplicate evidence is idempotent; contradictory evidence is rejected.
+    /// Edit claims require `resolve_edit` and an explicit terminal attestation.
     pub fn resolve(&mut self, key: ClaimKey, evidence: TerminalEvidence) -> Result<()> {
+        self.resolve_claim(key, evidence, None)
+    }
+
+    fn resolve_claim(
+        &mut self,
+        key: ClaimKey,
+        evidence: TerminalEvidence,
+        edit_termination: Option<EditTermination>,
+    ) -> Result<()> {
         let tx = self
             .connection
             .transaction_with_behavior(TransactionBehavior::Immediate)?;
         let mut claim = load_claim(&tx, key)?;
         validate_receipt(&evidence.receipt, &claim.binding)?;
+        edit::apply_termination(&mut claim, &evidence, edit_termination)?;
         if let Some(old) = &claim.terminal {
             return if old == &evidence {
                 Ok(())
@@ -464,9 +531,25 @@ impl WorkspaceRegistry {
             "UPDATE claims SET active=0,record=?2 WHERE key=?1",
             params![encode(&key)?, encoded],
         )?;
-        tx.commit()?;
+        commit_claim_write(
+            tx,
+            #[cfg(test)]
+            &mut self.lose_next_commit_ack,
+        )?;
         Ok(())
     }
+}
+
+fn commit_claim_write(
+    tx: rusqlite::Transaction<'_>,
+    #[cfg(test)] lose_ack: &mut bool,
+) -> Result<()> {
+    tx.commit()?;
+    #[cfg(test)]
+    if std::mem::take(lose_ack) {
+        return Err(std::io::Error::other("injected committed-write acknowledgement loss").into());
+    }
+    Ok(())
 }
 
 fn advance(connection: &Connection, table: &str, id: &str) -> Result<()> {
@@ -517,6 +600,9 @@ fn checked_binding(connection: &Connection, binding: &WorkspaceBinding) -> Resul
     Ok(record)
 }
 fn load_claim(connection: &Connection, key: ClaimKey) -> Result<WorkspaceClaim> {
+    find_claim(connection, key)?.ok_or(RegistryError::EvidenceConflict)
+}
+fn find_claim(connection: &Connection, key: ClaimKey) -> Result<Option<WorkspaceClaim>> {
     let value: Option<String> = connection
         .query_row(
             "SELECT record FROM claims WHERE key=?1",
@@ -524,7 +610,7 @@ fn load_claim(connection: &Connection, key: ClaimKey) -> Result<WorkspaceClaim> 
             |r| r.get(0),
         )
         .optional()?;
-    decode(&value.ok_or(RegistryError::EvidenceConflict)?)
+    value.map(|s| decode(&s)).transpose()
 }
 fn encode(value: &impl Serialize) -> Result<String> {
     struct Bounded(Vec<u8>);
