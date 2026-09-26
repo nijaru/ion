@@ -128,11 +128,11 @@ struct RunArgs {
     /// Frozen serialized request byte ceiling; this is not a token estimate.
     #[arg(long, default_value_t = 1024 * 1024, value_parser = clap::value_parser!(u32).range(4096..=1048576))]
     max_request_bytes: u32,
-    #[arg(long, default_value_t = 8, value_parser = clap::value_parser!(u32).range(1..=32))]
+    #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u32).range(1..=32))]
     max_model_steps: u32,
     #[arg(long, default_value_t = 2, value_parser = clap::value_parser!(u32).range(1..=4))]
     max_model_attempts_per_step: u32,
-    #[arg(long, default_value_t = 16, value_parser = clap::value_parser!(u32).range(1..=32))]
+    #[arg(long, default_value_t = 32, value_parser = clap::value_parser!(u32).range(1..=32))]
     max_tool_invocations: u32,
     /// Frozen total maximum reserved model charges for this Turn (micro-USD).
     #[arg(long)]
@@ -291,9 +291,9 @@ fn initial_config(
             start_receipts: StartReceiptCapability::None,
             egress: realm.clone(),
         }],
-        default_provider: identity.binding,
+        default_provider: identity.binding.clone(),
         fallback_route: Vec::new(),
-        compaction_route: Vec::new(),
+        compaction_route: vec![identity.binding],
         initial_tools: tools.iter().map(|tool| tool.id.clone()).collect(),
         tools,
         controls: GenerationControls {

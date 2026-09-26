@@ -50,6 +50,7 @@ pub enum TurnPhase {
 pub enum ParkReason {
     MissingCredentials,
     ProviderUnavailable,
+    IncompleteResponse,
     ReturnedModelMismatch,
     ToolChoiceMismatch,
     ToolUnavailable,
@@ -59,6 +60,7 @@ pub enum ParkReason {
     CostQuoteUnavailable,
     MonetaryCapacity,
     ContextCapacity,
+    InvalidCheckpoint,
     RecoveryRequired,
     Other(String),
 }

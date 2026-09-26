@@ -134,7 +134,9 @@ impl ModelBoundary for Model {
         Box::pin(async move {
             self.starts.fetch_add(1, Ordering::SeqCst);
             let has_result = r.messages.iter().any(|m| m.role == TranscriptRole::Tool);
-            let content = if has_result {
+            let content = if r.instructions.contains("advisory continuation checkpoint") {
+                vec![Content::Text(r#"{"goals":["finish read"],"constraints":[],"done":["read completed"],"in_progress":[],"blocked":[],"decisions":[],"evidence":[],"unresolved":[],"next_action":"answer","terminal_condition":null}"#.into())]
+            } else if has_result {
                 vec![Content::Text("done".into())]
             } else {
                 (0..self.calls)
@@ -358,6 +360,10 @@ fn tools(t: &Arc<Tool>) -> ToolBoundaries {
     ToolBoundaries::new([Arc::clone(t) as Arc<dyn ToolBoundary>]).unwrap()
 }
 async fn setup(c: ConversationConfig) -> (Session, PathBuf, TurnId) {
+    setup_with_prompt(c, "read").await
+}
+
+async fn setup_with_prompt(c: ConversationConfig, prompt: &str) -> (Session, PathBuf, TurnId) {
     let path = std::env::temp_dir().join(format!("ion-r1c-{}.sqlite", SessionId::new()));
     let created = Session::create(&path, c).await.unwrap();
     let session = created.session;
@@ -370,7 +376,7 @@ async fn setup(c: ConversationConfig) -> (Session, PathBuf, TurnId) {
                 sender: InputSender::User,
                 mode: InputMode::Submit,
                 request_key: None,
-                body: InputBody::Text("read".into()),
+                body: InputBody::Text(prompt.into()),
             },
         )
         .await
@@ -394,6 +400,38 @@ fn model() -> Arc<Model> {
         arguments: json!({"path":"x"}),
         calls: 1,
     })
+}
+
+#[tokio::test]
+async fn compacted_tool_result_remains_one_complete_exchange() {
+    let mut configured = config();
+    configured.providers[0].capabilities.max_input_tokens = 5000;
+    configured.context.max_input_tokens = 5000;
+    configured.context.max_request_bytes = 5000;
+    configured.compaction_route = vec![configured.default_provider.clone()];
+    let (session, path, turn) = setup_with_prompt(configured, &"x".repeat(3200)).await;
+    let model = model();
+    let tool = Arc::new(Tool::new(success()));
+    let exit = session
+        .handle()
+        .resume_with_tools(turn, models(&model), tools(&tool), DrivePolicy::default())
+        .await
+        .unwrap();
+    assert!(
+        matches!(exit, DriveExit::Settled(TurnOutcome::Completed { .. })),
+        "{exit:?}"
+    );
+    assert_eq!(tool.executes.load(Ordering::SeqCst), 1);
+    let entries = session
+        .handle()
+        .page_entries(session.primary_conversation(), None, 32)
+        .await
+        .unwrap();
+    assert!(entries.entries.iter().any(|entry| {
+        matches!(&entry.data, EntryData::ContextBoundary(boundary) if boundary.raw_tail.start.is_some())
+    }));
+    session.close().await.unwrap();
+    std::fs::remove_file(path).unwrap();
 }
 async fn tool_step(s: &Session) -> StepId {
     let entries = s

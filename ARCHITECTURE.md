@@ -360,6 +360,13 @@ block; do not recursively compact the compaction request or silently select anot
 provider. Compactor ModelSteps expose no tools/provider-hosted actions, require the typed
 checkpoint output schema and use ordinary ModelStep/Attempt budget/recovery semantics.
 Large outputs are bounded/spooled before this path.
+Native provider-enforced JSON is an optimization, not a prerequisite for a local
+compaction route. The host validates the complete text response against the typed
+checkpoint schema and frozen byte bound before selecting it; malformed or incomplete
+responses cannot advance the context boundary. A compaction step consumes the same
+Turn's bounded model-step and attempt budget, and selection atomically appends its
+boundary while returning the Turn to request preparation. Model-facing checkpoint
+content is advisory and cannot grant tool authority or assert an external effect.
 
 Starting a turn captures one bounded immutable TurnEnvironment value directly in the
 Turn: conversation configuration revision, resolved instructions/project context, frozen

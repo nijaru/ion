@@ -67,6 +67,7 @@ pub struct EntryRange {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ContinuationCheckpoint {
     pub goals: Vec<String>,
     pub constraints: Vec<String>,
@@ -81,6 +82,7 @@ pub struct ContinuationCheckpoint {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CheckpointDecision {
     pub decision: String,
     pub rationale: String,

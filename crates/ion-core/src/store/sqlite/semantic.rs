@@ -1116,7 +1116,7 @@ fn decode_installed_config(
     Ok(InstalledConfig { revision, config })
 }
 
-fn load_input(
+pub(super) fn load_input(
     connection: &Connection,
     input_id: InputId,
 ) -> Result<(Input, CommitSeq), StoreError> {

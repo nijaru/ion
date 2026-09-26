@@ -204,10 +204,12 @@ impl SqliteDatabase {
     pub(crate) fn create_initial_model_step(
         &mut self,
         turn: TurnId,
+        purpose: crate::StepPurpose,
         manifest: RequestManifest,
     ) -> Result<CreatedModelStep, StoreError> {
-        let result =
-            self.mutate(|connection| model_state::create_initial_step(connection, turn, manifest))?;
+        let result = self.mutate(|connection| {
+            model_state::create_initial_step(connection, turn, purpose, manifest)
+        })?;
         self.observations.publish(result.receipt.clone());
         Ok(result)
     }
@@ -273,6 +275,16 @@ impl SqliteDatabase {
     ) -> Result<SelectedModelResponse, StoreError> {
         let result =
             self.mutate(|connection| model_state::select_final_response(connection, attempt))?;
+        self.observations.publish(result.receipt.clone());
+        Ok(result)
+    }
+
+    pub(crate) fn select_compaction_response(
+        &mut self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        let result =
+            self.mutate(|connection| model_state::select_compaction_response(connection, attempt))?;
         self.observations.publish(result.receipt.clone());
         Ok(result)
     }

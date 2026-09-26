@@ -1,10 +1,11 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
 
 use ion_ai::{
-    BoxFuture, Content, GenerationControls, Message, ModelRef, ModelResponse, ModelStreamEvent,
-    ProviderError, ProviderErrorKind, Reasoning, ResponseTermination, Role, ToolChoice, Usage,
+    BoxFuture, Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelResponse,
+    ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning, ResponseTermination, Role,
+    ToolChoice, Usage,
 };
 use ion_core::{
     AdmitInputRequest, AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling,
@@ -174,6 +175,76 @@ struct CompleteBoundary {
     returned_model: Option<String>,
     starts: AtomicUsize,
     stream_dropped: CancellationToken,
+}
+
+struct CompactingBoundary {
+    requests: Mutex<Vec<ion_core::SemanticRequest>>,
+    checkpoint: String,
+}
+
+impl CompactingBoundary {
+    fn new(checkpoint: &str) -> Arc<Self> {
+        Arc::new(Self {
+            requests: Mutex::new(Vec::new()),
+            checkpoint: checkpoint.to_owned(),
+        })
+    }
+}
+
+impl ModelBoundary for CompactingBoundary {
+    fn identity(&self) -> ModelBoundaryIdentity {
+        identity()
+    }
+
+    fn fingerprint(
+        &self,
+        request: &ion_core::SemanticRequest,
+        effect_key: &str,
+    ) -> Result<ContentDigest, ProviderError> {
+        fingerprint(request, effect_key)
+    }
+
+    fn start<'a>(
+        &'a self,
+        _attempt: ion_core::AttemptId,
+        _effect_key: String,
+        request: ion_core::SemanticRequest,
+        _stop: CancellationToken,
+    ) -> BoxFuture<'a, ModelStart> {
+        Box::pin(async move {
+            let compact = request
+                .instructions
+                .contains("advisory continuation checkpoint");
+            self.requests.lock().unwrap().push(request);
+            let text = if compact { &self.checkpoint } else { "done" };
+            let incomplete = compact && text == "__incomplete__";
+            let response = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: if incomplete {
+                        Vec::new()
+                    } else {
+                        vec![Content::Text(text.to_owned())]
+                    },
+                    provider_replay: None,
+                },
+                usage: Usage::known(10, 4),
+                termination: if incomplete {
+                    ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+                } else {
+                    ResponseTermination::Completed
+                },
+                returned_model: Some("test".into()),
+            };
+            ModelStart::Started {
+                stream: Box::pin(TerminalWithoutEof {
+                    response: Some(response),
+                    dropped: CancellationToken::new(),
+                }),
+                start_receipt: None,
+            }
+        })
+    }
 }
 
 impl CompleteBoundary {
@@ -407,6 +478,166 @@ async fn oversized_input_parks_before_provider_start() {
 
     session.close().await.expect("close");
     std::fs::remove_dir_all(dir).expect("cleanup");
+}
+
+fn compaction_config() -> ConversationConfig {
+    let mut configured = config();
+    configured.providers[0].capabilities.max_input_tokens = 8000;
+    configured.context.max_input_tokens = 8000;
+    configured.context.max_request_bytes = 8000;
+    configured.compaction_route = vec![configured.default_provider.clone()];
+    configured
+}
+
+#[tokio::test]
+async fn compaction_keeps_evidence_and_exact_current_input_without_replaying_old_input() {
+    let (dir, path) = database("compaction-continuity");
+    let session = Session::create(&path, compaction_config())
+        .await
+        .unwrap()
+        .session;
+    let (handle, first) = started_turn(&session, "first", &"x".repeat(6200)).await;
+    let checkpoint = r#"{"goals":["continue the coding task"],"constraints":[],"done":["earlier answer completed"],"in_progress":[],"blocked":[],"decisions":[],"evidence":[],"unresolved":[],"next_action":"read current user request","terminal_condition":null}"#;
+    let boundary = CompactingBoundary::new(checkpoint);
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
+    assert!(matches!(
+        handle.resume(first, boundaries.clone()).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+
+    let (_, second) = started_turn(&session, "second", "second-task").await;
+    let exit = handle.resume(second, boundaries).await.unwrap();
+    assert!(
+        matches!(exit, DriveExit::Settled(TurnOutcome::Completed { .. })),
+        "{exit:?}"
+    );
+    {
+        let requests = boundary.requests.lock().unwrap();
+        assert_eq!(requests.len(), 3);
+        assert!(
+            requests[1]
+                .instructions
+                .contains("advisory continuation checkpoint")
+        );
+        assert!(requests[1].tools.is_empty());
+        assert!(
+            serde_json::to_string(requests[1].messages.last().unwrap())
+                .unwrap()
+                .contains("Create the continuation checkpoint now")
+        );
+        assert_eq!(requests[2].instructions, "answer carefully");
+        let projected = serde_json::to_string(&requests[2].messages).unwrap();
+        assert!(projected.contains("continue the coding task"));
+        assert_eq!(projected.matches("second-task").count(), 1);
+        assert!(!projected.contains(&"x".repeat(64)));
+    }
+    let snapshot = handle
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(snapshot.transcript_tail.iter().any(|entry| {
+        matches!(&entry.data, ion_core::EntryData::ContextBoundary(boundary) if boundary.raw_tail.start.is_some())
+    }));
+    assert!(snapshot.transcript_tail.iter().any(|entry| {
+        entry.projection.iter().any(|message| {
+            serde_json::to_string(message)
+                .unwrap()
+                .contains(&"x".repeat(64))
+        })
+    }));
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn malformed_checkpoint_does_not_advance_context_or_repeat_model_call() {
+    let (dir, path) = database("compaction-invalid");
+    let session = Session::create(&path, compaction_config())
+        .await
+        .unwrap()
+        .session;
+    let (handle, first) = started_turn(&session, "first", &"x".repeat(6200)).await;
+    let boundary = CompactingBoundary::new("not-json");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
+    assert!(matches!(
+        handle.resume(first, boundaries.clone()).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let (_, second) = started_turn(&session, "second", "second-task").await;
+    assert_eq!(
+        handle.resume(second, boundaries.clone()).await.unwrap(),
+        DriveExit::Parked(ParkReason::InvalidCheckpoint)
+    );
+    assert_eq!(
+        handle.resume(second, boundaries).await.unwrap(),
+        DriveExit::Parked(ParkReason::InvalidCheckpoint)
+    );
+    assert_eq!(boundary.requests.lock().unwrap().len(), 2);
+    let snapshot = handle
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !snapshot
+            .transcript_tail
+            .iter()
+            .any(|entry| { matches!(entry.data, ion_core::EntryData::ContextBoundary(_)) })
+    );
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn incomplete_checkpoint_keeps_response_evidence_without_advancing_context() {
+    let (dir, path) = database("compaction-incomplete");
+    let session = Session::create(&path, compaction_config())
+        .await
+        .unwrap()
+        .session;
+    let (handle, first) = started_turn(&session, "first", &"x".repeat(6200)).await;
+    let boundary = CompactingBoundary::new("__incomplete__");
+    let boundaries = allowed_boundaries([boundary.clone() as Arc<dyn ModelBoundary>]);
+    assert!(matches!(
+        handle.resume(first, boundaries.clone()).await.unwrap(),
+        DriveExit::Settled(TurnOutcome::Completed { .. })
+    ));
+    let (_, second) = started_turn(&session, "second", "second-task").await;
+    assert_eq!(
+        handle.resume(second, boundaries.clone()).await.unwrap(),
+        DriveExit::Parked(ParkReason::IncompleteResponse)
+    );
+    assert_eq!(
+        handle.resume(second, boundaries).await.unwrap(),
+        DriveExit::Parked(ParkReason::IncompleteResponse)
+    );
+    assert_eq!(boundary.requests.lock().unwrap().len(), 2);
+    let snapshot = handle
+        .snapshot(SnapshotRequest {
+            conversation: session.primary_conversation(),
+            max_inputs: 16,
+            max_entries: 16,
+            max_bytes: 1024 * 1024,
+        })
+        .await
+        .unwrap();
+    assert!(
+        !snapshot
+            .transcript_tail
+            .iter()
+            .any(|entry| { matches!(entry.data, ion_core::EntryData::ContextBoundary(_)) })
+    );
+    session.close().await.unwrap();
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[tokio::test]

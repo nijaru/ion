@@ -69,7 +69,7 @@ impl Fixture {
             },
         };
         let step = store
-            .create_initial_model_step(started.turn.id, manifest)
+            .create_initial_model_step(started.turn.id, crate::StepPurpose::Generate, manifest)
             .await
             .unwrap()
             .step

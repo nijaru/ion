@@ -2,19 +2,21 @@
 
 use ion_ai::{Content, Role};
 use rusqlite::{Connection, OptionalExtension, params};
+use std::collections::BTreeSet;
 
 use super::super::{
     CreatedModelAttempt, CreatedModelStep, DriveBasis, FinishedTurn, RecordedModelAttempt,
     SelectedModelResponse, StoreError,
 };
 use super::semantic::{
-    Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_turn,
+    Sequence, advance_metadata, insert_entry, json_from, json_to, load_entry, load_input, load_turn,
 };
 use crate::{
-    AttemptId, CommitReceipt, CommitSeq, CostQuote, Entry, EntryData, EntryId, InputId,
-    ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SessionChange,
-    SessionUpdate, StepDisposition, StepId, StepPurpose, TranscriptContent, TranscriptMessage,
-    TranscriptRole, TurnId, TurnOutcome, TurnPhase, TurnSettings,
+    AttemptId, CommitReceipt, CommitSeq, ContextBoundary, ContinuationCheckpoint, CostQuote, Entry,
+    EntryData, EntryId, EntryRange, InputBody, InputDisposition, InputId, ModelAttempt,
+    ModelAttemptState, ModelAttemptTiming, ModelStep, RequestManifest, SemanticCompatibilityId,
+    SessionChange, SessionUpdate, StepDisposition, StepId, StepPurpose, TranscriptContent,
+    TranscriptMessage, TranscriptRole, TurnId, TurnOutcome, TurnPhase, TurnSettings,
 };
 
 pub(super) const MAX_DRIVE_ENTRIES: usize = 1024;
@@ -61,6 +63,7 @@ pub(super) fn drive_basis(
 pub(super) fn create_initial_step(
     connection: &mut Connection,
     turn_id: TurnId,
+    purpose: StepPurpose,
     manifest: RequestManifest,
 ) -> Result<CreatedModelStep, StoreError> {
     let transaction = connection.transaction()?;
@@ -83,7 +86,27 @@ pub(super) fn create_initial_step(
             "turn {turn_id} exhausted its model-step limit"
         )));
     }
-    validate_manifest_basis(&transaction, &turn, &turn.settings, &manifest)?;
+    if !matches!(purpose, StepPurpose::Generate | StepPurpose::Compact) {
+        return Err(StoreError::InvalidState(
+            "initial model step has invalid purpose".into(),
+        ));
+    }
+    if matches!(purpose, StepPurpose::Compact)
+        && !turn
+            .environment
+            .compaction_route
+            .contains(&manifest.settings.provider)
+    {
+        return Err(StoreError::InvalidState(
+            "compaction provider is outside the frozen route".into(),
+        ));
+    }
+    let expected_settings = if matches!(purpose, StepPurpose::Compact) {
+        crate::request::compaction_settings(&turn.settings)
+    } else {
+        turn.settings.clone()
+    };
+    validate_manifest_basis(&transaction, &turn, &expected_settings, &manifest)?;
 
     let mut sequence = Sequence::load(&transaction)?;
     let step_id: StepId = sequence.next()?;
@@ -97,7 +120,7 @@ pub(super) fn create_initial_step(
         id: step_id,
         turn: turn_id,
         ordinal,
-        purpose: StepPurpose::Generate,
+        purpose,
         manifest,
         disposition: StepDisposition::Open,
     };
@@ -131,6 +154,11 @@ pub(super) fn create_fallback_step(
 ) -> Result<CreatedModelStep, StoreError> {
     let transaction = connection.transaction()?;
     let mut predecessor = load_step(&transaction, predecessor_id)?;
+    if matches!(predecessor.purpose, StepPurpose::Compact) {
+        return Err(StoreError::InvalidState(
+            "compaction cannot fall back to a generation step".into(),
+        ));
+    }
     if !matches!(predecessor.disposition, StepDisposition::Open) {
         return Err(StoreError::InvalidState(format!(
             "model step {predecessor_id} is no longer open"
@@ -592,6 +620,11 @@ pub(super) fn select_final_response(
     let projection = final_response_projection(response)?;
 
     let mut step = load_step(&transaction, attempt.step)?;
+    if matches!(step.purpose, StepPurpose::Compact) {
+        return Err(StoreError::InvalidState(
+            "compaction response cannot settle a user turn".into(),
+        ));
+    }
     if !step.manifest.settings.permits_tool_response(response) {
         return Err(StoreError::InvalidState(
             "response violates frozen tool-choice controls".into(),
@@ -656,6 +689,232 @@ pub(super) fn select_final_response(
             ]),
         },
     })
+}
+
+pub(super) fn select_compaction_response(
+    connection: &mut Connection,
+    attempt_id: AttemptId,
+) -> Result<SelectedModelResponse, StoreError> {
+    let transaction = connection.transaction()?;
+    let attempt = load_attempt(&transaction, attempt_id)?;
+    let response = match &attempt.state {
+        ModelAttemptState::ResponseReady { response, .. } if response.is_complete() => response,
+        _ => {
+            return Err(StoreError::InvalidState(format!(
+                "model attempt {attempt_id} has no complete checkpoint response"
+            )));
+        }
+    };
+    let mut step = load_step(&transaction, attempt.step)?;
+    if !matches!(step.purpose, StepPurpose::Compact)
+        || !matches!(step.disposition, StepDisposition::Open)
+    {
+        return Err(StoreError::InvalidState(
+            "model step is not an open compaction".into(),
+        ));
+    }
+    let mut turn = load_turn(&transaction, step.turn)?;
+    if turn.is_terminal()
+        || turn.cancellation.requested
+        || turn.cancellation.generation != attempt.generation
+    {
+        return Err(StoreError::Cancelled(turn.id));
+    }
+    if turn.phase != TurnPhase::Model(step.id) {
+        return Err(StoreError::InvalidState(
+            "compaction step is not current".into(),
+        ));
+    }
+    if !turn
+        .environment
+        .provider(&step.manifest.settings.provider)
+        .is_some_and(|binding| binding.permits_returned_model(response.returned_model.as_deref()))
+    {
+        return Err(StoreError::InvalidState(
+            "compaction returned model is outside the frozen binding".into(),
+        ));
+    }
+    if latest_entry_id(&transaction, turn.conversation)? != step.manifest.cutoff
+        || turn_input_ids(&transaction, turn.id)? != step.manifest.included_inputs
+    {
+        return Err(StoreError::InvalidState(
+            "compaction source cutoff or retained inputs changed".into(),
+        ));
+    }
+    let mut text = String::new();
+    for content in &response.message.content {
+        let Content::Text(piece) = content else {
+            return Err(StoreError::InvalidCheckpoint(
+                "response contains non-text content".into(),
+            ));
+        };
+        text.push_str(piece);
+    }
+    let bound = turn.environment.context.max_checkpoint_bytes.min(
+        turn.environment
+            .context
+            .max_request_bytes
+            .min(turn.environment.context.max_input_tokens)
+            / 4,
+    ) as usize;
+    if text.is_empty() || text.len() > bound {
+        return Err(StoreError::InvalidCheckpoint(format!(
+            "checkpoint text must be between 1 and {bound} bytes"
+        )));
+    }
+    let checkpoint: ContinuationCheckpoint = serde_json::from_str(&text)
+        .map_err(|error| StoreError::InvalidCheckpoint(error.to_string()))?;
+    if !checkpoint.evidence.is_empty() {
+        return Err(StoreError::InvalidCheckpoint(
+            "checkpoint cites evidence IDs absent from the compactor request".into(),
+        ));
+    }
+    let boundary = ContextBoundary {
+        source_cutoff: step.manifest.cutoff,
+        retained_inputs: step.manifest.included_inputs.clone(),
+        checkpoint,
+        raw_tail: select_raw_tail(&transaction, &turn, step.manifest.cutoff)?,
+        checkpoint_schema: SemanticCompatibilityId::new("ion-checkpoint-v1")
+            .expect("static checkpoint schema is valid"),
+        compactor: step.manifest.settings.provider.clone(),
+        opaque_provider_artifact: None,
+    };
+    let mut sequence = Sequence::load(&transaction)?;
+    let entry_id: EntryId = sequence.next()?;
+    let commit: CommitSeq = sequence.next()?;
+    let entry = Entry {
+        id: entry_id,
+        conversation: turn.conversation,
+        data: EntryData::ContextBoundary(Box::new(boundary)),
+        projection: Vec::new(),
+    };
+    insert_entry(&transaction, &entry, commit)?;
+    step.disposition = StepDisposition::Selected(attempt_id);
+    update_step_disposition(&transaction, &step)?;
+    turn.phase = TurnPhase::Ready;
+    update_turn_runtime(&transaction, &turn)?;
+    advance_metadata(&transaction, &sequence, commit, None)?;
+    transaction.commit()?;
+
+    Ok(SelectedModelResponse {
+        entry: entry.clone(),
+        step: step.clone(),
+        turn: turn.clone(),
+        receipt: CommitReceipt {
+            seq: commit,
+            update: SessionUpdate::new(vec![
+                SessionChange::Entry(entry),
+                SessionChange::ModelStep(step),
+                SessionChange::Turn(turn),
+            ]),
+        },
+    })
+}
+
+fn select_raw_tail(
+    connection: &Connection,
+    turn: &crate::Turn,
+    cutoff: Option<EntryId>,
+) -> Result<EntryRange, StoreError> {
+    let empty = EntryRange {
+        start: None,
+        end: None,
+    };
+    let Some(cutoff) = cutoff else {
+        return Ok(empty);
+    };
+    let previous_boundary: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM entries WHERE conversation_id = ?1 AND kind = 'context_boundary'
+             ORDER BY id DESC LIMIT 1",
+            [turn.conversation.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let start_after = previous_boundary.unwrap_or(0);
+    let mut statement = connection.prepare(
+        "SELECT id FROM entries WHERE conversation_id = ?1 AND id > ?2 AND id <= ?3 ORDER BY id",
+    )?;
+    let rows = statement.query_map(
+        params![turn.conversation.get(), start_after, cutoff.get()],
+        |row| row.get::<_, i64>(0),
+    )?;
+    let mut entries = Vec::new();
+    for row in rows {
+        if entries.len() >= MAX_DRIVE_ENTRIES {
+            return Err(StoreError::ContextCapacity(
+                "compaction source exceeds bounded entry count".into(),
+            ));
+        }
+        entries.push(load_entry(
+            connection,
+            id::<EntryId>(row?, "compaction tail source")?,
+        )?);
+    }
+    let provider = turn
+        .environment
+        .provider(&turn.settings.provider)
+        .ok_or_else(|| StoreError::Corrupt("compaction provider binding disappeared".into()))?;
+    let request_cap = turn
+        .environment
+        .context
+        .max_request_bytes
+        .min(turn.environment.context.max_input_tokens)
+        .min(provider.capabilities.max_input_tokens);
+    let max_bytes = usize::try_from(turn.environment.context.max_tail_bytes.min(request_cap / 4))
+        .map_err(|_| StoreError::Limit("context tail bound overflow".into()))?;
+    let mut bytes = 0usize;
+    let mut chosen = None;
+    for start in (0..entries.len()).rev() {
+        bytes = bytes.saturating_add(json_to(&entries[start])?.len());
+        if bytes > max_bytes {
+            break;
+        }
+        if complete_exchange_suffix(&entries[start..]) {
+            chosen = Some(entries[start].id);
+        }
+    }
+    Ok(match chosen {
+        Some(start) => EntryRange {
+            start: Some(start),
+            end: Some(cutoff),
+        },
+        None => empty,
+    })
+}
+
+fn complete_exchange_suffix(entries: &[Entry]) -> bool {
+    let mut pending = BTreeSet::new();
+    for entry in entries {
+        for message in &entry.projection {
+            match message.role {
+                TranscriptRole::Assistant => {
+                    if !pending.is_empty() {
+                        return false;
+                    }
+                    for content in &message.content {
+                        if let TranscriptContent::ToolCall { invocation, .. } = content
+                            && !pending.insert(*invocation)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                TranscriptRole::Tool => {
+                    for content in &message.content {
+                        if let TranscriptContent::ToolResult { invocation, .. } = content
+                            && !pending.remove(invocation)
+                        {
+                            return false;
+                        }
+                    }
+                }
+                TranscriptRole::User if !pending.is_empty() => return false,
+                TranscriptRole::User => {}
+            }
+        }
+    }
+    pending.is_empty()
 }
 
 pub(super) fn finish_cancelled_turn(
@@ -896,6 +1155,19 @@ fn validate_manifest_basis(
             "model manifest cutoff is stale".to_owned(),
         ));
     }
+    let boundary: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM entries WHERE conversation_id = ?1 AND kind = 'context_boundary'
+             ORDER BY id DESC LIMIT 1",
+            [turn.conversation.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    if manifest.context_boundary.map(EntryId::get) != boundary {
+        return Err(StoreError::InvalidState(
+            "model manifest context boundary is stale".into(),
+        ));
+    }
     let inputs = turn_input_ids(connection, turn.id)?;
     if manifest.included_inputs != inputs {
         return Err(StoreError::InvalidState(
@@ -909,9 +1181,18 @@ pub(super) fn load_turn_entries(
     connection: &Connection,
     turn: &crate::Turn,
 ) -> Result<Vec<Entry>, StoreError> {
+    let boundary_id: Option<i64> = connection
+        .query_row(
+            "SELECT id FROM entries WHERE conversation_id = ?1 AND kind = 'context_boundary'
+             ORDER BY id DESC LIMIT 1",
+            [turn.conversation.get()],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let start = boundary_id.unwrap_or(0);
     let count: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM entries WHERE conversation_id = ?1",
-        [turn.conversation.get()],
+        "SELECT COUNT(*) FROM entries WHERE conversation_id = ?1 AND id >= ?2",
+        params![turn.conversation.get(), start],
         |row| row.get(0),
     )?;
     let count = usize::try_from(count)
@@ -925,8 +1206,8 @@ pub(super) fn load_turn_entries(
 
     let bytes: i64 = connection.query_row(
         "SELECT COALESCE(SUM(length(data) + length(projection)), 0)
-         FROM entries WHERE conversation_id = ?1",
-        [turn.conversation.get()],
+         FROM entries WHERE conversation_id = ?1 AND id >= ?2",
+        params![turn.conversation.get(), start],
         |row| row.get(0),
     )?;
     let bytes = usize::try_from(bytes)
@@ -938,15 +1219,103 @@ pub(super) fn load_turn_entries(
         )));
     }
 
-    let mut statement =
-        connection.prepare("SELECT id FROM entries WHERE conversation_id = ?1 ORDER BY id")?;
-    let rows = statement.query_map([turn.conversation.get()], |row| row.get::<_, i64>(0))?;
+    let mut statement = connection
+        .prepare("SELECT id FROM entries WHERE conversation_id = ?1 AND id >= ?2 ORDER BY id")?;
+    let rows = statement.query_map(params![turn.conversation.get(), start], |row| {
+        row.get::<_, i64>(0)
+    })?;
     let mut entries = Vec::with_capacity(count);
     for row in rows {
-        entries.push(load_entry(
-            connection,
-            id::<EntryId>(row?, "turn transcript entry")?,
-        )?);
+        let mut entry = load_entry(connection, id::<EntryId>(row?, "turn transcript entry")?)?;
+        if Some(entry.id.get()) == boundary_id {
+            let EntryData::ContextBoundary(boundary) = &entry.data else {
+                return Err(StoreError::Corrupt(
+                    "indexed context boundary has wrong kind".into(),
+                ));
+            };
+            let mut tail = Vec::new();
+            match (boundary.raw_tail.start, boundary.raw_tail.end) {
+                (Some(start), Some(end))
+                    if start <= end && end < entry.id && boundary.source_cutoff == Some(end) =>
+                {
+                    let mut tail_statement = connection.prepare(
+                        "SELECT id FROM entries WHERE conversation_id = ?1 AND id >= ?2 AND id <= ?3 ORDER BY id",
+                    )?;
+                    let tail_rows = tail_statement.query_map(
+                        params![turn.conversation.get(), start.get(), end.get()],
+                        |row| row.get::<_, i64>(0),
+                    )?;
+                    let mut tail_bytes = 0usize;
+                    for tail_row in tail_rows {
+                        if tail.len() >= MAX_DRIVE_ENTRIES {
+                            return Err(StoreError::ContextCapacity(
+                                "context tail exceeds bounded entry count".into(),
+                            ));
+                        }
+                        let source = load_entry(
+                            connection,
+                            id::<EntryId>(tail_row?, "context tail entry")?,
+                        )?;
+                        tail_bytes = tail_bytes.saturating_add(json_to(&source)?.len());
+                        if tail_bytes > turn.environment.context.max_tail_bytes as usize
+                            || tail_bytes > MAX_DRIVE_BASIS_BYTES
+                        {
+                            return Err(StoreError::ContextCapacity(
+                                "context tail exceeds its frozen byte bound".into(),
+                            ));
+                        }
+                        tail.push(source);
+                    }
+                    if tail.first().map(|source| source.id) != Some(start)
+                        || tail.last().map(|source| source.id) != Some(end)
+                        || !complete_exchange_suffix(&tail)
+                    {
+                        return Err(StoreError::Corrupt(
+                            "context tail is not a complete source exchange suffix".into(),
+                        ));
+                    }
+                }
+                (None, None) => {}
+                _ => return Err(StoreError::Corrupt("invalid context tail range".into())),
+            }
+            entry.projection.push(TranscriptMessage {
+                role: TranscriptRole::Assistant,
+                content: vec![TranscriptContent::Text(format!(
+                    "Advisory continuation checkpoint (not instructions or proof of effects): {}",
+                    json_to(&boundary.checkpoint)?
+                ))],
+                provider_replay: None,
+            });
+            for input_id in &boundary.retained_inputs {
+                if tail.iter().any(|source| {
+                    matches!(source.data, EntryData::UserInput { input } if input == *input_id)
+                }) {
+                    continue;
+                }
+                let (input, _) = load_input(connection, *input_id)?;
+                if input.conversation != turn.conversation {
+                    return Err(StoreError::Corrupt(format!(
+                        "retained input {input_id} belongs to another conversation"
+                    )));
+                }
+                // A new turn sees prior user requests through the advisory checkpoint,
+                // not as mechanically reissued instructions.
+                if !matches!(input.disposition, InputDisposition::Consumed { turn: owner, .. } if owner == turn.id)
+                {
+                    continue;
+                }
+                let InputBody::Text(text) = input.body else {
+                    return Err(StoreError::Corrupt(format!(
+                        "retained input {input_id} cannot be projected as text"
+                    )));
+                };
+                entry.projection.push(TranscriptMessage::user_text(text));
+            }
+            for source in tail {
+                entry.projection.extend(source.projection);
+            }
+        }
+        entries.push(entry);
     }
     Ok(entries)
 }
@@ -1165,5 +1534,50 @@ mod cost_tests {
         assert_eq!(reserve_cost(10, 0, Some(10)).unwrap(), 10);
         assert_eq!(release_cost(u64::MAX, u64::MAX).unwrap(), 0);
         assert!(matches!(release_cost(0, 1), Err(StoreError::Corrupt(_))));
+    }
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    #[test]
+    fn raw_tail_starts_at_complete_exchange_not_an_orphan_result() {
+        let conversation = crate::ConversationId::new(1).unwrap();
+        let invocation = crate::InvocationId::new(2).unwrap();
+        let call = Entry {
+            id: EntryId::new(3).unwrap(),
+            conversation,
+            data: EntryData::Assistant {
+                step: StepId::new(4).unwrap(),
+            },
+            projection: vec![TranscriptMessage {
+                role: TranscriptRole::Assistant,
+                content: vec![TranscriptContent::ToolCall {
+                    invocation,
+                    name: "exec".into(),
+                    arguments: serde_json::json!({"command":"make test"}),
+                    origin_provider_id: None,
+                }],
+                provider_replay: None,
+            }],
+        };
+        let result = Entry {
+            id: EntryId::new(5).unwrap(),
+            conversation,
+            data: EntryData::ToolResult { invocation },
+            projection: vec![TranscriptMessage {
+                role: TranscriptRole::Tool,
+                content: vec![TranscriptContent::ToolResult {
+                    invocation,
+                    name: "exec".into(),
+                    result: serde_json::json!({"exit_code":0}),
+                }],
+                provider_replay: None,
+            }],
+        };
+        assert!(complete_exchange_suffix(&[call.clone(), result.clone()]));
+        assert!(!complete_exchange_suffix(&[call]));
+        assert!(!complete_exchange_suffix(&[result]));
     }
 }

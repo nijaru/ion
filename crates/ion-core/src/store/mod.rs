@@ -20,7 +20,7 @@ use crate::{
     CommitReceipt, CommitSeq, ConversationConfig, ConversationId, CostQuote, Entry, EntryId,
     EntryPage, InputId, InstalledConfig, ModelAttempt, ModelAttemptState, ModelAttemptTiming,
     ModelStep, ProviderBindingId, RequestManifest, SessionId, SessionSnapshot, SnapshotRequest,
-    StepId, Turn, TurnId, TurnSettings,
+    StepId, StepPurpose, Turn, TurnId, TurnSettings,
 };
 
 const COMMAND_CAPACITY: usize = 64;
@@ -306,10 +306,12 @@ impl SessionStore {
     pub(crate) async fn create_initial_model_step(
         &self,
         turn: TurnId,
+        purpose: StepPurpose,
         manifest: RequestManifest,
     ) -> Result<CreatedModelStep, StoreError> {
         self.call(|reply| Command::CreateInitialModelStep {
             turn,
+            purpose,
             manifest,
             reply,
         })
@@ -381,6 +383,14 @@ impl SessionStore {
         attempt: crate::AttemptId,
     ) -> Result<SelectedModelResponse, StoreError> {
         self.call(|reply| Command::SelectFinalModelResponse { attempt, reply })
+            .await
+    }
+
+    pub(crate) async fn select_compaction_response(
+        &self,
+        attempt: crate::AttemptId,
+    ) -> Result<SelectedModelResponse, StoreError> {
+        self.call(|reply| Command::SelectCompactionResponse { attempt, reply })
             .await
     }
 
@@ -564,6 +574,7 @@ enum Command {
     },
     CreateInitialModelStep {
         turn: TurnId,
+        purpose: StepPurpose,
         manifest: RequestManifest,
         reply: oneshot::Sender<Result<CreatedModelStep, StoreError>>,
     },
@@ -592,6 +603,10 @@ enum Command {
         reply: oneshot::Sender<Result<RecordedModelAttempt, StoreError>>,
     },
     SelectFinalModelResponse {
+        attempt: crate::AttemptId,
+        reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
+    },
+    SelectCompactionResponse {
         attempt: crate::AttemptId,
         reply: oneshot::Sender<Result<SelectedModelResponse, StoreError>>,
     },
@@ -684,10 +699,11 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
             }
             Command::CreateInitialModelStep {
                 turn,
+                purpose,
                 manifest,
                 reply,
             } => {
-                let _ = reply.send(database.create_initial_model_step(turn, manifest));
+                let _ = reply.send(database.create_initial_model_step(turn, purpose, manifest));
             }
             Command::CreateFallbackModelStep {
                 predecessor,
@@ -730,6 +746,9 @@ fn run(mut database: sqlite::SqliteDatabase, mut rx: mpsc::Receiver<Command>) {
             }
             Command::SelectFinalModelResponse { attempt, reply } => {
                 let _ = reply.send(database.select_final_model_response(attempt));
+            }
+            Command::SelectCompactionResponse { attempt, reply } => {
+                let _ = reply.send(database.select_compaction_response(attempt));
             }
             Command::FinishCancelledTurn { turn, reply } => {
                 let _ = reply.send(database.finish_cancelled_turn(turn));
@@ -791,6 +810,8 @@ pub(crate) enum StoreError {
     Cancelled(TurnId),
     #[error("turn context cannot be assembled within bounded runtime limits: {0}")]
     ContextCapacity(String),
+    #[error("model compaction checkpoint is invalid: {0}")]
+    InvalidCheckpoint(String),
     #[error("turn reached a configured limit: {0}")]
     Limit(String),
     #[error("no conservative host quote is available for a capped model attempt")]
@@ -833,6 +854,7 @@ impl StoreError {
                 | Self::InvalidRequest(_)
                 | Self::Cancelled(_)
                 | Self::ContextCapacity(_)
+                | Self::InvalidCheckpoint(_)
                 | Self::Limit(_)
                 | Self::CostQuoteUnavailable
                 | Self::MonetaryCapacity

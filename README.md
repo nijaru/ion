@@ -34,6 +34,11 @@ foundation, and an initial tool-execution boundary:
 - logical `ModelStep` versus physical `ModelAttempt`, durable response-ready evidence,
   monotonic start-receipt/evidence refinement, selection guarded by current Turn generation and
   step eligibility, and atomic predecessor-superseding provider fallback;
+- automatic safe-boundary context compaction through a tool-free ModelStep. A complete,
+  schema-checked checkpoint and bounded raw exchange tail become one immutable
+  ContextBoundary; exact current-turn user input remains separate, and old transcript
+  evidence remains inspectable. Malformed or incomplete checkpoints park without
+  advancing the boundary;
 - stable provider effect keys derived from Session + Turn + step ordinal and covered by the
   provider-request fingerprint when adapters use them as idempotency material; exact frozen
   service-realm matching and host-owned credential/egress preflight before intent, with a
@@ -87,10 +92,11 @@ Two synthetic workspace tasks completed against a local Qwen model through the
 OpenAI-compatible loopback endpoint: read/edit/re-read and list/read/create/re-read.
 A terminal session also completed a live model exchange and restored the terminal.
 One synthetic Linux task also created C source, compiled and ran it with native
-GCC through `exec`, and read the imported source back. Native macOS command
-execution, user-facing approval, broader provider qualification, and sustained
-coding-task evidence remain open.
-Parallel tool dispatch, context compaction/forking,
+GCC through `exec`, and read the imported source back. A Fedora local-Qwen
+two-turn C task fixed a parser, added regression tests, then added and tested a
+formatting API in the same Session across context boundaries; independent host
+tests passed. Native macOS command execution, user-facing approval, and broader
+provider qualification remain open. Parallel tool dispatch, context reset/forking,
 Steer/InteractionReply placement and workers remain optional later work.
 
 Known limits before prerelease: absolute Turn wall deadlines are not implemented;
@@ -104,6 +110,12 @@ batch and remaining context headroom, rather than reserving 64 KiB for a tiny
 read. It still compares serialized request **bytes** to an asserted input-token
 capacity, not an exact tokenizer-backed bound; a provider may reject a context
 that passes this conservative proxy.
+Compaction uses the selected frozen provider and requires one valid checkpoint
+JSON object. A local Qwen run with an asserted 4096-token output cap exhausted
+that cap on a compaction request; the current drive parks incomplete responses
+as `IncompleteResponse`. An 8192-token-cap run completed the tested two-turn task.
+This is task evidence, not a universal output-cap recommendation or provider
+guarantee.
 
 `submit_turn` atomically admits text and places its Turn with one watch receipt;
 request-key replay is idempotent and an insertion fault rolls back the submission.
@@ -301,7 +313,7 @@ serialized request bytes against the asserted input-token capacity. A live PTY
 `ion chat` run used `exec` to write a file, read it back and exited through
 `/quit`. A direct OpenAI attempt returned HTTP 429;
 the Anthropic adapter has only loopback tests. These checks do not qualify
-sustained coding, public-provider behavior, macOS exec or the full
+public-provider behavior, macOS exec or the full
 range of terminal emulators. The excluded legacy `crates/ion/` remains
 reference material, not an alternative maintained runtime.
 

@@ -16,7 +16,7 @@ use crate::{
     ModelAttempt, ModelAttemptState, ModelAttemptTiming, ModelBoundaries, ModelBoundary,
     ModelStart, ParkReason, ProviderAdmissionError, ProviderFailureEvidence, ProviderFingerprint,
     ProviderStartReceipt, RequestManifest, SemanticRequest, SessionHealth, SessionId,
-    StartReceiptCapability, StartReconciliation, StepDisposition, TurnId, TurnOutcome,
+    StartReceiptCapability, StartReconciliation, StepDisposition, StepPurpose, TurnId, TurnOutcome,
     TurnSettings, assemble, semantic_request_assembly_revision,
 };
 
@@ -95,6 +95,15 @@ pub(crate) async fn run(
             if !step.manifest.settings.permits_tool_response(response) {
                 return DriveExit::Parked(ParkReason::ToolChoiceMismatch);
             }
+            if !response.is_complete() {
+                return DriveExit::Parked(ParkReason::IncompleteResponse);
+            }
+            if matches!(step.purpose, StepPurpose::Compact) {
+                match select_ready(&inner, turn_id, attempt, response, &step.purpose).await {
+                    DispatchAction::Continue => continue,
+                    DispatchAction::Exit(exit) => return exit,
+                }
+            }
             if response
                 .message
                 .content
@@ -107,28 +116,37 @@ pub(crate) async fn run(
                 }
                 continue;
             }
-            return select_ready(&inner, turn_id, attempt, response).await;
+            match select_ready(&inner, turn_id, attempt, response, &step.purpose).await {
+                DispatchAction::Continue => continue,
+                DispatchAction::Exit(exit) => return exit,
+            }
         }
-        if !crate::tool_drive::compatible(&basis, &tools) {
-            return DriveExit::Parked(ParkReason::ToolUnavailable);
-        }
-
         match &basis.current_step {
             None => {
                 let prepared = match prepare_initial(inner.session_id(), &basis, &boundaries) {
                     Ok(prepared) => prepared,
                     Err(exit) => return exit.with_turn(turn_id),
                 };
+                if !matches!(prepared.purpose, StepPurpose::Compact)
+                    && !crate::tool_drive::compatible(&basis, &tools)
+                {
+                    return DriveExit::Parked(ParkReason::ToolUnavailable);
+                }
                 if let Err(error) = inner.observe_store(
                     inner
                         .store()
-                        .create_initial_model_step(turn_id, prepared.manifest)
+                        .create_initial_model_step(turn_id, prepared.purpose, prepared.manifest)
                         .await,
                 ) {
                     return store_exit(turn_id, error);
                 }
             }
             Some(step) => {
+                if !matches!(step.purpose, StepPurpose::Compact)
+                    && !crate::tool_drive::compatible(&basis, &tools)
+                {
+                    return DriveExit::Parked(ParkReason::ToolUnavailable);
+                }
                 if !matches!(step.disposition, StepDisposition::Open) {
                     return DriveExit::Faulted {
                         turn: turn_id,
@@ -139,6 +157,9 @@ pub(crate) async fn run(
                 let prepared = match prepare_existing(inner.session_id(), &basis, &boundaries) {
                     Ok(prepared) => prepared,
                     Err(PrepareExit::Parked(ParkReason::ProviderUnavailable)) => {
+                        if matches!(step.purpose, StepPurpose::Compact) {
+                            return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                        }
                         match commit_fallback(
                             &inner,
                             &basis,
@@ -176,6 +197,9 @@ pub(crate) async fn run(
                                 >= basis.turn.environment.limits.max_model_attempts_per_step
                                     as usize;
                             if !retryable_provider_failure(failure.kind) || retry_exhausted {
+                                if matches!(step.purpose, StepPurpose::Compact) {
+                                    return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                                }
                                 if !provider_failure_permits_fallback(failure.kind) {
                                     return DriveExit::Parked(ParkReason::ProviderUnavailable);
                                 }
@@ -197,6 +221,9 @@ pub(crate) async fn run(
                                 >= basis.turn.environment.limits.max_model_attempts_per_step
                                     as usize
                             {
+                                if matches!(step.purpose, StepPurpose::Compact) {
+                                    return DriveExit::Parked(ParkReason::ProviderUnavailable);
+                                }
                                 match commit_fallback(
                                     &inner,
                                     &basis,
@@ -244,12 +271,19 @@ struct PreparedDrive {
     boundary: Arc<dyn ModelBoundary>,
     effect_key: String,
     manifest: RequestManifest,
+    purpose: StepPurpose,
     response_limit: u32,
 }
 
 enum PrepareExit {
     Parked(ParkReason),
     Faulted(String),
+}
+
+fn current_context_boundary(entries: &[crate::Entry]) -> Option<crate::EntryId> {
+    entries.first().and_then(|entry| {
+        matches!(entry.data, crate::EntryData::ContextBoundary(_)).then_some(entry.id)
+    })
 }
 
 impl PrepareExit {
@@ -266,13 +300,57 @@ fn prepare_initial(
     basis: &DriveBasis,
     boundaries: &ModelBoundaries,
 ) -> Result<PreparedDrive, PrepareExit> {
-    let assembled = assemble(
+    let generation = assemble(
         &basis.turn.environment,
         &basis.turn.settings,
         &basis.entries,
         basis.entries.last().map(|entry| entry.id),
-    )
-    .map_err(map_request_error)?;
+    );
+    let provider = basis
+        .turn
+        .environment
+        .provider(&basis.turn.settings.provider)
+        .ok_or(PrepareExit::Parked(ParkReason::ProviderUnavailable))?;
+    let capacity = basis
+        .turn
+        .environment
+        .context
+        .max_request_bytes
+        .min(basis.turn.environment.context.max_input_tokens)
+        .min(provider.capabilities.max_input_tokens);
+    // Keep one fifth of the selected model's asserted input window for the next
+    // tool call/result closure. The earlier two-thirds trigger compacted a live
+    // coding Turn repeatedly and spent its step budget rereading unchanged files.
+    let should_compact = matches!(&generation, Err(crate::RequestError::TooLarge { .. }))
+        || generation
+            .as_ref()
+            .is_ok_and(|request| request.bytes.saturating_mul(5) >= u64::from(capacity) * 4);
+    let compact = should_compact
+        && basis.entries.len() > 1
+        && basis
+            .turn
+            .environment
+            .compaction_route
+            .contains(&basis.turn.settings.provider);
+    let (assembled, purpose, settings) = if compact {
+        (
+            crate::request::assemble_compaction(
+                &basis.turn.environment,
+                &basis.turn.settings,
+                &basis.entries,
+                basis.entries.last().map(|entry| entry.id),
+            )
+            .map_err(map_request_error)?,
+            StepPurpose::Compact,
+            crate::request::compaction_settings(&basis.turn.settings),
+        )
+    } else {
+        (
+            generation.map_err(map_request_error)?,
+            StepPurpose::Generate,
+            basis.turn.settings.clone(),
+        )
+    };
     let binding = basis
         .turn
         .environment
@@ -292,8 +370,8 @@ fn prepare_initial(
         environment_digest: basis.turn.environment.digest().map_err(|error| {
             PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
         })?,
-        settings: basis.turn.settings.clone(),
-        context_boundary: None,
+        settings,
+        context_boundary: current_context_boundary(&basis.entries),
         cutoff: basis.entries.last().map(|entry| entry.id),
         included_inputs: basis.included_inputs.clone(),
         assembly: semantic_request_assembly_revision(),
@@ -308,6 +386,7 @@ fn prepare_initial(
         boundary,
         effect_key,
         manifest,
+        purpose,
         response_limit: basis.turn.environment.limits.max_response_bytes,
     })
 }
@@ -329,16 +408,26 @@ fn prepare_existing(
     if step.manifest.environment_digest != environment_digest
         || step.manifest.included_inputs != basis.included_inputs
         || step.manifest.cutoff != basis.entries.last().map(|entry| entry.id)
+        || step.manifest.context_boundary != current_context_boundary(&basis.entries)
     {
         return Err(PrepareExit::Parked(ParkReason::RecoveryRequired));
     }
 
-    let assembled = assemble(
-        &basis.turn.environment,
-        &step.manifest.settings,
-        &basis.entries,
-        step.manifest.cutoff,
-    )
+    let assembled = if matches!(step.purpose, StepPurpose::Compact) {
+        crate::request::assemble_compaction(
+            &basis.turn.environment,
+            &step.manifest.settings,
+            &basis.entries,
+            step.manifest.cutoff,
+        )
+    } else {
+        assemble(
+            &basis.turn.environment,
+            &step.manifest.settings,
+            &basis.entries,
+            step.manifest.cutoff,
+        )
+    }
     .map_err(map_request_error)?;
     if assembled.semantic_digest != step.manifest.semantic_digest {
         return Err(PrepareExit::Parked(ParkReason::RecoveryRequired));
@@ -367,6 +456,7 @@ fn prepare_existing(
         boundary,
         effect_key,
         manifest: step.manifest.clone(),
+        purpose: step.purpose.clone(),
         response_limit: basis.turn.environment.limits.max_response_bytes,
     })
 }
@@ -433,10 +523,7 @@ fn prepare_fallback(
                 PrepareExit::Faulted(format!("turn environment digest failed: {error}"))
             })?,
             settings: settings.clone(),
-            context_boundary: basis
-                .current_step
-                .as_ref()
-                .and_then(|step| step.manifest.context_boundary),
+            context_boundary: current_context_boundary(&basis.entries),
             cutoff: basis.entries.last().map(|entry| entry.id),
             included_inputs: basis.included_inputs.clone(),
             assembly: semantic_request_assembly_revision(),
@@ -934,9 +1021,14 @@ async fn dispatch(
                                 ParkReason::ToolChoiceMismatch,
                             ));
                         }
-                        return DispatchAction::Exit(
-                            select_ready(inner, basis.turn.id, &created.attempt, &response).await,
-                        );
+                        return select_ready(
+                            inner,
+                            basis.turn.id,
+                            &created.attempt,
+                            &response,
+                            &prepared.purpose,
+                        )
+                        .await;
                     }
                 }
             }
@@ -949,9 +1041,31 @@ async fn select_ready(
     turn_id: TurnId,
     attempt: &ModelAttempt,
     response: &ion_ai::ModelResponse,
-) -> DriveExit {
+    purpose: &StepPurpose,
+) -> DispatchAction {
     if !response.is_complete() {
-        return DriveExit::Parked(ParkReason::ProviderUnavailable);
+        return DispatchAction::Exit(DriveExit::Parked(ParkReason::IncompleteResponse));
+    }
+    if matches!(purpose, StepPurpose::Compact) {
+        if response
+            .message
+            .content
+            .iter()
+            .any(|content| !matches!(content, Content::Text(_)))
+        {
+            return DispatchAction::Exit(DriveExit::Parked(ParkReason::InvalidCheckpoint));
+        }
+        return match inner.observe_store(inner.store().select_compaction_response(attempt.id).await)
+        {
+            Ok(_) => DispatchAction::Continue,
+            Err(StoreError::InvalidCheckpoint(_)) => {
+                DispatchAction::Exit(DriveExit::Parked(ParkReason::InvalidCheckpoint))
+            }
+            Err(StoreError::Cancelled(_)) => {
+                DispatchAction::Exit(finish_cancelled(inner, turn_id).await)
+            }
+            Err(error) => DispatchAction::Exit(store_exit(turn_id, error)),
+        };
     }
     if response
         .message
@@ -959,19 +1073,21 @@ async fn select_ready(
         .iter()
         .any(|content| matches!(content, Content::ToolCall(_)))
     {
-        return DriveExit::Parked(ParkReason::ToolUnavailable);
+        return DispatchAction::Exit(DriveExit::Parked(ParkReason::ToolUnavailable));
     }
 
     match inner.observe_store(inner.store().select_final_model_response(attempt.id).await) {
-        Ok(selected) => match selected.turn.outcome {
+        Ok(selected) => DispatchAction::Exit(match selected.turn.outcome {
             Some(outcome) => DriveExit::Settled(outcome),
             None => DriveExit::Faulted {
                 turn: turn_id,
                 message: "final response selection did not settle its Turn".to_owned(),
             },
-        },
-        Err(StoreError::Cancelled(_)) => finish_cancelled(inner, turn_id).await,
-        Err(error) => store_exit(turn_id, error),
+        }),
+        Err(StoreError::Cancelled(_)) => {
+            DispatchAction::Exit(finish_cancelled(inner, turn_id).await)
+        }
+        Err(error) => DispatchAction::Exit(store_exit(turn_id, error)),
     }
 }
 
