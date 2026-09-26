@@ -95,8 +95,9 @@ One synthetic Linux task also created C source, compiled and ran it with native
 GCC through `exec`, and read the imported source back. A Fedora local-Qwen
 two-turn C task fixed a parser, added regression tests, then added and tested a
 formatting API in the same Session across context boundaries; independent host
-tests passed. Native macOS command execution, user-facing approval, and broader
-provider qualification remain open. Parallel tool dispatch, context reset/forking,
+tests passed. An opt-in terminal approval flow has synthetic PTY coverage;
+native macOS command execution and broader provider qualification remain open.
+Parallel tool dispatch, context reset/forking,
 Steer/InteractionReply placement and workers remain optional later work.
 
 With the text checkpoint, a separate Fedora PTY run completed a `make test`

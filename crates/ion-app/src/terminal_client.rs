@@ -10,9 +10,9 @@ use std::{
 use anyhow::{Context, Result, ensure};
 use ion_core::{
     ApprovalDecision, ApprovalState, AttemptId, ContentDigest, DriveExit, DrivePolicy, Entry,
-    EntryData, InputSender, InvocationId, PreparedAction, ProgressUpdate, SessionProgress,
-    SessionSnapshot, SnapshotRequest, StepId, SubmitTurnRequest, SubmittedTurn, ToolExchangeState,
-    ToolInvocation, ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
+    EntryData, InputSender, InvocationId, ParkReason, PreparedAction, ProgressUpdate,
+    SessionProgress, SessionSnapshot, SnapshotRequest, StepId, SubmitTurnRequest, SubmittedTurn,
+    ToolExchangeState, ToolInvocation, ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
 };
 use ion_terminal::{
     Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession,
@@ -498,6 +498,10 @@ pub(super) async fn chat(args: ChatArgs) -> Result<()> {
     }
     if args.ask_mutations {
         ui.present_approval(&initial, usize::from(columns))?;
+    } else if pending_approval(&initial).is_some() {
+        ui.status =
+            "Approval pending; reopen chat with --ask-mutations and the same host/tool flags"
+                .into();
     }
     ui.render(&mut terminal, &mut screen, false)?;
     let mut initial_prompt = args
@@ -749,6 +753,10 @@ async fn run_turn(
     ui.tool_progress = None;
     ui.status = match exit {
         Ok(DriveExit::Settled(outcome)) => format!("Turn {}: {outcome:?}", turn.get()),
+        Ok(DriveExit::Parked(ParkReason::AwaitingApproval)) if !args.ask_mutations => format!(
+            "Turn {}: approval pending; reopen chat with --ask-mutations and the same host/tool flags",
+            turn.get()
+        ),
         Ok(other) => format!(
             "Turn {}: {other:?}; /resume after checking status",
             turn.get()

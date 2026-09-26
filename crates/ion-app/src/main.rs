@@ -17,7 +17,7 @@ use ion_core::{
     AuthorityCeiling, ContentDigest, ContextPolicy, ControlCeiling, ConversationConfig, CostQuote,
     DriveExit, DrivePolicy, EgressRealm, InputSender, LiveToolAuthority, ModelBoundaries,
     ModelBoundary, ModelBoundaryIdentity, NativeEditBoundary, NativeListBoundary,
-    NativeReadBoundary, ProviderAdmissionError, ProviderBinding, ProviderBindingId,
+    NativeReadBoundary, ParkReason, ProviderAdmissionError, ProviderBinding, ProviderBindingId,
     ProviderCapabilities, ReturnedModelPolicy, SemanticCompatibilityId, Session, SnapshotRequest,
     StartReceiptCapability, SubmitTurnRequest, SubmittedTurn, ToolBinding, ToolBoundaries,
     ToolBoundary, TurnId, TurnLimits, anthropic::AnthropicMessages,
@@ -611,6 +611,9 @@ async fn drive(host: Host, turn: TurnId) -> Result<()> {
     match exit {
         DriveExit::Settled(ion_core::TurnOutcome::Completed { .. }) => Ok(()),
         DriveExit::Settled(outcome) => bail!("Turn settled without completion: {outcome:?}"),
+        DriveExit::Parked(ParkReason::AwaitingApproval) => bail!(
+            "Turn awaits an exact tool decision; reopen this Session with `ion chat --ask-mutations` and the same host/tool flags"
+        ),
         DriveExit::Parked(reason) => bail!("Turn parked: {reason:?}"),
         DriveExit::Stopped { .. } => bail!("Turn stopped"),
         DriveExit::Faulted { message, .. } => bail!("Turn faulted: {message}"),
