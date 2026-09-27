@@ -71,8 +71,10 @@ a real terminal. In a separate live Rust fixture, DeepSeek Flash diagnosed
 failing contract tests, repaired the implementation, passed `cargo test`, and
 recalled the change after relaunch. Direct OpenAI returned HTTP 429. Anthropic
 and other model/account combinations remain unqualified here. OpenRouter
-browser login has focused tests; live attempts reached the authorization page
-but timed out without a callback.
+browser login has focused tests. A disposable invalid code reached its local
+callback and OpenRouter's exchange endpoint, where it was rejected without
+saving a credential. Real account authorization remains unqualified: browser
+attempts timed out without a callback.
 [ARCHITECTURE.md](ARCHITECTURE.md) holds the design contracts.
 
 Repository checks:
