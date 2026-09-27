@@ -67,10 +67,12 @@ separate live coding tasks. OpenRouter GPT-5.4 also completed headless and
 terminal tasks, but the cheaper Flash routes are the default preference.
 Resulting files and committed sessions were checked independently. Masked key
 entry, private saved-key storage, credential status and logout were checked in
-a real terminal. Direct OpenAI returned HTTP 429. Anthropic and other
-model/account combinations remain unqualified here. OpenRouter browser login
-has focused tests; live attempts reached the authorization page but timed out
-without a callback.
+a real terminal. In a separate live Rust fixture, DeepSeek Flash diagnosed
+failing contract tests, repaired the implementation, passed `cargo test`, and
+recalled the change after relaunch. Direct OpenAI returned HTTP 429. Anthropic
+and other model/account combinations remain unqualified here. OpenRouter
+browser login has focused tests; live attempts reached the authorization page
+but timed out without a callback.
 [ARCHITECTURE.md](ARCHITECTURE.md) holds the design contracts.
 
 Repository checks:
