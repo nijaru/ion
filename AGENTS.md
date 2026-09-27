@@ -3,8 +3,7 @@
 ## Direction
 
 - `ARCHITECTURE.md` holds the current coding-agent design target;
-  `README.md` describes implemented and validated behavior. The target is
-  under review until the rewritten core and real user paths are qualified.
+  `README.md` describes implemented and validated behavior.
 - Build one Pi-like local coding loop for TUI, headless and library hosts:
   read, edit, write, native shell, project instructions, model catalog,
   automatic environment keys, interactive login and resumable sessions.
