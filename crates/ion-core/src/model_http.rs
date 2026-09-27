@@ -26,6 +26,7 @@ const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
     ChatCompletions,
+    LlamaCppNoThinking,
     DeepSeekChat,
     MiMoChat,
     OpenRouterNoReasoning,
@@ -468,6 +469,15 @@ fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderEr
             Reasoning::High => body["reasoning_effort"] = json!("high"),
             Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
         },
+        HttpWire::LlamaCppNoThinking => {
+            if !matches!(
+                request.controls.reasoning,
+                Reasoning::ProviderDefault | Reasoning::Off
+            ) {
+                return Err(unsupported("llama.cpp thinking needs reasoning replay"));
+            }
+            body["chat_template_kwargs"] = json!({"enable_thinking":false});
+        }
         HttpWire::DeepSeekChat => {
             if !matches!(
                 request.controls.reasoning,
@@ -1230,6 +1240,8 @@ mod tests {
         assert_eq!(mimo["thinking"]["type"], "disabled");
         let openrouter = chat_body(&request, HttpWire::OpenRouterNoReasoning).unwrap();
         assert_eq!(openrouter["reasoning"]["enabled"], false);
+        let llama_cpp = chat_body(&request, HttpWire::LlamaCppNoThinking).unwrap();
+        assert_eq!(llama_cpp["chat_template_kwargs"]["enable_thinking"], false);
 
         let mut thinking = request;
         thinking.controls.reasoning = Reasoning::High;
@@ -1237,6 +1249,7 @@ mod tests {
             HttpWire::DeepSeekChat,
             HttpWire::MiMoChat,
             HttpWire::OpenRouterNoReasoning,
+            HttpWire::LlamaCppNoThinking,
         ] {
             assert_eq!(
                 chat_body(&thinking, wire).unwrap_err().kind,

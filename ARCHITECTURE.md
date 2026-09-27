@@ -16,9 +16,9 @@ a library host. The first tool set is read, edit, write and shell. Shell can
 handle search and listing until a dedicated tool shows a benefit.
 
 A usable first version includes project instructions, model discovery and
-selection, automatic environment API keys, interactive login with a suitable
-OAuth route, and honest resume. Ion needs to complete real coding tasks end to
-end; scripted model and storage tests alone do not establish that outcome.
+selection, automatic environment API keys, optional masked key entry, and
+honest resume. Ion needs to complete real coding tasks end to end; scripted
+model and storage tests alone do not establish that outcome.
 Workers, personal memory, gateways, schedules and general workflow authoring
 are outside this initial scope.
 
@@ -118,9 +118,8 @@ The catalog lists models with working transports and maintained capability
 metadata. A user can discover, select and switch models without asserting
 capacity values for known entries. Custom compatible endpoints remain
 possible with the metadata their adapters actually need. Resolve an ambient
-key automatically for its matching provider. Interactive login and logout
-operate on host-owned credentials; an OAuth route uses its own valid flow and
-matching wire adapter, with expiry handled at request time. Do not silently
+key automatically for its matching provider. Masked key entry and logout
+operate on host-owned credentials. Do not silently
 switch identities after a saved login fails. The exact initial provider list
 is an implementation recommendation to verify, not a product requirement.
 

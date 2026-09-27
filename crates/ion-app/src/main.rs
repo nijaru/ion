@@ -62,10 +62,8 @@ enum Action {
         #[arg(long)]
         api_key_env: Option<String>,
     },
-    /// Sign in through OpenRouter OAuth, or enter an API key for another provider.
+    /// Save a provider API key entered at a masked terminal prompt.
     Login { provider: String },
-    /// Enter a provider API key in the terminal, including for OpenRouter.
-    LoginKey { provider: String },
     /// Remove a saved credential; an environment key stays active.
     Logout { provider: String },
     /// Show credential sources without displaying secrets.
@@ -82,6 +80,7 @@ enum Action {
 #[serde(rename_all = "kebab-case")]
 enum Wire {
     ChatCompletions,
+    LlamaCppNoThinking,
     AnthropicMessages,
 }
 
@@ -149,12 +148,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             println!("Selected {}/{}", resolved.provider, resolved.model);
             Ok(())
         }
-        Some(Action::Login { provider }) if provider == "openrouter" => {
-            credentials.login_openrouter().await?;
-            println!("Signed in to OpenRouter.");
-            Ok(())
-        }
-        Some(Action::Login { provider }) | Some(Action::LoginKey { provider }) => {
+        Some(Action::Login { provider }) => {
             ensure!(
                 io::stdin().is_terminal(),
                 "API-key login requires a terminal; use an environment variable in headless mode"
@@ -368,6 +362,7 @@ fn resolve_saved(saved: &SavedSelection) -> Result<Selection> {
         endpoint: endpoint.into(),
         wire: match wire {
             Wire::ChatCompletions => HttpWire::ChatCompletions,
+            Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
             Wire::AnthropicMessages => HttpWire::AnthropicMessages,
         },
         api_key_env: saved
@@ -423,7 +418,7 @@ fn select(
         }
     }
     bail!(
-        "no model selected; run `ion models`, then `ion use PROVIDER MODEL` or `ion login openrouter`"
+        "no model selected; run `ion models`, then `ion use PROVIDER MODEL` or set a provider key"
     )
 }
 

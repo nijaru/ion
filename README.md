@@ -19,14 +19,14 @@ Ion picks a catalog model automatically when its provider key is present in
 `ANTHROPIC_API_KEY`. The default preference starts with DeepSeek Flash, then
 MiMo Flash, then DeepSeek Flash through OpenRouter. To select one
 explicitly, run `ion use PROVIDER MODEL` with the exact ID shown by `ion
-models`. `ion login openrouter` opens OpenRouter's browser login and saves the
-returned key locally. `ion login-key PROVIDER` accepts a key at a masked
-terminal prompt; `ion auth` shows which credential source is active, and
+models`. `ion login PROVIDER` accepts a key at a masked terminal prompt when
+no environment key is available. `ion auth` shows which credential source is
+active, and
 `ion logout PROVIDER` removes a saved key. Environment keys take precedence.
 With the existing Pi FNOX profile, for example:
 
 ```sh
-fnox --profile pi exec -- target/debug/ion --provider deepseek --model deepseek-flash
+fnox --profile pi exec -- target/debug/ion --provider openrouter --model deepseek/deepseek-v4.1-flash
 ```
 
 From the project directory:
@@ -43,8 +43,10 @@ SQLite session. An existing session uses its recorded directory, and an
 explicit `--cwd` must match it. By default, Ion reopens the session associated
 with the current directory. It loads `AGENTS.md` instructions found along that
 directory's ancestor path. `ion use` also accepts a custom model with
-`--endpoint URL --wire chat-completions` or `--wire anthropic-messages`;
-custom remote endpoints require HTTPS and a key supplied through
+`--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+For a llama.cpp server whose model emits unreplayable reasoning, use
+`--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
+endpoints require HTTPS and a key supplied through
 `ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Literal loopback HTTP can run
 without a key.
 
@@ -65,16 +67,17 @@ wrote and verified a file, then continued the same session headlessly after
 relaunch. MiMo V2.6 Flash and DeepSeek V4.1 Flash through OpenRouter completed
 separate live coding tasks. OpenRouter GPT-5.4 also completed headless and
 terminal tasks, but the cheaper Flash routes are the default preference.
+In a later OpenRouter FNOX task, Ion created a Python module, repaired two
+contract failures discovered by additional tests, passed independent checks,
+and ended three resumed Turns cleanly. The custom llama.cpp no-thinking route
+also repaired a Python fixture through Pi's desktop model via a loopback SSH
+tunnel; independent tests and a resumed answer confirmed it.
 Resulting files and committed sessions were checked independently. Masked key
 entry, private saved-key storage, credential status and logout were checked in
 a real terminal. In a separate live Rust fixture, DeepSeek Flash diagnosed
 failing contract tests, repaired the implementation, passed `cargo test`, and
 recalled the change after relaunch. Direct OpenAI returned HTTP 429. Anthropic
-and other model/account combinations remain unqualified here. OpenRouter
-browser login has focused tests. A disposable invalid code reached its local
-callback and OpenRouter's exchange endpoint, where it was rejected without
-saving a credential. Real account authorization remains unqualified: browser
-attempts timed out without a callback.
+and other model/account combinations remain unqualified here.
 [ARCHITECTURE.md](ARCHITECTURE.md) holds the design contracts.
 
 Repository checks:
