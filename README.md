@@ -39,8 +39,9 @@ ion inspect                # committed session history as JSON
 ```
 
 `--cwd PATH` chooses a working directory; `--session PATH` selects an explicit
-SQLite session. By default, Ion reopens the session associated with the
-current directory. It loads `AGENTS.md` instructions found along that
+SQLite session. An existing session uses its recorded directory, and an
+explicit `--cwd` must match it. By default, Ion reopens the session associated
+with the current directory. It loads `AGENTS.md` instructions found along that
 directory's ancestor path. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`;
 custom remote endpoints require HTTPS and a key supplied through

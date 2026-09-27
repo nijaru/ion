@@ -25,6 +25,10 @@ trap cleanup EXIT
 mkdir -p "$WORK/workspace" "$WORK/config" "$WORK/state"
 printf 'sample data\n' > "$WORK/workspace/data.txt"
 export XDG_CONFIG_HOME="$WORK/config" XDG_STATE_HOME="$WORK/state"
+if "$BIN" --cwd "$WORK/workspace" inspect > "$WORK/missing.out" 2> "$WORK/missing.err"; then
+    echo 'inspect accepted a nonexistent session' >&2; exit 1
+fi
+[[ ! -e "$WORK/state/ion" ]] || { echo 'read-only inspect created session state' >&2; exit 1; }
 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/port" "$WORK/requests" > "$WORK/server.out" 2> "$WORK/server.err" &
 server_pid=$!
 for _ in {1..100}; do [[ -s "$WORK/port" ]] && break; sleep 0.05; done
@@ -53,4 +57,22 @@ requests = [json.loads(line) for line in open(sys.argv[3])]
 assert len(requests) == 6, len(requests)
 assert len([m for m in requests[-1]['messages'] if m['role'] == 'user']) == 2
 PY
+
+# An explicit session owns its original working directory. A conflicting
+# --cwd must fail before model or tool work instead of silently targeting it.
+mkdir "$WORK/other-workspace"
+session_db="$(find "$WORK/state/ion/sessions" -name '*.sqlite' -print -quit)"
+[[ -n "$session_db" ]]
+if "$BIN" --cwd "$WORK/other-workspace" --session "$session_db" run 'Do not run this' \
+    > "$WORK/wrong-cwd.out" 2> "$WORK/wrong-cwd.err"; then
+    echo 'conflicting --cwd was accepted for an existing session' >&2; exit 1
+fi
+grep -q -- '--cwd does not match the session' "$WORK/wrong-cwd.err"
+if "$BIN" --cwd "$WORK/other-workspace" --session "$session_db" inspect \
+    > "$WORK/wrong-inspect.out" 2> "$WORK/wrong-inspect.err"; then
+    echo 'conflicting --cwd was accepted for inspect' >&2; exit 1
+fi
+grep -q -- '--cwd does not match the session' "$WORK/wrong-inspect.err"
+"$BIN" --session "$session_db" inspect > "$WORK/after-wrong-cwd.json"
+cmp "$WORK/second.json" "$WORK/after-wrong-cwd.json"
 echo 'Ion offline headless coding and session reopen: OK'

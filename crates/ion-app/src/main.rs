@@ -183,19 +183,28 @@ async fn run_cli(cli: Cli) -> Result<()> {
             Ok(())
         }
         action => {
+            let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
             let path = session_path(&cwd, cli.session)?;
-            if matches!(action, Some(Action::Inspect)) {
-                let view = CodingSession::inspect(&path)?;
-                println!("{}", serde_json::to_string_pretty(&view)?);
-                return Ok(());
-            }
-            let previous = if path.is_file() {
-                CodingSession::inspect(&path)?.last_model
+            let existing = if path.is_file() {
+                Some(CodingSession::inspect(&path)?)
             } else {
                 None
             };
+            if let Some(view) = &existing {
+                ensure!(
+                    !explicit_cwd || view.cwd == cwd,
+                    "--cwd does not match the session's working directory ({})",
+                    view.cwd.display()
+                );
+            }
+            if matches!(action, Some(Action::Inspect)) {
+                let view = existing.context("session does not exist")?;
+                println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
+            let previous = existing.and_then(|view| view.last_model);
             let selected = select(cli.provider, cli.model, previous, &credentials)?;
             if selected.requires_key
                 && credentials.status(&selected.provider, &selected.api_key_env)?
@@ -270,7 +279,6 @@ fn session_path(cwd: &Path, explicit: Option<PathBuf>) -> Result<PathBuf> {
     }
     let digest = format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes()));
     let dir = state_root()?.join("sessions");
-    fs::create_dir_all(&dir)?;
     Ok(dir.join(format!("{digest}.sqlite")))
 }
 
