@@ -59,13 +59,17 @@ request size limit is reached; automatic compaction is not implemented.
 The built headless and terminal clients have completed offline coding tasks
 with a deterministic local model stream: read, edit, write, shell, and reopen.
 A live DeepSeek V4.1 Flash task exercised read, edit, write, shell and headless
-resume using the Pi FNOX profile. MiMo V2.6 Flash and DeepSeek V4.1 Flash
-through OpenRouter completed separate live coding tasks. OpenRouter GPT-5.4
-also completed headless and terminal tasks, but the cheaper Flash routes are
-the default preference. Resulting files and committed sessions were checked
-independently. Direct OpenAI returned HTTP 429. Anthropic and other
+resume using the Pi FNOX profile. A second live DeepSeek terminal task read,
+wrote and verified a file, then continued the same session headlessly after
+relaunch. MiMo V2.6 Flash and DeepSeek V4.1 Flash through OpenRouter completed
+separate live coding tasks. OpenRouter GPT-5.4 also completed headless and
+terminal tasks, but the cheaper Flash routes are the default preference.
+Resulting files and committed sessions were checked independently. Masked key
+entry, private saved-key storage, credential status and logout were checked in
+a real terminal. Direct OpenAI returned HTTP 429. Anthropic and other
 model/account combinations remain unqualified here. OpenRouter browser login
-has focused tests; a live login attempt timed out without a callback.
+has focused tests; live attempts reached the authorization page but timed out
+without a callback.
 [ARCHITECTURE.md](ARCHITECTURE.md) holds the design contracts.
 
 Repository checks:
