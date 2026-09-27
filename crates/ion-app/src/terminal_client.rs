@@ -1,95 +1,211 @@
-//! Inline frontend over the durable Session. The reducer owns drafts and display
-//! state; the Session remains the sole owner of turns, effects and transcript.
+//! Terminal view over the same coding loop used by headless and library hosts.
+use std::sync::{Arc, Mutex};
 
-use std::{
-    collections::VecDeque,
-    io::{IsTerminal, Write},
-    time::{SystemTime, UNIX_EPOCH},
-};
-
-use anyhow::{Context, Result, ensure};
-use ion_core::{
-    ApprovalDecision, ApprovalState, AttemptId, ContentDigest, DriveExit, DrivePolicy, Entry,
-    EntryData, InputSender, InvocationId, ParkReason, PreparedAction, ProgressUpdate,
-    SessionProgress, SessionSnapshot, SnapshotRequest, StepId, SubmitTurnRequest, SubmittedTurn,
-    ToolExchangeState, ToolInvocation, ToolOutputStream, TranscriptContent, TurnId, TurnPhase,
-};
+use anyhow::{Context, Result};
+use ion_ai::{Content, Message, ModelRef, Role};
+use ion_core::{CodingAgent, CodingAgentEvent, CodingSession};
 use ion_terminal::{
-    Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, Screen, TerminalSession,
+    InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
     install_panic_hook,
 };
 use ratatui::text::Line;
 use tokio::time::{Duration, interval};
+use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
-use super::{ChatArgs, Host, host};
-
-const MAX_DRAFT_BYTES: usize = 64 * 1024;
-const MAX_ENTRY_CHARS: usize = 8 * 1024;
-const MAX_DISPLAY_ROWS: usize = 4096;
-const SNAPSHOT_ENTRIES: usize = 128;
-const APPROVAL_TTL_MS: i64 = 10 * 60 * 1000;
+const MAX_DRAFT: usize = 64 * 1024;
+const MAX_PREVIEW: usize = 64 * 1024;
+const MAX_ROWS: usize = 4096;
 
 #[derive(Default)]
 struct Frontend {
     draft: String,
     cursor: usize,
-    rows: VecDeque<String>,
-    last_entry: i64,
+    history: Vec<Message>,
+    scroll: usize,
     status: String,
-    /// A drive exit carries information that a structural snapshot cannot recover.
-    exit_status: Option<(TurnId, String)>,
-    unfinished: Option<TurnId>,
-    progress: Option<ProgressPreview>,
-    tool_progress: Option<ToolProgressPreview>,
-    reviewed_approval: Option<ApprovalIdentity>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-struct ApprovalIdentity {
-    step: StepId,
-    invocation: InvocationId,
-    digest: ContentDigest,
-}
-
-struct ProgressPreview {
-    attempt: AttemptId,
+#[derive(Default)]
+struct Progress {
     text: String,
-    omitted_prefix: bool,
+    events: Vec<String>,
 }
 
-struct ToolProgressPreview {
-    attempt: AttemptId,
-    latest: ToolOutputStream,
-    stdout: Option<OutputPreview>,
-    stderr: Option<OutputPreview>,
+impl Progress {
+    fn observe(&mut self, event: CodingAgentEvent) {
+        match event {
+            CodingAgentEvent::TextDelta(text) => {
+                self.text.push_str(&text);
+                if self.text.len() > MAX_PREVIEW {
+                    let mut start = self.text.len() - MAX_PREVIEW;
+                    while !self.text.is_char_boundary(start) {
+                        start += 1;
+                    }
+                    self.text.drain(..start);
+                }
+            }
+            CodingAgentEvent::ToolStarted { name, arguments } => self
+                .events
+                .push(format!("→ {name} {}", brief(&arguments.to_string(), 2048))),
+            CodingAgentEvent::ToolFinished { name, output } => self.events.push(format!(
+                "← {name} {}: {}",
+                if output.is_error { "error" } else { "done" },
+                brief(&output.value.to_string(), 2048)
+            )),
+            CodingAgentEvent::InterruptedCalls(n) => self.events.push(format!(
+                "{n} previous tool call(s) had unknown effects; inspect before retrying"
+            )),
+            CodingAgentEvent::Final(_) => {}
+        }
+        if self.events.len() > 16 {
+            self.events.drain(..self.events.len() - 16);
+        }
+    }
 }
 
-struct OutputPreview {
-    text: String,
-    omitted_prefix: bool,
+pub async fn chat(
+    session: Arc<CodingSession>,
+    agent: Arc<CodingAgent>,
+    model: ModelRef,
+    instructions: String,
+) -> Result<()> {
+    install_panic_hook();
+    let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
+    terminal.enter_alt_screen()?;
+    let (width, height) = terminal.size()?;
+    let mut screen = Screen::new(width, 0, height);
+    let mut input = terminal.input();
+    let view = session.view()?;
+    let mut ui = Frontend {
+        history: view.messages,
+        status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
+        ..Frontend::default()
+    };
+    if view.unfinished_turn.is_some() {
+        ui.status =
+            "Previous turn interrupted; tool effects may be unknown. Inspect before retrying."
+                .into();
+    }
+    loop {
+        draw(&mut terminal, &mut screen, &ui, None, &model, false)?;
+        let Some(event) = input.next().await else {
+            break;
+        };
+        match event? {
+            InputEvent::Key(key) => match ui.key(key) {
+                Action::None => {}
+                Action::Quit => break,
+                Action::Submit(prompt) => {
+                    ui.status = "Working · Ctrl-C cancels the current turn".into();
+                    ui.scroll = 0;
+                    run_turn(
+                        &mut terminal,
+                        &mut screen,
+                        &mut input,
+                        &mut ui,
+                        &session,
+                        &agent,
+                        model.clone(),
+                        &instructions,
+                        prompt,
+                    )
+                    .await?;
+                }
+            },
+            InputEvent::Paste(text) => ui.insert(&text),
+            InputEvent::Resize(size) => screen.resize(size.columns, size.rows),
+            InputEvent::Mouse(mouse) => match mouse.kind() {
+                MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                _ => {}
+            },
+            InputEvent::Focus(_) => {}
+        }
+    }
+    terminal.restore()?;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_turn(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    input: &mut InputStream,
+    ui: &mut Frontend,
+    session: &CodingSession,
+    agent: &CodingAgent,
+    model: ModelRef,
+    instructions: &str,
+    prompt: String,
+) -> Result<()> {
+    let progress = Arc::new(Mutex::new(Progress::default()));
+    let observer = progress.clone();
+    let stop = CancellationToken::new();
+    let turn = agent.submit(
+        session,
+        model.clone(),
+        prompt,
+        instructions.to_owned(),
+        stop.clone(),
+        move |event| {
+            observer
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .observe(event);
+        },
+    );
+    tokio::pin!(turn);
+    let mut tick = interval(Duration::from_millis(50));
+    let mut input_ended = false;
+    let result = loop {
+        tokio::select! {
+            result = &mut turn => break result,
+            event = input.next(), if !input_ended => match event {
+                Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
+                    MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                    MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                    _ => {},
+                },
+                Some(Ok(_)) => {},
+                Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
+                None => { stop.cancel(); input_ended = true; },
+            },
+            _ = tick.tick() => {
+                let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                draw(terminal, screen, ui, Some(&preview), &model, true)?;
+            }
+        }
+    };
+    ui.history = session.view()?.messages;
+    ui.scroll = 0;
+    ui.status = match result {
+        Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
+        Err(error) => format!("Turn ended: {error}"),
+    };
+    if input_ended {
+        return Err(anyhow::anyhow!("terminal input ended during the turn"));
+    }
+    Ok(())
 }
 
 enum Action {
     None,
     Submit(String),
-    Resume,
-    Cancel,
-    DecideApproval { digest: String, approve: bool },
     Quit,
 }
 
 impl Frontend {
-    fn key(&mut self, key: KeyEvent, driving: bool) -> Action {
+    fn key(&mut self, key: KeyEvent) -> Action {
         match key {
             KeyEvent {
                 code: KeyCode::Char('c'),
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) => {
-                if driving {
-                    Action::Cancel
-                } else if self.draft.is_empty() {
+                if self.draft.is_empty() {
                     Action::Quit
                 } else {
                     self.draft.clear();
@@ -100,9 +216,7 @@ impl Frontend {
             KeyEvent {
                 code: KeyCode::Char('d'),
                 modifiers,
-            } if modifiers.contains(Modifiers::CONTROL) && !driving && self.draft.is_empty() => {
-                Action::Quit
-            }
+            } if modifiers.contains(Modifiers::CONTROL) && self.draft.is_empty() => Action::Quit,
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers,
@@ -120,29 +234,34 @@ impl Frontend {
             KeyEvent {
                 code: KeyCode::Enter,
                 ..
-            } if !driving => {
-                let text = self.draft.trim().to_owned();
-                if text.is_empty() {
-                    return Action::None;
-                }
+            } => {
+                let prompt = self.draft.trim().to_owned();
                 self.draft.clear();
                 self.cursor = 0;
-                match text.as_str() {
-                    "/quit" | "/exit" => Action::Quit,
-                    "/resume" => Action::Resume,
-                    "/cancel" => Action::Cancel,
-                    _ if text == "/approve" || text.starts_with("/approve ") => {
-                        Action::DecideApproval {
-                            digest: text["/approve".len()..].trim().into(),
-                            approve: true,
-                        }
-                    }
-                    _ if text == "/deny" || text.starts_with("/deny ") => Action::DecideApproval {
-                        digest: text["/deny".len()..].trim().into(),
-                        approve: false,
-                    },
-                    _ => Action::Submit(text),
+                if prompt.is_empty() {
+                    Action::None
+                } else if prompt == "/exit" || prompt == "/quit" {
+                    Action::Quit
+                } else {
+                    Action::Submit(prompt)
                 }
+            }
+            KeyEvent {
+                code: KeyCode::Backspace,
+                ..
+            } => {
+                let start = previous_grapheme(&self.draft, self.cursor);
+                self.draft.replace_range(start..self.cursor, "");
+                self.cursor = start;
+                Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Delete,
+                ..
+            } => {
+                let end = next_grapheme(&self.draft, self.cursor);
+                self.draft.replace_range(self.cursor..end, "");
+                Action::None
             }
             KeyEvent {
                 code: KeyCode::Left,
@@ -174,20 +293,17 @@ impl Frontend {
                 Action::None
             }
             KeyEvent {
-                code: KeyCode::Backspace,
+                code: KeyCode::PageUp,
                 ..
             } => {
-                let before = previous_grapheme(&self.draft, self.cursor);
-                self.draft.replace_range(before..self.cursor, "");
-                self.cursor = before;
+                self.scroll = self.scroll.saturating_add(10);
                 Action::None
             }
             KeyEvent {
-                code: KeyCode::Delete,
+                code: KeyCode::PageDown,
                 ..
             } => {
-                let after = next_grapheme(&self.draft, self.cursor);
-                self.draft.replace_range(self.cursor..after, "");
+                self.scroll = self.scroll.saturating_sub(10);
                 Action::None
             }
             KeyEvent {
@@ -201,814 +317,240 @@ impl Frontend {
             _ => Action::None,
         }
     }
-
     fn insert(&mut self, text: &str) {
-        let cleaned = clean_input(text);
-        if self.draft.len().saturating_add(cleaned.len()) > MAX_DRAFT_BYTES {
-            self.status = format!("Draft limit: {MAX_DRAFT_BYTES} bytes");
+        let clean = text
+            .chars()
+            .filter_map(|ch| match ch {
+                '\n' | '\t' => Some(ch),
+                ch if ch.is_control() => None,
+                ch => Some(ch),
+            })
+            .collect::<String>();
+        if self.draft.len().saturating_add(clean.len()) > MAX_DRAFT {
+            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
             return;
         }
-        self.draft.insert_str(self.cursor, &cleaned);
-        self.cursor += cleaned.len();
-    }
-
-    fn observe(&mut self, snapshot: &SessionSnapshot, width: usize) {
-        self.unfinished = snapshot.unfinished_turn.as_ref().map(|turn| turn.id);
-        for entry in &snapshot.transcript_tail {
-            if entry.id.get() <= self.last_entry {
-                continue;
-            }
-            self.last_entry = entry.id.get();
-            for row in display_entry(entry, width) {
-                self.rows.push_back(row);
-            }
-            while self.rows.len() > MAX_DISPLAY_ROWS {
-                self.rows.pop_front();
-            }
-        }
-        if let Some(turn) = &snapshot.unfinished_turn {
-            self.update_turn_status(turn.id, turn.is_cancelling(), &turn.phase);
-        }
-    }
-
-    fn present_approval(&mut self, snapshot: &SessionSnapshot, width: usize) -> Result<()> {
-        let Some((call, action)) = pending_approval(snapshot) else {
-            self.reviewed_approval = None;
-            return Ok(());
-        };
-        let identity = ApprovalIdentity {
-            step: call.step,
-            invocation: call.id,
-            digest: action.digest,
-        };
-        if self.reviewed_approval == Some(identity) {
-            self.status = format!(
-                "Approval required for {}; review action above",
-                call.binding.as_str()
-            );
-            return Ok(());
-        }
-        let turn = snapshot
-            .unfinished_turn
-            .as_ref()
-            .context("pending approval has no unfinished turn")?;
-        let binding = turn
-            .environment
-            .tool(&call.binding)
-            .context("pending invocation has no frozen binding")?;
-        let digest = action.digest.to_string();
-        let review = format!(
-            "Approval required for {} (invocation {})\nWorkspace: {}\nImplementation: {}\nExecutor: {}\nPrepared action:\n{}\nType /approve {digest} or /deny {digest}",
-            binding.spec.name,
-            call.id.get(),
-            turn.environment.workspace.canonical_root,
-            binding.implementation.as_str(),
-            turn.environment.workspace.backend,
-            serde_json::to_string_pretty(action)?,
-        );
-        let (lines, _) = wrap(&safe_review(&review), width, None);
-        if lines.len() > MAX_DISPLAY_ROWS / 2 {
-            self.status =
-                "Approval action exceeds terminal review capacity; widen the terminal".into();
-            return Ok(());
-        }
-        for line in lines {
-            self.rows.push_back(line);
-        }
-        while self.rows.len() > MAX_DISPLAY_ROWS {
-            self.rows.pop_front();
-        }
-        self.reviewed_approval = Some(identity);
-        self.status = format!(
-            "Approval required for {}; review action above",
-            binding.spec.name
-        );
-        Ok(())
-    }
-
-    fn update_turn_status(&mut self, id: TurnId, cancelling: bool, phase: &TurnPhase) {
-        self.status = if let Some((saved, message)) = &self.exit_status
-            && *saved == id
-        {
-            message.clone()
-        } else if cancelling {
-            format!("Turn {}: cancelling", id.get())
-        } else {
-            format!("Turn {}: {phase:?}", id.get())
-        };
-    }
-
-    fn observe_progress(&mut self, turn: TurnId, event: SessionProgress) {
-        if event.turn != turn {
-            return;
-        }
-        match event.update {
-            ProgressUpdate::ModelText {
-                text,
-                omitted_prefix,
-            } => {
-                self.tool_progress = None;
-                self.progress = Some(ProgressPreview {
-                    attempt: event.attempt,
-                    text,
-                    omitted_prefix,
-                });
-            }
-            ProgressUpdate::ToolOutput {
-                stream,
-                text,
-                omitted_prefix,
-            } => {
-                self.progress = None;
-                if self
-                    .tool_progress
-                    .as_ref()
-                    .is_none_or(|preview| preview.attempt != event.attempt)
-                {
-                    self.tool_progress = Some(ToolProgressPreview {
-                        attempt: event.attempt,
-                        latest: stream,
-                        stdout: None,
-                        stderr: None,
-                    });
-                }
-                let preview = self.tool_progress.as_mut().expect("inserted tool preview");
-                preview.latest = stream;
-                let output = Some(OutputPreview {
-                    text,
-                    omitted_prefix,
-                });
-                match stream {
-                    ToolOutputStream::Stdout => preview.stdout = output,
-                    ToolOutputStream::Stderr => preview.stderr = output,
-                }
-            }
-            ProgressUpdate::End => {
-                if self
-                    .progress
-                    .as_ref()
-                    .is_some_and(|preview| preview.attempt == event.attempt)
-                {
-                    self.progress = None;
-                }
-                if self
-                    .tool_progress
-                    .as_ref()
-                    .is_some_and(|preview| preview.attempt == event.attempt)
-                {
-                    self.tool_progress = None;
-                }
-            }
-        }
-    }
-
-    fn render(
-        &self,
-        terminal: &mut TerminalSession,
-        screen: &mut Screen,
-        driving: bool,
-    ) -> Result<()> {
-        let (width, _) = screen.size();
-        let width = usize::from(width);
-        let committed: Vec<Line<'_>> = self
-            .rows
-            .iter()
-            .map(|row| Line::from(row.as_str()))
-            .collect();
-        let hint = if driving {
-            "Ctrl-C cancel · Shift-Enter newline"
-        } else {
-            "Enter send · Shift-Enter newline · /resume · Ctrl-D quit"
-        };
-        let mut live = vec![
-            Line::from(truncate_cells(&self.status, width)),
-            Line::from(truncate_cells(hint, width)),
-        ];
-        if driving {
-            let mut rows = Vec::new();
-            if let Some(progress) = &self.progress {
-                rows.extend(progress_lines(
-                    "ion",
-                    &progress.text,
-                    progress.omitted_prefix,
-                    width,
-                ));
-            }
-            if let Some(progress) = &self.tool_progress {
-                let (label, output) = match progress.latest {
-                    ToolOutputStream::Stdout => ("stdout", &progress.stdout),
-                    ToolOutputStream::Stderr => ("stderr", &progress.stderr),
-                };
-                if let Some(output) = output {
-                    rows.extend(progress_lines(
-                        label,
-                        &output.text,
-                        output.omitted_prefix,
-                        width,
-                    ));
-                }
-            }
-            let mut visible: Vec<_> = rows.into_iter().rev().take(3).collect();
-            visible.reverse();
-            for row in visible {
-                live.push(Line::from(row));
-            }
-        }
-        let progress_rows = live.len() - 2;
-        let display = format!("› {}", self.draft);
-        let (wrapped, cursor) = wrap(&display, width, Some(self.cursor + "› ".len()));
-        let shown = wrapped.len().min(if driving { 3 } else { 6 });
-        let skip = wrapped.len() - shown;
-        for row in wrapped.into_iter().skip(skip) {
-            live.push(Line::from(row));
-        }
-        let cursor = cursor.and_then(|(row, column)| {
-            (row >= skip).then_some((committed.len() + 2 + progress_rows + row - skip, column))
-        });
-        terminal.render(
-            screen,
-            &Frame {
-                committed: &committed,
-                live: &live,
-                cursor,
-            },
-        )?;
-        Ok(())
+        self.draft.insert_str(self.cursor, &clean);
+        self.cursor += clean.len();
     }
 }
 
-fn progress_lines(label: &str, text: &str, omitted_prefix: bool, width: usize) -> Vec<String> {
-    let mut preview = clean_display(text, MAX_ENTRY_CHARS);
-    if omitted_prefix {
-        preview.insert(0, '…');
+fn draw(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &Frontend,
+    progress: Option<&Progress>,
+    model: &ModelRef,
+    busy: bool,
+) -> Result<()> {
+    let (width, height) = terminal.size()?;
+    screen.resize(width, height);
+    let width = width.max(1) as usize;
+    let height = height.max(1) as usize;
+    let mut composer = wrap_input(&ui.draft, ui.cursor, width);
+    if busy {
+        composer.lines = vec!["… working (Ctrl-C cancels)".into()];
     }
-    wrap(&format!("{label} › {preview}"), width, None).0
-}
-
-fn pending_approval(snapshot: &SessionSnapshot) -> Option<(&ToolInvocation, &PreparedAction)> {
-    let turn = snapshot.unfinished_turn.as_ref()?;
-    let TurnPhase::Tools(step) = &turn.phase else {
-        return None;
+    let chrome_height = if height >= 3 { 2 } else { 0 };
+    let composer_height = composer.lines.len().min(4).min(height - chrome_height);
+    let composer_start = if busy {
+        0
+    } else {
+        composer
+            .cursor_row
+            .saturating_sub(composer_height - 1)
+            .min(composer.lines.len().saturating_sub(composer_height))
     };
-    let call = snapshot.tool_invocations.iter().find(|call| {
-        call.step == *step
-            && call.approval == ApprovalState::Pending
-            && call.exchange == ToolExchangeState::Pending
-    })?;
-    Some((call, call.preparation.ready()?))
-}
-
-fn safe_review(text: &str) -> String {
-    let mut review = String::with_capacity(text.len());
-    for ch in text.chars() {
-        if matches!(ch, '\u{200e}' | '\u{200f}' | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')
-        {
-            review.push_str(&format!("\\u{:04x}", ch as u32));
-        } else if ch == '\n' || ch == '\t' {
-            review.push(ch);
-        } else if ch.is_control() {
-            review.push('�');
-        } else {
-            review.push(ch);
+    let history_height = height - composer_height - chrome_height;
+    let mut history = history_rows(&ui.history, width);
+    if let Some(progress) = progress {
+        if !progress.text.is_empty() {
+            push_wrapped(&mut history, &format!("ion> {}", progress.text), width);
+        }
+        for event in &progress.events {
+            push_wrapped(&mut history, event, width);
         }
     }
-    review
-}
-
-pub(super) async fn chat(args: ChatArgs) -> Result<()> {
-    ensure!(
-        std::io::stdin().is_terminal() && std::io::stdout().is_terminal(),
-        "interactive chat requires a terminal on stdin and stdout"
-    );
-    let mut current = host(&args.run.host, Some(&args.run), args.ask_mutations).await?;
-    install_panic_hook();
-    let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
-    let (columns, rows) = terminal.size()?;
-    let (origin, live_height) = reserve_inline_region(&mut terminal, rows)?;
-    let mut screen = Screen::with_live_height(columns, origin, rows, live_height);
-    let mut input = terminal.input();
-    let mut ui = Frontend {
-        status: "Ion ready".into(),
-        ..Frontend::default()
+    if history.len() > MAX_ROWS {
+        history.drain(..history.len() - MAX_ROWS);
+    }
+    let end = history.len().saturating_sub(ui.scroll.min(history.len()));
+    let start = end.saturating_sub(history_height);
+    let mut rows = vec![Line::raw(""); height];
+    let padding = history_height.saturating_sub(end - start);
+    for (i, row) in history[start..end].iter().enumerate() {
+        rows[padding + i] = Line::raw(row.clone());
+    }
+    if chrome_height > 0 {
+        rows[history_height] = Line::raw("─".repeat(width));
+        rows[history_height + 1] = Line::raw(brief(
+            &format!("{} / {} · {}", model.provider, model.model, ui.status),
+            width,
+        ));
+    }
+    let composer_row = height - composer_height;
+    for i in 0..composer_height {
+        rows[composer_row + i] = Line::raw(composer.lines[composer_start + i].clone());
+    }
+    let cursor = if busy {
+        None
+    } else {
+        let row = composer_row + composer.cursor_row.saturating_sub(composer_start);
+        (row < height).then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16))
     };
-    let initial = snapshot(&current.session).await?;
-    ui.observe(&initial, usize::from(columns));
-    if let Some(turn) = ui.unfinished {
-        ui.status = format!("Turn {} unfinished; /resume or /cancel", turn.get());
-    }
-    if args.ask_mutations {
-        ui.present_approval(&initial, usize::from(columns))?;
-    } else if pending_approval(&initial).is_some() {
-        ui.status =
-            "Approval pending; reopen chat with --ask-mutations and the same host/tool flags"
-                .into();
-    }
-    ui.render(&mut terminal, &mut screen, false)?;
-    let mut initial_prompt = args
-        .run
-        .prompt
-        .clone()
-        .filter(|text| !text.trim().is_empty());
-    loop {
-        let action = if let Some(prompt) = initial_prompt.take() {
-            Action::Submit(prompt)
-        } else {
-            next_action(&mut input, &mut ui, &mut terminal, &mut screen).await?
-        };
-        match action {
-            Action::None => {}
-            Action::Quit => break,
-            Action::Cancel => {
-                if let Some(turn) = ui.unfinished {
-                    ui.exit_status = None;
-                    current.session.handle().cancel_turn(turn).await?;
-                    ui.status = format!("Turn {} cancellation requested", turn.get());
-                } else {
-                    ui.status = "No active turn".into();
-                }
-            }
-            Action::Submit(prompt) => {
-                if ui.unfinished.is_some() {
-                    ui.draft = prompt;
-                    ui.cursor = ui.draft.len();
-                    ui.status = "Finish or cancel the current turn before submitting".into();
-                } else {
-                    let turn = submit(&current, prompt).await?;
-                    let Some(next) = run_turn(
-                        current,
-                        &args,
-                        turn,
-                        &mut ui,
-                        &mut terminal,
-                        &mut screen,
-                        &mut input,
-                    )
-                    .await?
-                    else {
-                        return Ok(());
-                    };
-                    current = next;
-                }
-            }
-            Action::Resume => {
-                if let Some(turn) = ui.unfinished {
-                    let Some(next) = run_turn(
-                        current,
-                        &args,
-                        turn,
-                        &mut ui,
-                        &mut terminal,
-                        &mut screen,
-                        &mut input,
-                    )
-                    .await?
-                    else {
-                        return Ok(());
-                    };
-                    current = next;
-                } else {
-                    ui.status = "No unfinished turn".into();
-                }
-            }
-            Action::DecideApproval { digest, approve } => {
-                let decided = if !args.ask_mutations {
-                    ui.status = "Approval controls require --ask-mutations".into();
-                    None
-                } else {
-                    decide_pending_approval(&current, &mut ui, &digest, approve).await?
-                };
-                if let Some(turn) = decided {
-                    let Some(next) = run_turn(
-                        current,
-                        &args,
-                        turn,
-                        &mut ui,
-                        &mut terminal,
-                        &mut screen,
-                        &mut input,
-                    )
-                    .await?
-                    else {
-                        return Ok(());
-                    };
-                    current = next;
-                } else {
-                    let feedback = ui.status.clone();
-                    let view = snapshot(&current.session).await?;
-                    ui.observe(&view, usize::from(screen.size().0));
-                    if args.ask_mutations {
-                        ui.present_approval(&view, usize::from(screen.size().0))?;
-                    }
-                    ui.status = feedback;
-                    ui.render(&mut terminal, &mut screen, false)?;
-                    continue;
-                }
-            }
-        }
-        let view = snapshot(&current.session).await?;
-        ui.observe(&view, usize::from(screen.size().0));
-        if args.ask_mutations {
-            ui.present_approval(&view, usize::from(screen.size().0))?;
-        }
-        ui.render(&mut terminal, &mut screen, false)?;
-    }
-    screen.finish(terminal.output())?;
-    terminal.restore()?;
-    current.session.close().await?;
+    screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
 }
 
-/// Advance below the launch line and reserve a stable band without repainting
-/// lines that precede it. Query before the input stream exists so the cursor
-/// reply has exactly one reader. When near the bottom, scroll the necessary
-/// blank lines into place and account for the physical rows that moved.
-fn reserve_inline_region(terminal: &mut TerminalSession, rows: u16) -> Result<(u16, usize)> {
-    ensure!(rows > 0, "terminal reports zero rows");
-    let band = rows.min(9);
-    terminal.output().write_all(b"\r\n")?;
-    terminal.output().flush()?;
-    terminal.output().record_external(b"\x1b[6n")?;
-    let (_, row) = terminal
-        .cursor_position()
-        .context("terminal cursor query failed")?;
-    ensure!(row < rows, "terminal cursor is outside reported dimensions");
-    let available = rows - row;
-    if available >= band {
-        return Ok((row, usize::from(band)));
-    }
-    let scroll = band - available;
-    let to_bottom = rows - row - 1;
-    let newlines = to_bottom + scroll;
-    for _ in 0..newlines {
-        terminal.output().write_all(b"\r\n")?;
-    }
-    terminal.output().flush()?;
-    Ok((row - scroll, usize::from(band)))
+struct WrappedInput {
+    lines: Vec<String>,
+    cursor_row: usize,
+    cursor_col: usize,
 }
-
-async fn next_action(
-    input: &mut InputStream,
-    ui: &mut Frontend,
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-) -> Result<Action> {
-    let Some(event) = input.next().await else {
-        return Ok(Action::Quit);
-    };
-    let action = handle_event(event?, ui, screen, false);
-    ui.render(terminal, screen, false)?;
-    Ok(action)
-}
-
-fn handle_event(
-    event: InputEvent,
-    ui: &mut Frontend,
-    screen: &mut Screen,
-    driving: bool,
-) -> Action {
-    match event {
-        InputEvent::Key(key) => ui.key(key, driving),
-        InputEvent::Paste(text) => {
-            ui.insert(&text);
-            Action::None
+fn wrap_input(draft: &str, cursor: usize, width: usize) -> WrappedInput {
+    let width = width.max(3);
+    let mut lines = Vec::new();
+    let mut line = "› ".to_owned();
+    let mut col = 2;
+    let mut position = (0, 2);
+    for (byte, grapheme) in draft.grapheme_indices(true) {
+        if grapheme == "\n" {
+            if byte == cursor {
+                position = (lines.len(), col);
+            }
+            lines.push(line);
+            line = "  ".into();
+            col = 2;
+            continue;
         }
-        InputEvent::Resize(size) => {
-            screen.resize(size.columns, size.rows);
-            Action::None
+        let display = if grapheme == "\t" { "    " } else { grapheme };
+        let size = UnicodeWidthStr::width(display).max(1);
+        if col + size > width && col > 2 {
+            lines.push(line);
+            line = "  ".into();
+            col = 2;
         }
-        InputEvent::Focus(_) | InputEvent::Mouse(_) => Action::None,
+        if byte == cursor {
+            position = (lines.len(), col);
+        }
+        line.push_str(display);
+        col += size;
+    }
+    if cursor == draft.len() {
+        if col >= width {
+            lines.push(line);
+            line = "  ".into();
+            col = 2;
+        }
+        position = (lines.len(), col);
+    }
+    lines.push(line);
+    WrappedInput {
+        lines,
+        cursor_row: position.0,
+        cursor_col: position.1,
     }
 }
 
-async fn run_turn(
-    current: Host,
-    args: &ChatArgs,
-    turn: TurnId,
-    ui: &mut Frontend,
-    terminal: &mut TerminalSession,
-    screen: &mut Screen,
-    input: &mut InputStream,
-) -> Result<Option<Host>> {
-    ui.exit_status = None;
-    ui.unfinished = Some(turn);
-    ui.progress = None;
-    ui.tool_progress = None;
-    ui.status = format!("Turn {}: running", turn.get());
-    ui.render(terminal, screen, true)?;
-    let handle = current.session.handle();
-    let mut progress = handle.subscribe_progress();
-    let mut progress_open = true;
-    enum Wait {
-        Exit(Result<DriveExit, ion_core::SessionError>),
-        InputClosed,
-    }
-    let result = {
-        let drive =
-            handle.resume_with_tools(turn, current.models, current.tools, DrivePolicy::default());
-        tokio::pin!(drive);
-        let mut tick = interval(Duration::from_millis(200));
-        loop {
-            tokio::select! {
-                exit = &mut drive => break Wait::Exit(exit),
-                event = input.next() => {
-                    match event {
-                        Some(Ok(event)) => if matches!(handle_event(event, ui, screen, true), Action::Cancel) {
-                            handle.cancel_turn(turn).await?;
-                            ui.status = format!("Turn {}: cancelling", turn.get());
-                        },
-                        Some(Err(_)) | None => break Wait::InputClosed,
+fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
+    let mut rows = Vec::new();
+    for message in messages {
+        match message.role {
+            Role::User => {
+                for item in &message.content {
+                    if let Content::Text(text) = item {
+                        push_wrapped(
+                            &mut rows,
+                            &format!("you> {}", brief(text, MAX_PREVIEW)),
+                            width,
+                        );
                     }
-                    ui.render(terminal, screen, true)?;
-                },
-                event = progress.recv(), if progress_open => match event {
-                    Ok(event) => ui.observe_progress(turn, event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                        ui.progress = None;
-                        ui.tool_progress = None;
-                    }
-                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                        progress_open = false;
-                        ui.progress = None;
-                        ui.tool_progress = None;
-                    }
-                },
-                _ = tick.tick() => {
-                    let view = snapshot(&current.session).await?;
-                    ui.observe(&view, usize::from(screen.size().0));
-                    ui.render(terminal, screen, true)?;
                 }
             }
-        }
-    };
-    let Wait::Exit(exit) = result else {
-        // The frontend is gone. Closing joins any owned drive and leaves its
-        // durable outcome or unresolved effect evidence for an explicit resume.
-        // A hangup is never a user cancellation decision.
-        current.session.close().await?;
-        return Ok(None);
-    };
-    let view = snapshot(&current.session).await?;
-    ui.observe(&view, usize::from(screen.size().0));
-    ui.progress = None;
-    ui.tool_progress = None;
-    ui.status = match exit {
-        Ok(DriveExit::Settled(outcome)) => format!("Turn {}: {outcome:?}", turn.get()),
-        Ok(DriveExit::Parked(ParkReason::AwaitingApproval)) if !args.ask_mutations => format!(
-            "Turn {}: approval pending; reopen chat with --ask-mutations and the same host/tool flags",
-            turn.get()
-        ),
-        Ok(other) => format!(
-            "Turn {}: {other:?}; /resume after checking status",
-            turn.get()
-        ),
-        Err(error) => format!(
-            "Turn {}: {error}; /resume after checking status",
-            turn.get()
-        ),
-    };
-    if ui.unfinished == Some(turn) {
-        ui.exit_status = Some((turn, ui.status.clone()));
-    }
-    ui.render(terminal, screen, false)?;
-    current.session.close().await?;
-    Ok(Some(host(&args.run.host, None, args.ask_mutations).await?))
-}
-
-async fn snapshot(session: &ion_core::Session) -> Result<SessionSnapshot> {
-    Ok(session
-        .handle()
-        .snapshot(SnapshotRequest {
-            conversation: session.primary_conversation(),
-            max_inputs: 8,
-            max_entries: SNAPSHOT_ENTRIES,
-            max_bytes: 1024 * 1024,
-        })
-        .await?)
-}
-
-async fn submit(host: &Host, text: String) -> Result<TurnId> {
-    ensure!(!text.trim().is_empty(), "prompt must be nonempty");
-    let admitted_at_unix_ms: i64 = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()?;
-    let submitted = host
-        .session
-        .handle()
-        .submit_turn(SubmitTurnRequest {
-            conversation: host.session.primary_conversation(),
-            sender: InputSender::User,
-            request_key: None,
-            text,
-            admitted_at_unix_ms,
-            wall_deadline_unix_ms: None,
-        })
-        .await?;
-    Ok(match submitted {
-        SubmittedTurn::Created(started) => started.turn.id,
-        SubmittedTurn::Replayed { turn, .. } => turn.id,
-    })
-}
-
-async fn decide_pending_approval(
-    host: &Host,
-    ui: &mut Frontend,
-    digest: &str,
-    approve: bool,
-) -> Result<Option<TurnId>> {
-    let view = snapshot(&host.session).await?;
-    let Some((call, action)) = pending_approval(&view) else {
-        ui.reviewed_approval = None;
-        ui.status = "No pending tool approval".into();
-        return Ok(None);
-    };
-    let identity = ApprovalIdentity {
-        step: call.step,
-        invocation: call.id,
-        digest: action.digest,
-    };
-    if ui.reviewed_approval != Some(identity) || digest != action.digest.to_string() {
-        ui.status = "Approval digest does not match the reviewed action".into();
-        return Ok(None);
-    }
-    let turn = view
-        .unfinished_turn
-        .as_ref()
-        .context("pending approval has no unfinished turn")?;
-    let binding = turn
-        .environment
-        .tool(&call.binding)
-        .context("pending invocation has no frozen binding")?;
-    let boundary = match host.tools.resolve(binding, &turn.environment.workspace) {
-        Ok(boundary) => boundary,
-        Err(error) => {
-            ui.status = format!("Tool executor unavailable for approval: {error}");
-            return Ok(None);
-        }
-    };
-    let decision = if approve {
-        let now_unix_ms: i64 = SystemTime::now()
-            .duration_since(UNIX_EPOCH)?
-            .as_millis()
-            .try_into()?;
-        ApprovalDecision::Approve {
-            expires_at_unix_ms: now_unix_ms
-                .checked_add(APPROVAL_TTL_MS)
-                .context("approval expiry overflow")?,
-        }
-    } else {
-        ApprovalDecision::Deny {
-            reason: "denied by terminal user".into(),
-        }
-    };
-    match host
-        .session
-        .handle()
-        .decide_tool_approval(
-            call.step,
-            call.id,
-            action.digest,
-            decision,
-            boundary.executor(),
-        )
-        .await
-    {
-        Ok(_) => {
-            ui.reviewed_approval = None;
-            ui.exit_status = None;
-            ui.status = if approve {
-                "Tool action approved; resuming Turn".into()
-            } else {
-                "Tool action denied; resuming Turn".into()
-            };
-            Ok(Some(turn.id))
-        }
-        Err(error) => {
-            ui.reviewed_approval = None;
-            ui.status = format!("Approval decision was not recorded: {error}");
-            Ok(None)
-        }
-    }
-}
-
-fn display_entry(entry: &Entry, width: usize) -> Vec<String> {
-    let label = match &entry.data {
-        EntryData::UserInput { .. } => "you",
-        EntryData::Assistant { .. } => "ion",
-        EntryData::ToolResult { .. } => "tool",
-        EntryData::ContextBoundary(_) => "context",
-        EntryData::Notice { .. } => "notice",
-    };
-    let mut body = String::new();
-    for message in &entry.projection {
-        for content in &message.content {
-            if !body.is_empty() {
-                body.push('\n');
+            Role::Assistant => {
+                for item in &message.content {
+                    match item {
+                        Content::Text(text) => push_wrapped(
+                            &mut rows,
+                            &format!("ion> {}", brief(text, MAX_PREVIEW)),
+                            width,
+                        ),
+                        Content::ToolCall(call) => push_wrapped(
+                            &mut rows,
+                            &format!(
+                                "→ {} {}",
+                                call.name,
+                                brief(&call.arguments.to_string(), 2048)
+                            ),
+                            width,
+                        ),
+                        Content::ToolResult(_) => {}
+                    }
+                }
             }
-            match content {
-                TranscriptContent::Text(text) => body.push_str(text),
-                TranscriptContent::ToolCall {
-                    name, arguments, ..
-                } => body.push_str(&format!("{name} {}", arguments)),
-                TranscriptContent::ToolResult { name, result, .. } => {
-                    body.push_str(&display_tool_result(name, result))
+            Role::Tool => {
+                for item in &message.content {
+                    if let Content::ToolResult(result) = item {
+                        push_wrapped(
+                            &mut rows,
+                            &format!(
+                                "← {} {}",
+                                result.name,
+                                brief(&result.result.to_string(), 2048)
+                            ),
+                            width,
+                        );
+                    }
                 }
             }
         }
     }
-    if body.is_empty()
-        && let EntryData::Notice { kind, detail } = &entry.data
-    {
-        body = format!("{kind}: {detail}");
-    }
-    let body = clean_display(&body, MAX_ENTRY_CHARS);
-    let text = format!("{label} › {body}");
-    wrap(&text, width, None).0
+    rows
 }
 
-fn display_tool_result(name: &str, result: &serde_json::Value) -> String {
-    let value = &result["value"];
-    if result["is_error"].as_bool() == Some(true) {
-        return format!(
-            "{name} failed: {}",
-            value["error"].as_str().unwrap_or("tool returned an error")
-        );
-    }
-    match name {
-        "list" => {
-            let Some(entries) = value["entries"].as_array() else {
-                return format!("{name} {result}");
-            };
-            let names = entries
-                .iter()
-                .filter_map(|entry| entry["name"].as_str())
-                .collect::<Vec<_>>()
-                .join(", ");
-            let more = if value["has_more"].as_bool() == Some(true) {
-                " (more available)"
-            } else {
-                ""
-            };
-            format!(
-                "list {}: {}{more}",
-                value["path"].as_str().unwrap_or("."),
-                if names.is_empty() { "(empty)" } else { &names }
-            )
+fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
+    let width = width.max(1);
+    let mut line = String::new();
+    let mut col = 0;
+    for grapheme in text.graphemes(true) {
+        if grapheme == "\n" || grapheme == "\r" {
+            rows.push(std::mem::take(&mut line));
+            col = 0;
+            continue;
         }
-        "read" => {
-            let Some(content) = value["content"].as_str() else {
-                return format!("{name} {result}");
-            };
-            let more = if value["has_more"].as_bool() == Some(true) {
-                "\n… more available"
-            } else {
-                ""
-            };
-            format!("read:\n{content}{more}")
-        }
-        "edit" | "create" => {
-            let (Some(path), Some(bytes)) = (value["path"].as_str(), value["bytes"].as_u64())
-            else {
-                return format!("{name} {result}");
-            };
-            format!("{name} {path}: {bytes} bytes")
-        }
-        _ => format!("{name} {result}"),
-    }
-}
-
-fn clean_input(text: &str) -> String {
-    text.replace("\r\n", "\n")
-        .replace('\r', "\n")
-        .chars()
-        .filter(|ch| *ch == '\n' || *ch == '\t' || !ch.is_control())
-        .collect()
-}
-
-fn clean_display(text: &str, max_chars: usize) -> String {
-    let mut output = String::new();
-    for ch in text.chars().take(max_chars) {
-        if ch == '\n' || ch == '\t' {
-            output.push(ch);
-        } else if ch.is_control() {
-            output.push('�');
+        let display = if grapheme == "\t" {
+            "    "
+        } else if grapheme.chars().any(char::is_control) {
+            "�"
         } else {
-            output.push(ch);
+            grapheme
+        };
+        let size = UnicodeWidthStr::width(display).max(1);
+        if col + size > width && col > 0 {
+            rows.push(std::mem::take(&mut line));
+            col = 0;
         }
+        line.push_str(display);
+        col += size;
     }
-    if text.chars().count() > max_chars {
-        output.push_str("… [truncated]");
-    }
-    output
+    rows.push(line);
 }
-
+fn brief(text: &str, max: usize) -> String {
+    if text.len() <= max {
+        return text.into();
+    }
+    let mut end = max;
+    while !text.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}…", &text[..end])
+}
 fn previous_grapheme(text: &str, cursor: usize) -> usize {
     text[..cursor]
         .grapheme_indices(true)
         .next_back()
         .map_or(0, |(at, _)| at)
 }
-
 fn next_grapheme(text: &str, cursor: usize) -> usize {
     text[cursor..]
         .graphemes(true)
@@ -1016,199 +558,21 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
         .map_or(cursor, |g| cursor + g.len())
 }
 
-fn truncate_cells(text: &str, width: usize) -> String {
-    wrap(&clean_display(text, 512), width, None)
-        .0
-        .into_iter()
-        .next()
-        .unwrap_or_default()
-}
-
-/// Split at display-cell boundaries and map one source byte offset to a cell.
-fn wrap(text: &str, width: usize, cursor: Option<usize>) -> (Vec<String>, Option<(usize, u16)>) {
-    let width = width.max(1);
-    let mut rows = vec![String::new()];
-    let mut cells = 0usize;
-    let mut cursor_at = None;
-    for (at, grapheme) in text.grapheme_indices(true) {
-        if cursor == Some(at) {
-            cursor_at = Some((rows.len() - 1, cells.min(width - 1) as u16));
-        }
-        if grapheme == "\n" {
-            rows.push(String::new());
-            cells = 0;
-            continue;
-        }
-        // Keep literal tabs in the submitted prompt, but render fixed cells.
-        // Emitting a terminal tab would move the cursor outside our layout.
-        let shown = if grapheme == "\t" { "    " } else { grapheme };
-        let size = UnicodeWidthStr::width(shown).max(1);
-        if cells > 0 && cells + size > width {
-            rows.push(String::new());
-            cells = 0;
-        }
-        if size <= width {
-            rows.last_mut().expect("nonempty rows").push_str(shown);
-            cells += size;
-        }
-    }
-    if cursor == Some(text.len()) {
-        cursor_at = Some((rows.len() - 1, cells.min(width - 1) as u16));
-    }
-    (rows, cursor_at)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_terminal::KeyEvent;
-
     #[test]
-    fn tool_display_shows_useful_output_without_internal_receipt_fields() {
-        let listed = serde_json::json!({"is_error":false,"capture":"CompleteInline","value":{"path":"src","entries":[{"name":"main.rs"}],"has_more":false,"workspace_revision":{"files":3}}});
-        assert_eq!(display_tool_result("list", &listed), "list src: main.rs");
-        let read = serde_json::json!({"is_error":false,"capture":"CompleteInline","value":{"content":"hello\n","base_digest":"private-detail","has_more":false}});
-        assert_eq!(display_tool_result("read", &read), "read:\nhello\n");
-        assert!(!display_tool_result("read", &read).contains("base_digest"));
-        let failure = serde_json::json!({"is_error":true,"value":{"error":"stale revision"}});
-        assert_eq!(
-            display_tool_result("edit", &failure),
-            "edit failed: stale revision"
-        );
+    fn composer_keeps_unicode_cursor_across_lines() {
+        let draft = "ab🦀\nnext";
+        let input = wrap_input(draft, draft.len(), 8);
+        assert_eq!(input.lines, vec!["› ab🦀", "  next"]);
+        assert_eq!((input.cursor_row, input.cursor_col), (1, 6));
+        assert_eq!(previous_grapheme(draft, 6), 2);
     }
-
-    fn key(code: KeyCode, modifiers: Modifiers) -> KeyEvent {
-        KeyEvent::new(code, modifiers)
-    }
-
     #[test]
-    fn paste_is_multiline_data_until_enter() {
-        let mut ui = Frontend::default();
-        ui.insert("one\r\ntwo");
-        assert_eq!(ui.draft, "one\ntwo");
-        assert!(matches!(
-            ui.key(key(KeyCode::Enter, Modifiers::SHIFT), false),
-            Action::None
-        ));
-        assert_eq!(ui.draft, "one\ntwo\n");
-        assert!(
-            matches!(ui.key(key(KeyCode::Enter, Modifiers::NONE), false), Action::Submit(text) if text == "one\ntwo")
-        );
-    }
-
-    #[test]
-    fn cursor_and_backspace_use_graphemes() {
-        let mut ui = Frontend::default();
-        ui.insert("a👩‍💻b");
-        ui.key(key(KeyCode::Left, Modifiers::NONE), false);
-        ui.key(key(KeyCode::Backspace, Modifiers::NONE), false);
-        assert_eq!(ui.draft, "ab");
-        assert_eq!(ui.cursor, 1);
-    }
-
-    #[test]
-    fn control_sequences_cannot_enter_terminal_output() {
-        let cleaned = clean_display("hi\u{1b}[31m\u{7}ok", 100);
-        assert_eq!(cleaned, "hi�[31m�ok");
-    }
-
-    #[test]
-    fn provisional_progress_is_attempt_scoped_and_clears() {
-        let turn = TurnId::new(1).unwrap();
-        let attempt = AttemptId::new(2).unwrap();
-        let epoch = ion_core::SessionId::new().as_uuid();
-        let mut ui = Frontend::default();
-        ui.observe_progress(
-            turn,
-            SessionProgress {
-                attachment_epoch: epoch,
-                turn,
-                attempt,
-                update: ProgressUpdate::ModelText {
-                    text: "live answer".into(),
-                    omitted_prefix: false,
-                },
-            },
-        );
-        assert_eq!(ui.progress.as_ref().unwrap().text, "live answer");
-        ui.observe_progress(
-            turn,
-            SessionProgress {
-                attachment_epoch: epoch,
-                turn,
-                attempt: AttemptId::new(3).unwrap(),
-                update: ProgressUpdate::End,
-            },
-        );
-        assert!(ui.progress.is_some());
-        ui.observe_progress(
-            turn,
-            SessionProgress {
-                attachment_epoch: epoch,
-                turn,
-                attempt,
-                update: ProgressUpdate::End,
-            },
-        );
-        assert!(ui.progress.is_none());
-        ui.observe_progress(
-            turn,
-            SessionProgress {
-                attachment_epoch: epoch,
-                turn,
-                attempt: AttemptId::new(4).unwrap(),
-                update: ProgressUpdate::ToolOutput {
-                    stream: ToolOutputStream::Stderr,
-                    text: "compiling".into(),
-                    omitted_prefix: false,
-                },
-            },
-        );
-        assert_eq!(
-            ui.tool_progress
-                .as_ref()
-                .unwrap()
-                .stderr
-                .as_ref()
-                .unwrap()
-                .text,
-            "compiling"
-        );
-        ui.observe_progress(
-            turn,
-            SessionProgress {
-                attachment_epoch: epoch,
-                turn,
-                attempt: AttemptId::new(4).unwrap(),
-                update: ProgressUpdate::End,
-            },
-        );
-        assert!(ui.tool_progress.is_none());
-    }
-
-    #[test]
-    fn wrap_tracks_wide_cursor_and_newline() {
-        let (rows, cursor) = wrap("› 界a\nb", 5, Some("› 界a".len()));
-        assert_eq!(rows, vec!["› 界a", "b"]);
-        assert_eq!(cursor, Some((0, 4)));
-    }
-
-    #[test]
-    fn parked_drive_reason_survives_structural_snapshot_status() {
-        let id = TurnId::new(7).expect("turn id");
-        let message = "Turn 7: Parked(MissingCredentials); /resume after checking status";
-        let mut ui = Frontend {
-            exit_status: Some((id, message.into())),
-            ..Frontend::default()
-        };
-        ui.update_turn_status(
-            id,
-            false,
-            &TurnPhase::Parked(ion_core::ParkReason::MissingCredentials),
-        );
-        assert_eq!(ui.status, message);
-        ui.exit_status = None;
-        ui.update_turn_status(id, false, &TurnPhase::Ready);
-        assert_eq!(ui.status, "Turn 7: Ready");
+    fn display_replaces_terminal_controls() {
+        let mut rows = Vec::new();
+        push_wrapped(&mut rows, "safe\u{1b}[31m", 30);
+        assert_eq!(rows, vec!["safe�[31m"]);
     }
 }

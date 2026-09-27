@@ -18,7 +18,7 @@ ion-ai = { path = "crates/ion-ai" }
 ion-core = { path = "crates/ion-core" }
 ion-terminal = { path = "crates/ion-terminal" }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

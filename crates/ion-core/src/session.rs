@@ -1,905 +1,551 @@
-//! Passive Session ownership and the first replacement runtime commands.
-//!
-//! Creating/opening a Session starts only the bounded database command service.
-//! Provider/tool reconciliation and drive are explicit later operations; open is
-//! semantically passive.
-
-use std::collections::HashMap;
-use std::path::Path;
-use std::sync::atomic::{AtomicU8, Ordering};
-use std::sync::{Arc, Mutex};
-
-use futures_util::FutureExt;
-use thiserror::Error;
-use tokio::sync::{broadcast, watch};
-use tokio::task::JoinHandle;
-
-use crate::effect_gate::{EffectGate, EffectGates, signal};
-use crate::observation::{ObservationHub, Subscription};
-use crate::store::{SessionStore, StoreError};
-use crate::{
-    CommitReceipt, CommitSeq, ConfigError, Conversation, ConversationConfig, ConversationId,
-    DriveExit, DrivePolicy, Entry, EntryPage, Input, InputBody, InputMode, InputSender,
-    InstalledConfig, ModelBoundaries, ObservationError, RequestKey, SessionId, SessionSnapshot,
-    SnapshotRequest, SnapshotWatch, Turn, TurnId, WatchRequest,
+//! The single durable authority for a local coding conversation.
+//! SQLite commits related events atomically before any external effect runs.
+use std::{
+    collections::BTreeMap,
+    fs::{self, File, OpenOptions},
+    os::unix::fs::OpenOptionsExt,
+    path::{Path, PathBuf},
+    sync::Mutex,
+    time::Duration,
 };
 
-const HEALTH_OPEN: u8 = 0;
-const HEALTH_FENCED: u8 = 1;
-const HEALTH_CLOSING: u8 = 2;
-const HEALTH_CLOSED: u8 = 3;
+use ion_ai::{Content, Message, ModelRef, Role, ToolCall, ToolResult};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
+use rustix::fs::{FlockOperation, flock};
+use serde::{Deserialize, Serialize};
+use thiserror::Error;
+use tokio::sync::Mutex as AsyncMutex;
 
-pub struct Session {
-    inner: Arc<SessionInner>,
-    closed: bool,
+const FORMAT_VERSION: u32 = 1;
+const MAX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Header {
+    version: u32,
+    cwd: PathBuf,
 }
 
-impl std::fmt::Debug for Session {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("Session")
-            .field("session_id", &self.inner.session_id)
-            .field("primary_conversation", &self.inner.primary_conversation)
-            .field("health", &self.health())
-            .finish()
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct SessionHandle {
-    inner: Arc<SessionInner>,
-}
-
-#[derive(Debug)]
-pub(crate) struct SessionInner {
-    session_id: SessionId,
-    primary_conversation: ConversationId,
-    store: SessionStore,
-    observations: ObservationHub,
-    progress: crate::progress::ProgressHub,
-    health: AtomicU8,
-    effects: EffectGates,
-    drives: Mutex<HashMap<TurnId, watch::Receiver<Option<DriveExit>>>>,
-    joins: Mutex<Vec<JoinHandle<()>>>,
-    #[cfg(test)]
-    registration_pause: Mutex<Option<RegistrationPause>>,
-}
-
-#[cfg(test)]
-#[derive(Debug)]
-struct RegistrationPause {
-    reached: tokio::sync::oneshot::Sender<()>,
-    release: tokio::sync::oneshot::Receiver<()>,
-}
-
-#[derive(Debug)]
-pub struct CreatedSession {
-    pub session: Session,
-    pub receipt: CommitReceipt,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SessionHealth {
-    Open,
-    Fenced,
-    Closing,
-    Closed,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct AdmitInputRequest {
-    pub sender: InputSender,
-    pub mode: InputMode,
-    pub request_key: Option<RequestKey>,
-    pub body: InputBody,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum Admission {
-    Created {
-        input: Input,
-        admitted_at: CommitSeq,
-        receipt: CommitReceipt,
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data", rename_all = "snake_case")]
+pub enum SessionEntry {
+    TurnStarted {
+        turn: u64,
+        prompt: String,
+        model: ModelRef,
     },
-    Replayed {
-        input: Input,
-        admitted_at: CommitSeq,
+    Assistant {
+        turn: u64,
+        message: Message,
+    },
+    ToolResult {
+        turn: u64,
+        result: ToolResult,
+    },
+    TurnEnded {
+        turn: u64,
+        reason: TurnEndReason,
     },
 }
 
-impl Admission {
-    #[must_use]
-    pub const fn input(&self) -> &Input {
-        match self {
-            Self::Created { input, .. } | Self::Replayed { input, .. } => input,
-        }
-    }
-
-    #[must_use]
-    pub const fn admitted_at(&self) -> CommitSeq {
-        match self {
-            Self::Created { admitted_at, .. } | Self::Replayed { admitted_at, .. } => *admitted_at,
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TurnEndReason {
+    Completed,
+    Cancelled,
+    Interrupted,
+    Failed(String),
+    StepLimit,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct StartTurnRequest {
-    pub conversation: ConversationId,
-    pub input: crate::InputId,
-    pub admitted_at_unix_ms: i64,
-    pub wall_deadline_unix_ms: Option<i64>,
+#[derive(Debug, Clone, Serialize)]
+pub struct SessionView {
+    pub cwd: PathBuf,
+    pub entries: Vec<SessionEntry>,
+    pub messages: Vec<Message>,
+    pub unfinished_turn: Option<u64>,
+    pub last_end: Option<(u64, TurnEndReason)>,
+    pub last_model: Option<ModelRef>,
 }
 
-/// Atomic text submission: one durable commit admits the Input and places its Turn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SubmitTurnRequest {
-    pub conversation: ConversationId,
-    pub sender: InputSender,
-    pub request_key: Option<RequestKey>,
-    pub text: String,
-    pub admitted_at_unix_ms: i64,
-    pub wall_deadline_unix_ms: Option<i64>,
+#[derive(Default, Clone)]
+struct State {
+    active: Option<u64>,
+    pending: BTreeMap<String, String>,
+    last_id: u64,
+    last_end: Option<(u64, TurnEndReason)>,
+    last_model: Option<ModelRef>,
 }
 
-#[derive(Debug, Clone, PartialEq)]
-pub enum SubmittedTurn {
-    Created(StartedTurn),
-    Replayed {
-        input: Input,
-        turn: Turn,
-        admitted_at: CommitSeq,
-    },
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct StartedTurn {
-    pub turn: Turn,
-    pub input: Input,
-    pub entry: Entry,
-    pub receipt: CommitReceipt,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct CreatedConversation {
-    pub conversation: Conversation,
-    pub config: InstalledConfig,
-    pub receipt: CommitReceipt,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ConfiguredConversation {
-    pub conversation: Conversation,
-    pub config: InstalledConfig,
-    pub receipt: CommitReceipt,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum CancellationResult {
-    Committed { turn: Turn, receipt: CommitReceipt },
-    AlreadyRequested(Turn),
-    Terminal(Turn),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub enum AbandonResult {
-    Committed { turn: Turn, receipt: CommitReceipt },
-    Terminal(Turn),
-}
-
-impl Session {
-    pub async fn create(
-        path: impl AsRef<Path>,
-        config: ConversationConfig,
-    ) -> Result<CreatedSession, SessionError> {
-        Self::create_with_blob_limits(path, config, crate::BlobStoreLimits::default()).await
-    }
-
-    /// The database and its adjacent `.blobs-<SessionId>` namespace must be kept
-    /// outside agent-writable workspace state. Limits govern auxiliary output only.
-    pub async fn create_with_blob_limits(
-        path: impl AsRef<Path>,
-        config: ConversationConfig,
-        limits: crate::BlobStoreLimits,
-    ) -> Result<CreatedSession, SessionError> {
-        config.validate()?;
-        let observations = ObservationHub::new();
-        let session_id = SessionId::new();
-        let (store, metadata, receipt) = SessionStore::create(
-            path.as_ref(),
-            session_id,
-            config,
-            observations.clone(),
-            limits,
-        )
-        .await?;
-        let session = Self {
-            inner: Arc::new(SessionInner {
-                session_id: metadata.session_id,
-                primary_conversation: metadata.primary_conversation,
-                store,
-                observations,
-                progress: crate::progress::ProgressHub::new(),
-                health: AtomicU8::new(HEALTH_OPEN),
-                effects: EffectGates::default(),
-                drives: Mutex::new(HashMap::new()),
-                joins: Mutex::new(Vec::new()),
-                #[cfg(test)]
-                registration_pause: Mutex::new(None),
-            }),
-            closed: false,
-        };
-        Ok(CreatedSession { session, receipt })
-    }
-
-    pub async fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        Self::open_with_blob_limits(path, crate::BlobStoreLimits::default()).await
-    }
-
-    /// Passive: does not create, hash, clean, or repair the auxiliary blob namespace.
-    pub async fn open_with_blob_limits(
-        path: impl AsRef<Path>,
-        limits: crate::BlobStoreLimits,
-    ) -> Result<Self, SessionError> {
-        let observations = ObservationHub::new();
-        let (store, metadata) =
-            SessionStore::open(path.as_ref(), observations.clone(), limits).await?;
-        Ok(Self {
-            inner: Arc::new(SessionInner {
-                session_id: metadata.session_id,
-                primary_conversation: metadata.primary_conversation,
-                store,
-                observations,
-                progress: crate::progress::ProgressHub::new(),
-                health: AtomicU8::new(HEALTH_OPEN),
-                effects: EffectGates::default(),
-                drives: Mutex::new(HashMap::new()),
-                joins: Mutex::new(Vec::new()),
-                #[cfg(test)]
-                registration_pause: Mutex::new(None),
-            }),
-            closed: false,
-        })
-    }
-
-    #[must_use]
-    pub fn session_id(&self) -> SessionId {
-        self.inner.session_id
-    }
-
-    #[must_use]
-    pub fn primary_conversation(&self) -> ConversationId {
-        self.inner.primary_conversation
-    }
-
-    #[must_use]
-    pub fn handle(&self) -> SessionHandle {
-        SessionHandle {
-            inner: Arc::clone(&self.inner),
-        }
-    }
-
-    #[must_use]
-    pub fn health(&self) -> SessionHealth {
-        self.inner.health()
-    }
-
-    pub async fn close(mut self) -> Result<(), SessionError> {
-        self.inner
-            .health
-            .compare_exchange(
-                HEALTH_OPEN,
-                HEALTH_CLOSING,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            )
-            .or_else(|current| {
-                if current == HEALTH_FENCED {
-                    self.inner.health.store(HEALTH_CLOSING, Ordering::Release);
-                    Ok(HEALTH_FENCED)
-                } else {
-                    Err(current)
+impl State {
+    fn apply(
+        &mut self,
+        entry: &SessionEntry,
+        messages: &mut Vec<Message>,
+    ) -> Result<(), SessionError> {
+        match entry {
+            SessionEntry::TurnStarted {
+                turn,
+                prompt,
+                model,
+            } => {
+                if self.active.is_some()
+                    || *turn != self.last_id.saturating_add(1)
+                    || prompt.trim().is_empty()
+                {
+                    return Err(SessionError::InvalidHistory);
                 }
-            })
-            .map_err(|_| SessionError::Closed)?;
-        signal(self.inner.effects.seal_all());
-        let joins = {
-            // Registration holds drives through join-list insertion. Once health
-            // is Closing, this lock drains any registrar that already won admission.
-            let _drives = self.inner.drives.lock().expect("drive map poisoned");
-            let mut joins = self.inner.joins.lock().expect("drive join list poisoned");
-            std::mem::take(&mut *joins)
-        };
-        for join in joins {
-            let _ = join.await;
+                self.active = Some(*turn);
+                self.last_id = *turn;
+                self.last_model = Some(model.clone());
+                messages.push(Message {
+                    role: Role::User,
+                    content: vec![Content::Text(prompt.clone())],
+                    provider_replay: None,
+                });
+            }
+            SessionEntry::Assistant { turn, message } => {
+                if self.active != Some(*turn)
+                    || !self.pending.is_empty()
+                    || message.role != Role::Assistant
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                for part in &message.content {
+                    match part {
+                        Content::ToolCall(ToolCall { id, name, .. })
+                            if !id.is_empty() && !name.is_empty() =>
+                        {
+                            if self.pending.insert(id.clone(), name.clone()).is_some() {
+                                return Err(SessionError::InvalidHistory);
+                            }
+                        }
+                        Content::Text(_) => {}
+                        _ => return Err(SessionError::InvalidHistory),
+                    }
+                }
+                messages.push(message.clone());
+            }
+            SessionEntry::ToolResult { turn, result } => {
+                if self.active != Some(*turn)
+                    || self.pending.remove(&result.call_id).as_deref() != Some(&result.name)
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                messages.push(Message {
+                    role: Role::Tool,
+                    content: vec![Content::ToolResult(result.clone())],
+                    provider_replay: None,
+                });
+            }
+            SessionEntry::TurnEnded { turn, reason } => {
+                if self.active != Some(*turn) || !self.pending.is_empty() {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.active = None;
+                self.last_end = Some((*turn, reason.clone()));
+            }
         }
-
-        self.inner.store.shutdown().await?;
-        self.inner.health.store(HEALTH_CLOSED, Ordering::Release);
-        self.closed = true;
         Ok(())
     }
 }
 
-impl Drop for Session {
-    fn drop(&mut self) {
-        if self.closed {
-            return;
-        }
-        let current = self.inner.health.load(Ordering::Acquire);
-        if current == HEALTH_OPEN || current == HEALTH_FENCED {
-            self.inner.health.store(HEALTH_CLOSING, Ordering::Release);
-            signal(self.inner.effects.seal_all());
-        }
-    }
+struct Store {
+    connection: Connection,
+    state: State,
+    messages: Vec<Message>,
 }
 
-impl SessionHandle {
-    #[must_use]
-    pub fn session_id(&self) -> SessionId {
-        self.inner.session_id
-    }
+/// A writable Session holds a cross-process lock. `submit_gate` also keeps a
+/// whole live Turn exclusive within this process, including its async effects.
+pub struct Session {
+    store: Mutex<Store>,
+    _lock: File,
+    header: Header,
+    path: PathBuf,
+    pub(crate) submit_gate: AsyncMutex<()>,
+}
 
-    #[must_use]
-    pub fn primary_conversation(&self) -> ConversationId {
-        self.inner.primary_conversation
-    }
-
-    #[must_use]
-    pub fn health(&self) -> SessionHealth {
-        self.inner.health()
-    }
-
-    pub async fn create_conversation(
-        &self,
-        config: ConversationConfig,
-    ) -> Result<CreatedConversation, SessionError> {
-        config.validate()?;
-        self.ensure_mutable()?;
-        self.observe(self.inner.store.create_conversation(config).await)
-    }
-
-    pub async fn current_config(
-        &self,
-        conversation: ConversationId,
-    ) -> Result<InstalledConfig, SessionError> {
-        self.ensure_readable()?;
-        self.observe(self.inner.store.current_config(conversation).await)
-    }
-
-    pub async fn config_as_of(
-        &self,
-        conversation: ConversationId,
-        revision: CommitSeq,
-    ) -> Result<InstalledConfig, SessionError> {
-        self.ensure_readable()?;
-        self.observe(self.inner.store.config_as_of(conversation, revision).await)
-    }
-
-    pub async fn configure(
-        &self,
-        conversation: ConversationId,
-        expected_revision: CommitSeq,
-        config: ConversationConfig,
-    ) -> Result<ConfiguredConversation, SessionError> {
-        config.validate()?;
-        self.ensure_mutable()?;
-        self.observe(
-            self.inner
-                .store
-                .configure(conversation, expected_revision, config)
-                .await,
-        )
-    }
-
-    pub async fn admit_input(
-        &self,
-        conversation: ConversationId,
-        request: AdmitInputRequest,
-    ) -> Result<Admission, SessionError> {
-        self.ensure_mutable()?;
-        self.observe(self.inner.store.admit_input(conversation, request).await)
-    }
-
-    pub async fn submit_turn(
-        &self,
-        request: SubmitTurnRequest,
-    ) -> Result<SubmittedTurn, SessionError> {
-        self.ensure_mutable()?;
-        self.observe(self.inner.store.submit_turn(request).await)
-    }
-
-    pub async fn start_turn(&self, request: StartTurnRequest) -> Result<StartedTurn, SessionError> {
-        self.ensure_mutable()?;
-        self.observe(self.inner.store.start_turn(request).await)
-    }
-
-    pub async fn cancel_turn(&self, turn: TurnId) -> Result<CancellationResult, SessionError> {
-        self.ensure_mutable()?;
-        let tokens = self.inner.effects.begin_abort(turn);
-        let result = self.observe(self.inner.store.cancel_turn(turn).await);
-        signal(tokens);
-        if matches!(result, Ok(CancellationResult::Terminal(_))) {
-            self.inner.effects.retire(turn);
+impl Session {
+    pub fn create(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let path = path.as_ref();
+        let cwd = cwd.as_ref().canonicalize()?;
+        if !cwd.is_dir() {
+            return Err(SessionError::InvalidWorkingDirectory);
         }
-        result
-    }
-
-    pub async fn resume(
-        &self,
-        turn: TurnId,
-        boundaries: ModelBoundaries,
-    ) -> Result<DriveExit, SessionError> {
-        self.resume_with_policy(turn, boundaries, DrivePolicy::default())
-            .await
-    }
-
-    pub async fn resume_with_policy(
-        &self,
-        turn: TurnId,
-        boundaries: ModelBoundaries,
-        policy: DrivePolicy,
-    ) -> Result<DriveExit, SessionError> {
-        self.resume_with_tools(turn, boundaries, crate::ToolBoundaries::default(), policy)
-            .await
-    }
-
-    pub async fn tool_records(
-        &self,
-        step: crate::StepId,
-    ) -> Result<crate::ToolRecords, SessionError> {
-        self.ensure_readable()?;
-        self.observe(self.inner.store.tool_records(step).await)
-    }
-
-    /// Read only a committed physical attempt's complete output, never an arbitrary
-    /// caller-created BlobRef. The full object is verified before a bounded page returns.
-    pub async fn read_artifact(
-        &self,
-        attempt: crate::AttemptId,
-        offset: u64,
-        max_length: usize,
-    ) -> Result<crate::ArtifactRead, SessionError> {
-        self.ensure_readable()?;
-        self.observe(
-            self.inner
-                .store
-                .read_artifact(attempt, offset, max_length)
-                .await,
-        )
-    }
-
-    /// Explicit Session-local GC. Waits for publication THROUGH queued evidence commit,
-    /// including commands whose waiters were dropped. Returns reclaimed logical usage.
-    pub async fn collect_artifacts(&self) -> Result<crate::BlobStoreUsage, SessionError> {
-        self.ensure_mutable()?;
-        self.observe(self.inner.store.collect_artifacts().await)
-    }
-
-    /// Recover execution evidence even after exchange/Turn settlement. Never starts work.
-    pub async fn reconcile_tools(
-        &self,
-        step: crate::StepId,
-        tools: crate::ToolBoundaries,
-    ) -> Result<DriveExit, SessionError> {
-        self.ensure_mutable()?;
-        let turn = self.tool_records(step).await?.turn.id;
-        let inner = Arc::clone(&self.inner);
-        self.drive_owned(turn, false, async move {
-            match crate::tool_drive::reconcile(&inner, step, &tools).await {
-                Ok(()) => DriveExit::Stopped { turn },
-                Err(error) => DriveExit::Faulted {
-                    turn,
-                    message: error.to_string(),
-                },
-            }
-        })
-        .await
-    }
-
-    /// Record an explicit, targeted approval decision. The application must
-    /// authenticate the user/host caller; ordinary text is never an approval.
-    /// The digest identifies the exact saved action shown for inspection.
-    pub async fn decide_tool_approval(
-        &self,
-        step: crate::StepId,
-        invocation: crate::InvocationId,
-        action_digest: crate::ContentDigest,
-        decision: crate::ApprovalDecision,
-        executor: crate::SemanticCompatibilityId,
-    ) -> Result<Option<CommitReceipt>, SessionError> {
-        self.ensure_mutable()?;
-        let result = self.observe(
-            self.inner
-                .store
-                .tool_mutate(crate::store::ToolMutation::DecideApproval {
-                    step,
-                    invocation,
-                    action_digest,
-                    decision,
-                    executor,
-                    now_unix_ms: crate::tool_drive::now_unix_ms()?,
-                })
-                .await,
-        )?;
-        Ok(result.receipt)
-    }
-
-    /// Explicitly settle the exchange as unknown without changing execution truth.
-    pub async fn accept_tool_unknown(
-        &self,
-        step: crate::StepId,
-        invocation: crate::InvocationId,
-    ) -> Result<CommitReceipt, SessionError> {
-        self.ensure_mutable()?;
-        let result = self.observe(
-            self.inner
-                .store
-                .tool_mutate(crate::store::ToolMutation::Stage {
-                    step,
-                    invocation,
-                    source: crate::OutcomeSource::AcceptedUnknown,
-                })
-                .await,
-        )?;
-        result
-            .receipt
-            .ok_or_else(|| SessionError::InvalidState("tool settlement returned no commit".into()))
-    }
-
-    pub async fn resume_with_tools(
-        &self,
-        turn: TurnId,
-        boundaries: ModelBoundaries,
-        tools: crate::ToolBoundaries,
-        policy: DrivePolicy,
-    ) -> Result<DriveExit, SessionError> {
-        let inner = Arc::clone(&self.inner);
-        self.drive_owned(
-            turn,
-            true,
-            crate::drive::run(inner, turn, boundaries, tools, policy),
-        )
-        .await
-    }
-
-    async fn drive_owned(
-        &self,
-        turn: TurnId,
-        join_existing: bool,
-        future: impl std::future::Future<Output = DriveExit> + Send + 'static,
-    ) -> Result<DriveExit, SessionError> {
-        self.ensure_mutable()?;
-        #[cfg(test)]
-        {
-            let pause = self
-                .inner
-                .registration_pause
-                .lock()
-                .expect("test pause lock")
-                .take();
-            if let Some(pause) = pause {
-                let _ = pause.reached.send(());
-                let _ = pause.release.await;
-            }
-        }
-
-        let mut receiver = {
-            let mut drives = self.inner.drives.lock().expect("drive map poisoned");
-            // Linearize registration with close's collection of owned joins.
-            self.ensure_mutable()?;
-            if let Some(existing) = drives.get(&turn) {
-                if !join_existing {
-                    return Err(SessionError::InvalidState(
-                        "turn drive is already active".into(),
-                    ));
-                }
-                existing.clone()
-            } else {
-                let (sender, receiver) = watch::channel(None);
-                drives.insert(turn, receiver.clone());
-
-                let inner = Arc::clone(&self.inner);
-                let task_inner = Arc::clone(&inner);
-                let join = tokio::spawn(async move {
-                    let exit = std::panic::AssertUnwindSafe(future)
-                        .catch_unwind()
-                        .await
-                        .unwrap_or_else(|_| DriveExit::Faulted {
-                            turn,
-                            message: "drive task panicked".to_owned(),
-                        });
-                    if matches!(exit, DriveExit::Settled(_)) {
-                        task_inner.effects.retire(turn);
-                    }
-                    let _ = sender.send(Some(exit));
-                    task_inner
-                        .drives
-                        .lock()
-                        .expect("drive map poisoned")
-                        .remove(&turn);
-                });
-
-                let mut joins = inner.joins.lock().expect("drive join list poisoned");
-                joins.retain(|join| !join.is_finished());
-                joins.push(join);
-                receiver
-            }
+        fs::create_dir_all(path.parent().ok_or(SessionError::InvalidPath)?)?;
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(path)?;
+        let lock = lock(path)?;
+        let mut connection = Connection::open(path)?;
+        initialize(&connection)?;
+        let header = Header {
+            version: FORMAT_VERSION,
+            cwd,
         };
-
-        loop {
-            if let Some(exit) = receiver.borrow().clone() {
-                return Ok(exit);
-            }
-            receiver.changed().await.map_err(|_| SessionError::Closed)?;
-        }
+        let tx = connection.transaction()?;
+        tx.execute(
+            "INSERT INTO session(id, header) VALUES (1, ?1)",
+            params![serde_json::to_vec(&header)?],
+        )?;
+        tx.commit()?;
+        Ok(Self {
+            store: Mutex::new(Store {
+                connection,
+                state: State::default(),
+                messages: Vec::new(),
+            }),
+            _lock: lock,
+            header,
+            path: path.to_owned(),
+            submit_gate: AsyncMutex::new(()),
+        })
     }
 
-    pub async fn abandon_turn(&self, turn: TurnId) -> Result<AbandonResult, SessionError> {
-        self.ensure_mutable()?;
-        let result = self.observe(self.inner.store.abandon_turn(turn).await);
-        if result.is_ok() {
-            self.inner.effects.retire(turn);
+    pub fn open(path: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let path = path.as_ref();
+        if !path.is_file() {
+            return Err(SessionError::NotFound);
         }
-        result
+        let lock = lock(path)?;
+        let connection = Connection::open(path)?;
+        initialize(&connection)?;
+        let header = read_header(&connection)?;
+        let (state, messages) = project(&read_entries(&connection)?)?;
+        Ok(Self {
+            store: Mutex::new(Store {
+                connection,
+                state,
+                messages,
+            }),
+            _lock: lock,
+            header,
+            path: path.to_owned(),
+            submit_gate: AsyncMutex::new(()),
+        })
     }
 
-    pub async fn snapshot(
+    /// Read persisted facts without taking write ownership or repairing history.
+    pub fn inspect(path: impl AsRef<Path>) -> Result<SessionView, SessionError> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+        let header = read_header(&connection)?;
+        let entries = read_entries(&connection)?;
+        let (state, messages) = project(&entries)?;
+        Ok(SessionView {
+            cwd: header.cwd,
+            entries,
+            messages,
+            unfinished_turn: state.active,
+            last_end: state.last_end,
+            last_model: state.last_model,
+        })
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+    pub fn cwd(&self) -> &Path {
+        &self.header.cwd
+    }
+    pub fn messages(&self) -> Result<Vec<Message>, SessionError> {
+        Ok(self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .messages
+            .clone())
+    }
+    pub fn view(&self) -> Result<SessionView, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let entries = read_entries(&store.connection)?;
+        Ok(SessionView {
+            cwd: self.header.cwd.clone(),
+            entries,
+            messages: store.messages.clone(),
+            unfinished_turn: store.state.active,
+            last_end: store.state.last_end.clone(),
+            last_model: store.state.last_model.clone(),
+        })
+    }
+
+    /// Close any interrupted Turn and accept the next input in one transaction.
+    /// Caller holds `submit_gate` for the entire resulting Turn.
+    pub(crate) fn begin_turn(
         &self,
-        request: SnapshotRequest,
-    ) -> Result<SessionSnapshot, SessionError> {
-        request.validate()?;
-        self.ensure_readable()?;
-        self.observe(self.inner.store.snapshot(request).await)
-    }
-
-    /// Subscribe to bounded, provisional model text and tool output for this attachment.
-    /// Progress is not durable evidence and may be dropped under backpressure.
-    #[must_use]
-    pub fn subscribe_progress(&self) -> broadcast::Receiver<crate::SessionProgress> {
-        self.inner.progress.subscribe()
-    }
-
-    pub async fn snapshot_and_watch(
-        &self,
-        request: WatchRequest,
-    ) -> Result<SnapshotWatch, SessionError> {
-        let request = request.validate()?;
-        self.ensure_readable()?;
-
-        // Subscription is established before the snapshot command enters the
-        // database queue. Commits during snapshot acquisition are therefore
-        // either covered by the snapshot or already queued on this subscriber.
-        let subscription: Subscription = self.inner.observations.subscribe(request.queue)?;
-        let snapshot = self.observe(self.inner.store.snapshot(request.snapshot).await)?;
-        let watch = subscription.handoff(snapshot.coverage)?;
-        Ok(SnapshotWatch { snapshot, watch })
-    }
-
-    pub async fn page_entries(
-        &self,
-        conversation: ConversationId,
-        before: Option<crate::EntryId>,
-        limit: usize,
-    ) -> Result<EntryPage, SessionError> {
-        self.ensure_readable()?;
-        self.observe(
-            self.inner
-                .store
-                .page_entries(conversation, before, limit)
-                .await,
-        )
-    }
-
-    fn ensure_readable(&self) -> Result<(), SessionError> {
-        match self.health() {
-            SessionHealth::Open | SessionHealth::Fenced => Ok(()),
-            SessionHealth::Closing | SessionHealth::Closed => Err(SessionError::Closed),
+        prompt: String,
+        model: ModelRef,
+    ) -> Result<(u64, usize), SessionError> {
+        if prompt.trim().is_empty() {
+            return Err(SessionError::EmptyPrompt);
         }
-    }
-
-    fn ensure_mutable(&self) -> Result<(), SessionError> {
-        match self.health() {
-            SessionHealth::Open => Ok(()),
-            SessionHealth::Fenced => Err(SessionError::Fenced(
-                "session mutation is fenced after a storage ambiguity".to_owned(),
-            )),
-            SessionHealth::Closing | SessionHealth::Closed => Err(SessionError::Closed),
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut entries = Vec::new();
+        let interrupted = store.state.pending.len();
+        if let Some(old) = store.state.active {
+            entries.extend(unknown_results(old, &store.state.pending));
+            entries.push(SessionEntry::TurnEnded {
+                turn: old,
+                reason: TurnEndReason::Interrupted,
+            });
         }
+        let turn = store
+            .state
+            .last_id
+            .checked_add(1)
+            .ok_or(SessionError::TurnIdExhausted)?;
+        entries.push(SessionEntry::TurnStarted {
+            turn,
+            prompt,
+            model,
+        });
+        append(&mut store, &entries)?;
+        Ok((turn, interrupted))
     }
 
-    fn observe<T>(&self, result: Result<T, StoreError>) -> Result<T, SessionError> {
-        self.inner.observe_store(result).map_err(Into::into)
+    pub(crate) fn record_assistant(
+        &self,
+        turn: u64,
+        message: Message,
+    ) -> Result<bool, SessionError> {
+        let has_calls = message
+            .content
+            .iter()
+            .any(|part| matches!(part, Content::ToolCall(_)));
+        let mut entries = vec![SessionEntry::Assistant { turn, message }];
+        if !has_calls {
+            entries.push(SessionEntry::TurnEnded {
+                turn,
+                reason: TurnEndReason::Completed,
+            });
+        }
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &entries)?;
+        Ok(!has_calls)
+    }
+
+    pub(crate) fn record_tool_result(
+        &self,
+        turn: u64,
+        result: ToolResult,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &[SessionEntry::ToolResult { turn, result }])
+    }
+
+    pub(crate) fn end_turn(&self, turn: u64, reason: TurnEndReason) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store.state.active != Some(turn) {
+            return Err(SessionError::InvalidHistory);
+        }
+        let mut entries = unknown_results(turn, &store.state.pending);
+        entries.push(SessionEntry::TurnEnded { turn, reason });
+        append(&mut store, &entries)
     }
 }
 
-impl SessionInner {
-    pub(crate) fn session_id(&self) -> SessionId {
-        self.session_id
-    }
+fn unknown_results(turn: u64, pending: &BTreeMap<String, String>) -> Vec<SessionEntry> {
+    pending.iter().map(|(call_id, name)| SessionEntry::ToolResult { turn, result: ToolResult {
+        call_id: call_id.clone(), name: name.clone(),
+        result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
+    }}).collect()
+}
 
-    pub(crate) fn store(&self) -> &SessionStore {
-        &self.store
+fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
+    let mut candidate = store.state.clone();
+    let mut new_messages = Vec::new();
+    let encoded = entries
+        .iter()
+        .map(|entry| {
+            candidate.apply(entry, &mut new_messages)?;
+            let bytes = serde_json::to_vec(entry)?;
+            if bytes.len() > MAX_ENTRY_BYTES {
+                return Err(SessionError::EntryTooLarge);
+            }
+            Ok(bytes)
+        })
+        .collect::<Result<Vec<_>, SessionError>>()?;
+    let tx = store.connection.transaction()?;
+    for body in encoded {
+        tx.execute("INSERT INTO entries(body) VALUES (?1)", params![body])?;
     }
+    tx.commit()?;
+    store.state = candidate;
+    store.messages.extend(new_messages);
+    Ok(())
+}
 
-    pub(crate) fn progress(&self) -> &crate::progress::ProgressHub {
-        &self.progress
+fn project(entries: &[SessionEntry]) -> Result<(State, Vec<Message>), SessionError> {
+    let mut state = State::default();
+    let mut messages = Vec::new();
+    for entry in entries {
+        state.apply(entry, &mut messages)?;
     }
+    Ok((state, messages))
+}
 
-    pub(crate) fn effect_gate(&self, turn: TurnId) -> Arc<EffectGate> {
-        self.effects.gate(turn)
+fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
+    let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
+    let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+    let mut entries = Vec::new();
+    for body in rows {
+        entries.push(serde_json::from_slice(&body?)?);
     }
+    Ok(entries)
+}
 
-    pub(crate) fn health(&self) -> SessionHealth {
-        match self.health.load(Ordering::Acquire) {
-            HEALTH_OPEN => SessionHealth::Open,
-            HEALTH_FENCED => SessionHealth::Fenced,
-            HEALTH_CLOSING => SessionHealth::Closing,
-            HEALTH_CLOSED => SessionHealth::Closed,
-            _ => SessionHealth::Fenced,
+fn read_header(connection: &Connection) -> Result<Header, SessionError> {
+    let encoded: Vec<u8> = connection
+        .query_row("SELECT header FROM session WHERE id=1", [], |row| {
+            row.get(0)
+        })
+        .optional()?
+        .ok_or(SessionError::InvalidDatabase)?;
+    let header: Header = serde_json::from_slice(&encoded)?;
+    if header.version != FORMAT_VERSION {
+        return Err(SessionError::UnsupportedFormat(header.version));
+    }
+    Ok(header)
+}
+
+fn initialize(connection: &Connection) -> Result<(), SessionError> {
+    connection.busy_timeout(Duration::from_secs(5))?;
+    connection.pragma_update(None, "journal_mode", "WAL")?;
+    connection.pragma_update(None, "synchronous", "FULL")?;
+    connection.execute_batch("CREATE TABLE IF NOT EXISTS session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE IF NOT EXISTS entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);")?;
+    Ok(())
+}
+
+fn lock(path: &Path) -> Result<File, SessionError> {
+    let file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .open(path.with_extension("lock"))?;
+    flock(&file, FlockOperation::NonBlockingLockExclusive).map_err(|error| {
+        if error == rustix::io::Errno::WOULDBLOCK {
+            SessionError::AlreadyOpen
+        } else {
+            SessionError::Io(error.into())
         }
-    }
+    })?;
+    Ok(file)
+}
 
-    pub(crate) fn observe_store<T>(&self, result: Result<T, StoreError>) -> Result<T, StoreError> {
-        if let Err(error) = &result
-            && error.requires_fence()
-        {
-            self.health.store(HEALTH_FENCED, Ordering::Release);
-            signal(self.effects.seal_all());
-        }
-        result
-    }
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error("session does not exist")]
+    NotFound,
+    #[error("session is already open for writing")]
+    AlreadyOpen,
+    #[error("invalid session path")]
+    InvalidPath,
+    #[error("invalid working directory")]
+    InvalidWorkingDirectory,
+    #[error("invalid or inconsistent session history")]
+    InvalidHistory,
+    #[error("invalid session database")]
+    InvalidDatabase,
+    #[error("unsupported session format version {0}")]
+    UnsupportedFormat(u32),
+    #[error("prompt is empty")]
+    EmptyPrompt,
+    #[error("session entry exceeds storage limit")]
+    EntryTooLarge,
+    #[error("turn identifier space exhausted")]
+    TurnIdExhausted,
+    #[error("session mutex was poisoned")]
+    Poisoned,
+    #[error(transparent)]
+    Io(#[from] std::io::Error),
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+    #[error(transparent)]
+    Json(#[from] serde_json::Error),
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ion_ai::ToolCall;
 
-    #[tokio::test]
-    async fn abandoned_turn_retires_its_gate_without_reopening_old_references() {
-        let root = std::env::temp_dir().join(format!("ion-gate-retirement-{}", SessionId::new()));
-        std::fs::create_dir_all(&root).unwrap();
-        let session = Session::create(root.join("session.sqlite"), crate::config::tests::config())
-            .await
-            .unwrap()
-            .session;
-        let handle = session.handle();
-        for _ in 0..32 {
-            let input = handle
-                .admit_input(
-                    session.primary_conversation(),
-                    AdmitInputRequest {
-                        sender: crate::InputSender::User,
-                        mode: crate::InputMode::Submit,
-                        request_key: None,
-                        body: crate::InputBody::Text("test".into()),
-                    },
-                )
-                .await
-                .unwrap();
-            let turn = handle
-                .start_turn(StartTurnRequest {
-                    conversation: session.primary_conversation(),
-                    input: input.input().id,
-                    admitted_at_unix_ms: 0,
-                    wall_deadline_unix_ms: None,
-                })
-                .await
-                .unwrap()
-                .turn
-                .id;
-            let old = session.inner.effect_gate(turn);
-            handle.abandon_turn(turn).await.unwrap();
-            assert!(old.admit().is_none());
-        }
-        assert_eq!(session.inner.effects.len(), 0);
-        session.close().await.unwrap();
-        std::fs::remove_dir_all(root).unwrap();
+    fn fixture() -> (PathBuf, PathBuf) {
+        let root = std::env::temp_dir().join(format!("ion-session-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        (root.clone(), root.join("session.sqlite"))
     }
 
-    #[tokio::test]
-    async fn close_rejects_a_drive_paused_before_registration() {
-        let root =
-            std::env::temp_dir().join(format!("ion-close-registration-{}", SessionId::new()));
-        std::fs::create_dir_all(&root).unwrap();
-        let session = Session::create(root.join("session.sqlite"), crate::config::tests::config())
-            .await
-            .unwrap()
-            .session;
-        let (reached, at_pause) = tokio::sync::oneshot::channel();
-        let (release, released) = tokio::sync::oneshot::channel();
-        *session.inner.registration_pause.lock().unwrap() = Some(RegistrationPause {
-            reached,
-            release: released,
-        });
-        let handle = session.handle();
-        let executed = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let probe = Arc::clone(&executed);
-        let drive = tokio::spawn(async move {
-            let turn = TurnId::new(1).unwrap();
-            handle
-                .drive_owned(turn, false, async move {
-                    probe.store(true, Ordering::SeqCst);
-                    DriveExit::Stopped { turn }
-                })
-                .await
-        });
-        at_pause.await.unwrap();
-        session.close().await.unwrap();
-        release.send(()).unwrap();
-        assert!(matches!(drive.await.unwrap(), Err(SessionError::Closed)));
+    #[test]
+    fn interrupted_call_closes_atomically_with_next_input() {
+        let (root, path) = fixture();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call".into(),
+                        name: "write".into(),
+                        arguments: serde_json::json!({}),
+                    })],
+                    provider_replay: None,
+                },
+            )
+            .unwrap();
+        drop(session);
+        let before = Session::inspect(&path).unwrap();
+        assert_eq!(before.unfinished_turn, Some(turn));
+        assert_eq!(before.entries.len(), 2);
+        let reopened = Session::open(&path).unwrap();
+        let (next, interrupted) = reopened.begin_turn("second".into(), model).unwrap();
+        assert_eq!((next, interrupted), (turn + 1, 1));
+        let entries = reopened.view().unwrap().entries;
+        assert!(matches!(entries[2], SessionEntry::ToolResult { .. }));
+        assert!(matches!(
+            entries[3],
+            SessionEntry::TurnEnded {
+                reason: TurnEndReason::Interrupted,
+                ..
+            }
+        ));
+        assert!(matches!(entries[4], SessionEntry::TurnStarted { .. }));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn final_answer_and_end_share_a_commit() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("hello".into(), model).unwrap();
         assert!(
-            !executed.load(Ordering::SeqCst),
-            "no late backend reconciliation after ownership release"
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("done".into())],
+                        provider_replay: None
+                    }
+                )
+                .unwrap()
         );
-        std::fs::remove_dir_all(root).unwrap();
-    }
-}
-
-#[derive(Debug, Error)]
-pub enum SessionError {
-    #[error(transparent)]
-    Config(#[from] ConfigError),
-    #[error(transparent)]
-    Observation(#[from] ObservationError),
-    #[error("request key {request_key:?} conflicts in conversation {conversation}")]
-    RequestKeyConflict {
-        conversation: ConversationId,
-        request_key: String,
-    },
-    #[error("conversation {0} already has an unfinished turn")]
-    ConversationBusy(ConversationId),
-    #[error("{kind} {id} was not found")]
-    NotFound { kind: &'static str, id: i64 },
-    #[error(
-        "conversation {conversation} configuration revision changed: expected {expected}, found {actual}"
-    )]
-    RevisionConflict {
-        conversation: ConversationId,
-        expected: CommitSeq,
-        actual: CommitSeq,
-    },
-    #[error("invalid session operation: {0}")]
-    InvalidState(String),
-    #[error("session mutation is fenced: {0}")]
-    Fenced(String),
-    #[error("session is closing or closed")]
-    Closed,
-    #[error("session storage error: {0}")]
-    Storage(String),
-}
-
-impl From<StoreError> for SessionError {
-    fn from(error: StoreError) -> Self {
-        match error {
-            StoreError::RequestKeyConflict {
-                conversation,
-                request_key,
-            } => Self::RequestKeyConflict {
-                conversation,
-                request_key,
-            },
-            StoreError::ConversationBusy(conversation) => Self::ConversationBusy(conversation),
-            StoreError::NotFound { kind, id } => Self::NotFound { kind, id },
-            StoreError::RevisionConflict {
-                conversation,
-                expected,
-                actual,
-            } => Self::RevisionConflict {
-                conversation,
-                expected,
-                actual,
-            },
-            StoreError::InvalidState(message) | StoreError::InvalidRequest(message) => {
-                Self::InvalidState(message)
-            }
-            StoreError::ApprovalRequired => Self::InvalidState("tool approval required".into()),
-            StoreError::SnapshotTooLarge { maximum } => {
-                Self::Observation(ObservationError::SnapshotTooLarge { maximum })
-            }
-            StoreError::Fenced { cause } => Self::Fenced(cause),
-            StoreError::Closed => Self::Closed,
-            other => Self::Storage(other.to_string()),
-        }
+        let view = session.view().unwrap();
+        assert_eq!(view.last_end, Some((turn, TurnEndReason::Completed)));
+        assert_eq!(view.entries.len(), 3);
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -7,21 +7,22 @@ license.workspace = true
 
 [dependencies]
 anyhow = "1.0"
+base64 = "0.22.1"
 clap.workspace = true
+getrandom = "0.3.4"
 ion-ai.workspace = true
 ion-core.workspace = true
 ion-terminal.workspace = true
 ratatui = "0.30.2"
 reqwest = { version = "0.12.28", default-features = false }
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+sha2 = "0.10.9"
 tokio.workspace = true
+tokio-util.workspace = true
 unicode-segmentation = "1.13.3"
 unicode-width = "0.2.2"
-
-[dev-dependencies]
-nix = { version = "0.31.3", features = ["fs", "term"] }
-tempfile = "3.27.0"
-vt100 = "0.16.2"
 
 [lints]
 workspace = true

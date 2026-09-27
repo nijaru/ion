@@ -1,10 +1,10 @@
 # Ion architecture
 
 **Chosen implementation target, 2026-09-26.** This file states the
-coding-agent contracts. The product has not yet been validated end to end.
-[README.md](README.md) describes
-what the current executable can do. Ion is unreleased v0, so obsolete runtime
-representations can be replaced directly.
+coding-agent contracts. The coding loop has completed end-to-end tasks on
+specific live routes; broader model and account qualification remains.
+[README.md](README.md) describes what the current executable can do. Ion is
+unreleased v0, so obsolete runtime representations can be replaced directly.
 
 ## Product
 
