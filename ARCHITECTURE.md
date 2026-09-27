@@ -1,8 +1,8 @@
 # Ion architecture
 
-**Design target under review, 2026-09-26.** This file states the proposed
-coding-agent contracts for implementation. The target has not yet been
-validated as a complete working product. [README.md](README.md) describes
+**Chosen implementation target, 2026-09-26.** This file states the
+coding-agent contracts. The product has not yet been validated end to end.
+[README.md](README.md) describes
 what the current executable can do. Ion is unreleased v0, so obsolete runtime
 representations can be replaced directly.
 
@@ -38,8 +38,9 @@ user input -> model stream -> final answer
                host tools -> results -> next model request
 ```
 
-One Turn starts from an accepted user message. The loop selects its model,
-tools and instructions once, builds model input, streams a response,
+One Turn starts from an accepted user message. Each model request uses one
+coherent selection of model, tools, instructions and context. The loop
+builds model input, streams a response,
 dispatches complete tool calls in order, records their results and continues
 until a final response, stop or limit. A tool result is available to the
 model before a dependent request. Tool failure can be a result the model
@@ -49,12 +50,12 @@ to the client. Neither client infers task success from the model's prose alone.
 ## Session and recovery
 
 A Session owns the working-directory identity and one typed, append-only
-history. It admits at most one executing coding Turn. A single writer
-serializes append transactions. Turn acceptance and its user message commit
+history in SQLite. It admits at most one executing coding Turn. One writer
+serializes submissions and append transactions. Turn acceptance and its user message commit
 together; record the nonsecret context needed to interpret the history without
 duplicating a full request manifest. Save a complete assistant message
-containing tool calls before executing those calls, then
-save each observed result before another model request depends on it. A final
+containing tool calls durably before executing those calls, then
+save each observed result durably before another model request depends on it. A final
 answer and explicit Turn-end reason commit together. Cancellation, provider
 failure and limits also have explicit end reasons. Turn state is derived from
 entries; any index is rebuildable. Partial model text and streaming tool
@@ -66,7 +67,8 @@ dispatch may not have begun. An accepted Turn without an end entry is
 interrupted. Opening and reading a Session are passive; the read-only view
 can project these facts without changing history. Before a later user message
 enters model context, a writer closes unresolved calls with visible
-interruption results and ends the interrupted Turn in order. It never
+interruption results and ends the interrupted Turn before accepting the new
+input. It never
 silently reruns a call. Session resume means continuing the conversation
 across launches, not automatically resuming an interrupted external effect.
 
@@ -80,11 +82,11 @@ A separate pre-effect marker, physical attempt ledger, immutable request
 manifest, receipt graph and parallel outcome staging need a demonstrated
 recovery or concurrency benefit before becoming part of this coding contract.
 
-The storage implementation may use SQLite or JSONL. Its ordered entries are
-the one authority for conversation and Turn state; it must make atomic append,
-reopen and incomplete-call handling unambiguous. It need not preserve R1's
-schema or APIs. In unreleased v0, do not keep two production runtimes or
-compatibility facades.
+SQLite owns Session metadata and ordered entries; one transaction publishes a
+related event batch. Its entries are the only authority for conversation and
+Turn state. A derived index may be rebuilt. This avoids inventing a second
+JSONL publication and recovery protocol for the first product. In unreleased
+v0, do not keep two production runtimes or compatibility facades.
 
 ## Context, tools and trust
 
