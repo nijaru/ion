@@ -818,6 +818,12 @@ impl ChatState {
         if choice["index"].as_u64().is_some_and(|index| index != 0) {
             return Err(invalid("unexpected response choice index"));
         }
+        if value.get("usage").is_none_or(Value::is_null)
+            && let Some(usage) = choice.get("usage").filter(|usage| !usage.is_null())
+        {
+            self.usage.set_chat(usage)?;
+            events.push(ModelStreamEvent::Usage(self.usage.value()));
+        }
         if self.finish.is_some() {
             if choice["finish_reason"].as_str() != self.finish.as_deref()
                 || !empty_post_finish_delta(&choice["delta"])
@@ -844,14 +850,15 @@ impl ChatState {
                     .as_u64()
                     .ok_or_else(|| invalid("tool call fragment missing index"))?;
                 let call = self.calls.entry(index).or_default();
-                if let Some(id) = fragment["id"].as_str() {
-                    if !call.id.is_empty() && call.id != id {
-                        return Err(invalid("tool call ID changed within response"));
-                    }
+                if let Some(id) = fragment["id"].as_str()
+                    && call.id.is_empty()
+                {
                     call.id = id.into();
                 }
-                if let Some(name) = fragment["function"]["name"].as_str() {
-                    call.name.push_str(name);
+                if let Some(name) = fragment["function"]["name"].as_str()
+                    && call.name.is_empty()
+                {
+                    call.name = name.into();
                 }
                 if let Some(args) = fragment["function"]["arguments"].as_str() {
                     call.arguments.push_str(args);
@@ -1534,6 +1541,36 @@ mod tests {
     }
 
     #[test]
+    fn chat_tool_call_keeps_first_metadata_while_arguments_stream() {
+        let request = request();
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-first","function":{"name":"read","arguments":"{\"path\":\""}}]},"finish_reason":null}]}))
+            .unwrap();
+        state
+            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call-later","function":{"name":"read","arguments":"README.md\"}"}}]},"finish_reason":"tool_calls"}]}))
+            .unwrap();
+        assert_eq!(
+            state.complete(&request).unwrap().message.content,
+            vec![Content::ToolCall(ToolCall {
+                id: "call-first".into(),
+                name: "read".into(),
+                arguments: json!({"path":"README.md"}),
+                raw_arguments: None,
+            })]
+        );
+
+        let mut duplicate = ChatState::default();
+        duplicate
+            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[
+            {"index":0,"id":"same","function":{"name":"read","arguments":"{}"}},
+            {"index":1,"id":"same","function":{"name":"read","arguments":"{}"}}
+        ]},"finish_reason":"tool_calls"}]}))
+            .unwrap();
+        assert!(duplicate.complete(&request).is_err());
+    }
+
+    #[test]
     fn chat_accepts_empty_openrouter_usage_chunk_after_finish() {
         let request = request();
         let mut state = ChatState::default();
@@ -1552,6 +1589,18 @@ mod tests {
             .accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1}}))
             .unwrap();
         assert_eq!(state.complete(&request).unwrap().usage, Usage::known(2, 1));
+
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"prompt_tokens":7,"completion_tokens":2}}]}))
+            .unwrap();
+        assert_eq!(state.complete(&request).unwrap().usage, Usage::known(7, 2));
+
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"usage":{"prompt_tokens":8,"completion_tokens":3},"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"prompt_tokens":7,"completion_tokens":2}}]}))
+            .unwrap();
+        assert_eq!(state.complete(&request).unwrap().usage, Usage::known(8, 3));
 
         let mut state = ChatState::default();
         state

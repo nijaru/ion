@@ -162,6 +162,9 @@ including stream truncation. Classify context overflow from a provider signal
 or a narrow documented response pattern; a generic HTTP status is not enough
 to rewrite model context. Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
+Coalesce streamed tool calls by their call index: later repeated or changed
+metadata must not corrupt the first call identity, while argument fragments
+continue to accumulate and distinct completed calls retain unique IDs.
 Retry only before any streamed event is observed; a partial response is
 reported as incomplete rather than silently replayed. A valid provider retry
 delay takes precedence over local backoff, up to a bounded automatic wait;
