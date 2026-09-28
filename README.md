@@ -97,8 +97,9 @@ without making that repair. Ion summarizes settled history when its request
 nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this
-explicitly. A single oversized prompt or tool result may still exceed the
-context limit when no settled group can be summarized.
+explicitly. Longer saved histories are summarized in bounded steps when one
+summary request cannot fit. A single oversized prompt or tool result may
+still exceed the context limit when no settled group can be summarized.
 
 ## Current limits
 

@@ -68,10 +68,24 @@ impl Agent {
             guard = session.submit_gate.lock() => guard,
             () = stop.cancelled() => return Err(AgentError::Cancelled),
         };
-        let current_bytes = serde_json::to_vec(&session.context_messages()?)?.len();
-        let keep_bytes = self.keep_bytes().min(current_bytes / 2);
-        self.compact_inner(session, &model, &stop, keep_bytes, &mut observe)
-            .await
+        let keep_bytes = self
+            .keep_bytes()
+            .min(serde_json::to_vec(&session.context_messages()?)?.len() / 2);
+        let mut changed = false;
+        loop {
+            match self
+                .compact_inner(session, &model, &stop, keep_bytes, &mut observe)
+                .await?
+            {
+                Some(chunked) => {
+                    changed = true;
+                    if !chunked {
+                        return Ok(true);
+                    }
+                }
+                None => return Ok(changed),
+            }
+        }
     }
 
     fn request_fits(&self, bytes: usize, output_tokens: u32) -> bool {
@@ -102,42 +116,56 @@ impl Agent {
         stop: &CancellationToken,
         keep_bytes: usize,
         observe: &mut F,
-    ) -> Result<bool, AgentError>
+    ) -> Result<Option<bool>, AgentError>
     where
         F: FnMut(AgentEvent) + Send,
     {
-        let Some(plan) = session.compaction_plan(keep_bytes)? else {
-            return Ok(false);
-        };
-        let mut transcript = plan.messages;
-        for message in &mut transcript {
-            message.provider_replay = None;
-        }
         let output_tokens = self.limits.max_output_tokens.min(4096);
-        let request = ModelRequest {
-            model: model.clone(),
-            instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
-            messages: vec![ion_ai::Message {
-                role: Role::User,
-                content: vec![Content::Text(format!(
-                    "Conversation to summarize (JSON messages):\n{}",
-                    serde_json::to_string(&transcript)?
-                ))],
-                provider_replay: None,
-            }],
-            tools: Vec::new(),
-            controls: GenerationControls {
-                max_output_tokens: output_tokens,
-                temperature: None,
-                top_p: None,
-                reasoning: Reasoning::ProviderDefault,
-                tool_choice: ToolChoice::None,
-                parallel_tool_calls: false,
-            },
+        let mut budget = self.limits.max_request_bytes;
+        let (through_entry, chunked, request) = loop {
+            if stop.is_cancelled() {
+                return Err(AgentError::Cancelled);
+            }
+            let Some(plan) = session.compaction_plan(keep_bytes, budget)? else {
+                return if session.compaction_plan(keep_bytes, usize::MAX)?.is_some() {
+                    Err(AgentError::ContextTooLarge)
+                } else {
+                    Ok(None)
+                };
+            };
+            let mut transcript = plan.messages;
+            for message in &mut transcript {
+                message.provider_replay = None;
+            }
+            let request = ModelRequest {
+                model: model.clone(),
+                instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
+                messages: vec![ion_ai::Message {
+                    role: Role::User,
+                    content: vec![Content::Text(format!(
+                        "Conversation to summarize (JSON messages):\n{}",
+                        serde_json::to_string(&transcript)?
+                    ))],
+                    provider_replay: None,
+                }],
+                tools: Vec::new(),
+                controls: GenerationControls {
+                    max_output_tokens: output_tokens,
+                    temperature: None,
+                    top_p: None,
+                    reasoning: Reasoning::ProviderDefault,
+                    tool_choice: ToolChoice::None,
+                    parallel_tool_calls: false,
+                },
+            };
+            if self.request_fits(serde_json::to_vec(&request)?.len(), output_tokens) {
+                break (plan.through_entry, plan.chunked, request);
+            }
+            budget /= 2;
+            if budget == 0 {
+                return Err(AgentError::ContextTooLarge);
+            }
         };
-        if !self.request_fits(serde_json::to_vec(&request)?.len(), output_tokens) {
-            return Err(AgentError::ContextTooLarge);
-        }
         let response = self.generate(request, stop, &mut |_| {}).await?;
         if !matches!(response.termination, ResponseTermination::Completed)
             || response.message.role != Role::Assistant
@@ -162,11 +190,9 @@ impl Agent {
         if summary.trim().is_empty() {
             return Err(AgentError::InvalidSummary);
         }
-        session.record_compaction(plan.through_entry, summary, response.usage)?;
-        observe(AgentEvent::ContextCompacted {
-            through_entry: plan.through_entry,
-        });
-        Ok(true)
+        session.record_compaction(through_entry, summary, response.usage)?;
+        observe(AgentEvent::ContextCompacted { through_entry });
+        Ok(Some(chunked))
     }
 
     async fn generate<F>(
@@ -347,6 +373,7 @@ impl Agent {
                     if self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
                         .await?
+                        .is_some()
                     {
                         continue;
                     }
@@ -381,6 +408,7 @@ impl Agent {
                     && self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
                         .await?
+                        .is_some()
                 {
                     recovered_overflow = true;
                     continue;
@@ -871,6 +899,121 @@ mod tests {
         assert_eq!(scripts.requests().len(), 3);
         assert!(scripts.requests()[1].tools.is_empty());
         assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn long_saved_history_compacts_in_bounded_steps() {
+        let root = std::env::temp_dir().join(format!("ion-long-context-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        for index in 0..30 {
+            let (turn, _) = session
+                .begin_turn(format!("task {index}: {}", "a".repeat(240)), model())
+                .unwrap();
+            session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text(format!(
+                            "observed task {index}: {}",
+                            "b".repeat(240)
+                        ))],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+        }
+        let raw_before = session.view().unwrap().entries.len();
+        let scripts = Arc::new(ScriptedModelService::new((0..40).map(|index| {
+            response(vec![Content::Text(format!(
+                "Summary through chunk {index}"
+            ))])
+        })));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                max_request_bytes: 2_000,
+                ..AgentLimits::default()
+            });
+        let mut cuts = Vec::new();
+        assert!(
+            agent
+                .compact(&session, model(), CancellationToken::new(), |event| {
+                    if let AgentEvent::ContextCompacted { through_entry } = event {
+                        cuts.push(through_entry);
+                    }
+                })
+                .await
+                .unwrap()
+        );
+        assert!(cuts.len() > 1, "expected incremental summaries: {cuts:?}");
+        assert!(cuts.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(
+            serde_json::to_vec(&session.context_messages().unwrap())
+                .unwrap()
+                .len()
+                <= 1_000
+        );
+        assert_eq!(
+            session.view().unwrap().entries.len(),
+            raw_before + cuts.len()
+        );
+        assert!(scripts.requests().iter().all(|request| {
+            request.tools.is_empty() && serde_json::to_vec(request).unwrap().len() <= 2_000
+        }));
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert_eq!(
+            reopened.view().unwrap().compacted_through,
+            cuts.last().copied()
+        );
+        assert_eq!(
+            reopened.view().unwrap().entries.len(),
+            raw_before + cuts.len()
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn oversized_atomic_turn_reports_capacity_without_changing_history() {
+        let root =
+            std::env::temp_dir().join(format!("ion-atomic-context-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let (turn, _) = session.begin_turn("x".repeat(4_000), model()).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let before = session.view().unwrap().entries;
+        let scripts = Arc::new(ScriptedModelService::new([]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                max_request_bytes: 2_000,
+                ..AgentLimits::default()
+            });
+        assert!(matches!(
+            agent
+                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .await,
+            Err(AgentError::ContextTooLarge)
+        ));
+        assert!(scripts.requests().is_empty());
+        assert_eq!(session.view().unwrap().entries, before);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }

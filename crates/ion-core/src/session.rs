@@ -90,6 +90,7 @@ pub struct SessionView {
 pub(crate) struct CompactionPlan {
     pub through_entry: u64,
     pub messages: Vec<Message>,
+    pub chunked: bool,
 }
 
 #[derive(Default, Clone)]
@@ -381,6 +382,7 @@ impl Session {
     pub(crate) fn compaction_plan(
         &self,
         keep_bytes: usize,
+        max_summary_bytes: usize,
     ) -> Result<Option<CompactionPlan>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
@@ -397,6 +399,18 @@ impl Session {
             .transpose()?
             .map_or(0, |bytes| bytes.len() + 1);
         let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
+        let mut prefix_bytes = summary_bytes.saturating_add(2);
+        let mut prefix_fit = None;
+        for boundary in (previous + 1)..=entries.len() as u64 {
+            if let Some(message) = message_from_entry(&entries[boundary as usize - 1]) {
+                prefix_bytes = prefix_bytes
+                    .saturating_add(serde_json::to_vec(&message)?.len())
+                    .saturating_add(1);
+            }
+            if prefix_bytes <= max_summary_bytes && store.state.settled.contains(&boundary) {
+                prefix_fit = Some(boundary);
+            }
+        }
         let mut suffix_bytes = 2usize;
         let mut through = None;
         for boundary in ((previous + 1)..=entries.len() as u64).rev() {
@@ -415,9 +429,10 @@ impl Session {
                 .next_back()
                 .copied()
         });
-        let Some(through_entry) = through else {
+        let Some((suffix_target, prefix_fit)) = through.zip(prefix_fit) else {
             return Ok(None);
         };
+        let through_entry = suffix_target.min(prefix_fit);
         let mut messages = Vec::new();
         if let Some((_, summary)) = &store.state.compaction {
             messages.push(summary_message(summary));
@@ -428,6 +443,7 @@ impl Session {
         Ok(Some(CompactionPlan {
             through_entry,
             messages,
+            chunked: through_entry < suffix_target,
         }))
     }
 
@@ -881,7 +897,7 @@ mod tests {
                 false,
             )
             .unwrap();
-        let plan = session.compaction_plan(0).unwrap().unwrap();
+        let plan = session.compaction_plan(0, usize::MAX).unwrap().unwrap();
         assert_eq!(plan.through_entry, 3);
         assert_eq!(plan.messages.len(), 2);
         assert!(
@@ -959,7 +975,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert!(session.compaction_plan(0).unwrap().is_none());
+        assert!(session.compaction_plan(0, usize::MAX).unwrap().is_none());
         session
             .record_tool_result(
                 turn,
@@ -971,7 +987,11 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            session.compaction_plan(0).unwrap().unwrap().through_entry,
+            session
+                .compaction_plan(0, usize::MAX)
+                .unwrap()
+                .unwrap()
+                .through_entry,
             4
         );
         drop(session);

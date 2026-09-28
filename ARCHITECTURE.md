@@ -106,7 +106,10 @@ actionable capacity error without hiding or dropping history. Daily use also
 needs an explicit, recoverable way to reduce model context. A summary must
 commit as a Session fact, retain the raw transcript, and keep complete
 tool-call/result groups on either side of the cut. Evaluate its policy on
-representative tasks; no particular checkpoint or tail algorithm is fixed.
+representative tasks. If the saved prefix is too large for one summary
+request, summarize bounded settled prefixes in sequence; do not require a
+larger model merely to reopen long work. No particular checkpoint or tail
+algorithm is fixed.
 If a later model cannot encode stored history faithfully, report that or make
 an explicit context change rather than silently dropping content.
 
