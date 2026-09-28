@@ -43,6 +43,8 @@ struct Frontend {
     picker: Option<Picker>,
     session_label: String,
     cwd_label: String,
+    context_label: String,
+    context_window_tokens: Option<u32>,
     pending: VecDeque<String>,
 }
 
@@ -168,6 +170,11 @@ impl Progress {
             CodingAgentEvent::InterruptedCalls(n) => self.events.push(format!(
                 "{n} previous tool call(s) had unknown effects; inspect before retrying"
             )),
+            CodingAgentEvent::ContextCompacted { through_entry } => {
+                self.text.clear();
+                self.events
+                    .push(format!("Context summarized through entry {through_entry}"));
+            }
             CodingAgentEvent::Final(_) => {}
         }
         if self.events.len() > 16 {
@@ -202,10 +209,13 @@ pub async fn chat(
     let mut input = terminal.input();
     let mut ui = Frontend {
         status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
+        context_window_tokens: runtime.selected.context_window_tokens,
         ..Frontend::default()
     };
     ui.refresh_session(&runtime.session)?;
     loop {
+        ui.context_window_tokens = runtime.selected.context_window_tokens;
+        ui.update_context(&runtime.session)?;
         if let Some(prompt) = ui.pending.pop_front() {
             ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
             ui.scroll = 0;
@@ -266,6 +276,17 @@ pub async fn chat(
                             Ok(()) => ui.status = "Credential saved".into(),
                             Err(error) => ui.status = format!("{error:#}"),
                         }
+                    } else if command == "/compact" {
+                        run_compaction(
+                            &mut terminal,
+                            &mut screen,
+                            &mut input,
+                            &mut ui,
+                            &runtime.session,
+                            &runtime.agent,
+                            runtime.selected.identity(),
+                        )
+                        .await?;
                     } else {
                         if let Err(error) = handle_command(&mut runtime, &mut ui, &command) {
                             ui.status = format!("{error:#}");
@@ -327,7 +348,7 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /resume /session /name NAME /model /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /resume /session /name NAME /model /compact /login PROVIDER /logout PROVIDER /quit".into(),
         ),
         "/session" => {
             let view = runtime.session.view()?;
@@ -437,6 +458,114 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
     Ok(())
 }
 
+async fn run_compaction(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    input: &mut InputStream,
+    ui: &mut Frontend,
+    session: &CodingSession,
+    agent: &CodingAgent,
+    model: ModelRef,
+) -> Result<()> {
+    ui.status = "Summarizing context · Ctrl-C cancels".into();
+    let stop = CancellationToken::new();
+    let mut input_ended = false;
+    let result = {
+        let compact = agent.compact(session, model.clone(), stop.clone(), |_| {});
+        tokio::pin!(compact);
+        let mut tick = interval(Duration::from_millis(50));
+        loop {
+            tokio::select! {
+                result = &mut compact => break result,
+                event = input.next(), if !input_ended => match event {
+                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None),
+                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
+                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                        _ => {},
+                    },
+                    Some(Ok(_)) => {},
+                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
+                    None => { stop.cancel(); input_ended = true; },
+                },
+                _ = tick.tick() => draw(terminal, screen, ui, None, &model, true)?,
+            }
+        }
+    };
+    if result.is_err() {
+        return_pending_to_editor(ui);
+    }
+    ui.update_context(session)?;
+    ui.status = match result {
+        Ok(true) => "Context summarized; raw history retained".into(),
+        Ok(false) => "No settled history to summarize".into(),
+        Err(error) => format!("Compaction ended: {error}"),
+    };
+    if input_ended {
+        return Err(anyhow::anyhow!("terminal input ended during compaction"));
+    }
+    Ok(())
+}
+
+fn busy_key(
+    ui: &mut Frontend,
+    key: KeyEvent,
+    stop: &CancellationToken,
+    steering: Option<&mpsc::UnboundedSender<String>>,
+) {
+    match ui.key(key) {
+        Action::Submit(prompt) => {
+            if let Some(steering) = steering {
+                let _ = steering.send(prompt);
+                ui.status = "Steering sent for the next model step".into();
+            } else {
+                ui.pending.push_back(prompt);
+                ui.status = format!("{} follow-up(s) queued", ui.pending.len());
+            }
+        }
+        Action::Queue(prompt) => {
+            ui.pending.push_back(prompt);
+            ui.status = format!("{} follow-up(s) queued", ui.pending.len());
+        }
+        Action::Command(command) => {
+            ui.draft = command;
+            ui.cursor = ui.draft.len();
+            ui.status = "Commands are available after this operation".into();
+        }
+        Action::Quit => stop.cancel(),
+        Action::Pick(_) | Action::None => {}
+    }
+}
+
+fn return_pending_to_editor(ui: &mut Frontend) {
+    if ui.pending.is_empty() {
+        return;
+    }
+    let remaining = ui.pending.drain(..).collect::<Vec<_>>().join("\n\n");
+    if ui.draft.is_empty() {
+        ui.draft = remaining;
+    } else {
+        ui.draft = format!("{remaining}\n\n{}", ui.draft);
+    }
+    ui.cursor = ui.draft.len();
+}
+
+fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
+    let mut label = match (view.last_usage.and_then(|usage| usage.input_tokens), window) {
+        (Some(input), Some(window)) => format!("input {input}/{window} tokens"),
+        (Some(input), None) => format!("input {input} tokens"),
+        (None, Some(window)) => format!("context ≤{window} tokens · usage unknown"),
+        (None, None) => "usage unknown".into(),
+    };
+    if let Some(through) = view.compacted_through {
+        label.push_str(&format!(" · summary through {through}"));
+    }
+    label
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn run_turn(
     terminal: &mut TerminalSession,
@@ -476,23 +605,7 @@ async fn run_turn(
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) => match ui.key(key) {
-                        Action::Submit(prompt) => {
-                            let _ = steering_tx.send(prompt);
-                            ui.status = "Steering sent for the next model step".into();
-                        }
-                        Action::Queue(prompt) => {
-                            ui.pending.push_back(prompt);
-                            ui.status = format!("{} follow-up(s) queued", ui.pending.len());
-                        }
-                        Action::Command(command) => {
-                            ui.draft = command;
-                            ui.cursor = ui.draft.len();
-                            ui.status = "Commands are available after this turn".into();
-                        }
-                        Action::Quit => stop.cancel(),
-                        Action::Pick(_) | Action::None => {},
-                    },
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering_tx)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -514,16 +627,12 @@ async fn run_turn(
     while let Ok(prompt) = steering_rx.try_recv() {
         ui.pending.push_back(prompt);
     }
-    if result.is_err() && !ui.pending.is_empty() {
-        let remaining = ui.pending.drain(..).collect::<Vec<_>>().join("\n\n");
-        if ui.draft.is_empty() {
-            ui.draft = remaining;
-        } else {
-            ui.draft = format!("{remaining}\n\n{}", ui.draft);
-        }
-        ui.cursor = ui.draft.len();
+    if result.is_err() {
+        return_pending_to_editor(ui);
     }
-    ui.history = session.view()?.messages;
+    let view = session.view()?;
+    ui.context_label = context_label(&view, ui.context_window_tokens);
+    ui.history = view.messages;
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
@@ -547,6 +656,7 @@ enum Action {
 impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         let view = session.view()?;
+        self.context_label = context_label(&view, self.context_window_tokens);
         self.history = view.messages;
         self.notices.clear();
         self.scroll = 0;
@@ -564,6 +674,11 @@ impl Frontend {
         if view.unfinished_turn.is_some() {
             self.status = "Previous turn interrupted; tool effects may be unknown".into();
         }
+        Ok(())
+    }
+
+    fn update_context(&mut self, session: &CodingSession) -> Result<()> {
+        self.context_label = context_label(&session.view()?, self.context_window_tokens);
         Ok(())
     }
 
@@ -866,8 +981,8 @@ fn draw(
             rows[history_height + 1] = Line::raw(brief(&ui.status, width));
             rows[history_height + 2] = Line::raw(brief(
                 &format!(
-                    "{} · {} · {}/{}",
-                    ui.cwd_label, ui.session_label, model.provider, model.model
+                    "{} · {} · {}/{} · {}",
+                    ui.cwd_label, ui.session_label, model.provider, model.model, ui.context_label
                 ),
                 width,
             ));

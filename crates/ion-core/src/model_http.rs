@@ -146,21 +146,27 @@ impl ModelService for HttpModelService {
             if self.wire == HttpWire::AnthropicMessages {
                 post = post.header("anthropic-version", "2023-06-01");
             }
-            let response = post
+            let mut response = post
                 .send()
                 .await
                 .map_err(|_| transport("provider HTTP request failed"))?;
             if !response.status().is_success() {
                 let status = response.status().as_u16();
-                let kind = match status {
-                    401 => ProviderErrorKind::Authentication,
-                    403 => ProviderErrorKind::Permission,
-                    408 => ProviderErrorKind::Timeout,
-                    429 => ProviderErrorKind::RateLimited,
-                    503 | 529 => ProviderErrorKind::Overloaded,
-                    500..=599 => ProviderErrorKind::Server,
-                    _ => ProviderErrorKind::InvalidRequest,
-                };
+                let mut body = Vec::new();
+                while body.len() < 16 * 1024 {
+                    let Some(chunk) = response
+                        .chunk()
+                        .await
+                        .map_err(|_| transport("provider HTTP error response failed"))?
+                    else {
+                        break;
+                    };
+                    if body.len() + chunk.len() > 16 * 1024 {
+                        break;
+                    }
+                    body.extend_from_slice(&chunk);
+                }
+                let kind = classify_http_error(status, &body);
                 return Err(error(kind, &format!("provider returned HTTP {status}")));
             }
             let is_sse = response
@@ -212,6 +218,42 @@ impl ModelService for HttpModelService {
             });
             Ok(stream)
         })
+    }
+}
+
+fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
+    if status == 413 {
+        return ProviderErrorKind::ContextLength;
+    }
+    if status == 400 {
+        let value = serde_json::from_slice::<Value>(body).ok();
+        let code = value.as_ref().and_then(|value| {
+            value
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .or_else(|| value.pointer("/error/type").and_then(Value::as_str))
+                .or_else(|| value.get("code").and_then(Value::as_str))
+        });
+        if matches!(
+            code,
+            Some(
+                "context_length_exceeded"
+                    | "model_context_window_exceeded"
+                    | "context_window_exceeded"
+                    | "request_too_large"
+            )
+        ) {
+            return ProviderErrorKind::ContextLength;
+        }
+    }
+    match status {
+        401 => ProviderErrorKind::Authentication,
+        403 => ProviderErrorKind::Permission,
+        408 => ProviderErrorKind::Timeout,
+        429 => ProviderErrorKind::RateLimited,
+        503 | 529 => ProviderErrorKind::Overloaded,
+        500..=599 => ProviderErrorKind::Server,
+        _ => ProviderErrorKind::InvalidRequest,
     }
 }
 
@@ -1161,6 +1203,22 @@ mod tests {
                 parallel_tool_calls: false,
             },
         }
+    }
+
+    #[test]
+    fn structured_context_error_is_distinct_from_other_bad_requests() {
+        assert_eq!(
+            classify_http_error(400, br#"{"error":{"code":"context_length_exceeded"}}"#),
+            ProviderErrorKind::ContextLength
+        );
+        assert_eq!(
+            classify_http_error(400, br#"{"error":{"code":"invalid_api_key"}}"#),
+            ProviderErrorKind::InvalidRequest
+        );
+        assert_eq!(
+            classify_http_error(413, b""),
+            ProviderErrorKind::ContextLength
+        );
     }
 
     #[test]

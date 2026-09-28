@@ -79,6 +79,8 @@ enum Action {
     Chat,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
+    /// Summarize settled history for continued work, retaining the raw log.
+    Compact,
 }
 
 #[tokio::main]
@@ -188,8 +190,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 catalog.resolve_explicit(explicit)?
             } else if cli.continue_session {
                 catalog.latest()?
-            } else if matches!(action, Some(Action::Inspect)) {
-                bail!("inspect needs --continue or --session ID; run `ion sessions` to find one")
+            } else if matches!(action, Some(Action::Inspect | Action::Compact)) {
+                bail!("use --continue or --session ID; run `ion sessions` to find one")
             } else {
                 catalog.new_path()?
             };
@@ -210,6 +212,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&view)?);
                 return Ok(());
             }
+            if matches!(action, Some(Action::Compact)) {
+                ensure!(existing.is_some(), "session does not exist");
+            }
             let previous = existing.and_then(|view| view.last_model);
             let selected = models.choose(cli.provider, cli.model, previous, &credentials)?;
             selected.require_access(&credentials)?;
@@ -224,6 +229,23 @@ async fn run_cli(cli: Cli) -> Result<()> {
             match action {
                 Some(Action::Run { prompt }) => {
                     headless(session, agent, model, instructions, prompt).await
+                }
+                Some(Action::Compact) => {
+                    let stop = CancellationToken::new();
+                    let signal_stop = stop.clone();
+                    let signal = tokio::spawn(async move {
+                        if tokio::signal::ctrl_c().await.is_ok() {
+                            signal_stop.cancel();
+                        }
+                    });
+                    let result = agent.compact(&session, model, stop, |_| {}).await;
+                    signal.abort();
+                    if result? {
+                        println!("Context summarized; raw Session history retained");
+                    } else {
+                        println!("No settled history to summarize");
+                    }
+                    Ok(())
                 }
                 Some(Action::Chat) | None if cli.print.is_none() => {
                     terminal_client::chat(
@@ -268,6 +290,7 @@ fn create_agent(
     Ok(Arc::new(CodingAgent::new(service, tools).with_limits(
         AgentLimits {
             max_output_tokens: selected.max_output_tokens.min(16_384),
+            context_window_tokens: selected.context_window_tokens,
             ..AgentLimits::default()
         },
     )))
@@ -369,6 +392,9 @@ async fn headless(
                 }
                 CodingAgentEvent::InterruptedCalls(count) => {
                     eprintln!("[recovered {count} incomplete tool call(s); effects unknown]")
+                }
+                CodingAgentEvent::ContextCompacted { through_entry } => {
+                    eprintln!("[context summarized through entry {through_entry}]")
                 }
                 CodingAgentEvent::Final(text) if !streamed => print!("{text}"),
                 CodingAgentEvent::Final(_) => {}

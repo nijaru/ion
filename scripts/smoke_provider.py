@@ -28,8 +28,11 @@ class Handler(BaseHTTPRequestHandler):
             with requests_file.open("a") as trace:
                 trace.write(json.dumps(body) + "\n")
             assert body["stream"] is True
-            assert len(body["tools"]) == 4
-            assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec"}
+            if count == 6 and require_steering:
+                assert "tools" not in body
+            else:
+                assert len(body["tools"]) == 4
+                assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec"}
             if count < 4:
                 if count:
                     last = body["messages"][-1]
@@ -50,6 +53,8 @@ class Handler(BaseHTTPRequestHandler):
             elif count == 5:
                 assert len([m for m in body["messages"] if m["role"] == "user"]) == (3 if require_steering else 2)
                 delta, finish = {"content": "RESUMED"}, "stop"
+            elif count == 6 and require_steering:
+                delta, finish = {"content": "The file repair is complete and tests passed."}, "stop"
             else:
                 raise AssertionError("unexpected extra model request")
             count += 1

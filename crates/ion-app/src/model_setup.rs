@@ -47,6 +47,7 @@ pub struct Selection {
     pub wire: HttpWire,
     pub api_key_env: String,
     pub max_output_tokens: u32,
+    pub context_window_tokens: Option<u32>,
     pub requires_key: bool,
 }
 
@@ -259,6 +260,7 @@ impl ModelStore {
                 },
                 api_key_env: model.api_key_env.into(),
                 max_output_tokens: model.max_output_tokens,
+                context_window_tokens: Some(model.context_window),
                 requires_key: true,
             });
         }
@@ -293,6 +295,7 @@ impl ModelStore {
                 .clone()
                 .unwrap_or_else(|| "ION_CUSTOM_API_KEY".into()),
             max_output_tokens: 8192,
+            context_window_tokens: None,
             requires_key: !local,
         })
     }

@@ -1,7 +1,7 @@
 //! The single durable authority for a local coding conversation.
 //! SQLite commits related events atomically before any external effect runs.
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use ion_ai::{Content, Message, ModelRef, Role, ToolCall, ToolResult};
+use ion_ai::{Content, Message, ModelRef, Role, ToolCall, ToolResult, Usage};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
@@ -37,6 +37,12 @@ pub enum SessionEntry {
         turn: u64,
         prompt: String,
     },
+    Compacted {
+        through_entry: u64,
+        summary: String,
+        #[serde(default = "Usage::unknown")]
+        usage: Usage,
+    },
     TurnStarted {
         turn: u64,
         prompt: String,
@@ -45,6 +51,8 @@ pub enum SessionEntry {
     Assistant {
         turn: u64,
         message: Message,
+        #[serde(default = "Usage::unknown")]
+        usage: Usage,
     },
     ToolResult {
         turn: u64,
@@ -75,6 +83,13 @@ pub struct SessionView {
     pub unfinished_turn: Option<u64>,
     pub last_end: Option<(u64, TurnEndReason)>,
     pub last_model: Option<ModelRef>,
+    pub compacted_through: Option<u64>,
+    pub last_usage: Option<Usage>,
+}
+
+pub(crate) struct CompactionPlan {
+    pub through_entry: u64,
+    pub messages: Vec<Message>,
 }
 
 #[derive(Default, Clone)]
@@ -84,6 +99,10 @@ struct State {
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
+    sequence: u64,
+    settled: BTreeSet<u64>,
+    compaction: Option<(u64, String)>,
+    last_usage: Option<Usage>,
 }
 
 impl State {
@@ -98,6 +117,23 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.last_model = Some(model.clone());
+            }
+            SessionEntry::Compacted {
+                through_entry,
+                summary,
+                ..
+            } => {
+                if !self.pending.is_empty()
+                    || summary.trim().is_empty()
+                    || !self.settled.contains(through_entry)
+                    || self
+                        .compaction
+                        .as_ref()
+                        .is_some_and(|(previous, _)| through_entry <= previous)
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.compaction = Some((*through_entry, summary.clone()));
             }
             SessionEntry::TurnStarted {
                 turn,
@@ -132,7 +168,11 @@ impl State {
                     provider_replay: None,
                 });
             }
-            SessionEntry::Assistant { turn, message } => {
+            SessionEntry::Assistant {
+                turn,
+                message,
+                usage,
+            } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
                     || message.role != Role::Assistant
@@ -153,6 +193,7 @@ impl State {
                     }
                 }
                 messages.push(message.clone());
+                self.last_usage = Some(*usage);
             }
             SessionEntry::ToolResult { turn, result } => {
                 if self.active != Some(*turn)
@@ -165,6 +206,9 @@ impl State {
                     content: vec![Content::ToolResult(result.clone())],
                     provider_replay: None,
                 });
+                if self.pending.is_empty() {
+                    self.settled.insert(self.sequence + 1);
+                }
             }
             SessionEntry::TurnEnded { turn, reason } => {
                 if self.active != Some(*turn) || !self.pending.is_empty() {
@@ -172,8 +216,10 @@ impl State {
                 }
                 self.active = None;
                 self.last_end = Some((*turn, reason.clone()));
+                self.settled.insert(self.sequence + 1);
             }
         }
+        self.sequence += 1;
         Ok(())
     }
 }
@@ -271,6 +317,8 @@ impl Session {
             unfinished_turn: state.active,
             last_end: state.last_end,
             last_model: state.last_model,
+            compacted_through: state.compaction.map(|(through, _)| through),
+            last_usage: state.last_usage,
         })
     }
 
@@ -288,6 +336,92 @@ impl Session {
             .messages
             .clone())
     }
+
+    /// The model-facing projection. Inspect and export still use raw history.
+    pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        match &store.state.compaction {
+            Some((through, summary)) => {
+                let entries = read_entries(&store.connection)?;
+                let mut messages = vec![summary_message(summary)];
+                messages.extend(messages_from_entries(&entries[*through as usize..]));
+                Ok(messages)
+            }
+            None => Ok(store.messages.clone()),
+        }
+    }
+
+    /// Find the earliest settled cut that fits a useful recent suffix.
+    /// The returned prefix includes the previous summary, if any.
+    pub(crate) fn compaction_plan(
+        &self,
+        keep_bytes: usize,
+    ) -> Result<Option<CompactionPlan>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let entries = read_entries(&store.connection)?;
+        let previous = store
+            .state
+            .compaction
+            .as_ref()
+            .map_or(0, |(through, _)| *through);
+        let summary_bytes = store
+            .state
+            .compaction
+            .as_ref()
+            .map(|(_, summary)| serde_json::to_vec(&summary_message(summary)))
+            .transpose()?
+            .map_or(0, |bytes| bytes.len() + 1);
+        let suffix_budget = keep_bytes.saturating_sub(summary_bytes);
+        let mut suffix_bytes = 2usize;
+        let mut through = None;
+        for boundary in ((previous + 1)..=entries.len() as u64).rev() {
+            if store.state.settled.contains(&boundary) && suffix_bytes <= suffix_budget {
+                through = Some(boundary);
+            }
+            if let Some(message) = message_from_entry(&entries[boundary as usize - 1]) {
+                suffix_bytes = suffix_bytes.saturating_add(serde_json::to_vec(&message)?.len() + 1);
+            }
+        }
+        let through = through.or_else(|| {
+            store
+                .state
+                .settled
+                .range((previous + 1)..)
+                .next_back()
+                .copied()
+        });
+        let Some(through_entry) = through else {
+            return Ok(None);
+        };
+        let mut messages = Vec::new();
+        if let Some((_, summary)) = &store.state.compaction {
+            messages.push(summary_message(summary));
+        }
+        messages.extend(messages_from_entries(
+            &entries[previous as usize..through_entry as usize],
+        ));
+        Ok(Some(CompactionPlan {
+            through_entry,
+            messages,
+        }))
+    }
+
+    pub(crate) fn record_compaction(
+        &self,
+        through_entry: u64,
+        summary: String,
+        usage: Usage,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::Compacted {
+                through_entry,
+                summary,
+                usage,
+            }],
+        )
+    }
     pub fn view(&self) -> Result<SessionView, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
@@ -300,6 +434,8 @@ impl Session {
             unfinished_turn: store.state.active,
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
+            compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
+            last_usage: store.state.last_usage,
         })
     }
 
@@ -363,13 +499,18 @@ impl Session {
         &self,
         turn: u64,
         message: Message,
+        usage: Usage,
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
         let has_calls = message
             .content
             .iter()
             .any(|part| matches!(part, Content::ToolCall(_)));
-        let mut entries = vec![SessionEntry::Assistant { turn, message }];
+        let mut entries = vec![SessionEntry::Assistant {
+            turn,
+            message,
+            usage,
+        }];
         if !has_calls && !continue_turn {
             entries.push(SessionEntry::TurnEnded {
                 turn,
@@ -435,6 +576,41 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     store.state = candidate;
     store.messages.extend(new_messages);
     Ok(())
+}
+
+fn summary_message(summary: &str) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![Content::Text(format!(
+            "Earlier conversation summary (retain its constraints and progress):\n{summary}"
+        ))],
+        provider_replay: None,
+    }
+}
+
+fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
+    entries.iter().filter_map(message_from_entry).collect()
+}
+
+fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
+    match entry {
+        SessionEntry::TurnStarted { prompt, .. } | SessionEntry::Steering { prompt, .. } => {
+            Some(Message {
+                role: Role::User,
+                content: vec![Content::Text(prompt.clone())],
+                provider_replay: None,
+            })
+        }
+        SessionEntry::Assistant { message, .. } => Some(message.clone()),
+        SessionEntry::ToolResult { result, .. } => Some(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(result.clone())],
+            provider_replay: None,
+        }),
+        SessionEntry::ModelSelected { .. }
+        | SessionEntry::Compacted { .. }
+        | SessionEntry::TurnEnded { .. } => None,
+    }
 }
 
 fn project(entries: &[SessionEntry]) -> Result<(State, Vec<Message>), SessionError> {
@@ -561,6 +737,7 @@ mod tests {
                     })],
                     provider_replay: None,
                 },
+                Usage::unknown(),
                 false,
             )
             .unwrap();
@@ -603,14 +780,20 @@ mod tests {
                         content: vec![Content::Text("done".into())],
                         provider_replay: None
                     },
+                    Usage::known(123, 45),
                     false,
                 )
                 .unwrap()
         );
         let view = session.view().unwrap();
         assert_eq!(view.last_end, Some((turn, TurnEndReason::Completed)));
+        assert_eq!(view.last_usage, Some(Usage::known(123, 45)));
         assert_eq!(view.entries.len(), 3);
         drop(session);
+        assert_eq!(
+            Session::inspect(&path).unwrap().last_usage,
+            Some(Usage::known(123, 45))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -647,6 +830,126 @@ mod tests {
         session.select_model(model.clone()).unwrap();
         drop(session);
         assert_eq!(Session::inspect(&path).unwrap().last_model, Some(model));
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_changes_only_the_model_projection_and_survives_reopen() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (first, _) = session
+            .begin_turn("first task".into(), model.clone())
+            .unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first result".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let plan = session.compaction_plan(0).unwrap().unwrap();
+        assert_eq!(plan.through_entry, 3);
+        assert_eq!(plan.messages.len(), 2);
+        assert!(
+            session
+                .record_compaction(2, "invalid".into(), Usage::unknown())
+                .is_err()
+        );
+        session
+            .record_compaction(
+                plan.through_entry,
+                "first task done".into(),
+                Usage::unknown(),
+            )
+            .unwrap();
+        let (second, _) = session.begin_turn("next task".into(), model).unwrap();
+        session
+            .record_assistant(
+                second,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("next result".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        assert_eq!(session.messages().unwrap().len(), 4);
+        assert_eq!(session.context_messages().unwrap().len(), 3);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.context_messages().unwrap().len(), 3);
+        assert_eq!(reopened.view().unwrap().compacted_through, Some(3));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_never_cuts_between_parallel_tool_results() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("inspect".into(), model).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: ["one", "two"]
+                        .into_iter()
+                        .map(|id| {
+                            Content::ToolCall(ToolCall {
+                                id: id.into(),
+                                name: "read".into(),
+                                arguments: serde_json::json!({"path": id}),
+                            })
+                        })
+                        .collect(),
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "one".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"content":"a"}),
+                },
+            )
+            .unwrap();
+        assert!(session.compaction_plan(0).unwrap().is_none());
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "two".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"content":"b"}),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            session.compaction_plan(0).unwrap().unwrap().through_entry,
+            4
+        );
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 }

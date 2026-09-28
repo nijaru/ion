@@ -3,8 +3,9 @@ use std::sync::Arc;
 
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, GenerationControls, ModelRef, ModelRequest, ModelService, ProviderError,
-    Reasoning, ResponseTermination, Role, ToolCall, ToolChoice, ToolResult, ToolSpec,
+    BoxFuture, Content, GenerationControls, IncompleteReason, ModelRef, ModelRequest,
+    ModelResponse, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
+    ResponseTermination, Role, ToolCall, ToolChoice, ToolResult, ToolSpec,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -18,14 +19,16 @@ pub struct AgentLimits {
     pub max_steps: usize,
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
+    pub context_window_tokens: Option<u32>,
 }
 
 impl Default for AgentLimits {
     fn default() -> Self {
         Self {
             max_steps: 80,
-            max_request_bytes: 2 * 1024 * 1024,
+            max_request_bytes: 8 * 1024 * 1024,
             max_output_tokens: 16_384,
+            context_window_tokens: None,
         }
     }
 }
@@ -48,6 +51,151 @@ impl Agent {
     pub fn with_limits(mut self, limits: AgentLimits) -> Self {
         self.limits = limits;
         self
+    }
+
+    /// Summarize a settled prefix while retaining the complete raw Session.
+    pub async fn compact<F>(
+        &self,
+        session: &Session,
+        model: ModelRef,
+        stop: CancellationToken,
+        mut observe: F,
+    ) -> Result<bool, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        let _guard = tokio::select! {
+            guard = session.submit_gate.lock() => guard,
+            () = stop.cancelled() => return Err(AgentError::Cancelled),
+        };
+        let current_bytes = serde_json::to_vec(&session.context_messages()?)?.len();
+        let keep_bytes = self.keep_bytes().min(current_bytes / 2);
+        self.compact_inner(session, &model, &stop, keep_bytes, &mut observe)
+            .await
+    }
+
+    fn request_fits(&self, bytes: usize, output_tokens: u32) -> bool {
+        if bytes > self.limits.max_request_bytes {
+            return false;
+        }
+        self.limits.context_window_tokens.is_none_or(|window| {
+            let estimated_input = bytes.div_ceil(3) as u64;
+            estimated_input + u64::from(output_tokens) + 8_192 <= u64::from(window)
+        })
+    }
+
+    fn keep_bytes(&self) -> usize {
+        let model_budget = self
+            .limits
+            .context_window_tokens
+            .map_or(usize::MAX, |window| {
+                (window.saturating_sub(self.limits.max_output_tokens + 8_192) as usize)
+                    .saturating_mul(3)
+            });
+        self.limits.max_request_bytes.min(model_budget) / 2
+    }
+
+    async fn compact_inner<F>(
+        &self,
+        session: &Session,
+        model: &ModelRef,
+        stop: &CancellationToken,
+        keep_bytes: usize,
+        observe: &mut F,
+    ) -> Result<bool, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        let Some(plan) = session.compaction_plan(keep_bytes)? else {
+            return Ok(false);
+        };
+        let mut transcript = plan.messages;
+        for message in &mut transcript {
+            message.provider_replay = None;
+        }
+        let output_tokens = self.limits.max_output_tokens.min(4096);
+        let request = ModelRequest {
+            model: model.clone(),
+            instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
+            messages: vec![ion_ai::Message {
+                role: Role::User,
+                content: vec![Content::Text(format!(
+                    "Conversation to summarize (JSON messages):\n{}",
+                    serde_json::to_string(&transcript)?
+                ))],
+                provider_replay: None,
+            }],
+            tools: Vec::new(),
+            controls: GenerationControls {
+                max_output_tokens: output_tokens,
+                temperature: None,
+                top_p: None,
+                reasoning: Reasoning::ProviderDefault,
+                tool_choice: ToolChoice::None,
+                parallel_tool_calls: false,
+            },
+        };
+        if !self.request_fits(serde_json::to_vec(&request)?.len(), output_tokens) {
+            return Err(AgentError::ContextTooLarge);
+        }
+        let response = self.generate(request, stop, &mut |_| {}).await?;
+        if !matches!(response.termination, ResponseTermination::Completed)
+            || response.message.role != Role::Assistant
+            || response
+                .message
+                .content
+                .iter()
+                .any(|part| !matches!(part, Content::Text(_)))
+        {
+            return Err(AgentError::InvalidSummary);
+        }
+        let summary = response
+            .message
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                Content::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if summary.trim().is_empty() {
+            return Err(AgentError::InvalidSummary);
+        }
+        session.record_compaction(plan.through_entry, summary, response.usage)?;
+        observe(AgentEvent::ContextCompacted {
+            through_entry: plan.through_entry,
+        });
+        Ok(true)
+    }
+
+    async fn generate<F>(
+        &self,
+        request: ModelRequest,
+        stop: &CancellationToken,
+        on_text: &mut F,
+    ) -> Result<ModelResponse, AgentError>
+    where
+        F: FnMut(String) + Send,
+    {
+        let stream = tokio::select! {
+            result = self.model.stream(request) => result?,
+            () = stop.cancelled() => return Err(AgentError::Cancelled),
+        };
+        tokio::pin!(stream);
+        loop {
+            let event = tokio::select! {
+                item = stream.next() => item,
+                () = stop.cancelled() => return Err(AgentError::Cancelled),
+            };
+            match event {
+                Some(Ok(ModelStreamEvent::TextDelta(text))) => on_text(text),
+                Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {}
+                Some(Ok(ModelStreamEvent::Completed(response))) => return Ok(response),
+                Some(Err(error)) => return Err(AgentError::Provider(error)),
+                None => return Err(AgentError::IncompleteModelResponse),
+            }
+        }
     }
 
     pub async fn submit<F>(
@@ -176,43 +324,68 @@ impl Agent {
             for prompt in drain_steering(&mut steering) {
                 session.record_steering(turn, prompt)?;
             }
-            let request = ModelRequest {
-                model: model.clone(),
-                instructions: Some(instructions.clone()),
-                messages: session.messages()?,
-                tools: self.tools.specs(),
-                controls: GenerationControls {
-                    max_output_tokens: self.limits.max_output_tokens,
-                    temperature: None,
-                    top_p: None,
-                    reasoning: Reasoning::ProviderDefault,
-                    tool_choice: ToolChoice::Auto,
-                    parallel_tool_calls: true,
-                },
-            };
-            if serde_json::to_vec(&request)?.len() > self.limits.max_request_bytes {
-                return Err(AgentError::ContextTooLarge);
-            }
-            let stream = tokio::select! {
-                result = self.model.stream(request) => result?,
-                () = stop.cancelled() => return Err(AgentError::Cancelled),
-            };
-            tokio::pin!(stream);
+            let mut recovered_overflow = false;
             let response = loop {
-                let event = tokio::select! {
-                    item = stream.next() => item,
-                    () = stop.cancelled() => return Err(AgentError::Cancelled),
+                let request = ModelRequest {
+                    model: model.clone(),
+                    instructions: Some(instructions.clone()),
+                    messages: session.context_messages()?,
+                    tools: self.tools.specs(),
+                    controls: GenerationControls {
+                        max_output_tokens: self.limits.max_output_tokens,
+                        temperature: None,
+                        top_p: None,
+                        reasoning: Reasoning::ProviderDefault,
+                        tool_choice: ToolChoice::Auto,
+                        parallel_tool_calls: true,
+                    },
                 };
-                match event {
-                    Some(Ok(ion_ai::ModelStreamEvent::TextDelta(text))) => {
-                        observe(AgentEvent::TextDelta(text))
+                if !self.request_fits(
+                    serde_json::to_vec(&request)?.len(),
+                    self.limits.max_output_tokens,
+                ) {
+                    if self
+                        .compact_inner(session, &model, stop, self.keep_bytes(), observe)
+                        .await?
+                    {
+                        continue;
                     }
-                    Some(Ok(ion_ai::ModelStreamEvent::ToolCall(_)))
-                    | Some(Ok(ion_ai::ModelStreamEvent::Usage(_))) => {}
-                    Some(Ok(ion_ai::ModelStreamEvent::Completed(response))) => break response,
-                    Some(Err(error)) => return Err(AgentError::Provider(error)),
-                    None => return Err(AgentError::IncompleteModelResponse),
+                    return Err(AgentError::ContextTooLarge);
                 }
+                let mut emitted_text = false;
+                let generated = {
+                    let mut on_text = |text| {
+                        emitted_text = true;
+                        observe(AgentEvent::TextDelta(text));
+                    };
+                    self.generate(request, stop, &mut on_text).await
+                };
+                let overflow = matches!(
+                    &generated,
+                    Err(AgentError::Provider(ProviderError {
+                        kind: ProviderErrorKind::ContextLength,
+                        ..
+                    }))
+                ) || matches!(
+                    &generated,
+                    Ok(ModelResponse {
+                        termination: ResponseTermination::Incomplete(
+                            IncompleteReason::ContextLength
+                        ),
+                        ..
+                    })
+                );
+                if overflow
+                    && !emitted_text
+                    && !recovered_overflow
+                    && self
+                        .compact_inner(session, &model, stop, self.keep_bytes(), observe)
+                        .await?
+                {
+                    recovered_overflow = true;
+                    continue;
+                }
+                break generated?;
             };
             if response.message.role != Role::Assistant
                 || !matches!(response.termination, ResponseTermination::Completed)
@@ -257,8 +430,12 @@ impl Agent {
             } else {
                 Vec::new()
             };
-            let complete =
-                session.record_assistant(turn, response.message, !pending_steering.is_empty())?;
+            let complete = session.record_assistant(
+                turn,
+                response.message,
+                response.usage,
+                !pending_steering.is_empty(),
+            )?;
             if complete {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
@@ -308,6 +485,7 @@ fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TextDelta(String),
+    ContextCompacted { through_entry: u64 },
     ToolStarted { name: String, arguments: Value },
     ToolFinished { name: String, output: ToolOutput },
     InterruptedCalls(usize),
@@ -335,8 +513,12 @@ pub enum AgentError {
     EmptyPrompt,
     #[error("turn was cancelled")]
     Cancelled,
-    #[error("model context is too large; start a new session or reduce history")]
+    #[error(
+        "model context is too large after available compaction; shorten the current input or select a larger-context model"
+    )]
     ContextTooLarge,
+    #[error("model returned an invalid context summary")]
+    InvalidSummary,
     #[error("model stream ended without a complete assistant response")]
     IncompleteModelResponse,
     #[error("model returned continuation material for another provider")]
@@ -360,6 +542,7 @@ impl AgentError {
             Self::StepLimit => TurnEndReason::StepLimit,
             Self::Provider(error) => TurnEndReason::Failed(format!("provider: {:?}", error.kind)),
             Self::ContextTooLarge => TurnEndReason::Failed("context_too_large".into()),
+            Self::InvalidSummary => TurnEndReason::Failed("invalid_summary".into()),
             Self::IncompleteModelResponse => {
                 TurnEndReason::Failed("incomplete_model_response".into())
             }
@@ -521,6 +704,218 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn manual_compaction_uses_no_tools_and_keeps_raw_history() {
+        let root = std::env::temp_dir().join(format!("ion-compact-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first result".into())]),
+            response(vec![Content::Text("First task is complete.".into())]),
+            response(vec![Content::Text("continued".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        agent
+            .submit(
+                &session,
+                model(),
+                "first task".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert!(
+            agent
+                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .await
+                .unwrap()
+        );
+        assert!(scripts.requests()[1].tools.is_empty());
+        assert_eq!(session.messages().unwrap().len(), 2);
+        assert_eq!(session.context_messages().unwrap().len(), 1);
+        agent
+            .submit(
+                &session,
+                model(),
+                "continue".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(scripts.requests()[2].messages.len(), 2);
+        assert_eq!(session.messages().unwrap().len(), 4);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn provider_overflow_compacts_and_retries_only_the_model_request() {
+        let root = std::env::temp_dir().join(format!("ion-overflow-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first result".into())]),
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::ContextLength,
+                message: "too long".into(),
+            }),
+            response(vec![Content::Text("First result is complete.".into())]),
+            response(vec![Content::Text("continued".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        for prompt in ["first task", "next task"] {
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    prompt.into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+        }
+        let requests = scripts.requests();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[2].tools.is_empty());
+        assert_eq!(requests[3].messages.len(), 2);
+        assert_eq!(session.messages().unwrap().len(), 4);
+        assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn failed_summary_does_not_change_the_context_projection() {
+        let root = std::env::temp_dir().join(format!("ion-summary-fail-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let before = session.context_messages().unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([Script::OpenError(
+            ProviderError {
+                kind: ProviderErrorKind::Server,
+                message: "unavailable".into(),
+            },
+        )]));
+        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
+        assert!(
+            agent
+                .compact(&session, model(), CancellationToken::new(), |_| {})
+                .await
+                .is_err()
+        );
+        assert_eq!(session.context_messages().unwrap(), before);
+        assert_eq!(session.view().unwrap().compacted_through, None);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn request_pressure_compacts_before_the_next_model_request() {
+        let root = std::env::temp_dir().join(format!("ion-pressure-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("x".repeat(1_200))]),
+            response(vec![Content::Text("First task completed.".into())]),
+            response(vec![Content::Text("continued".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                max_request_bytes: 2_500,
+                ..AgentLimits::default()
+            });
+        for prompt in ["first", "second"] {
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    prompt.into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(scripts.requests().len(), 3);
+        assert!(scripts.requests()[1].tools.is_empty());
+        assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn visible_partial_output_is_not_silently_replayed_after_overflow() {
+        let root = std::env::temp_dir().join(format!("ion-partial-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first result".into())]),
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("partial".into()),
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("partial".into())],
+                        provider_replay: None,
+                    },
+                    usage: Usage::unknown(),
+                    termination: ResponseTermination::Incomplete(IncompleteReason::ContextLength),
+                    returned_model: Some("test".into()),
+                }),
+            ]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        agent
+            .submit(
+                &session,
+                model(),
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert!(
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "second".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(scripts.requests().len(), 2);
+        assert_eq!(session.view().unwrap().compacted_through, None);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn incomplete_tool_call_is_reported_without_reexecution() {
         let root =
             std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
@@ -540,6 +935,7 @@ mod tests {
                     })],
                     provider_replay: None,
                 },
+                Usage::unknown(),
                 false,
             )
             .unwrap();

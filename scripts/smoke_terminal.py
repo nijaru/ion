@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
-        sent_first = sent_steering = sent_second = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
+        sent_first = sent_steering = sent_second = sent_compact = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -63,7 +63,11 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     time.sleep(0.1)
                     os.write(master, b"What did we finish previously?\x1b[13;3u")
                     sent_second = True
-                if sent_second and b"RESUMED" in output and not sent_controls:
+                if sent_second and b"RESUMED" in output and not sent_compact:
+                    time.sleep(0.2)
+                    os.write(master, b"/compact\r")
+                    sent_compact = True
+                if sent_compact and b"Context summarized; raw history retained" in output and not sent_controls:
                     time.sleep(0.2)
                     os.write(master, b"/name Smoke repair\r")
                     time.sleep(0.2)
@@ -94,7 +98,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert sent_first and sent_steering and sent_second and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert sent_first and sent_steering and sent_second and sent_compact and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"
@@ -106,6 +110,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             entries = json.loads(inspected.stdout)["entries"]
             assert [entry["kind"] for entry in entries].count("turn_ended") == 2
             assert [entry["kind"] for entry in entries].count("steering") == 1
+            assert [entry["kind"] for entry in entries].count("compacted") == 1
             turns = [entry["data"]["prompt"] for entry in entries if entry["kind"] == "turn_started"]
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert entries[-1]["kind"] == "model_selected", entries[-1]

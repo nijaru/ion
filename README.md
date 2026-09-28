@@ -42,6 +42,7 @@ ion -p 'Summarize the changes'
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
+ion --continue compact     # summarize old context; retain the raw Session
 ```
 
 `--cwd PATH` chooses a working directory. By default, a run starts a new
@@ -50,7 +51,7 @@ session; `--continue` reopens the most recently active one in that directory.
 open an exact SQLite path for scripts. An existing session uses its recorded
 directory, and an explicit `--cwd` must match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session` and
-`/model` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
+`/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions.
@@ -72,9 +73,12 @@ Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun
 the call automatically. `ion --continue inspect` reads the existing log
-without making that repair. Current sessions use the full recorded
-conversation until the request size limit is reached; automatic compaction
-is not implemented.
+without making that repair. Ion summarizes settled history when its request
+nears a known model's context window or exceeds its transport bound, and can
+retry one model request after a provider reports context overflow. The raw
+conversation remains inspectable; `compact` and `/compact` also trigger this
+explicitly. A single oversized prompt or tool result may still exceed the
+context limit when no settled group can be summarized.
 
 ## Current limits
 
@@ -84,8 +88,9 @@ through a loopback tunnel on macOS. The code and session results were checked
 independently; this is evidence for short tasks, not broad model or platform
 parity.
 
-Long histories end with an explicit request-size error because compaction is
-not implemented yet. The TUI clips tool output in its default view. Direct
+The TUI clips tool output in its default view. Context pressure currently
+uses a rough request-size token estimate; custom routes without a known
+context window use only the transport bound. Direct
 OpenAI was rate-limited in the available account; Anthropic and live Linux
 coding were not qualified. [ARCHITECTURE.md](ARCHITECTURE.md) holds the design
 contracts.
