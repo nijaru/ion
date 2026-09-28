@@ -582,6 +582,30 @@ impl Session {
         usage: Usage,
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
+        self.record_assistant_entries(turn, message, usage, continue_turn, Vec::new())
+    }
+
+    /// Publish the completed assistant and queued steering in one batch; a
+    /// failed transaction must leave both unpublished for the host to recover.
+    pub(crate) fn record_assistant_with_steering(
+        &self,
+        turn: u64,
+        message: Message,
+        usage: Usage,
+        steering: Vec<String>,
+    ) -> Result<bool, SessionError> {
+        let continue_turn = !steering.is_empty();
+        self.record_assistant_entries(turn, message, usage, continue_turn, steering)
+    }
+
+    fn record_assistant_entries(
+        &self,
+        turn: u64,
+        message: Message,
+        usage: Usage,
+        continue_turn: bool,
+        steering: Vec<String>,
+    ) -> Result<bool, SessionError> {
         let has_calls = message
             .content
             .iter()
@@ -598,6 +622,11 @@ impl Session {
                 reason: TurnEndReason::Completed,
             });
         }
+        entries.extend(
+            steering
+                .into_iter()
+                .map(|prompt| SessionEntry::Steering { turn, prompt }),
+        );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
         Ok(!has_calls && !continue_turn)
@@ -645,9 +674,20 @@ impl Session {
         Ok(results)
     }
 
-    pub(crate) fn record_steering(&self, turn: u64, prompt: String) -> Result<(), SessionError> {
+    pub(crate) fn record_steerings(
+        &self,
+        turn: u64,
+        prompts: Vec<String>,
+    ) -> Result<(), SessionError> {
+        if prompts.is_empty() {
+            return Ok(());
+        }
+        let entries = prompts
+            .into_iter()
+            .map(|prompt| SessionEntry::Steering { turn, prompt })
+            .collect::<Vec<_>>();
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &[SessionEntry::Steering { turn, prompt }])
+        append(&mut store, &entries)
     }
 
     pub(crate) fn record_tool_result(
@@ -1174,7 +1214,7 @@ mod tests {
                 .unwrap()
         );
         session
-            .record_steering(turn, "follow-up steering".into())
+            .record_steerings(turn, vec!["follow-up steering".into()])
             .unwrap();
         assert_eq!(
             session

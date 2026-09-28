@@ -8,7 +8,7 @@ mod session;
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, ToolHost as CodingToolHost, ToolOutput as CodingToolOutput,
+    AgentLimits, SteeringInbox, ToolHost as CodingToolHost, ToolOutput as CodingToolOutput,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;

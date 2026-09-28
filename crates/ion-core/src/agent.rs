@@ -1,5 +1,6 @@
 //! One coding loop for library, headless and terminal clients.
-use std::sync::Arc;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures_util::StreamExt;
@@ -10,10 +11,71 @@ use ion_ai::{
 };
 use serde_json::Value;
 use thiserror::Error;
-use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::{Session, SessionError, TurnEndReason};
+
+/// Host-owned input waiting for a Session commit. A failed write leaves the
+/// prompts here so the host can return them to its editor after the Turn.
+#[derive(Default)]
+pub struct SteeringInbox {
+    pending: Mutex<VecDeque<String>>,
+}
+
+impl SteeringInbox {
+    pub fn push(&self, prompt: String) {
+        if !prompt.trim().is_empty() {
+            self.pending
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .push_back(prompt);
+        }
+    }
+
+    /// Return prompts that never entered the Session. Call after the Turn
+    /// future finishes; the host can restore them to its editor or queue.
+    pub fn take_uncommitted(&self) -> Vec<String> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .drain(..)
+            .collect()
+    }
+
+    fn record_pending(&self, session: &Session, turn: u64) -> Result<(), SessionError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.is_empty() {
+            return Ok(());
+        }
+        session.record_steerings(turn, pending.iter().cloned().collect())?;
+        pending.clear();
+        Ok(())
+    }
+
+    fn record_assistant(
+        &self,
+        session: &Session,
+        turn: u64,
+        message: ion_ai::Message,
+        usage: ion_ai::Usage,
+    ) -> Result<bool, SessionError> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let complete = session.record_assistant_with_steering(
+            turn,
+            message,
+            usage,
+            pending.iter().cloned().collect(),
+        )?;
+        pending.clear();
+        Ok(complete)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct AgentLimits {
@@ -298,7 +360,7 @@ impl Agent {
     }
 
     /// Accept user steering at model-step boundaries during an active turn.
-    /// Messages still in the receiver when the turn ends belong to the host.
+    /// Prompts not committed when the Turn ends remain in the host-owned inbox.
     #[expect(
         clippy::too_many_arguments,
         reason = "explicit turn and input lifecycles"
@@ -310,7 +372,7 @@ impl Agent {
         prompt: String,
         instructions: String,
         stop: CancellationToken,
-        steering: &mut mpsc::UnboundedReceiver<String>,
+        steering: &SteeringInbox,
         mut observe: F,
     ) -> Result<String, AgentError>
     where
@@ -339,7 +401,7 @@ impl Agent {
         prompt: String,
         instructions: String,
         stop: CancellationToken,
-        steering: Option<&mut mpsc::UnboundedReceiver<String>>,
+        steering: Option<&SteeringInbox>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -386,7 +448,7 @@ impl Agent {
         model: ModelRef,
         instructions: String,
         stop: &CancellationToken,
-        mut steering: Option<&mut mpsc::UnboundedReceiver<String>>,
+        steering: Option<&SteeringInbox>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -397,8 +459,8 @@ impl Agent {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
-            for prompt in drain_steering(&mut steering) {
-                session.record_steering(turn, prompt)?;
+            if let Some(inbox) = steering {
+                inbox.record_pending(session, turn)?;
             }
             let mut recovered_overflow = false;
             let response = loop {
@@ -561,19 +623,18 @@ impl Agent {
             if calls.is_empty() && final_text.trim().is_empty() {
                 return Err(AgentError::IncompleteModelResponse);
             }
-            // Keep steering in the channel until tools settle. Cancellation
-            // during a tool must return unsent input to the host.
-            let pending_steering = if calls.is_empty() {
-                drain_steering(&mut steering)
+            // Steering arriving during a tool stays in the host inbox until
+            // the tool result is durable. A final answer and its queued
+            // steering enter the Session together or neither does.
+            let complete = if calls.is_empty() {
+                if let Some(inbox) = steering {
+                    inbox.record_assistant(session, turn, response.message, response.usage)?
+                } else {
+                    session.record_assistant(turn, response.message, response.usage, false)?
+                }
             } else {
-                Vec::new()
+                session.record_assistant(turn, response.message, response.usage, false)?
             };
-            let complete = session.record_assistant(
-                turn,
-                response.message,
-                response.usage,
-                !pending_steering.is_empty(),
-            )?;
             if complete {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
@@ -610,9 +671,6 @@ impl Agent {
                     output,
                 });
             }
-            for prompt in pending_steering {
-                session.record_steering(turn, prompt)?;
-            }
         }
         Err(AgentError::StepLimit)
     }
@@ -627,18 +685,6 @@ fn retryable_provider_error(error: &ProviderError) -> bool {
             | ProviderErrorKind::Overloaded
             | ProviderErrorKind::Server
     )
-}
-
-fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -> Vec<String> {
-    let mut prompts = Vec::new();
-    if let Some(receiver) = receiver {
-        while let Ok(prompt) = receiver.try_recv() {
-            if !prompt.trim().is_empty() {
-                prompts.push(prompt);
-            }
-        }
-    }
-    prompts
 }
 
 #[derive(Debug, Clone)]
@@ -1048,6 +1094,153 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rejected_steering_stays_available_to_the_host() {
+        let root =
+            std::env::temp_dir().join(format!("ion-steering-fault-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "done".into(),
+        )])]));
+        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
+        let steering = SteeringInbox::default();
+        let prompt = "x".repeat(4 * 1024 * 1024);
+        steering.push(prompt.clone());
+        let result = agent
+            .submit_with_steering(
+                &session,
+                model(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                &steering,
+                |_| {},
+            )
+            .await;
+        assert!(matches!(result, Err(AgentError::Session(_))));
+        assert_eq!(steering.take_uncommitted(), vec![prompt]);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn assistant_and_steering_commit_together_or_remain_unpublished() {
+        let root =
+            std::env::temp_dir().join(format!("ion-steering-batch-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+            ModelStreamEvent::TextDelta("done".into()),
+            ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: Some("test".into()),
+            }),
+        ])]));
+        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
+        let steering = SteeringInbox::default();
+        let prompt = "x".repeat(4 * 1024 * 1024);
+        let result = agent
+            .submit_with_steering(
+                &session,
+                model(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                &steering,
+                |event| {
+                    if matches!(event, AgentEvent::TextDelta(_)) {
+                        steering.push(prompt.clone());
+                    }
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(AgentError::Session(_))));
+        assert_eq!(steering.take_uncommitted(), vec![prompt]);
+        let entries = session.view().unwrap().entries;
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(
+            entries[0],
+            crate::session::SessionEntry::TurnStarted { .. }
+        ));
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn final_text_and_queued_steering_continue_the_same_turn() {
+        let root =
+            std::env::temp_dir().join(format!("ion-steering-final-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let first = ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("first".into())],
+                provider_replay: None,
+            },
+            usage: Usage::unknown(),
+            termination: ResponseTermination::Completed,
+            returned_model: Some("test".into()),
+        };
+        let scripts = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("first".into()),
+                ModelStreamEvent::Completed(first),
+            ]),
+            response(vec![Content::Text("second".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let steering = SteeringInbox::default();
+        let answer = agent
+            .submit_with_steering(
+                &session,
+                model(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                &steering,
+                |event| {
+                    if matches!(event, AgentEvent::TextDelta(_)) {
+                        steering.push("also answer this".into());
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "second");
+        assert!(steering.take_uncommitted().is_empty());
+        assert_eq!(scripts.requests().len(), 2);
+        let entries = session.view().unwrap().entries;
+        assert!(matches!(
+            entries[1],
+            crate::session::SessionEntry::Assistant { .. }
+        ));
+        assert!(matches!(
+            entries[2],
+            crate::session::SessionEntry::Steering { .. }
+        ));
+        assert!(matches!(
+            entries[3],
+            crate::session::SessionEntry::Assistant { .. }
+        ));
+        assert!(matches!(
+            entries[4],
+            crate::session::SessionEntry::TurnEnded { .. }
+        ));
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn steering_is_recorded_before_the_next_model_step_in_one_turn() {
         let root = std::env::temp_dir().join(format!("ion-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -1064,7 +1257,8 @@ mod tests {
         ]));
         std::fs::write(root.join("file.txt"), "content").unwrap();
         let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
-        let (sender, mut steering) = mpsc::unbounded_channel();
+        let steering = Arc::new(SteeringInbox::default());
+        let sender = steering.clone();
         agent
             .submit_with_steering(
                 &session,
@@ -1072,10 +1266,10 @@ mod tests {
                 "read file".into(),
                 "test".into(),
                 CancellationToken::new(),
-                &mut steering,
+                &steering,
                 move |event| {
                     if matches!(event, AgentEvent::ToolFinished { .. }) {
-                        sender.send("also check the content".into()).unwrap();
+                        sender.push("also check the content".into());
                     }
                 },
             )

@@ -83,6 +83,10 @@ failure and limits also have explicit end reasons. Turn state is derived from
 entries; any index is rebuildable. Partial model text and streaming tool
 output may be shown live, but committed Session facts are the authority on
 reopen.
+Steering remains in a host-owned inbox until it commits to the Session. When
+it arrives beside a completed assistant response, the assistant and steering
+commit together. A failed write leaves the uncommitted prompt available to
+the host for restoration.
 Recorded assistant attempts retain their provider termination reason, so a
 truncated call that was rejected is distinguishable from a complete call.
 

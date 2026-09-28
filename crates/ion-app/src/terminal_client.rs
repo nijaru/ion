@@ -9,13 +9,12 @@ use std::{
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
-use ion_core::{CodingAgent, CodingAgentEvent, CodingSession};
+use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, SteeringInbox};
 use ion_terminal::{
     InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
     install_panic_hook,
 };
 use ratatui::text::Line;
-use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
@@ -589,12 +588,12 @@ fn busy_key(
     ui: &mut Frontend,
     key: KeyEvent,
     stop: &CancellationToken,
-    steering: Option<&mpsc::UnboundedSender<String>>,
+    steering: Option<&SteeringInbox>,
 ) {
     match ui.key(key) {
         Action::Submit(prompt) => {
             if let Some(steering) = steering {
-                let _ = steering.send(prompt);
+                steering.push(prompt);
                 ui.status = "Steering sent for the next model step".into();
             } else {
                 ui.pending.push_back(prompt);
@@ -680,7 +679,7 @@ async fn run_turn(
     let progress = Arc::new(Mutex::new(Progress::default()));
     let observer = progress.clone();
     let stop = CancellationToken::new();
-    let (steering_tx, mut steering_rx) = mpsc::unbounded_channel();
+    let steering = SteeringInbox::default();
     let mut input_ended = false;
     let result = {
         let turn = agent.submit_with_steering(
@@ -689,7 +688,7 @@ async fn run_turn(
             prompt,
             instructions.to_owned(),
             stop.clone(),
-            &mut steering_rx,
+            &steering,
             move |event| {
                 observer
                     .lock()
@@ -704,7 +703,7 @@ async fn run_turn(
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering_tx)),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -722,7 +721,7 @@ async fn run_turn(
             }
         }
     };
-    while let Ok(prompt) = steering_rx.try_recv() {
+    for prompt in steering.take_uncommitted() {
         ui.pending.push_back(prompt);
     }
     if result.is_err() {
