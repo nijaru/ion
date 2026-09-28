@@ -149,11 +149,13 @@ File edits reject ambiguous matches. Writes report
 creation or replacement; commands report exit status, launch/transport
 failure and truncation. When command output is bounded, retain the diagnostic
 tail and state what was omitted. Exact text edits must handle ordinary BOM and
-line-ending conventions without silently changing unrelated text. Support
-optional command timeouts and cancellation, and bound payload and output sizes
-at usable values. Do not claim stronger effect or isolation guarantees than a tool
-implements. Approval or sandboxing is a separate opt-in product decision,
-not a prerequisite for native coding.
+line-ending conventions without silently changing unrelated text. An atomic
+replacement of an existing file must still respect its effective write
+permission; directory rename access alone does not make it an editable target.
+Support optional command timeouts and cancellation, and bound payload and
+output sizes at usable values. Do not claim stronger effect or isolation
+guarantees than a tool implements. Approval or sandboxing is a separate opt-in
+product decision, not a prerequisite for native coding.
 
 Project files and tool output are lower-trust data. Credentials belong to the
 host and stay out of model-visible context and Session history.

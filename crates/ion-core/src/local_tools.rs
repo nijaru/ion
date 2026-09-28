@@ -173,6 +173,9 @@ impl LocalTools {
             Ok(bytes) => bytes,
             Err(e) => return error(format!("edit {}: {e}", input.path)),
         };
+        if let Err(e) = ensure_writable(&path) {
+            return error(format!("edit {}: {e}", input.path));
+        }
         let actual = hex_digest(&bytes);
         if input
             .base_digest
@@ -223,6 +226,11 @@ impl LocalTools {
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
             Err(e) => return error(e.to_string()),
         };
+        if previous.is_some()
+            && let Err(e) = ensure_writable(&path)
+        {
+            return error(format!("write {}: {e}", input.path));
+        }
         let created = previous.is_none();
         if let Some(parent) = path.parent()
             && let Err(e) = fs::create_dir_all(parent)
@@ -423,6 +431,11 @@ fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
     }
     Ok(bytes)
 }
+fn ensure_writable(path: &Path) -> std::io::Result<()> {
+    // Atomic rename would otherwise bypass the target file's write permission.
+    // Opening without truncate checks the current host user's effective access.
+    OpenOptions::new().write(true).open(path).map(|_| ())
+}
 fn replace_file(
     path: &Path,
     content: &[u8],
@@ -565,6 +578,23 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit_and_write_do_not_replace_read_only_files() {
+        let root = std::env::temp_dir().join(format!("ion-readonly-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        fs::write(&path, "old").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let edit = tools.edit(&json!({"path":"file.txt","old_text":"old","new_text":"new"}));
+        assert!(edit.is_error, "{}", edit.value);
+        let write = tools.write(&json!({"path":"file.txt","content":"new"}));
+        assert!(write.is_error, "{}", write.value);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
 
