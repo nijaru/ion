@@ -52,7 +52,8 @@ One Turn starts from an accepted user message. Each model request uses one
 coherent selection of model, tools, instructions and context. The loop
 builds model input, streams a response,
 dispatches complete tool calls in order, records their results and continues
-until a final response, stop or limit. A tool result is available to the
+until a final response, cancellation or an explicit failure. There is no
+fixed model-step cap on an active Turn. A tool result is available to the
 model before a dependent request. Tool failure can be a result the model
 reasons about; transport, storage and unrecoverable dispatch errors surface
 to the client. Neither client infers task success from the model's prose alone.

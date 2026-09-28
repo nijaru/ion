@@ -80,7 +80,6 @@ pub enum TurnEndReason {
     Cancelled,
     Interrupted,
     Failed(String),
-    StepLimit,
 }
 
 #[derive(Debug, Clone, Serialize)]

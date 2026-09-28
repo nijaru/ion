@@ -79,7 +79,6 @@ impl SteeringInbox {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AgentLimits {
-    pub max_steps: usize,
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
     pub context_window_tokens: Option<u32>,
@@ -88,7 +87,6 @@ pub struct AgentLimits {
 impl Default for AgentLimits {
     fn default() -> Self {
         Self {
-            max_steps: 80,
             max_request_bytes: 8 * 1024 * 1024,
             max_output_tokens: 16_384,
             context_window_tokens: None,
@@ -455,7 +453,10 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let mut length_recovery_attempted = false;
-        for _ in 0..self.limits.max_steps {
+        loop {
+            // Keep a fast in-process model from starving terminal input and
+            // cancellation during a long tool sequence.
+            tokio::task::yield_now().await;
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
             }
@@ -672,7 +673,6 @@ impl Agent {
                 });
             }
         }
-        Err(AgentError::StepLimit)
     }
 }
 
@@ -751,8 +751,6 @@ pub enum AgentError {
     InvalidProviderReplay,
     #[error("model returned an invalid or duplicate tool call")]
     InvalidToolCall,
-    #[error("turn exceeded its model-step limit")]
-    StepLimit,
     #[error(transparent)]
     Provider(#[from] ProviderError),
     #[error(transparent)]
@@ -765,7 +763,6 @@ impl AgentError {
     fn end_reason(&self) -> TurnEndReason {
         match self {
             Self::Cancelled => TurnEndReason::Cancelled,
-            Self::StepLimit => TurnEndReason::StepLimit,
             Self::Provider(error) => TurnEndReason::Failed(format!("provider: {:?}", error.kind)),
             Self::ContextTooLarge => TurnEndReason::Failed("context_too_large".into()),
             Self::InvalidSummary => TurnEndReason::Failed("invalid_summary".into()),
@@ -944,6 +941,85 @@ mod tests {
         assert_eq!(answer, "still here");
         assert_eq!(reopened.messages().unwrap().len(), 7);
         drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn long_coding_turn_is_not_stopped_by_an_arbitrary_step_count() {
+        let root = std::env::temp_dir().join(format!("ion-long-turn-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file.txt"), "content").unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let mut scripts = (0..81)
+            .map(|index| {
+                response(vec![Content::ToolCall(ToolCall {
+                    id: format!("read-{index}"),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"file.txt"}),
+                    raw_arguments: None,
+                })])
+            })
+            .collect::<Vec<_>>();
+        scripts.push(response(vec![Content::Text("done".into())]));
+        let service = Arc::new(ScriptedModelService::new(scripts));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let answer = agent
+            .submit(
+                &session,
+                model(),
+                "inspect the file repeatedly".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "done");
+        assert_eq!(service.requests().len(), 82);
+        assert!(session.view().unwrap().unfinished_turn.is_none());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn fast_model_steps_leave_room_for_cancellation() {
+        let root = std::env::temp_dir().join(format!("ion-fast-turn-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file.txt"), "content").unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = (0..100)
+            .map(|index| {
+                response(vec![Content::ToolCall(ToolCall {
+                    id: format!("read-{index}"),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"file.txt"}),
+                    raw_arguments: None,
+                })])
+            })
+            .collect::<Vec<_>>();
+        let service = Arc::new(ScriptedModelService::new(scripts));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let stop = CancellationToken::new();
+        let mut trigger = Some(stop.clone());
+        let result = agent
+            .submit(
+                &session,
+                model(),
+                "inspect the file".into(),
+                "test".into(),
+                stop,
+                move |event| {
+                    if matches!(event, AgentEvent::ToolFinished { .. })
+                        && let Some(trigger) = trigger.take()
+                    {
+                        tokio::spawn(async move { trigger.cancel() });
+                    }
+                },
+            )
+            .await;
+        assert!(matches!(result, Err(AgentError::Cancelled)));
+        assert!(service.requests().len() < 100);
+        drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
 
