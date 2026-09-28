@@ -166,6 +166,7 @@ impl Screen {
             self.origin = height.saturating_sub(2);
         }
         self.current = None;
+        self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
         self.live_height_bias = 0;
@@ -209,6 +210,7 @@ impl Screen {
     /// is no longer what this Screen believes it is.
     pub fn invalidate(&mut self) {
         self.current = None;
+        self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
         self.live_height_bias = 0;
@@ -394,7 +396,7 @@ impl Screen {
             next.render_line(line.clone(), row as u16);
         }
         let mut painted = false;
-        for r in 0..h.min(rows.len()) as u16 {
+        for r in 0..h as u16 {
             let comparable = previous
                 .as_ref()
                 .is_some_and(|prev| r < prev.buffer.area.height);
@@ -985,6 +987,67 @@ mod tests {
         let s = String::from_utf8(out).expect("utf8");
         // invalidation repaints even rows whose content did not change
         assert_eq!(s.matches("history").count(), 2, "{s}");
+    }
+
+    #[test]
+    fn shorter_fullscreen_frame_clears_old_rows() {
+        let mut screen = Screen::new(12, 0, 3);
+        let mut terminal = vt100::Parser::new(3, 12, 0);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(
+                &mut out,
+                &[line("first"), line("second"), line("third")],
+                None,
+            )
+            .unwrap();
+        terminal.process(&out);
+        out.clear();
+        screen
+            .draw_fullscreen(&mut out, &[line("new")], None)
+            .unwrap();
+        terminal.process(&out);
+        let rows = terminal
+            .screen()
+            .rows(0, 12)
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, vec!["new", "", ""]);
+    }
+
+    #[test]
+    fn fullscreen_resize_repaints_at_new_dimensions() {
+        let mut screen = Screen::new(4, 0, 3);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(&mut out, &[line("old")], None)
+            .unwrap();
+        screen.resize(8, 3);
+        out.clear();
+        screen
+            .draw_fullscreen(&mut out, &[line("new")], None)
+            .unwrap();
+        let mut terminal = vt100::Parser::new(3, 8, 0);
+        terminal.process(&out);
+        assert_eq!(
+            terminal.screen().rows(0, 8).next().unwrap().trim_end(),
+            "new"
+        );
+    }
+
+    #[test]
+    fn invalidate_repaints_fullscreen() {
+        let mut screen = Screen::new(8, 0, 3);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(&mut out, &[line("hello")], None)
+            .unwrap();
+        out.clear();
+        screen.invalidate();
+        screen
+            .draw_fullscreen(&mut out, &[line("hello")], None)
+            .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("hello"));
     }
 
     #[test]
