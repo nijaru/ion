@@ -1,14 +1,11 @@
 //! Per-request generation controls.
 //!
-//! Every field is explicit: `None` and [`Reasoning::ProviderDefault`] mean the
-//! wire field is deliberately omitted, not "use whatever the host defaults to
-//! today". A request that needs a default to be interpreted is not reproducible,
-//! and a frozen request must mean the same thing when it is replayed.
+//! `None` and [`Reasoning::ProviderDefault`] omit their optional wire fields.
+//! The provider then applies its current defaults, which can change between
+//! calls.
 //!
-//! Values are validated here once, for both callers: durable configuration
-//! refuses a malformed setting before it is stored, and a provider refuses it
-//! again before it is encoded. Model-specific ranges are *not* this type's
-//! concern; an adapter or profile applies those, because they differ per model.
+//! Provider-neutral values are validated here. Adapters validate combinations
+//! and model-specific constraints before encoding, because they differ by route.
 
 use serde::{Deserialize, Serialize};
 
@@ -57,7 +54,7 @@ impl GenerationControls {
         Ok(())
     }
 
-    /// Check the complete provider response against the frozen tool request.
+    /// Check the complete provider response against this call's tool controls.
     /// Adapters must not be trusted to honor tool_choice or parallel limits.
     pub fn permits_tool_calls<'a>(&self, names: impl IntoIterator<Item = &'a str>) -> bool {
         let mut count = 0u8;
@@ -212,7 +209,7 @@ mod tests {
     }
 
     #[test]
-    fn frozen_tool_choice_rejects_unrequested_and_parallel_calls() {
+    fn tool_choice_rejects_unrequested_and_parallel_calls() {
         let mut controls = controls();
         controls.tool_choice = ToolChoice::None;
         assert!(controls.permits_tool_calls([]));
