@@ -1,5 +1,9 @@
 //! Terminal view over the same coding loop used by headless and library hosts.
-use std::sync::{Arc, Mutex};
+use std::{
+    fs,
+    path::PathBuf,
+    sync::{Arc, Mutex},
+};
 
 use anyhow::{Context, Result};
 use ion_ai::{Content, Message, ModelRef, Role};
@@ -14,6 +18,14 @@ use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
+use crate::{
+    auth::{CredentialStatus, CredentialStore},
+    create_agent,
+    model_setup::{ModelStore, Selection},
+    project_instructions,
+    session_catalog::SessionCatalog,
+};
+
 const MAX_DRAFT: usize = 64 * 1024;
 const MAX_PREVIEW: usize = 64 * 1024;
 const MAX_ROWS: usize = 4096;
@@ -25,6 +37,102 @@ struct Frontend {
     history: Vec<Message>,
     scroll: usize,
     status: String,
+    notices: Vec<String>,
+    picker: Option<Picker>,
+    session_label: String,
+    cwd_label: String,
+}
+
+enum PickerValue {
+    Session(PathBuf),
+    Model(ModelRef),
+}
+
+struct PickerItem {
+    label: String,
+    value: PickerValue,
+}
+
+struct Picker {
+    title: &'static str,
+    query: String,
+    selected: usize,
+    items: Vec<PickerItem>,
+}
+
+impl Picker {
+    fn matches(&self) -> Vec<usize> {
+        let query = self.query.to_ascii_lowercase();
+        self.items
+            .iter()
+            .enumerate()
+            .filter_map(|(index, item)| {
+                item.label
+                    .to_ascii_lowercase()
+                    .contains(&query)
+                    .then_some(index)
+            })
+            .collect()
+    }
+}
+
+struct ChatRuntime {
+    session: Arc<CodingSession>,
+    agent: Arc<CodingAgent>,
+    selected: Selection,
+    instructions: String,
+    sessions: SessionCatalog,
+    models: ModelStore,
+    credentials: CredentialStore,
+}
+
+impl ChatRuntime {
+    fn switch_session(&mut self, path: PathBuf) -> Result<()> {
+        if fs::canonicalize(self.session.path())? == fs::canonicalize(&path)? {
+            return Ok(());
+        }
+        let session = Arc::new(CodingSession::open(&path)?);
+        anyhow::ensure!(
+            session.cwd() == self.session.cwd(),
+            "session belongs to another directory"
+        );
+        let selected =
+            self.models
+                .choose(None, None, session.view()?.last_model, &self.credentials)?;
+        selected.require_access(&self.credentials)?;
+        let agent = create_agent(&session, &selected, &self.credentials)?;
+        let instructions = project_instructions(session.cwd())?;
+        self.session = session;
+        self.selected = selected;
+        self.agent = agent;
+        self.instructions = instructions;
+        Ok(())
+    }
+
+    fn new_session(&mut self) -> Result<()> {
+        let selected = self.models.choose(None, None, None, &self.credentials)?;
+        selected.require_access(&self.credentials)?;
+        let instructions = project_instructions(self.session.cwd())?;
+        let path = self.sessions.new_path()?;
+        let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
+        let agent = create_agent(&session, &selected, &self.credentials)?;
+        session.select_model(selected.identity())?;
+        self.session = session;
+        self.selected = selected;
+        self.agent = agent;
+        self.instructions = instructions;
+        Ok(())
+    }
+
+    fn select_model(&mut self, model: ModelRef) -> Result<()> {
+        let selected = self.models.resolve_identity(&model)?;
+        selected.require_access(&self.credentials)?;
+        let agent = create_agent(&self.session, &selected, &self.credentials)?;
+        self.session.select_model(model)?;
+        self.selected = selected;
+        self.agent = agent;
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -68,28 +176,41 @@ impl Progress {
 pub async fn chat(
     session: Arc<CodingSession>,
     agent: Arc<CodingAgent>,
-    model: ModelRef,
+    selected: Selection,
     instructions: String,
+    sessions: SessionCatalog,
+    models: ModelStore,
+    credentials: CredentialStore,
 ) -> Result<()> {
+    let mut runtime = ChatRuntime {
+        session,
+        agent,
+        selected,
+        instructions,
+        sessions,
+        models,
+        credentials,
+    };
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
     terminal.enter_alt_screen()?;
     let (width, height) = terminal.size()?;
     let mut screen = Screen::new(width, 0, height);
     let mut input = terminal.input();
-    let view = session.view()?;
     let mut ui = Frontend {
-        history: view.messages,
         status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
         ..Frontend::default()
     };
-    if view.unfinished_turn.is_some() {
-        ui.status =
-            "Previous turn interrupted; tool effects may be unknown. Inspect before retrying."
-                .into();
-    }
+    ui.refresh_session(&runtime.session)?;
     loop {
-        draw(&mut terminal, &mut screen, &ui, None, &model, false)?;
+        draw(
+            &mut terminal,
+            &mut screen,
+            &ui,
+            None,
+            &runtime.selected.identity(),
+            false,
+        )?;
         let Some(event) = input.next().await else {
             break;
         };
@@ -105,13 +226,44 @@ pub async fn chat(
                         &mut screen,
                         &mut input,
                         &mut ui,
-                        &session,
-                        &agent,
-                        model.clone(),
-                        &instructions,
+                        &runtime.session,
+                        &runtime.agent,
+                        runtime.selected.identity(),
+                        &runtime.instructions,
                         prompt,
                     )
                     .await?;
+                }
+                Action::Command(command) => {
+                    if let Some(provider) = command.strip_prefix("/login ") {
+                        match login_in_terminal(
+                            &mut terminal,
+                            &mut screen,
+                            &mut input,
+                            &runtime.credentials,
+                            provider.trim(),
+                        )? {
+                            Ok(()) => ui.status = "Credential saved".into(),
+                            Err(error) => ui.status = format!("{error:#}"),
+                        }
+                    } else {
+                        if let Err(error) = handle_command(&mut runtime, &mut ui, &command) {
+                            ui.status = format!("{error:#}");
+                        }
+                    }
+                }
+                Action::Pick(value) => {
+                    let result = match value {
+                        PickerValue::Session(path) => runtime.switch_session(path),
+                        PickerValue::Model(model) => runtime.select_model(model),
+                    };
+                    match result {
+                        Ok(()) => {
+                            ui.refresh_session(&runtime.session)?;
+                            ui.status = "Ready".into();
+                        }
+                        Err(error) => ui.status = format!("{error:#}"),
+                    }
                 }
             },
             InputEvent::Paste(text) => ui.insert(&text),
@@ -125,6 +277,142 @@ pub async fn chat(
         }
     }
     terminal.restore()?;
+    Ok(())
+}
+
+fn login_in_terminal(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    input: &mut InputStream,
+    credentials: &CredentialStore,
+    provider: &str,
+) -> Result<Result<()>> {
+    anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
+    terminal.suspend()?;
+    let result = (|| -> Result<()> {
+        let key = rpassword::prompt_password(format!("{provider} API key: "))?;
+        credentials.save_api_key(provider, &key)
+    })();
+    terminal.resume()?;
+    terminal.enter_alt_screen()?;
+    let (width, height) = terminal.size()?;
+    *screen = Screen::new(width, 0, height);
+    *input = terminal.input();
+    Ok(result)
+}
+
+fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -> Result<()> {
+    let (name, args) = command.split_once(' ').unwrap_or((command, ""));
+    let args = args.trim();
+    match name {
+        "/help" => ui.note(
+            "/new /resume /session /name NAME /model /login PROVIDER /logout PROVIDER /quit".into(),
+        ),
+        "/session" => {
+            let view = runtime.session.view()?;
+            ui.note(format!(
+                "Session {} · {} turn(s) · {}",
+                runtime.session.path().display(),
+                view.entries
+                    .iter()
+                    .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
+                    .count(),
+                view.name.unwrap_or_else(|| "unnamed".into()),
+            ));
+        }
+        "/new" => {
+            runtime.new_session()?;
+            ui.refresh_session(&runtime.session)?;
+            ui.note("Started a new session".into());
+        }
+        "/resume" => {
+            if !args.is_empty() {
+                runtime.switch_session(runtime.sessions.by_id(args)?)?;
+                ui.refresh_session(&runtime.session)?;
+            } else {
+                let items = runtime
+                    .sessions
+                    .list()?
+                    .into_iter()
+                    .map(|session| PickerItem {
+                        label: format!(
+                            "{}  {}  {}",
+                            &session.id[..session.id.len().min(12)],
+                            session.name.as_deref().unwrap_or(""),
+                            session.preview.as_deref().unwrap_or("")
+                        ),
+                        value: PickerValue::Session(session.path),
+                    })
+                    .collect();
+                ui.picker = Some(Picker {
+                    title: "Resume session",
+                    query: String::new(),
+                    selected: 0,
+                    items,
+                });
+            }
+        }
+        "/name" => {
+            if args.is_empty() {
+                ui.note(
+                    runtime
+                        .session
+                        .view()?
+                        .name
+                        .unwrap_or_else(|| "Session has no name".into()),
+                );
+            } else {
+                runtime.session.set_name(Some(args))?;
+                ui.refresh_session(&runtime.session)?;
+            }
+        }
+        "/model" => {
+            if !args.is_empty() {
+                let (provider, model) =
+                    args.split_once('/').context("use /model PROVIDER/MODEL")?;
+                runtime.select_model(ModelRef {
+                    provider: provider.into(),
+                    model: model.into(),
+                })?;
+                ui.status = format!("Selected {args}");
+            } else {
+                let items = runtime
+                    .models
+                    .choices(&runtime.credentials)?
+                    .into_iter()
+                    .map(|choice| {
+                        let option = choice.selected;
+                        Ok(PickerItem {
+                            label: format!(
+                                "{}/{}  {}  {}",
+                                option.provider,
+                                option.model,
+                                choice.label,
+                                if choice.credential == CredentialStatus::Missing {
+                                    "no credential"
+                                } else {
+                                    "ready"
+                                }
+                            ),
+                            value: PickerValue::Model(option.identity()),
+                        })
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                ui.picker = Some(Picker {
+                    title: "Choose model",
+                    query: String::new(),
+                    selected: 0,
+                    items,
+                });
+            }
+        }
+        "/logout" => {
+            anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
+            runtime.credentials.remove(args)?;
+            ui.status = format!("Removed saved {args} credential");
+        }
+        _ => ui.status = format!("Unknown command: {name}. Type /help"),
+    }
     Ok(())
 }
 
@@ -195,11 +483,46 @@ async fn run_turn(
 enum Action {
     None,
     Submit(String),
+    Command(String),
+    Pick(PickerValue),
     Quit,
 }
 
 impl Frontend {
+    fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
+        let view = session.view()?;
+        self.history = view.messages;
+        self.notices.clear();
+        self.scroll = 0;
+        self.cwd_label = session.cwd().display().to_string();
+        let id = session.path().file_stem().map_or_else(
+            || "session".into(),
+            |stem| stem.to_string_lossy().into_owned(),
+        );
+        self.session_label = format!(
+            "{}{}",
+            &id[..id.len().min(8)],
+            view.name
+                .map_or_else(String::new, |name| format!(" {name}"))
+        );
+        if view.unfinished_turn.is_some() {
+            self.status = "Previous turn interrupted; tool effects may be unknown".into();
+        }
+        Ok(())
+    }
+
+    fn note(&mut self, message: String) {
+        self.notices.push(message);
+        if self.notices.len() > 16 {
+            self.notices.remove(0);
+        }
+        self.scroll = 0;
+    }
+
     fn key(&mut self, key: KeyEvent) -> Action {
+        if self.picker.is_some() {
+            return self.picker_key(key);
+        }
         match key {
             KeyEvent {
                 code: KeyCode::Char('c'),
@@ -242,6 +565,8 @@ impl Frontend {
                     Action::None
                 } else if prompt == "/exit" || prompt == "/quit" {
                     Action::Quit
+                } else if prompt.starts_with('/') {
+                    Action::Command(prompt)
                 } else {
                     Action::Submit(prompt)
                 }
@@ -317,7 +642,66 @@ impl Frontend {
             _ => Action::None,
         }
     }
+
+    fn picker_key(&mut self, key: KeyEvent) -> Action {
+        let picker = self.picker.as_mut().expect("picker is active");
+        match key.code {
+            KeyCode::Esc => {
+                self.picker = None;
+                Action::None
+            }
+            KeyCode::Char('c') if key.modifiers.contains(Modifiers::CONTROL) => {
+                self.picker = None;
+                Action::None
+            }
+            KeyCode::Up => {
+                picker.selected = picker.selected.saturating_sub(1);
+                Action::None
+            }
+            KeyCode::Down => {
+                picker.selected =
+                    (picker.selected + 1).min(picker.matches().len().saturating_sub(1));
+                Action::None
+            }
+            KeyCode::Backspace => {
+                picker.query.pop();
+                picker.selected = 0;
+                Action::None
+            }
+            KeyCode::Char(ch)
+                if !key.modifiers.contains(Modifiers::CONTROL)
+                    && !key.modifiers.contains(Modifiers::ALT) =>
+            {
+                picker.query.push(ch);
+                picker.selected = 0;
+                Action::None
+            }
+            KeyCode::Enter => {
+                let matching = picker.matches();
+                let selected = matching
+                    .get(picker.selected)
+                    .and_then(|index| picker.items.get(*index));
+                let value = selected.map(|item| match &item.value {
+                    PickerValue::Session(path) => PickerValue::Session(path.clone()),
+                    PickerValue::Model(model) => PickerValue::Model(model.clone()),
+                });
+                self.picker = None;
+                value.map_or(Action::None, Action::Pick)
+            }
+            _ => Action::None,
+        }
+    }
     fn insert(&mut self, text: &str) {
+        if let Some(picker) = &mut self.picker {
+            picker.query.push_str(
+                &text
+                    .chars()
+                    .filter(|ch| !ch.is_control())
+                    .collect::<String>(),
+            );
+            picker.selected = 0;
+            return;
+        }
         let clean = text
             .chars()
             .filter_map(|ch| match ch {
@@ -347,11 +731,20 @@ fn draw(
     screen.resize(width, height);
     let width = width.max(1) as usize;
     let height = height.max(1) as usize;
-    let mut composer = wrap_input(&ui.draft, ui.cursor, width);
+    let (draft, cursor) = ui.picker.as_ref().map_or((&ui.draft, ui.cursor), |picker| {
+        (&picker.query, picker.query.len())
+    });
+    let mut composer = wrap_input(draft, cursor, width);
     if busy {
         composer.lines = vec!["… working (Ctrl-C cancels)".into()];
     }
-    let chrome_height = if height >= 3 { 2 } else { 0 };
+    let chrome_height = if height >= 5 {
+        3
+    } else if height >= 3 {
+        2
+    } else {
+        0
+    };
     let composer_height = composer.lines.len().min(4).min(height - chrome_height);
     let composer_start = if busy {
         0
@@ -362,19 +755,43 @@ fn draw(
             .min(composer.lines.len().saturating_sub(composer_height))
     };
     let history_height = height - composer_height - chrome_height;
-    let mut history = history_rows(&ui.history, width);
-    if let Some(progress) = progress {
-        if !progress.text.is_empty() {
-            push_wrapped(&mut history, &format!("ion> {}", progress.text), width);
+    let mut history = if let Some(picker) = &ui.picker {
+        let matching = picker.matches();
+        let mut rows = vec![format!("{} · {} match(es)", picker.title, matching.len())];
+        let visible = history_height.saturating_sub(1);
+        let start = picker.selected.saturating_sub(visible.saturating_sub(1));
+        for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
+            let label = &picker.items[*item].label;
+            rows.push(format!(
+                "{} {}",
+                if index == picker.selected { '›' } else { ' ' },
+                brief(label, width.saturating_sub(2))
+            ));
         }
-        for event in &progress.events {
-            push_wrapped(&mut history, event, width);
+        rows
+    } else {
+        let mut rows = history_rows(&ui.history, width);
+        for notice in &ui.notices {
+            push_wrapped(&mut rows, notice, width);
         }
-    }
+        if let Some(progress) = progress {
+            if !progress.text.is_empty() {
+                push_wrapped(&mut rows, &format!("ion> {}", progress.text), width);
+            }
+            for event in &progress.events {
+                push_wrapped(&mut rows, event, width);
+            }
+        }
+        rows
+    };
     if history.len() > MAX_ROWS {
         history.drain(..history.len() - MAX_ROWS);
     }
-    let end = history.len().saturating_sub(ui.scroll.min(history.len()));
+    let end = history.len().saturating_sub(if ui.picker.is_some() {
+        0
+    } else {
+        ui.scroll.min(history.len())
+    });
     let start = end.saturating_sub(history_height);
     let mut rows = vec![Line::raw(""); height];
     let padding = history_height.saturating_sub(end - start);
@@ -383,10 +800,21 @@ fn draw(
     }
     if chrome_height > 0 {
         rows[history_height] = Line::raw("─".repeat(width));
-        rows[history_height + 1] = Line::raw(brief(
-            &format!("{} / {} · {}", model.provider, model.model, ui.status),
-            width,
-        ));
+        if chrome_height == 3 {
+            rows[history_height + 1] = Line::raw(brief(&ui.status, width));
+            rows[history_height + 2] = Line::raw(brief(
+                &format!(
+                    "{} · {} · {}/{}",
+                    ui.cwd_label, ui.session_label, model.provider, model.model
+                ),
+                width,
+            ));
+        } else {
+            rows[history_height + 1] = Line::raw(brief(
+                &format!("{} / {} · {}", model.provider, model.model, ui.status),
+                width,
+            ));
+        }
     }
     let composer_row = height - composer_height;
     for i in 0..composer_height {

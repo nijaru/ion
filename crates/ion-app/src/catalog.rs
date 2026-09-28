@@ -163,16 +163,6 @@ pub fn find(provider: &str, id: &str) -> Option<&'static CatalogModel> {
         .find(|model| model.provider == provider && model.id == id)
 }
 
-/// Search display names and exact provider/model identifiers for a picker.
-pub fn search(query: &str) -> impl Iterator<Item = &'static CatalogModel> + '_ {
-    let needle = query.trim().to_ascii_lowercase();
-    MODELS.iter().filter(move |model| {
-        model.provider.contains(&needle)
-            || model.id.contains(&needle)
-            || model.label.to_ascii_lowercase().contains(&needle)
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,18 +182,13 @@ mod tests {
     }
 
     #[test]
-    fn lookup_is_exact_and_search_is_case_insensitive() {
+    fn lookup_is_exact() {
         assert_eq!(
             find("openai", "gpt-5.4").map(|model| model.label),
             Some("GPT-5.4")
         );
         assert!(find("anthropic", "gpt-5.4").is_none());
         assert!(find("openai", "gpt-5").is_none());
-        assert_eq!(
-            search(" OPUS ").map(|model| model.id).collect::<Vec<_>>(),
-            vec!["claude-opus-4-6"]
-        );
-        assert_eq!(search("anthropic").count(), 3);
         assert_eq!(
             find("deepseek", "deepseek-flash").map(|model| model.wire),
             Some(CatalogWire::DeepSeekChat)

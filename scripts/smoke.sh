@@ -40,11 +40,11 @@ port="$(cat "$WORK/port")"
 [[ "$(cat "$WORK/workspace/data.txt")" == 'sample data updated' ]]
 [[ "$(cat "$WORK/workspace/created.txt")" == 'created by ion' ]]
 grep -q 'TASK_COMPLETE' "$WORK/first.out"
-"$BIN" --cwd "$WORK/workspace" inspect > "$WORK/first.json"
+"$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/first.json"
 
-"$BIN" --cwd "$WORK/workspace" run 'What did we finish previously?' > "$WORK/second.out" 2> "$WORK/second.err"
+"$BIN" --cwd "$WORK/workspace" --continue run 'What did we finish previously?' > "$WORK/second.out" 2> "$WORK/second.err"
 grep -q 'RESUMED' "$WORK/second.out"
-"$BIN" --cwd "$WORK/workspace" inspect > "$WORK/second.json"
+"$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/second.json"
 python3 - "$WORK/first.json" "$WORK/second.json" "$WORK/requests" <<'PY'
 import json, sys
 first, second = (json.load(open(path)) for path in sys.argv[1:3])

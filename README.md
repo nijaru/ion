@@ -39,14 +39,24 @@ From the project directory:
 ion                        # terminal chat
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
-ion inspect                # committed session history as JSON
+ion --continue             # reopen the latest session in this directory
+ion sessions               # list saved sessions and their IDs
+ion --session ID inspect   # committed history for a selected session as JSON
 ```
 
-`--cwd PATH` chooses a working directory; `--session PATH` selects an explicit
-SQLite session. An existing session uses its recorded directory, and an
-explicit `--cwd` must match it. By default, Ion reopens the session associated
-with the current directory. It loads `AGENTS.md` instructions found along that
-directory's ancestor path. `ion use` also accepts a custom model with
+`--cwd PATH` chooses a working directory. By default, a run starts a new
+session; `--continue` reopens the most recently active one in that directory.
+`--session ID` selects a listed session, and `--session PATH` can create or
+open an exact SQLite path for scripts. An existing session uses its recorded
+directory, and an explicit `--cwd` must match it. Headless runs print the
+session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session` and
+`/model` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
+manage saved keys. The TUI model picker searches catalog and configured
+custom routes. A resumed session restores its model; `ion use` sets the
+default for new sessions.
+
+Ion loads `AGENTS.md` instructions found along the working directory's
+ancestor path. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
@@ -57,9 +67,10 @@ without a key.
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun
-the call automatically. `ion inspect` reads the existing log without making
-that repair. Current sessions use the full recorded conversation until the
-request size limit is reached; automatic compaction is not implemented.
+the call automatically. `ion --continue inspect` reads the existing log
+without making that repair. Current sessions use the full recorded
+conversation until the request size limit is reached; automatic compaction
+is not implemented.
 
 ## Current limits
 
@@ -69,14 +80,12 @@ through a loopback tunnel on macOS. The code and session results were checked
 independently; this is evidence for short tasks, not broad model or platform
 parity.
 
-The default session is reused for the same directory. There is no session
-picker or new-session command yet; use `--session PATH` to isolate another
-conversation. `ion use` sets a global model choice, which currently takes
-precedence over a resumed session's recorded model. Model selection is not
-available inside the TUI. Long histories end with an explicit request-size
-error because automatic compaction is not implemented. Direct OpenAI was
-rate-limited in the available account; Anthropic and live Linux coding were
-not qualified. [ARCHITECTURE.md](ARCHITECTURE.md) holds the design contracts.
+Long histories end with an explicit request-size error because compaction is
+not implemented yet. The TUI does not yet accept steering or follow-up input
+while a turn runs, and tool output is clipped in its default view. Direct
+OpenAI was rate-limited in the available account; Anthropic and live Linux
+coding were not qualified. [ARCHITECTURE.md](ARCHITECTURE.md) holds the design
+contracts.
 
 Repository checks:
 

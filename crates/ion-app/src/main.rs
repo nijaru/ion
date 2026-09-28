@@ -1,29 +1,29 @@
 //! Local CLI and terminal host for the same coding Agent and Session.
 use std::{
     collections::BTreeSet,
-    fs::{self, DirBuilder, File, OpenOptions},
+    fs,
     io::{self, IsTerminal, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Path, PathBuf},
     sync::Arc,
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Parser, Subcommand};
 use ion_ai::ModelRef;
 use ion_core::{
-    AgentLimits, CodingAgent, CodingAgentEvent, CodingSession, HttpModelService, HttpWire,
-    LocalTools,
+    AgentLimits, CodingAgent, CodingAgentEvent, CodingSession, HttpModelService, LocalTools,
 };
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use tokio_util::sync::CancellationToken;
 
 mod auth;
 mod catalog;
+mod model_setup;
+mod session_catalog;
 mod terminal_client;
 
 use auth::{CredentialStatus, CredentialStore};
+use model_setup::{ModelStore, SavedSelection, Selection, Wire};
+use session_catalog::SessionCatalog;
 
 #[derive(Parser)]
 #[command(about = "Ion: a local coding agent")]
@@ -34,9 +34,12 @@ struct Cli {
     /// Working directory for a new session (defaults to the current directory).
     #[arg(long, global = true)]
     cwd: Option<PathBuf>,
-    /// Explicit session database path (defaults to a session for the working directory).
-    #[arg(long, global = true)]
+    /// Session database path or ID; new work starts a fresh session by default.
+    #[arg(long, global = true, conflicts_with = "continue_session")]
     session: Option<PathBuf>,
+    /// Continue the most recently active session in this working directory.
+    #[arg(short = 'c', long = "continue", global = true)]
+    continue_session: bool,
     /// Provider for this invocation; use with --model.
     #[arg(long, global = true)]
     provider: Option<String>,
@@ -68,39 +71,14 @@ enum Action {
     Logout { provider: String },
     /// Show credential sources without displaying secrets.
     Auth,
+    /// List saved sessions for the working directory.
+    Sessions,
     /// Submit one prompt and stream the result to stdout.
     Run { prompt: String },
     /// Open the terminal chat client.
     Chat,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, ValueEnum)]
-#[serde(rename_all = "kebab-case")]
-enum Wire {
-    ChatCompletions,
-    LlamaCppNoThinking,
-    AnthropicMessages,
-}
-
-#[derive(Clone, Serialize, Deserialize)]
-struct SavedSelection {
-    provider: String,
-    model: String,
-    endpoint: Option<String>,
-    wire: Option<Wire>,
-    api_key_env: Option<String>,
-}
-
-struct Selection {
-    provider: String,
-    model: String,
-    endpoint: String,
-    wire: HttpWire,
-    api_key_env: String,
-    max_output_tokens: u32,
-    requires_key: bool,
 }
 
 #[tokio::main]
@@ -112,19 +90,27 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
-    let credentials = CredentialStore::new(config_root()?.join("credentials"));
+    let config = config_root()?;
+    let credentials = CredentialStore::new(config.join("credentials"));
+    let models = ModelStore::new(config);
     match cli.action {
         Some(_) if cli.print.is_some() => bail!("--print cannot be combined with a subcommand"),
         Some(Action::Models { query }) => {
-            let query = query.unwrap_or_default();
-            for model in catalog::search(&query) {
-                let status = credentials.status(model.provider, model.api_key_env)?;
+            let query = query.unwrap_or_default().to_ascii_lowercase();
+            for choice in models.choices(&credentials)? {
+                let model = choice.selected;
+                if !model.provider.contains(&query)
+                    && !model.model.to_ascii_lowercase().contains(&query)
+                    && !choice.label.to_ascii_lowercase().contains(&query)
+                {
+                    continue;
+                }
                 println!(
                     "{}/{}\t{}\t{}",
                     model.provider,
-                    model.id,
-                    model.label,
-                    status_label(status)
+                    model.model,
+                    choice.label,
+                    status_label(choice.credential)
                 );
             }
             Ok(())
@@ -143,8 +129,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 wire,
                 api_key_env,
             };
-            let resolved = resolve_saved(&saved)?;
-            write_selection(&saved)?;
+            let resolved = models.save_default(&saved)?;
             println!("Selected {}/{}", resolved.provider, resolved.model);
             Ok(())
         }
@@ -165,14 +150,32 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Action::Auth) => {
             let mut seen = BTreeSet::new();
-            for model in catalog::models() {
-                if seen.insert(model.provider) {
-                    println!(
-                        "{}: {}",
-                        model.provider,
-                        status_label(credentials.status(model.provider, model.api_key_env)?)
-                    );
+            for choice in models.choices(&credentials)? {
+                let model = choice.selected;
+                if seen.insert(model.provider.clone()) {
+                    println!("{}: {}", model.provider, status_label(choice.credential));
                 }
+            }
+            Ok(())
+        }
+        Some(Action::Sessions) => {
+            let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
+            let catalog = SessionCatalog::new(state_root()?.join("sessions"), cwd);
+            for session in catalog.list()? {
+                println!(
+                    "{}\t{}\t{} turn(s)\t{}\t{}",
+                    session.id,
+                    session.name.as_deref().unwrap_or(""),
+                    session.turns,
+                    session
+                        .model
+                        .as_ref()
+                        .map_or_else(String::new, |model| format!(
+                            "{}/{}",
+                            model.provider, model.model
+                        )),
+                    session.preview.as_deref().unwrap_or("")
+                );
             }
             Ok(())
         }
@@ -180,7 +183,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
-            let path = session_path(&cwd, cli.session)?;
+            let catalog = SessionCatalog::new(state_root()?.join("sessions"), cwd.clone());
+            let path = if let Some(explicit) = cli.session {
+                catalog.resolve_explicit(explicit)?
+            } else if cli.continue_session {
+                catalog.latest()?
+            } else if matches!(action, Some(Action::Inspect)) {
+                bail!("inspect needs --continue or --session ID; run `ion sessions` to find one")
+            } else {
+                catalog.new_path()?
+            };
             let existing = if path.is_file() {
                 Some(CodingSession::inspect(&path)?)
             } else {
@@ -199,42 +211,31 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 return Ok(());
             }
             let previous = existing.and_then(|view| view.last_model);
-            let selected = select(cli.provider, cli.model, previous, &credentials)?;
-            if selected.requires_key
-                && credentials.status(&selected.provider, &selected.api_key_env)?
-                    == CredentialStatus::Missing
-            {
-                bail!(
-                    "no {} credential; set {} or run `ion login {}`",
-                    selected.provider,
-                    selected.api_key_env,
-                    selected.provider
-                );
-            }
+            let selected = models.choose(cli.provider, cli.model, previous, &credentials)?;
+            selected.require_access(&credentials)?;
+            let model = selected.identity();
             let session = Arc::new(if path.is_file() {
                 CodingSession::open(&path)?
             } else {
                 CodingSession::create(&path, &cwd)?
             });
-            let tools = Arc::new(LocalTools::new(session.cwd())?);
-            let resolver = credentials.resolver(&selected.provider, &selected.api_key_env)?;
-            let wire = selected.wire;
-            let service = Arc::new(HttpModelService::new(&selected.endpoint, wire, resolver)?);
-            let agent = Arc::new(CodingAgent::new(service, tools).with_limits(AgentLimits {
-                max_output_tokens: selected.max_output_tokens.min(16_384),
-                ..AgentLimits::default()
-            }));
-            let model = ModelRef {
-                provider: selected.provider,
-                model: selected.model,
-            };
+            let agent = create_agent(&session, &selected, &credentials)?;
             let instructions = project_instructions(session.cwd())?;
             match action {
                 Some(Action::Run { prompt }) => {
                     headless(session, agent, model, instructions, prompt).await
                 }
                 Some(Action::Chat) | None if cli.print.is_none() => {
-                    terminal_client::chat(session, agent, model, instructions).await
+                    terminal_client::chat(
+                        session,
+                        agent,
+                        selected,
+                        instructions,
+                        catalog,
+                        models,
+                        credentials,
+                    )
+                    .await
                 }
                 None => {
                     headless(
@@ -252,6 +253,26 @@ async fn run_cli(cli: Cli) -> Result<()> {
     }
 }
 
+fn create_agent(
+    session: &CodingSession,
+    selected: &Selection,
+    credentials: &CredentialStore,
+) -> Result<Arc<CodingAgent>> {
+    let tools = Arc::new(LocalTools::new(session.cwd())?);
+    let resolver = credentials.resolver(&selected.provider, &selected.api_key_env)?;
+    let service = Arc::new(HttpModelService::new(
+        &selected.endpoint,
+        selected.wire,
+        resolver,
+    )?);
+    Ok(Arc::new(CodingAgent::new(service, tools).with_limits(
+        AgentLimits {
+            max_output_tokens: selected.max_output_tokens.min(16_384),
+            ..AgentLimits::default()
+        },
+    )))
+}
+
 fn config_root() -> Result<PathBuf> {
     app_root("XDG_CONFIG_HOME", ".config")
 }
@@ -265,161 +286,6 @@ fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
     }
     let home = std::env::var_os("HOME").context("HOME is required for Ion paths")?;
     Ok(PathBuf::from(home).join(fallback).join("ion"))
-}
-
-fn session_path(cwd: &Path, explicit: Option<PathBuf>) -> Result<PathBuf> {
-    if let Some(path) = explicit {
-        return Ok(path);
-    }
-    let digest = format!("{:x}", Sha256::digest(cwd.as_os_str().as_encoded_bytes()));
-    let dir = state_root()?.join("sessions");
-    Ok(dir.join(format!("{digest}.sqlite")))
-}
-
-fn selection_path() -> Result<PathBuf> {
-    Ok(config_root()?.join("selection.json"))
-}
-fn read_selection() -> Result<Option<SavedSelection>> {
-    let path = selection_path()?;
-    match fs::read(&path) {
-        Ok(bytes) => Ok(Some(
-            serde_json::from_slice(&bytes).context("invalid saved model selection")?,
-        )),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error).with_context(|| format!("cannot read {}", path.display())),
-    }
-}
-fn write_selection(value: &SavedSelection) -> Result<()> {
-    let path = selection_path()?;
-    let parent = path.parent().context("selection path has no parent")?;
-    if !parent.exists() {
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(parent)?;
-    }
-    let temp = path.with_extension(format!("{}.tmp", std::process::id()));
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temp)?;
-    let result = (|| -> Result<()> {
-        file.write_all(&serde_json::to_vec_pretty(value)?)?;
-        file.sync_all()?;
-        fs::rename(&temp, &path)?;
-        File::open(parent)?.sync_all()?;
-        Ok(())
-    })();
-    if result.is_err() {
-        let _ = fs::remove_file(&temp);
-    }
-    result
-}
-
-fn resolve_saved(saved: &SavedSelection) -> Result<Selection> {
-    if let Some(model) = catalog::find(&saved.provider, &saved.model) {
-        ensure!(
-            saved.endpoint.is_none() && saved.wire.is_none() && saved.api_key_env.is_none(),
-            "catalog model route cannot be overridden; use a custom provider identifier"
-        );
-        return Ok(Selection {
-            provider: saved.provider.clone(),
-            model: saved.model.clone(),
-            endpoint: model.endpoint.into(),
-            wire: match model.wire {
-                catalog::CatalogWire::ChatCompletions => HttpWire::ChatCompletions,
-                catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
-                catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
-                catalog::CatalogWire::OpenRouterNoReasoning => HttpWire::OpenRouterNoReasoning,
-                catalog::CatalogWire::AnthropicMessages => HttpWire::AnthropicMessages,
-            },
-            api_key_env: model.api_key_env.into(),
-            max_output_tokens: model.max_output_tokens,
-            requires_key: true,
-        });
-    }
-    let endpoint = saved
-        .endpoint
-        .as_deref()
-        .context("unknown model; supply --endpoint and --wire to configure a custom route")?;
-    let wire = saved.wire.context("custom route requires --wire")?;
-    let url = reqwest::Url::parse(endpoint)?;
-    let host = url.host_str().context("custom endpoint has no host")?;
-    let local = matches!(host, "127.0.0.1" | "::1" | "[::1]");
-    ensure!(
-        url.scheme() == "https" || (url.scheme() == "http" && local),
-        "custom endpoint requires HTTPS or literal loopback HTTP"
-    );
-    ensure!(
-        url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
-        "custom endpoint must not contain credentials or a fragment"
-    );
-    ensure!(!saved.model.is_empty(), "model ID is empty");
-    Ok(Selection {
-        provider: saved.provider.clone(),
-        model: saved.model.clone(),
-        endpoint: endpoint.into(),
-        wire: match wire {
-            Wire::ChatCompletions => HttpWire::ChatCompletions,
-            Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
-            Wire::AnthropicMessages => HttpWire::AnthropicMessages,
-        },
-        api_key_env: saved
-            .api_key_env
-            .clone()
-            .unwrap_or_else(|| "ION_CUSTOM_API_KEY".into()),
-        max_output_tokens: 8192,
-        requires_key: !local,
-    })
-}
-
-fn select(
-    provider: Option<String>,
-    model: Option<String>,
-    previous: Option<ModelRef>,
-    credentials: &CredentialStore,
-) -> Result<Selection> {
-    if provider.is_some() != model.is_some() {
-        bail!("--provider and --model must be used together");
-    }
-    if let (Some(provider), Some(model)) = (provider, model) {
-        return resolve_saved(&SavedSelection {
-            provider,
-            model,
-            endpoint: None,
-            wire: None,
-            api_key_env: None,
-        });
-    }
-    if let Some(saved) = read_selection()? {
-        return resolve_saved(&saved);
-    }
-    if let Some(previous) = previous
-        && let Ok(selection) = resolve_saved(&SavedSelection {
-            provider: previous.provider,
-            model: previous.model,
-            endpoint: None,
-            wire: None,
-            api_key_env: None,
-        })
-    {
-        return Ok(selection);
-    }
-    for entry in catalog::models() {
-        if credentials.status(entry.provider, entry.api_key_env)? != CredentialStatus::Missing {
-            return resolve_saved(&SavedSelection {
-                provider: entry.provider.into(),
-                model: entry.id.into(),
-                endpoint: None,
-                wire: None,
-                api_key_env: None,
-            });
-        }
-    }
-    bail!(
-        "no model selected; run `ion models`, then `ion use PROVIDER MODEL` or set a provider key"
-    )
 }
 
 fn status_label(status: CredentialStatus) -> &'static str {
@@ -473,6 +339,9 @@ async fn headless(
     instructions: String,
     prompt: String,
 ) -> Result<()> {
+    if let Some(id) = session.path().file_stem() {
+        eprintln!("[session: {}]", id.to_string_lossy());
+    }
     let stop = CancellationToken::new();
     let signal_stop = stop.clone();
     let signal = tokio::spawn(async move {

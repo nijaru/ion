@@ -34,10 +34,14 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port_file.read_text()}/v1/chat/completions", "--wire", "chat-completions"], env=env, check=True, capture_output=True)
         master, slave = pty.openpty()
         fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
-        child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, start_new_session=True)
+        def attach_controlling_terminal():
+            os.setsid()
+            fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+        child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
-        sent_first = sent_second = sent_quit = False
+        sent_first = sent_second = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -55,22 +59,51 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if b"TASK_COMPLETE" in output and b"Ready" in output and not sent_second:
                     os.write(master, b"What did we finish previously?\r")
                     sent_second = True
-                if sent_second and b"RESUMED" in output and not sent_quit:
+                if sent_second and b"RESUMED" in output and not sent_controls:
                     time.sleep(0.2)
+                    os.write(master, b"/name Smoke repair\r")
+                    time.sleep(0.2)
+                    os.write(master, b"/new\r")
+                    time.sleep(0.2)
+                    os.write(master, b"/resume\r")
+                    time.sleep(0.2)
+                    os.write(master, b"Smoke repair\r")
+                    time.sleep(0.2)
+                    os.write(master, b"/model\r")
+                    time.sleep(0.2)
+                    os.write(master, b"smoke\r")
+                    sent_controls = True
+                if sent_controls and b"Choose model" in output and b"Resume session" in output and not sent_login:
+                    time.sleep(0.2)
+                    os.write(master, b"/login smoke\r")
+                    sent_login = True
+                if sent_login and b"smoke API key:" in output and not sent_key:
+                    os.write(master, b"disposable-smoke-key\r")
+                    sent_key = True
+                if sent_key and b"Credential saved" in output and not sent_logout:
+                    os.write(master, b"/logout smoke\r")
+                    sent_logout = True
+                if sent_logout and b"Removed saved smoke credential" in output and not sent_quit:
                     os.write(master, b"\x03")
                     sent_quit = True
                 if child.poll() is not None:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert sent_first and sent_second and sent_quit, "terminal did not complete both prompts"
+            assert sent_first and sent_second and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"
-            inspected = subprocess.run([binary, "--cwd", workspace, "inspect"], env=env, check=True, capture_output=True)
+            listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
+            named = [line for line in listing.splitlines() if "Smoke repair" in line]
+            assert len(named) == 1 and len(listing.splitlines()) == 2, listing
+            session_id = named[0].split("\t")[0]
+            inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
             assert [entry["kind"] for entry in entries].count("turn_ended") == 2
-            assert entries[-1]["data"]["reason"] == "completed"
-            print("Ion terminal coding, continuation and restoration: OK")
+            assert entries[-1]["kind"] == "model_selected", entries[-1]
+            assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
+            print("Ion terminal coding, session/model/login and restoration: OK")
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)

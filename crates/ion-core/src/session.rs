@@ -23,11 +23,16 @@ const MAX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
 struct Header {
     version: u32,
     cwd: PathBuf,
+    #[serde(default)]
+    name: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionEntry {
+    ModelSelected {
+        model: ModelRef,
+    },
     TurnStarted {
         turn: u64,
         prompt: String,
@@ -60,6 +65,7 @@ pub enum TurnEndReason {
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
     pub cwd: PathBuf,
+    pub name: Option<String>,
     pub entries: Vec<SessionEntry>,
     pub messages: Vec<Message>,
     pub unfinished_turn: Option<u64>,
@@ -83,6 +89,12 @@ impl State {
         messages: &mut Vec<Message>,
     ) -> Result<(), SessionError> {
         match entry {
+            SessionEntry::ModelSelected { model } => {
+                if self.active.is_some() {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.last_model = Some(model.clone());
+            }
             SessionEntry::TurnStarted {
                 turn,
                 prompt,
@@ -184,6 +196,7 @@ impl Session {
         let header = Header {
             version: FORMAT_VERSION,
             cwd,
+            name: None,
         };
         let tx = connection.transaction()?;
         tx.execute(
@@ -235,6 +248,7 @@ impl Session {
         let (state, messages) = project(&entries)?;
         Ok(SessionView {
             cwd: header.cwd,
+            name: header.name,
             entries,
             messages,
             unfinished_turn: state.active,
@@ -260,14 +274,38 @@ impl Session {
     pub fn view(&self) -> Result<SessionView, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&store.connection)?;
+        let header = read_header(&store.connection)?;
         Ok(SessionView {
-            cwd: self.header.cwd.clone(),
+            cwd: header.cwd,
+            name: header.name,
             entries,
             messages: store.messages.clone(),
             unfinished_turn: store.state.active,
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
         })
+    }
+
+    /// Change only display metadata. Conversation history remains append-only.
+    pub fn set_name(&self, name: Option<&str>) -> Result<(), SessionError> {
+        let name = name.map(str::trim).filter(|name| !name.is_empty());
+        if name.is_some_and(|name| name.len() > 120 || name.chars().any(char::is_control)) {
+            return Err(SessionError::InvalidName);
+        }
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut header = read_header(&store.connection)?;
+        header.name = name.map(str::to_owned);
+        store.connection.execute(
+            "UPDATE session SET header = ?1 WHERE id = 1",
+            params![serde_json::to_vec(&header)?],
+        )?;
+        Ok(())
+    }
+
+    /// Persist an idle Session's choice even when no new Turn has been sent.
+    pub fn select_model(&self, model: ModelRef) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &[SessionEntry::ModelSelected { model }])
     }
 
     /// Close any interrupted Turn and accept the next input in one transaction.
@@ -452,6 +490,8 @@ pub enum SessionError {
     UnsupportedFormat(u32),
     #[error("prompt is empty")]
     EmptyPrompt,
+    #[error("session name must be at most 120 bytes without control characters")]
+    InvalidName,
     #[error("session entry exceeds storage limit")]
     EntryTooLarge,
     #[error("turn identifier space exhausted")]
@@ -546,6 +586,42 @@ mod tests {
         assert_eq!(view.last_end, Some((turn, TurnEndReason::Completed)));
         assert_eq!(view.entries.len(), 3);
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn name_is_visible_after_reopen_without_changing_history() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        session.set_name(Some("  Investigate parser  ")).unwrap();
+        assert_eq!(
+            session.view().unwrap().name.as_deref(),
+            Some("Investigate parser")
+        );
+        assert!(session.view().unwrap().entries.is_empty());
+        drop(session);
+        assert_eq!(
+            Session::inspect(&path).unwrap().name.as_deref(),
+            Some("Investigate parser")
+        );
+        let reopened = Session::open(&path).unwrap();
+        reopened.set_name(None).unwrap();
+        assert!(reopened.view().unwrap().name.is_none());
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn idle_model_choice_survives_reopen() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "new".into(),
+        };
+        session.select_model(model.clone()).unwrap();
+        drop(session);
+        assert_eq!(Session::inspect(&path).unwrap().last_model, Some(model));
         fs::remove_dir_all(root).unwrap();
     }
 }
