@@ -129,4 +129,17 @@ assert events[0]['type'] == 'session'
 assert events[-1]['type'] == 'run_end' and events[-1]['status'] == 'failed'
 assert 'provider returned HTTP 500' in events[-1]['error']
 PY
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+ION_SMOKE_PARTIAL_FAILURE=1 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/partial-port" "$WORK/partial-requests" > "$WORK/partial-server.out" 2> "$WORK/partial-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/partial-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/partial-port" ]] || { cat "$WORK/partial-server.err" >&2; echo 'partial mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/partial-port")/v1/chat/completions" --wire chat-completions > "$WORK/partial-use.out"
+if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/partial.out" 2> "$WORK/partial.err"; then
+    echo 'headless text mode accepted an unfinished model stream' >&2; exit 1
+fi
+[[ ! -s "$WORK/partial.out" ]] || { echo 'headless text mode published an uncommitted answer' >&2; exit 1; }
+grep -q 'finish_reason' "$WORK/partial.err"
 echo 'Ion offline headless coding and session reopen: OK'

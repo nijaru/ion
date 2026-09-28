@@ -79,7 +79,7 @@ enum Action {
     Auth,
     /// List saved sessions for the working directory.
     Sessions,
-    /// Submit one prompt and stream the result to stdout.
+    /// Submit one prompt and print the committed final answer.
     Run { prompt: String },
     /// Open the terminal chat client.
     Chat,
@@ -384,7 +384,6 @@ async fn headless(
             signal_stop.cancel();
         }
     });
-    let mut streamed = false;
     let mut output_error = None;
     let result = agent
         .submit(
@@ -435,11 +434,7 @@ async fn headless(
                     return;
                 }
                 match event {
-                CodingAgentEvent::TextDelta(text) => {
-                    print!("{text}");
-                    let _ = io::stdout().flush();
-                    streamed = true;
-                }
+                CodingAgentEvent::TextDelta(_) => {}
                 CodingAgentEvent::ProviderRetry { attempt, max_retries, delay_ms } => {
                     eprintln!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]")
                 }
@@ -457,13 +452,8 @@ async fn headless(
                     eprintln!("[context summarized through entry {through_entry}]")
                 }
                 CodingAgentEvent::ResponseRestarted => {
-                    if streamed {
-                        println!();
-                    }
                     eprintln!("[incomplete response discarded; retrying]");
-                    streamed = false;
                 }
-                CodingAgentEvent::Final(text) if !streamed => print!("{text}"),
                 CodingAgentEvent::Final(_) => {}
                 }
             },
@@ -486,8 +476,10 @@ async fn headless(
         result?;
         return Ok(());
     }
-    println!();
-    result?;
+    let answer = result?;
+    let mut stdout = io::stdout().lock();
+    writeln!(stdout, "{answer}")?;
+    stdout.flush()?;
     Ok(())
 }
 

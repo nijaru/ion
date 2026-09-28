@@ -65,7 +65,10 @@ independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
 Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB.
-Stdout contains one JSON object per line: a `session` record with the ID and
+Plain text mode writes the committed final answer to stdout after a successful
+turn. Tool progress and errors go to stderr; a failed turn does not print a
+provisional answer as if it had completed.
+In JSONL mode, stdout contains one JSON object per line: a `session` record with the ID and
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
 `tool_started` and `tool_finished` share a `call_id`; `tool_rejected` reports

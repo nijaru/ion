@@ -17,6 +17,7 @@ steps = [
 ]
 count = 0
 require_steering = os.environ.get("ION_SMOKE_STEERING") == "1"
+partial_failure = os.environ.get("ION_SMOKE_PARTIAL_FAILURE") == "1"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -28,6 +29,16 @@ class Handler(BaseHTTPRequestHandler):
             with requests_file.open("a") as trace:
                 trace.write(json.dumps(body) + "\n")
             assert body["stream"] is True
+            if partial_failure:
+                assert count == 0
+                count += 1
+                payload = b'data: {"id":"smoke","model":"smoke-model","choices":[{"index":0,"delta":{"content":"PROVISIONAL_ANSWER"},"finish_reason":null}]}\n\n'
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
             if count == 6 and require_steering:
                 assert "tools" not in body
             else:

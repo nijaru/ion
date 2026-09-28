@@ -220,10 +220,13 @@ incrementally across read boundaries; a lone Escape waits briefly for a
 possible key sequence, with a longer wait over SSH. Bracketed paste and
 enabled mouse/keyboard sequences remain semantic events rather than draft
 text. The input reader releases the tty before a synchronous login prompt.
-Headless mode exposes the
-same loop without terminal dependencies, with useful text output and exit
-status. A JSONL output mode emits one session identity, ordered progress
-events and a terminal invocation result on stdout; diagnostics stay on stderr.
+Headless mode exposes the same loop without terminal dependencies. Text mode
+writes only the committed
+final answer to stdout after a successful Turn; provisional streamed text can
+be discarded or replaced and must not masquerade as the answer. Failures have
+a nonzero exit status. A JSONL output mode emits one session identity, ordered
+progress events and a terminal invocation result on stdout; diagnostics stay
+on stderr.
 Tool lifecycle events carry call IDs so a host can correlate them. This is a
 view of the same loop, not a second Session authority or a copy of Pi's event
 schema.
