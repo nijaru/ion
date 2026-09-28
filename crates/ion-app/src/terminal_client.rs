@@ -360,6 +360,7 @@ pub async fn chat(
             },
         }
     }
+    input.suspend()?;
     terminal.restore()?;
     Ok(())
 }
