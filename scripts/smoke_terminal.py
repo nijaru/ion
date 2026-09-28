@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
-        sent_first = sent_steering = sent_second = sent_compact = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
+        sent_file_start = selected_file = sent_first = sent_steering = sent_second = sent_tool = closed_tool = sent_compact = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -53,8 +53,14 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\x1b[?1049h" in output and not sent_first:
-                    os.write(master, b"Read data.txt, edit it, create created.txt, then verify both files with shell.\r")
+                if b"\x1b[?1049h" in output and not sent_file_start:
+                    os.write(master, b"Read @")
+                    sent_file_start = True
+                if sent_file_start and b"Choose file" in output and not selected_file:
+                    os.write(master, b"data.txt\r")
+                    selected_file = True
+                if selected_file and b"Read @data.txt" in output and not sent_first:
+                    os.write(master, b", edit it, create created.txt, then verify both files with shell.\r")
                     sent_first = True
                 if sent_first and trace.exists() and not sent_steering:
                     os.write(master, b"Also check that the updated file has one line.\r")
@@ -63,7 +69,14 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     time.sleep(0.1)
                     os.write(master, b"What did we finish previously?\x1b[13;3u")
                     sent_second = True
-                if sent_second and b"RESUMED" in output and not sent_compact:
+                if sent_second and b"RESUMED" in output and not sent_tool:
+                    time.sleep(0.2)
+                    os.write(master, b"\x0f")
+                    sent_tool = True
+                if sent_tool and b"Tool 4: exec" in output and not closed_tool:
+                    os.write(master, b"\x0f")
+                    closed_tool = True
+                if closed_tool and b"Tool output closed" in output and not sent_compact:
                     time.sleep(0.2)
                     os.write(master, b"/compact\r")
                     sent_compact = True
@@ -98,7 +111,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert sent_first and sent_steering and sent_second and sent_compact and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and sent_tool and closed_tool and sent_compact and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"

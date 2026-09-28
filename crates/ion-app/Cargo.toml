@@ -10,6 +10,7 @@ anyhow = "1.0"
 base64 = "0.22.1"
 clap.workspace = true
 getrandom = "0.3.4"
+ignore = "0.4.33"
 ion-ai.workspace = true
 ion-core.workspace = true
 ion-terminal.workspace = true

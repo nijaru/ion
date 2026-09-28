@@ -2,11 +2,12 @@
 use std::{
     collections::VecDeque,
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result};
+use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{CodingAgent, CodingAgentEvent, CodingSession};
 use ion_terminal::{
@@ -46,11 +47,27 @@ struct Frontend {
     context_label: String,
     context_window_tokens: Option<u32>,
     pending: VecDeque<String>,
+    prompt_history: Vec<String>,
+    history_cursor: Option<usize>,
+    saved_draft: String,
+    tool_view: Option<ToolView>,
+    cwd: PathBuf,
+}
+
+struct ToolView {
+    label: String,
+    output: String,
+    scroll: usize,
 }
 
 enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
+    File {
+        path: String,
+        start: usize,
+        end: usize,
+    },
 }
 
 struct PickerItem {
@@ -295,9 +312,14 @@ pub async fn chat(
                 }
                 Action::Queue(prompt) => ui.pending.push_back(prompt),
                 Action::Pick(value) => {
+                    if let PickerValue::File { path, start, end } = value {
+                        ui.insert_file(path, start, end);
+                        continue;
+                    }
                     let result = match value {
                         PickerValue::Session(path) => runtime.switch_session(path),
                         PickerValue::Model(model) => runtime.select_model(model),
+                        PickerValue::File { .. } => unreachable!("handled above"),
                     };
                     match result {
                         Ok(()) => {
@@ -348,7 +370,7 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /resume /session /name NAME /model /compact /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /resume /session /name NAME /model /compact /tools /tool [N] /login PROVIDER /logout PROVIDER /quit".into(),
         ),
         "/session" => {
             let view = runtime.session.view()?;
@@ -453,6 +475,15 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
             runtime.credentials.remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
+        "/tools" => ui.list_tools(),
+        "/tool" => {
+            let number = if args.is_empty() {
+                None
+            } else {
+                Some(args.parse::<usize>().context("use /tool [N]")?)
+            };
+            ui.open_tool(number);
+        }
         _ => ui.status = format!("Unknown command: {name}. Type /help"),
     }
     Ok(())
@@ -536,6 +567,9 @@ fn busy_key(
             ui.status = "Commands are available after this operation".into();
         }
         Action::Quit => stop.cancel(),
+        Action::Pick(PickerValue::File { path, start, end }) => {
+            ui.insert_file(path, start, end);
+        }
         Action::Pick(_) | Action::None => {}
     }
 }
@@ -551,6 +585,27 @@ fn return_pending_to_editor(ui: &mut Frontend) {
         ui.draft = format!("{remaining}\n\n{}", ui.draft);
     }
     ui.cursor = ui.draft.len();
+}
+
+fn scan_files(cwd: &Path) -> Vec<String> {
+    let mut files = Vec::new();
+    for entry in WalkBuilder::new(cwd)
+        .follow_links(false)
+        .require_git(false)
+        .build()
+        .flatten()
+    {
+        if entry.file_type().is_some_and(|kind| kind.is_file())
+            && let Ok(relative) = entry.path().strip_prefix(cwd)
+        {
+            files.push(relative.to_string_lossy().into_owned());
+            if files.len() >= 20_000 {
+                break;
+            }
+        }
+    }
+    files.sort();
+    files
 }
 
 fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
@@ -632,7 +687,7 @@ async fn run_turn(
     }
     let view = session.view()?;
     ui.context_label = context_label(&view, ui.context_window_tokens);
-    ui.history = view.messages;
+    ui.load_history(view.messages);
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
@@ -657,10 +712,12 @@ impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         let view = session.view()?;
         self.context_label = context_label(&view, self.context_window_tokens);
-        self.history = view.messages;
+        self.load_history(view.messages);
+        self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
         self.cwd_label = session.cwd().display().to_string();
+        self.cwd = session.cwd().to_path_buf();
         let id = session.path().file_stem().map_or_else(
             || "session".into(),
             |stem| stem.to_string_lossy().into_owned(),
@@ -677,6 +734,22 @@ impl Frontend {
         Ok(())
     }
 
+    fn load_history(&mut self, messages: Vec<Message>) {
+        self.history = messages;
+        self.prompt_history = self
+            .history
+            .iter()
+            .filter(|message| message.role == Role::User)
+            .flat_map(|message| message.content.iter())
+            .filter_map(|content| match content {
+                Content::Text(text) => Some(text.clone()),
+                _ => None,
+            })
+            .collect();
+        self.history_cursor = None;
+        self.saved_draft.clear();
+    }
+
     fn update_context(&mut self, session: &CodingSession) -> Result<()> {
         self.context_label = context_label(&session.view()?, self.context_window_tokens);
         Ok(())
@@ -691,6 +764,9 @@ impl Frontend {
     }
 
     fn key(&mut self, key: KeyEvent) -> Action {
+        if self.tool_view.is_some() {
+            return self.tool_view_key(key);
+        }
         if self.picker.is_some() {
             return self.picker_key(key);
         }
@@ -711,6 +787,27 @@ impl Frontend {
                 code: KeyCode::Char('d'),
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) && self.draft.is_empty() => Action::Quit,
+            KeyEvent {
+                code: KeyCode::Tab, ..
+            } => {
+                let start = self.draft[..self.cursor]
+                    .rfind(char::is_whitespace)
+                    .map_or(0, |at| at + 1);
+                let token = &self.draft[start..self.cursor];
+                if let Some(query) = token.strip_prefix('@') {
+                    self.open_file_picker(start, self.cursor, query.to_owned());
+                } else {
+                    self.insert("\t");
+                }
+                Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers,
+            } if modifiers.contains(Modifiers::CONTROL) => {
+                self.open_tool(None);
+                Action::None
+            }
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers,
@@ -739,6 +836,15 @@ impl Frontend {
                 Action::None
             }
             KeyEvent {
+                code: KeyCode::Char('@'),
+                modifiers,
+            } if !modifiers.contains(Modifiers::CONTROL) && !modifiers.contains(Modifiers::ALT) => {
+                let start = self.cursor;
+                self.insert("@");
+                self.open_file_picker(start, self.cursor, String::new());
+                Action::None
+            }
+            KeyEvent {
                 code: KeyCode::Enter,
                 ..
             } => {
@@ -759,6 +865,7 @@ impl Frontend {
                 code: KeyCode::Backspace,
                 ..
             } => {
+                self.history_cursor = None;
                 let start = previous_grapheme(&self.draft, self.cursor);
                 self.draft.replace_range(start..self.cursor, "");
                 self.cursor = start;
@@ -768,6 +875,7 @@ impl Frontend {
                 code: KeyCode::Delete,
                 ..
             } => {
+                self.history_cursor = None;
                 let end = next_grapheme(&self.draft, self.cursor);
                 self.draft.replace_range(self.cursor..end, "");
                 Action::None
@@ -784,6 +892,34 @@ impl Frontend {
                 ..
             } => {
                 self.cursor = next_grapheme(&self.draft, self.cursor);
+                Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Up,
+                modifiers,
+            } if modifiers.contains(Modifiers::ALT) => {
+                self.dequeue();
+                Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Up, ..
+            } => {
+                if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, false) {
+                    self.cursor = cursor;
+                } else {
+                    self.history_previous();
+                }
+                Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            } => {
+                if let Some(cursor) = vertical_cursor(&self.draft, self.cursor, true) {
+                    self.cursor = cursor;
+                } else {
+                    self.history_next();
+                }
                 Action::None
             }
             KeyEvent {
@@ -868,12 +1004,132 @@ impl Frontend {
                 let value = selected.map(|item| match &item.value {
                     PickerValue::Session(path) => PickerValue::Session(path.clone()),
                     PickerValue::Model(model) => PickerValue::Model(model.clone()),
+                    PickerValue::File { path, start, end } => PickerValue::File {
+                        path: path.clone(),
+                        start: *start,
+                        end: *end,
+                    },
                 });
                 self.picker = None;
                 value.map_or(Action::None, Action::Pick)
             }
             _ => Action::None,
         }
+    }
+
+    fn tool_view_key(&mut self, key: KeyEvent) -> Action {
+        let view = self.tool_view.as_mut().expect("tool output view is active");
+        match key {
+            KeyEvent {
+                code: KeyCode::Esc, ..
+            }
+            | KeyEvent {
+                code: KeyCode::Char('o'),
+                modifiers: Modifiers::CONTROL,
+            } => {
+                self.tool_view = None;
+                self.status = "Tool output closed".into();
+            }
+            KeyEvent {
+                code: KeyCode::Up, ..
+            } => view.scroll = view.scroll.saturating_add(1),
+            KeyEvent {
+                code: KeyCode::Down,
+                ..
+            } => view.scroll = view.scroll.saturating_sub(1),
+            KeyEvent {
+                code: KeyCode::PageUp,
+                ..
+            } => view.scroll = view.scroll.saturating_add(12),
+            KeyEvent {
+                code: KeyCode::PageDown,
+                ..
+            } => view.scroll = view.scroll.saturating_sub(12),
+            _ => {}
+        }
+        Action::None
+    }
+
+    fn list_tools(&mut self) {
+        let names = self
+            .history
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|content| match content {
+                Content::ToolResult(result) => Some(result.name.as_str()),
+                _ => None,
+            })
+            .enumerate()
+            .map(|(index, name)| format!("{}:{name}", index + 1))
+            .collect::<Vec<_>>();
+        self.note(if names.is_empty() {
+            "No tool results in this session".into()
+        } else {
+            format!("Tool results: {}", names.join(" · "))
+        });
+    }
+
+    fn open_tool(&mut self, number: Option<usize>) {
+        let results = self
+            .history
+            .iter()
+            .flat_map(|message| message.content.iter())
+            .filter_map(|content| match content {
+                Content::ToolResult(result) => Some(result),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let index = number.unwrap_or(results.len());
+        if index == 0 || index > results.len() {
+            self.status = "Tool result not found; use /tools to list results".into();
+            return;
+        }
+        let result = results[index - 1];
+        self.tool_view = Some(ToolView {
+            label: format!("Tool {index}: {} · Esc or Ctrl-O closes", result.name),
+            output: serde_json::to_string_pretty(&result.result)
+                .unwrap_or_else(|_| result.result.to_string()),
+            scroll: 0,
+        });
+        self.status = format!("Viewing tool result {index}");
+    }
+    fn open_file_picker(&mut self, start: usize, end: usize, query: String) {
+        let files = scan_files(&self.cwd);
+        if files.is_empty() {
+            self.status = "No project files available for completion".into();
+            return;
+        }
+        let items = files
+            .into_iter()
+            .map(|path| PickerItem {
+                label: path.clone(),
+                value: PickerValue::File { path, start, end },
+            })
+            .collect();
+        self.picker = Some(Picker {
+            title: "Choose file",
+            query,
+            selected: 0,
+            items,
+        });
+    }
+
+    fn insert_file(&mut self, path: String, start: usize, end: usize) {
+        if end > self.draft.len() || start > end {
+            return;
+        }
+        let mention = if path.chars().any(char::is_whitespace) {
+            format!("@\"{path}\"")
+        } else {
+            format!("@{path}")
+        };
+        if self.draft.len() - (end - start) + mention.len() > MAX_DRAFT {
+            self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
+            return;
+        }
+        self.draft.replace_range(start..end, &mention);
+        self.cursor = start + mention.len();
+        self.history_cursor = None;
     }
     fn insert(&mut self, text: &str) {
         if let Some(picker) = &mut self.picker {
@@ -898,8 +1154,79 @@ impl Frontend {
             self.status = format!("Prompt is limited to {MAX_DRAFT} bytes");
             return;
         }
+        self.history_cursor = None;
         self.draft.insert_str(self.cursor, &clean);
         self.cursor += clean.len();
+    }
+
+    fn history_previous(&mut self) {
+        if self.prompt_history.is_empty() {
+            return;
+        }
+        let index = match self.history_cursor {
+            Some(0) => 0,
+            Some(index) => index - 1,
+            None => {
+                self.saved_draft = self.draft.clone();
+                self.prompt_history.len() - 1
+            }
+        };
+        self.history_cursor = Some(index);
+        self.draft = self.prompt_history[index].clone();
+        self.cursor = self.draft.len();
+    }
+
+    fn history_next(&mut self) {
+        let Some(index) = self.history_cursor else {
+            return;
+        };
+        if index + 1 < self.prompt_history.len() {
+            self.history_cursor = Some(index + 1);
+            self.draft = self.prompt_history[index + 1].clone();
+        } else {
+            self.history_cursor = None;
+            self.draft = std::mem::take(&mut self.saved_draft);
+        }
+        self.cursor = self.draft.len();
+    }
+
+    fn dequeue(&mut self) {
+        if let Some(prompt) = self.pending.pop_back() {
+            if self.draft.is_empty() {
+                self.draft = prompt;
+            } else {
+                self.draft = format!("{}\n\n{prompt}", self.draft);
+            }
+            self.cursor = self.draft.len();
+            self.history_cursor = None;
+            self.status = format!("{} follow-up(s) remain queued", self.pending.len());
+        }
+    }
+}
+
+fn vertical_cursor(draft: &str, cursor: usize, down: bool) -> Option<usize> {
+    let line_start = draft[..cursor].rfind('\n').map_or(0, |at| at + 1);
+    let column = draft[line_start..cursor].graphemes(true).count();
+    if down {
+        let next_start = draft[cursor..].find('\n').map(|at| cursor + at + 1)?;
+        let next_end = draft[next_start..]
+            .find('\n')
+            .map_or(draft.len(), |at| next_start + at);
+        Some(
+            draft[next_start..next_end]
+                .grapheme_indices(true)
+                .nth(column)
+                .map_or(next_end, |(at, _)| next_start + at),
+        )
+    } else {
+        let previous_end = line_start.checked_sub(1)?;
+        let previous_start = draft[..previous_end].rfind('\n').map_or(0, |at| at + 1);
+        Some(
+            draft[previous_start..previous_end]
+                .grapheme_indices(true)
+                .nth(column)
+                .map_or(previous_end, |(at, _)| previous_start + at),
+        )
     }
 }
 
@@ -932,7 +1259,11 @@ fn draw(
         .saturating_sub(composer_height - 1)
         .min(composer.lines.len().saturating_sub(composer_height));
     let history_height = height - composer_height - chrome_height;
-    let mut history = if let Some(picker) = &ui.picker {
+    let mut history = if let Some(view) = &ui.tool_view {
+        let mut rows = vec![view.label.clone()];
+        push_wrapped(&mut rows, &view.output, width);
+        rows
+    } else if let Some(picker) = &ui.picker {
         let matching = picker.matches();
         let mut rows = vec![format!("{} · {} match(es)", picker.title, matching.len())];
         let visible = history_height.saturating_sub(1);
@@ -961,13 +1292,14 @@ fn draw(
         }
         rows
     };
-    if history.len() > MAX_ROWS {
+    if ui.tool_view.is_none() && history.len() > MAX_ROWS {
         history.drain(..history.len() - MAX_ROWS);
     }
+    let scroll = ui.tool_view.as_ref().map_or(ui.scroll, |view| view.scroll);
     let end = history.len().saturating_sub(if ui.picker.is_some() {
         0
     } else {
-        ui.scroll.min(history.len())
+        scroll.min(history.len())
     });
     let start = end.saturating_sub(history_height);
     let mut rows = vec![Line::raw(""); height];
@@ -998,8 +1330,8 @@ fn draw(
         rows[composer_row + i] = Line::raw(composer.lines[composer_start + i].clone());
     }
     let row = composer_row + composer.cursor_row.saturating_sub(composer_start);
-    let cursor =
-        (row < height).then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
+    let cursor = (ui.tool_view.is_none() && row < height)
+        .then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
     screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
 }
@@ -1186,5 +1518,70 @@ mod tests {
             Action::Queue(prompt) if prompt == "follow up"
         ));
         assert!(ui.draft.is_empty());
+    }
+
+    #[test]
+    fn prompt_history_restores_unsent_draft_and_moves_between_lines() {
+        let mut ui = Frontend {
+            prompt_history: vec!["first".into(), "second\nline".into()],
+            ..Frontend::default()
+        };
+        ui.insert("unsent");
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        assert_eq!(ui.draft, "second\nline");
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        assert_eq!(ui.cursor, "line".len());
+        ui.key(KeyEvent::new(KeyCode::Up, Modifiers::NONE));
+        assert_eq!(ui.draft, "first");
+        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+        assert_eq!(ui.draft, "second\nline");
+        ui.key(KeyEvent::new(KeyCode::Down, Modifiers::NONE));
+        assert_eq!(ui.draft, "unsent");
+    }
+
+    #[test]
+    fn tool_view_keeps_output_beyond_the_compact_preview() {
+        let output = format!("{}END_MARKER", "x".repeat(4_000));
+        let mut ui = Frontend {
+            history: vec![Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult(ion_ai::ToolResult {
+                    call_id: "call".into(),
+                    name: "exec".into(),
+                    result: serde_json::json!({"stdout": output}),
+                })],
+                provider_replay: None,
+            }],
+            ..Frontend::default()
+        };
+        ui.open_tool(None);
+        let view = ui.tool_view.as_ref().unwrap();
+        assert!(view.output.contains("END_MARKER"));
+        assert!(view.output.len() > 2_048);
+    }
+    #[test]
+    fn file_picker_inserts_a_selected_project_path() {
+        let root = std::env::temp_dir().join(format!("ion-files-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("src")).unwrap();
+        std::fs::write(root.join("src/main.rs"), "fn main() {}").unwrap();
+        std::fs::write(root.join("src/skip.rs"), "ignored").unwrap();
+        std::fs::write(root.join(".gitignore"), "src/skip.rs\n").unwrap();
+        let mut ui = Frontend {
+            cwd: root.clone(),
+            ..Frontend::default()
+        };
+        assert!(scan_files(&root).contains(&"src/main.rs".into()));
+        assert!(!scan_files(&root).contains(&"src/skip.rs".into()));
+        ui.insert("Read ");
+        ui.key(KeyEvent::new(KeyCode::Char('@'), Modifiers::NONE));
+        ui.key(KeyEvent::new(KeyCode::Char('m'), Modifiers::NONE));
+        let chosen = ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::NONE));
+        let Action::Pick(PickerValue::File { path, start, end }) = chosen else {
+            panic!("file picker did not choose a path")
+        };
+        ui.insert_file(path, start, end);
+        assert_eq!(ui.draft, "Read @src/main.rs");
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

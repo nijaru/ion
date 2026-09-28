@@ -50,13 +50,19 @@ session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or
 open an exact SQLite path for scripts. An existing session uses its recorded
 directory, and an explicit `--cwd` must match it. Headless runs print the
-session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session` and
+session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions.
 While a turn runs, the editor remains available: Enter steers the next model
-step, Alt-Enter queues a separate follow-up turn, and Ctrl-C cancels. Input
+step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
+recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
+earlier prompts when the cursor reaches the first or last editor line. Type
+`@` to pick a project file, or use Tab after a partial `@path`; the picker
+inserts a path reference for the model to read, not the file's contents.
+Ctrl-O opens the latest complete tool result; `/tools` lists results and
+`/tool N` opens a selected one. Esc or Ctrl-O closes the result view. Input
 that has not reached the model returns to the editor if the turn fails or is
 cancelled.
 
@@ -88,7 +94,8 @@ through a loopback tunnel on macOS. The code and session results were checked
 independently; this is evidence for short tasks, not broad model or platform
 parity.
 
-The TUI clips tool output in its default view. Context pressure currently
+The TUI clips tool output in its default view; the full stored result is
+available through Ctrl-O or `/tool`. Context pressure currently
 uses a rough request-size token estimate; custom routes without a known
 context window use only the transport bound. Direct
 OpenAI was rate-limited in the available account; Anthropic and live Linux
