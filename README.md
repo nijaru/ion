@@ -150,6 +150,20 @@ ancestors. Invalid resources are skipped with a diagnostic. Project resources
 are treated as lower-trust repository text under the same live-directory tool
 permissions as `AGENTS.md`; review unfamiliar resources before using them.
 
+Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`;
+`ion mcp list` and `ion mcp remove NAME` manage the saved user configuration.
+Ion starts configured servers when a coding client starts, discovers their
+tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
+exec. Headless, TUI and RPC use the same tool set. Server processes inherit
+the user's environment and permissions and run in the Session's working
+directory. A repository file does not launch an MCP server merely because
+Ion opened that directory. A failing server is reported at startup; a failed
+tool call becomes an error result visible to the model. Current MCP support
+handles text and structured tool results; image/audio tool results report an
+explicit unsupported-content error. For Rust embedders, `Host::agent_with_tools`
+composes a custom `CodingToolHost` with built-ins; a same-name custom tool
+replaces that one built-in.
+
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun

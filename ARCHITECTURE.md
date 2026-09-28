@@ -282,8 +282,14 @@ diagnostics; an explicit command expands a template or skill before Turn
 acceptance, and a model can choose to read an advertised skill. The live
 working-directory permission boundary still applies.
 
-An embedded host can supply custom tools through `ToolHost`. External
-extensions need a documented lifecycle for registering tools and commands,
+An embedded host can supply custom tools through `ToolHost`; host composition
+adds them to the local tools, with a same-name custom tool deliberately
+replacing only that built-in. External model-callable tools use named MCP
+servers over stdio rather than a second private executable protocol. Server
+startup is explicit, never triggered merely by opening a repository. A
+server crash or cancellation produces an honest tool error; it cannot alter
+committed Session facts outside ordinary tool results. External extensions
+beyond MCP tools need a documented lifecycle for registering commands,
 observing relevant Turn events, and using client UI capabilities when present.
 Extension callbacks cannot mutate committed Session entries or provider wire
 state behind their owners. The external mechanism need not execute Pi's

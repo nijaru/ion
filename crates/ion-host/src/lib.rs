@@ -4,6 +4,7 @@
 pub mod auth;
 pub mod catalog;
 pub mod image_input;
+pub mod mcp;
 pub mod model_setup;
 pub mod project_instructions;
 pub mod resources;
@@ -16,10 +17,11 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_core::{
-    AgentLimits, CodingAgent, CodingSession, CodingToolHost, HttpModelService, LocalTools,
+    AgentLimits, CodingAgent, CodingSession, CodingToolHost, HttpModelService, LocalTools, ToolSet,
 };
 
 pub use auth::{CredentialStatus, CredentialStore};
+pub use mcp::{McpConfig, McpServer, McpTools};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
@@ -77,14 +79,45 @@ impl Host {
         Resources::load(cwd, &self.config_root)
     }
 
-    pub fn agent(&self, session: &CodingSession, selected: &Selection) -> Result<Arc<CodingAgent>> {
-        let tools = Arc::new(LocalTools::new(session.cwd())?);
-        self.agent_with_tools(selected, tools)
+    pub fn mcp_config(&self) -> McpConfig {
+        McpConfig::new(&self.config_root)
     }
 
-    /// Compose a selected route with host-supplied tools. This is the same
-    /// provider setup used by the executable, without prescribing its tools.
+    pub async fn external_tools(&self, cwd: &Path) -> Result<Option<Arc<McpTools>>> {
+        McpTools::connect(&self.mcp_config(), cwd).await
+    }
+
+    pub fn agent(&self, session: &CodingSession, selected: &Selection) -> Result<Arc<CodingAgent>> {
+        let tools = Arc::new(LocalTools::new(session.cwd())?);
+        self.agent_with_tool_host(selected, tools)
+    }
+
+    pub fn agent_with_optional_tools(
+        &self,
+        session: &CodingSession,
+        selected: &Selection,
+        custom: Option<Arc<dyn CodingToolHost>>,
+    ) -> Result<Arc<CodingAgent>> {
+        match custom {
+            Some(custom) => self.agent_with_tools(session, selected, custom),
+            None => self.agent(session, selected),
+        }
+    }
+
+    /// Add custom tools to Ion's built-ins. A custom tool with a built-in name
+    /// deliberately replaces that tool while all other built-ins remain.
     pub fn agent_with_tools(
+        &self,
+        session: &CodingSession,
+        selected: &Selection,
+        custom: Arc<dyn CodingToolHost>,
+    ) -> Result<Arc<CodingAgent>> {
+        let builtins: Arc<dyn CodingToolHost> = Arc::new(LocalTools::new(session.cwd())?);
+        self.agent_with_tool_host(selected, Arc::new(ToolSet::new([builtins, custom])))
+    }
+
+    /// Compose a selected route with a complete caller-owned tool host.
+    pub fn agent_with_tool_host(
         &self,
         selected: &Selection,
         tools: Arc<dyn CodingToolHost>,

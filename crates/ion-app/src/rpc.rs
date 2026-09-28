@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::{Content, Message, Role};
-use ion_core::{CodingAgentEvent, CodingSession, SteeringInbox};
+use ion_core::{CodingAgentEvent, CodingSession, CodingToolHost, SteeringInbox};
 use ion_host::{Host, Resources, Selection, SessionCatalog};
 use serde_json::{Value, json};
 use tokio::{
@@ -42,6 +42,7 @@ struct Control {
     resources: Resources,
     active: Option<Active>,
     output: mpsc::Sender<Output>,
+    external_tools: Option<Arc<dyn CodingToolHost>>,
 }
 
 pub async fn run(
@@ -50,6 +51,7 @@ pub async fn run(
     resources: Resources,
     catalog: SessionCatalog,
     host: Arc<Host>,
+    external_tools: Option<Arc<dyn CodingToolHost>>,
 ) -> Result<()> {
     let (output, mut events) = mpsc::channel::<Output>(128);
     let mut control = Control {
@@ -60,6 +62,7 @@ pub async fn run(
         resources,
         active: None,
         output,
+        external_tools,
     };
     write_json_record(
         &json!({"type":"ready","session":control.session_id(),"cwd":control.session.cwd()}),
@@ -281,7 +284,11 @@ impl Control {
                 .collect(),
             provider_replay: None,
         };
-        let agent = self.host.agent(&self.session, &self.selected)?;
+        let agent = self.host.agent_with_optional_tools(
+            &self.session,
+            &self.selected,
+            self.external_tools.clone(),
+        )?;
         let instructions = self.resources.instructions().to_owned();
         let model = self.selected.identity();
         let session = self.session.clone();

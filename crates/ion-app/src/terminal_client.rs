@@ -9,7 +9,7 @@ use std::{
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
-use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, SteeringInbox};
+use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, SteeringInbox};
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
 use ion_terminal::{
@@ -100,6 +100,7 @@ struct ChatRuntime {
     resources: Resources,
     sessions: SessionCatalog,
     host: Arc<Host>,
+    external_tools: Option<Arc<dyn CodingToolHost>>,
 }
 
 impl ChatRuntime {
@@ -119,7 +120,11 @@ impl ChatRuntime {
             self.host.credentials(),
         )?;
         selected.require_access(self.host.credentials())?;
-        let agent = self.host.agent(&session, &selected)?;
+        let agent = self.host.agent_with_optional_tools(
+            &session,
+            &selected,
+            self.external_tools.clone(),
+        )?;
         let instructions = self.resources.instructions().to_owned();
         self.session = session;
         self.selected = selected;
@@ -137,7 +142,11 @@ impl ChatRuntime {
         let instructions = self.resources.instructions().to_owned();
         let path = self.sessions.new_path()?;
         let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-        let agent = self.host.agent(&session, &selected)?;
+        let agent = self.host.agent_with_optional_tools(
+            &session,
+            &selected,
+            self.external_tools.clone(),
+        )?;
         session.select_model(selected.identity())?;
         self.session = session;
         self.selected = selected;
@@ -161,7 +170,11 @@ impl ChatRuntime {
     fn select_model(&mut self, model: ModelRef) -> Result<()> {
         let selected = self.host.models().resolve_identity(&model)?;
         selected.require_access(self.host.credentials())?;
-        let agent = self.host.agent(&self.session, &selected)?;
+        let agent = self.host.agent_with_optional_tools(
+            &self.session,
+            &selected,
+            self.external_tools.clone(),
+        )?;
         self.session.select_model(model)?;
         self.selected = selected;
         self.agent = agent;
@@ -237,15 +250,28 @@ impl Progress {
     }
 }
 
-pub async fn chat(
-    session: Arc<CodingSession>,
-    agent: Arc<CodingAgent>,
-    selected: Selection,
-    resources: Resources,
-    images: Vec<LoadedImage>,
-    sessions: SessionCatalog,
-    host: Arc<Host>,
-) -> Result<()> {
+pub struct ChatInit {
+    pub session: Arc<CodingSession>,
+    pub agent: Arc<CodingAgent>,
+    pub selected: Selection,
+    pub resources: Resources,
+    pub images: Vec<LoadedImage>,
+    pub sessions: SessionCatalog,
+    pub host: Arc<Host>,
+    pub external_tools: Option<Arc<dyn CodingToolHost>>,
+}
+
+pub async fn chat(init: ChatInit) -> Result<()> {
+    let ChatInit {
+        session,
+        agent,
+        selected,
+        resources,
+        images,
+        sessions,
+        host,
+        external_tools,
+    } = init;
     let instructions = resources.instructions().to_owned();
     let mut runtime = ChatRuntime {
         session,
@@ -255,6 +281,7 @@ pub async fn chat(
         resources,
         sessions,
         host,
+        external_tools,
     };
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;

@@ -56,7 +56,8 @@ headless offline submit/reopen path. Add focused fault tests for changed
 storage, provider or cancellation behavior. Terminal changes need PTY and
 real-terminal checks. Run `python3 scripts/smoke_resources.py` for resource
 changes and `python3 scripts/smoke_images.py` for image changes. Run
-`python3 scripts/smoke_rpc.py` for sustained-control changes. Re-run relevant
-gates after the last code edit. For
+`python3 scripts/smoke_rpc.py` for sustained-control changes and
+`python3 scripts/smoke_mcp.py` for external-tool changes. Re-run relevant gates
+after the last code edit. For
 documentation-only work, verify links, authority and status consistency;
 do not claim runtime validation.

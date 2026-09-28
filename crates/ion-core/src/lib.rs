@@ -5,6 +5,7 @@ mod credentials;
 mod local_tools;
 mod model_http;
 mod session;
+mod tool_set;
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
@@ -17,3 +18,4 @@ pub use session::{
     Session as CodingSession, SessionEntry, SessionError as CodingSessionError, SessionView,
     TurnEndReason,
 };
+pub use tool_set::ToolSet;

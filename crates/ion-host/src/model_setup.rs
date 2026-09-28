@@ -299,7 +299,7 @@ fn read_json<T: DeserializeOwned>(path: &Path) -> Result<Option<T>> {
     }
 }
 
-fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
+pub(crate) fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
     let parent = path.parent().context("model config path has no parent")?;
     if !parent.exists() {
         DirBuilder::new()

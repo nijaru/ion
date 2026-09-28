@@ -9,9 +9,9 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message, ModelRef, Role};
-use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession};
+use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost};
 use ion_host::image_input::LoadedImage;
-use ion_host::{CredentialStatus, Host, Resources, SavedSelection, Wire};
+use ion_host::{CredentialStatus, Host, McpServer, Resources, SavedSelection, Wire};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -81,6 +81,11 @@ enum Action {
     Run { prompt: String },
     /// Open the terminal chat client.
     Chat,
+    /// Configure explicitly launched local MCP tool servers.
+    Mcp {
+        #[command(subcommand)]
+        action: McpAction,
+    },
     /// Control a persistent coding session over JSONL stdin/stdout.
     Rpc,
     /// Inspect committed Session history without running a model or tool.
@@ -89,6 +94,20 @@ enum Action {
     Clone,
     /// Summarize settled history for continued work, retaining the raw log.
     Compact,
+}
+
+#[derive(Subcommand)]
+enum McpAction {
+    List,
+    Add {
+        name: String,
+        command: String,
+        #[arg(trailing_var_arg = true)]
+        args: Vec<String>,
+    },
+    Remove {
+        name: String,
+    },
 }
 
 #[tokio::main]
@@ -233,6 +252,29 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Some(Action::Mcp { action }) => {
+            let config = host.mcp_config();
+            match action {
+                McpAction::List => {
+                    for (name, server) in config.list()? {
+                        println!("{name}\t{} {}", server.command, server.args.join(" "));
+                    }
+                }
+                McpAction::Add {
+                    name,
+                    command,
+                    args,
+                } => {
+                    config.add(&name, McpServer { command, args })?;
+                    println!("Added MCP server {name}");
+                }
+                McpAction::Remove { name } => {
+                    config.remove(&name)?;
+                    println!("Removed MCP server {name}");
+                }
+            }
+            Ok(())
+        }
         action => {
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
@@ -306,7 +348,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 CodingSession::create(&path, &cwd)?
             });
-            let agent = host.agent(&session, &selected)?;
+            let external_mcp = if matches!(action, Some(Action::Compact)) {
+                None
+            } else {
+                host.external_tools(session.cwd()).await?
+            };
+            let external_tools: Option<Arc<dyn CodingToolHost>> = external_mcp
+                .as_ref()
+                .map(|tools| tools.clone() as Arc<dyn CodingToolHost>);
+            let agent =
+                host.agent_with_optional_tools(&session, &selected, external_tools.clone())?;
             let resources = host.resources(session.cwd())?;
             for diagnostic in resources.diagnostics() {
                 eprintln!(
@@ -316,61 +367,77 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 );
             }
             let instructions = resources.instructions().to_owned();
-            match action {
-                Some(Action::Run { prompt }) => {
-                    headless(
-                        session,
-                        agent,
-                        model,
-                        instructions,
-                        with_piped_input(expand_input(&resources, prompt)?)?,
-                        images,
-                        cli.json,
-                    )
-                    .await
-                }
-                Some(Action::Compact) => {
-                    let stop = CancellationToken::new();
-                    let signal_stop = stop.clone();
-                    let signal = tokio::spawn(async move {
-                        if tokio::signal::ctrl_c().await.is_ok() {
-                            signal_stop.cancel();
-                        }
-                    });
-                    let result = agent.compact(&session, model, stop, |_| {}).await;
-                    signal.abort();
-                    if result? {
-                        println!("Context summarized; raw Session history retained");
-                    } else {
-                        println!("No settled history to summarize");
+            let result = async {
+                match action {
+                    Some(Action::Run { prompt }) => {
+                        headless(
+                            session,
+                            agent,
+                            model,
+                            instructions,
+                            with_piped_input(expand_input(&resources, prompt)?)?,
+                            images,
+                            cli.json,
+                        )
+                        .await
                     }
-                    Ok(())
+                    Some(Action::Compact) => {
+                        let stop = CancellationToken::new();
+                        let signal_stop = stop.clone();
+                        let signal = tokio::spawn(async move {
+                            if tokio::signal::ctrl_c().await.is_ok() {
+                                signal_stop.cancel();
+                            }
+                        });
+                        let result = agent.compact(&session, model, stop, |_| {}).await;
+                        signal.abort();
+                        if result? {
+                            println!("Context summarized; raw Session history retained");
+                        } else {
+                            println!("No settled history to summarize");
+                        }
+                        Ok(())
+                    }
+                    Some(Action::Clone) => unreachable!("clone handled before model selection"),
+                    Some(Action::Rpc) => {
+                        rpc::run(session, selected, resources, catalog, host, external_tools).await
+                    }
+                    Some(Action::Chat) | None if cli.print.is_none() => {
+                        terminal_client::chat(terminal_client::ChatInit {
+                            session,
+                            agent,
+                            selected,
+                            resources,
+                            images,
+                            sessions: catalog,
+                            host,
+                            external_tools,
+                        })
+                        .await
+                    }
+                    None => {
+                        headless(
+                            session,
+                            agent,
+                            model,
+                            instructions,
+                            with_piped_input(expand_input(
+                                &resources,
+                                cli.print.expect("matched Some"),
+                            )?)?,
+                            images,
+                            cli.json,
+                        )
+                        .await
+                    }
+                    _ => unreachable!("non-agent action handled above"),
                 }
-                Some(Action::Clone) => unreachable!("clone handled before model selection"),
-                Some(Action::Rpc) => rpc::run(session, selected, resources, catalog, host).await,
-                Some(Action::Chat) | None if cli.print.is_none() => {
-                    terminal_client::chat(
-                        session, agent, selected, resources, images, catalog, host,
-                    )
-                    .await
-                }
-                None => {
-                    headless(
-                        session,
-                        agent,
-                        model,
-                        instructions,
-                        with_piped_input(expand_input(
-                            &resources,
-                            cli.print.expect("matched Some"),
-                        )?)?,
-                        images,
-                        cli.json,
-                    )
-                    .await
-                }
-                _ => unreachable!("non-agent action handled above"),
             }
+            .await;
+            if let Some(tools) = external_mcp {
+                tools.shutdown().await;
+            }
+            result
         }
     }
 }
