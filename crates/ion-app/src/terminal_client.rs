@@ -205,6 +205,10 @@ impl Progress {
                 if output.is_error { "error" } else { "done" },
                 brief(&output.value.to_string(), 2048)
             )),
+            CodingAgentEvent::ToolRejected { name, output, .. } => self.events.push(format!(
+                "↛ {name} skipped: {}",
+                brief(&output.value.to_string(), 2048)
+            )),
             CodingAgentEvent::InterruptedCalls(n) => self.events.push(format!(
                 "{n} previous tool call(s) had unknown effects; inspect before retrying"
             )),

@@ -480,8 +480,17 @@ impl Agent {
                 }
                 break generated?;
             };
+            let truncated_calls = matches!(
+                response.termination,
+                ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+            ) && response
+                .message
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::ToolCall(_)));
             if response.message.role != Role::Assistant
-                || !matches!(response.termination, ResponseTermination::Completed)
+                || (!matches!(response.termination, ResponseTermination::Completed)
+                    && !truncated_calls)
             {
                 return Err(AgentError::IncompleteModelResponse);
             }
@@ -502,6 +511,21 @@ impl Agent {
                     }
                     calls.push(call.clone());
                 }
+            }
+            if truncated_calls {
+                let results =
+                    session.record_truncated_assistant(turn, response.message, response.usage)?;
+                for result in results {
+                    observe(AgentEvent::ToolRejected {
+                        call_id: result.call_id,
+                        name: result.name,
+                        output: ToolOutput {
+                            value: result.result,
+                            is_error: true,
+                        },
+                    });
+                }
+                continue;
             }
             let final_text = response
                 .message
@@ -613,6 +637,11 @@ pub enum AgentEvent {
         arguments: Value,
     },
     ToolFinished {
+        call_id: String,
+        name: String,
+        output: ToolOutput,
+    },
+    ToolRejected {
         call_id: String,
         name: String,
         output: ToolOutput,
@@ -846,6 +875,98 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "still here");
         assert_eq!(reopened.messages().unwrap().len(), 7);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn truncated_tool_call_is_rejected_and_reissued_without_effect() {
+        let root =
+            std::env::temp_dir().join(format!("ion-truncated-call-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![
+                        Content::ToolCall(ToolCall {
+                            id: "partial".into(),
+                            name: "write".into(),
+                            arguments: serde_json::json!({"path":"should-not-exist","content":"wrong"}),
+                            raw_arguments: None,
+                        }),
+                        Content::ToolCall(ToolCall {
+                            id: "partial-2".into(),
+                            name: "exec".into(),
+                            arguments: serde_json::json!({"command":"touch should-not-exist-2"}),
+                            raw_arguments: None,
+                        }),
+                    ],
+                    provider_replay: None,
+                },
+                usage: Usage::known(10, 20),
+                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                returned_model: None,
+            })]),
+            response(vec![Content::ToolCall(ToolCall {
+                id: "complete".into(),
+                name: "write".into(),
+                arguments: serde_json::json!({"path":"created.txt","content":"right"}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let mut rejected = Vec::new();
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "write the file".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |event| {
+                        if let AgentEvent::ToolRejected { call_id, .. } = event {
+                            rejected.push(call_id);
+                        }
+                    },
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+        assert_eq!(rejected, ["partial", "partial-2"]);
+        assert!(!root.join("should-not-exist").exists());
+        assert!(!root.join("should-not-exist-2").exists());
+        assert_eq!(
+            std::fs::read_to_string(root.join("created.txt")).unwrap(),
+            "right"
+        );
+        assert!(matches!(
+            &scripts.requests()[1].messages[1].content[0],
+            Content::ToolCall(call) if call.id == "partial"
+        ));
+        assert!(matches!(
+            &scripts.requests()[1].messages[2].content[0],
+            Content::ToolResult(result) if result.is_error && result.call_id == "partial"
+        ));
+        assert!(matches!(
+            &scripts.requests()[1].messages[3].content[0],
+            Content::ToolResult(result) if result.is_error && result.call_id == "partial-2"
+        ));
+        assert!(matches!(
+            &session.view().unwrap().entries[1],
+            crate::session::SessionEntry::Assistant {
+                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                ..
+            }
+        ));
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert!(reopened.view().unwrap().unfinished_turn.is_none());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

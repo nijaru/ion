@@ -9,7 +9,10 @@ use std::{
     time::Duration,
 };
 
-use ion_ai::{Content, Message, ModelRef, Role, ToolCall, ToolResult, Usage};
+use ion_ai::{
+    Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
+    Usage,
+};
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
@@ -18,6 +21,10 @@ use tokio::sync::Mutex as AsyncMutex;
 
 const FORMAT_VERSION: u32 = 1;
 const MAX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+
+fn completed_termination() -> ResponseTermination {
+    ResponseTermination::Completed
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Header {
@@ -53,6 +60,8 @@ pub enum SessionEntry {
         message: Message,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
+        #[serde(default = "completed_termination")]
+        termination: ResponseTermination,
     },
     ToolResult {
         turn: u64,
@@ -173,10 +182,22 @@ impl State {
                 turn,
                 message,
                 usage,
+                termination,
             } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
                     || message.role != Role::Assistant
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                if matches!(termination, ResponseTermination::Incomplete(_))
+                    && (!matches!(
+                        termination,
+                        ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+                    ) || !message
+                        .content
+                        .iter()
+                        .any(|part| matches!(part, Content::ToolCall(_))))
                 {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -555,6 +576,7 @@ impl Session {
             turn,
             message,
             usage,
+            termination: ResponseTermination::Completed,
         }];
         if !has_calls && !continue_turn {
             entries.push(SessionEntry::TurnEnded {
@@ -565,6 +587,48 @@ impl Session {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
         Ok(!has_calls && !continue_turn)
+    }
+
+    /// Publish a truncated assistant attempt and every unexecuted call's
+    /// synthetic result together. A crash cannot leave these calls pending
+    /// and falsely classify their effects as unknown on reopen.
+    pub(crate) fn record_truncated_assistant(
+        &self,
+        turn: u64,
+        message: Message,
+        usage: Usage,
+    ) -> Result<Vec<ToolResult>, SessionError> {
+        let results = message
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                Content::ToolCall(call) => Some(ToolResult {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    result: serde_json::json!({"error": "Tool call was not executed: the model response hit the output token limit and its arguments may be truncated. Reissue the complete call."}),
+                    is_error: true,
+                }),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        if results.is_empty() {
+            return Err(SessionError::InvalidHistory);
+        }
+        let mut entries = vec![SessionEntry::Assistant {
+            turn,
+            message,
+            usage,
+            termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+        }];
+        entries.extend(
+            results
+                .iter()
+                .cloned()
+                .map(|result| SessionEntry::ToolResult { turn, result }),
+        );
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &entries)?;
+        Ok(results)
     }
 
     pub(crate) fn record_steering(&self, turn: u64, prompt: String) -> Result<(), SessionError> {

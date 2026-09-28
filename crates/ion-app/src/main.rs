@@ -447,6 +447,11 @@ async fn headless(
                             name,
                             output,
                         } => json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error}),
+                        CodingAgentEvent::ToolRejected {
+                            call_id,
+                            name,
+                            output,
+                        } => json!({"type":"tool_rejected","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error}),
                         CodingAgentEvent::InterruptedCalls(count) => {
                             json!({"type":"interrupted_calls","count":count})
                         }
@@ -475,6 +480,9 @@ async fn headless(
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
                 CodingAgentEvent::ToolFinished { name, output, .. } => {
                     eprintln!("[tool: {name}] {}", output.value)
+                }
+                CodingAgentEvent::ToolRejected { name, output, .. } => {
+                    eprintln!("[tool skipped: {name}] {}", output.value)
                 }
                 CodingAgentEvent::InterruptedCalls(count) => {
                     eprintln!("[recovered {count} incomplete tool call(s); effects unknown]")

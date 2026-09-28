@@ -58,7 +58,11 @@ reasons about; transport, storage and unrecoverable dispatch errors surface
 to the client. Neither client infers task success from the model's prose alone.
 An invented tool name or invalid arguments should reach a visible tool error
 when the call can be represented safely. Preserve malformed streamed argument
-text as a failed call, and never dispatch it or a truncated call.
+text as a failed call, and never dispatch it or a truncated call. When a
+response reaches its output-token limit with identifiable tool calls, commit
+the incomplete assistant attempt and synthetic failure results in one Session
+transaction, then let the model reissue complete calls. An unrepresentable
+partial call ends the Turn without dispatch.
 
 ## Session and recovery
 
@@ -74,6 +78,8 @@ failure and limits also have explicit end reasons. Turn state is derived from
 entries; any index is rebuildable. Partial model text and streaming tool
 output may be shown live, but committed Session facts are the authority on
 reopen.
+Recorded assistant attempts retain their provider termination reason, so a
+truncated call that was rejected is distinguishable from a complete call.
 
 An unmatched call after process loss has an unknown effect, including when
 dispatch may not have begun. An accepted Turn without an end entry is

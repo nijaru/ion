@@ -68,7 +68,9 @@ Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB.
 Stdout contains one JSON object per line: a `session` record with the ID and
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
-`tool_started` and `tool_finished` share a `call_id`. Diagnostics stay on
+`tool_started` and `tool_finished` share a `call_id`; `tool_rejected` reports
+a call that was never dispatched because the model response was truncated.
+Diagnostics stay on
 stderr, and failure also sets a nonzero exit status. The `final` record is
 the committed assistant answer; earlier text deltas are for live display.
 While a turn runs, the editor remains available: Enter steers the next model
@@ -112,6 +114,9 @@ still exceed the context limit when no settled group can be summarized.
 Transient provider failures can trigger up to two cancellable retries before
 stream output; retry events appear in the TUI and JSONL output. A response that
 stops after producing partial output is not replayed silently.
+If an output-token limit cuts off identifiable tool calls, Ion records them
+as skipped errors and lets the model reissue complete calls. No tool from the
+truncated response runs.
 
 ## Current limits
 

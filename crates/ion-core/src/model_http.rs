@@ -889,7 +889,11 @@ impl ChatState {
         if !self.text.is_empty() {
             content.push(Content::Text(self.text));
         }
-        if matches!(termination, ResponseTermination::Completed) {
+        if matches!(
+            termination,
+            ResponseTermination::Completed
+                | ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+        ) {
             let mut ids = BTreeSet::new();
             for (_, call) in self.calls {
                 if call.id.is_empty() || !ids.insert(call.id.clone()) || !valid_name(&call.name) {
@@ -1571,6 +1575,24 @@ mod tests {
         ]},"finish_reason":"tool_calls"}]}))
             .unwrap();
         assert!(duplicate.complete(&request).is_err());
+    }
+
+    #[test]
+    fn chat_length_stop_retains_calls_for_safe_rejection() {
+        let request = request();
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"partial","function":{"name":"write","arguments":"{\"path\":\"short\",\"content\":\"hel\"}"}}]},"finish_reason":"length"}]}))
+            .unwrap();
+        let response = state.complete(&request).unwrap();
+        assert_eq!(
+            response.termination,
+            ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens)
+        );
+        assert!(matches!(
+            &response.message.content[0],
+            Content::ToolCall(call) if call.id == "partial" && call.name == "write"
+        ));
     }
 
     #[test]
