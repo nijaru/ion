@@ -981,16 +981,23 @@ impl UsageState {
         }
     }
     fn set_chat(&mut self, value: &Value) -> Result<(), ProviderError> {
-        self.input = Some(
-            value["prompt_tokens"]
-                .as_u64()
-                .ok_or_else(|| invalid("invalid prompt token count"))?,
-        );
-        self.output = Some(
-            value["completion_tokens"]
-                .as_u64()
-                .ok_or_else(|| invalid("invalid completion token count"))?,
-        );
+        let fields = value
+            .as_object()
+            .ok_or_else(|| invalid("invalid Chat Completions usage"))?;
+        if let Some(input) = fields.get("prompt_tokens") {
+            self.input = Some(
+                input
+                    .as_u64()
+                    .ok_or_else(|| invalid("invalid prompt token count"))?,
+            );
+        }
+        if let Some(output) = fields.get("completion_tokens") {
+            self.output = Some(
+                output
+                    .as_u64()
+                    .ok_or_else(|| invalid("invalid completion token count"))?,
+            );
+        }
         Ok(())
     }
 }
@@ -1662,6 +1669,42 @@ mod tests {
             .accept(&json!({"choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}))
             .unwrap();
         assert!(state.accept(&json!({"choices":[{"index":0,"delta":{"content":"late"},"finish_reason":"stop"}]})).is_err());
+    }
+
+    #[test]
+    fn chat_partial_usage_retains_previous_counts() {
+        let request = request();
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"usage":{"prompt_tokens":12,"completion_tokens":1}}))
+            .unwrap();
+        state
+            .accept(&json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop","usage":{"completion_tokens":3}}]}))
+            .unwrap();
+        assert_eq!(state.complete(&request).unwrap().usage, Usage::known(12, 3));
+
+        let mut state = ChatState::default();
+        state
+            .accept(&json!({"usage":{"prompt_tokens":12}}))
+            .unwrap();
+        state
+            .accept(
+                &json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+            )
+            .unwrap();
+        assert_eq!(
+            state.complete(&request).unwrap().usage,
+            Usage {
+                input_tokens: Some(12),
+                output_tokens: None,
+            }
+        );
+
+        assert!(
+            ChatState::default()
+                .accept(&json!({"usage":{"prompt_tokens":"wrong"}}))
+                .is_err()
+        );
     }
 
     #[test]
