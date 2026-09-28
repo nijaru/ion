@@ -5,6 +5,7 @@ pub mod auth;
 pub mod catalog;
 pub mod model_setup;
 pub mod project_instructions;
+pub mod resources;
 pub mod session_catalog;
 
 use std::{
@@ -19,6 +20,7 @@ use ion_core::{
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
+pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
 
 /// Host configuration can be supplied explicitly by an embedding program or
@@ -67,7 +69,11 @@ impl Host {
     }
 
     pub fn instructions(&self, cwd: &Path) -> Result<String> {
-        project_instructions::load(cwd)
+        Ok(self.resources(cwd)?.instructions().to_owned())
+    }
+
+    pub fn resources(&self, cwd: &Path) -> Result<Resources> {
+        Resources::load(cwd, &self.config_root)
     }
 
     pub fn agent(&self, session: &CodingSession, selected: &Selection) -> Result<Arc<CodingAgent>> {

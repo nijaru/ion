@@ -269,6 +269,11 @@ belong to one host owner and are consistent across interactive and
 programmatic clients. A public Rust host interface also composes the model
 catalog, credentials, tools and Session selection; embedding should not
 require reproducing executable-private setup.
+Repository skills and templates are lower-trust local text, like project
+instructions. Discovery does not execute them. Invalid resources produce
+diagnostics; an explicit command expands a template or skill before Turn
+acceptance, and a model can choose to read an advertised skill. The live
+working-directory permission boundary still applies.
 
 An embedded host can supply custom tools through `ToolHost`. External
 extensions need a documented lifecycle for registering tools and commands,

@@ -10,7 +10,7 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, SteeringInbox};
-use ion_host::{CredentialStatus, CredentialStore, Host, Selection, SessionCatalog};
+use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
 use ion_terminal::{
     InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
     install_panic_hook,
@@ -95,6 +95,7 @@ struct ChatRuntime {
     agent: Arc<CodingAgent>,
     selected: Selection,
     instructions: String,
+    resources: Resources,
     sessions: SessionCatalog,
     host: Arc<Host>,
 }
@@ -117,7 +118,7 @@ impl ChatRuntime {
         )?;
         selected.require_access(self.host.credentials())?;
         let agent = self.host.agent(&session, &selected)?;
-        let instructions = self.host.instructions(session.cwd())?;
+        let instructions = self.resources.instructions().to_owned();
         self.session = session;
         self.selected = selected;
         self.agent = agent;
@@ -131,7 +132,7 @@ impl ChatRuntime {
             .models()
             .choose(None, None, None, self.host.credentials())?;
         selected.require_access(self.host.credentials())?;
-        let instructions = self.host.instructions(self.session.cwd())?;
+        let instructions = self.resources.instructions().to_owned();
         let path = self.sessions.new_path()?;
         let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
         let agent = self.host.agent(&session, &selected)?;
@@ -162,6 +163,12 @@ impl ChatRuntime {
         self.session.select_model(model)?;
         self.selected = selected;
         self.agent = agent;
+        Ok(())
+    }
+
+    fn reload_resources(&mut self) -> Result<()> {
+        self.resources = self.host.resources(self.session.cwd())?;
+        self.instructions = self.resources.instructions().to_owned();
         Ok(())
     }
 }
@@ -232,6 +239,7 @@ pub async fn chat(
     agent: Arc<CodingAgent>,
     selected: Selection,
     instructions: String,
+    resources: Resources,
     sessions: SessionCatalog,
     host: Arc<Host>,
 ) -> Result<()> {
@@ -240,6 +248,7 @@ pub async fn chat(
         agent,
         selected,
         instructions,
+        resources,
         sessions,
         host,
     };
@@ -259,6 +268,19 @@ pub async fn chat(
         ui.context_window_tokens = runtime.selected.context_window_tokens;
         ui.update_context(&runtime.session)?;
         if let Some(prompt) = ui.pending.pop_front() {
+            let prompt = match expand_resource_input(&runtime.resources, prompt) {
+                Ok(prompt) => prompt,
+                Err((original, error)) => {
+                    ui.draft = if ui.draft.is_empty() {
+                        original
+                    } else {
+                        format!("{original}\n\n{}", ui.draft)
+                    };
+                    ui.cursor = ui.draft.len();
+                    ui.status = format!("{error:#}");
+                    continue;
+                }
+            };
             ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
             ui.scroll = 0;
             run_turn(
@@ -270,6 +292,7 @@ pub async fn chat(
                 &runtime.agent,
                 runtime.selected.identity(),
                 &runtime.instructions,
+                &runtime.resources,
                 prompt,
             )
             .await?;
@@ -302,6 +325,7 @@ pub async fn chat(
                         &runtime.agent,
                         runtime.selected.identity(),
                         &runtime.instructions,
+                        &runtime.resources,
                         prompt,
                     )
                     .await?;
@@ -330,8 +354,28 @@ pub async fn chat(
                         )
                         .await?;
                     } else {
-                        if let Err(error) = handle_command(&mut runtime, &mut ui, &command) {
-                            ui.status = format!("{error:#}");
+                        match handle_command(&mut runtime, &mut ui, &command) {
+                            Ok(Some(prompt)) => {
+                                ui.status =
+                                    "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels"
+                                        .into();
+                                ui.scroll = 0;
+                                run_turn(
+                                    &mut terminal,
+                                    &mut screen,
+                                    &mut input,
+                                    &mut ui,
+                                    &runtime.session,
+                                    &runtime.agent,
+                                    runtime.selected.identity(),
+                                    &runtime.instructions,
+                                    &runtime.resources,
+                                    prompt,
+                                )
+                                .await?;
+                            }
+                            Ok(None) => {}
+                            Err(error) => ui.status = format!("{error:#}"),
                         }
                     }
                 }
@@ -398,13 +442,23 @@ fn login_in_terminal(
     Ok(result)
 }
 
-fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -> Result<()> {
+fn handle_command(
+    runtime: &mut ChatRuntime,
+    ui: &mut Frontend,
+    command: &str,
+) -> Result<Option<String>> {
     let (name, args) = command.split_once(' ').unwrap_or((command, ""));
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
         ),
+        "/skills" => ui.note(runtime.resources.skills().map(|skill| format!("{} — {}", skill.name, skill.description)).collect::<Vec<_>>().join("\n")),
+        "/prompts" => ui.note(runtime.resources.templates().map(|template| format!("/{} — {}", template.name, template.description)).collect::<Vec<_>>().join("\n")),
+        "/reload" => {
+            runtime.reload_resources()?;
+            ui.note(format!("Reloaded resources ({} diagnostic(s))", runtime.resources.diagnostics().len()));
+        }
         "/session" => {
             let view = runtime.session.view()?;
             ui.note(format!(
@@ -525,9 +579,14 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
             };
             ui.open_tool(number);
         }
-        _ => ui.status = format!("Unknown command: {name}. Type /help"),
+        _ => {
+            if let Some(prompt) = runtime.resources.expand_command(command) {
+                return prompt.map(Some);
+            }
+            ui.status = format!("Unknown command: {name}. Type /help");
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 async fn run_compaction(
@@ -551,7 +610,7 @@ async fn run_compaction(
                 result = &mut compact => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -581,11 +640,23 @@ async fn run_compaction(
     Ok(())
 }
 
+fn expand_resource_input(
+    resources: &Resources,
+    prompt: String,
+) -> std::result::Result<String, (String, anyhow::Error)> {
+    match resources.expand_command(&prompt) {
+        Some(Ok(expanded)) => Ok(expanded),
+        Some(Err(error)) => Err((prompt, error)),
+        None => Ok(prompt),
+    }
+}
+
 fn busy_key(
     ui: &mut Frontend,
     key: KeyEvent,
     stop: &CancellationToken,
     steering: Option<&SteeringInbox>,
+    resources: Option<&Resources>,
 ) {
     match ui.key(key) {
         Action::Submit(prompt) => {
@@ -602,9 +673,22 @@ fn busy_key(
             ui.status = format!("{} follow-up(s) queued", ui.pending.len());
         }
         Action::Command(command) => {
+            if let (Some(steering), Some(resources)) = (steering, resources)
+                && let Some(expanded) = resources.expand_command(&command)
+            {
+                match expanded {
+                    Ok(prompt) => {
+                        steering.push(prompt);
+                        ui.status = "Steering sent for the next model step".into();
+                        return;
+                    }
+                    Err(error) => ui.status = format!("{error:#}"),
+                }
+            } else {
+                ui.status = "Commands are available after this operation".into();
+            }
             ui.draft = command;
             ui.cursor = ui.draft.len();
-            ui.status = "Commands are available after this operation".into();
         }
         Action::Quit => stop.cancel(),
         Action::Pick(PickerValue::File { path, start, end }) => {
@@ -671,6 +755,7 @@ async fn run_turn(
     agent: &CodingAgent,
     model: ModelRef,
     instructions: &str,
+    resources: &Resources,
     prompt: String,
 ) -> Result<()> {
     let progress = Arc::new(Mutex::new(Progress::default()));
@@ -700,7 +785,7 @@ async fn run_turn(
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering)),
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
                     Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
@@ -1557,6 +1642,43 @@ mod tests {
             Action::Queue(prompt) if prompt == "follow up"
         ));
         assert!(ui.draft.is_empty());
+    }
+
+    #[test]
+    fn skill_command_during_a_turn_is_expanded_before_steering() {
+        let root = std::env::temp_dir().join(format!(
+            "ion-terminal-resource-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let skill = root.join(".agents/skills/ion-terminal-audit-test");
+        fs::create_dir_all(root.join(".git")).unwrap();
+        fs::create_dir_all(&skill).unwrap();
+        fs::write(
+            skill.join("SKILL.md"),
+            "---\nname: ion-terminal-audit-test\ndescription: Audit a change.\n---\nAUDIT_MARKER\n",
+        )
+        .unwrap();
+        let resources = Resources::load(&root, &root.join("config")).unwrap();
+        let mut ui = Frontend::default();
+        ui.insert("/skill:ion-terminal-audit-test src/lib.rs");
+        let steering = SteeringInbox::default();
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &CancellationToken::new(),
+            Some(&steering),
+            Some(&resources),
+        );
+        assert!(ui.draft.is_empty());
+        let queued = steering.take_uncommitted();
+        assert_eq!(queued.len(), 1);
+        assert!(queued[0].contains("AUDIT_MARKER"));
+        assert!(queued[0].contains("User request: src/lib.rs"));
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

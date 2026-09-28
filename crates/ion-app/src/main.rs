@@ -10,7 +10,7 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::ModelRef;
 use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession};
-use ion_host::{CredentialStatus, Host, SavedSelection, Wire};
+use ion_host::{CredentialStatus, Host, Resources, SavedSelection, Wire};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -67,6 +67,8 @@ enum Action {
     Auth,
     /// List saved sessions for the working directory.
     Sessions,
+    /// List skills and prompt templates available in the working directory.
+    Resources,
     /// Submit one prompt and print the committed final answer.
     Run { prompt: String },
     /// Open the terminal chat client.
@@ -183,6 +185,34 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             Ok(())
         }
+        Some(Action::Resources) => {
+            let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
+            let resources = host.resources(&cwd)?;
+            for skill in resources.skills() {
+                println!(
+                    "skill\t{}\t{}\t{}",
+                    skill.name,
+                    skill.description,
+                    skill.path.display()
+                );
+            }
+            for template in resources.templates() {
+                println!(
+                    "prompt\t{}\t{}\t{}",
+                    template.name,
+                    template.description,
+                    template.path.display()
+                );
+            }
+            for diagnostic in resources.diagnostics() {
+                eprintln!(
+                    "[resource: {}: {}]",
+                    diagnostic.path.display(),
+                    diagnostic.message
+                );
+            }
+            Ok(())
+        }
         action => {
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
@@ -242,7 +272,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 CodingSession::create(&path, &cwd)?
             });
             let agent = host.agent(&session, &selected)?;
-            let instructions = host.instructions(session.cwd())?;
+            let resources = host.resources(session.cwd())?;
+            for diagnostic in resources.diagnostics() {
+                eprintln!(
+                    "[resource: {}: {}]",
+                    diagnostic.path.display(),
+                    diagnostic.message
+                );
+            }
+            let instructions = resources.instructions().to_owned();
             match action {
                 Some(Action::Run { prompt }) => {
                     headless(
@@ -250,7 +288,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         agent,
                         model,
                         instructions,
-                        with_piped_input(prompt)?,
+                        with_piped_input(expand_input(&resources, prompt)?)?,
                         cli.json,
                     )
                     .await
@@ -274,8 +312,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 Some(Action::Clone) => unreachable!("clone handled before model selection"),
                 Some(Action::Chat) | None if cli.print.is_none() => {
-                    terminal_client::chat(session, agent, selected, instructions, catalog, host)
-                        .await
+                    terminal_client::chat(
+                        session,
+                        agent,
+                        selected,
+                        instructions,
+                        resources,
+                        catalog,
+                        host,
+                    )
+                    .await
                 }
                 None => {
                     headless(
@@ -283,7 +329,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         agent,
                         model,
                         instructions,
-                        with_piped_input(cli.print.expect("matched Some"))?,
+                        with_piped_input(expand_input(
+                            &resources,
+                            cli.print.expect("matched Some"),
+                        )?)?,
                         cli.json,
                     )
                     .await
@@ -292,6 +341,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
     }
+}
+
+fn expand_input(resources: &Resources, prompt: String) -> Result<String> {
+    resources
+        .expand_command(&prompt)
+        .transpose()
+        .map(|expanded| expanded.unwrap_or(prompt))
 }
 
 fn status_label(status: CredentialStatus) -> &'static str {

@@ -100,6 +100,23 @@ endpoints require HTTPS and a key supplied through
 `ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Loopback HTTP, including
 `localhost`, can run without a key.
 
+Ion also discovers Agent Skills from `~/.agents/skills/`,
+`~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project
+`.agents/skills/` directories from the working directory up to its Git root.
+Each skill is a directory with `SKILL.md` and valid Agent Skills frontmatter.
+Only its name, description and path enter the standing model instructions;
+the model can read the full file when relevant. Use `/skill:NAME [request]` to
+load it explicitly. Prompt templates are direct `.md` files in
+`~/.config/ion/prompts/` or project `.ion/prompts/`; `/NAME [arguments]`
+expands one before submitting it. Templates support `$1`, `$@`,
+`${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
+spaces. `ion resources` lists both, and the TUI has
+`/skills`, `/prompts` and `/reload`. Personal resources take precedence over
+same-named project resources; nearer project directories take precedence over
+ancestors. Invalid resources are skipped with a diagnostic. Project resources
+are treated as lower-trust repository text under the same live-directory tool
+permissions as `AGENTS.md`; review unfamiliar resources before using them.
+
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun
