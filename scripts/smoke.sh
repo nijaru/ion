@@ -109,6 +109,15 @@ assert next(event['text'] for event in events if event['type'] == 'final') == 'T
 assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\n'
 assert pathlib.Path(sys.argv[2], 'created.txt').read_text() == 'created by ion\n'
 PY
+printf 'PIPED_CONTEXT_MARKER\n' | "$BIN" --json --cwd "$WORK/other-workspace" --continue run 'What did we finish previously?' > "$WORK/piped-events.jsonl" 2> "$WORK/piped-events.err"
+python3 - "$WORK/piped-events.jsonl" "$WORK/json-requests" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[-1] == {'type': 'run_end', 'status': 'completed'}
+assert next(event['text'] for event in events if event['type'] == 'final') == 'RESUMED'
+requests = [json.loads(line) for line in open(sys.argv[2])]
+assert 'PIPED_CONTEXT_MARKER\n\nWhat did we finish previously?' in requests[-1]['messages'][-1]['content']
+PY
 mkdir "$WORK/error-workspace"
 if "$BIN" --json --cwd "$WORK/error-workspace" run 'Unexpected prompt' > "$WORK/error-events.jsonl" 2> "$WORK/error-events.err"; then
     echo 'JSON mode accepted a failed model request' >&2; exit 1

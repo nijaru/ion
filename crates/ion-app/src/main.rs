@@ -2,7 +2,7 @@
 use std::{
     collections::BTreeSet,
     fs,
-    io::{self, IsTerminal, Write},
+    io::{self, IsTerminal, Read, Write},
     path::{Path, PathBuf},
     sync::Arc,
 };
@@ -256,7 +256,15 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let instructions = project_instructions(session.cwd())?;
             match action {
                 Some(Action::Run { prompt }) => {
-                    headless(session, agent, model, instructions, prompt, cli.json).await
+                    headless(
+                        session,
+                        agent,
+                        model,
+                        instructions,
+                        with_piped_input(prompt)?,
+                        cli.json,
+                    )
+                    .await
                 }
                 Some(Action::Compact) => {
                     let stop = CancellationToken::new();
@@ -294,7 +302,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         agent,
                         model,
                         instructions,
-                        cli.print.expect("matched Some"),
+                        with_piped_input(cli.print.expect("matched Some"))?,
                         cli.json,
                     )
                     .await
@@ -502,4 +510,19 @@ fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all(&bytes)?;
     stdout.flush()
+}
+
+fn with_piped_input(prompt: String) -> Result<String> {
+    if io::stdin().is_terminal() {
+        return Ok(prompt);
+    }
+    const MAX_STDIN: u64 = 8 * 1024 * 1024;
+    let mut bytes = Vec::new();
+    io::stdin().take(MAX_STDIN + 1).read_to_end(&mut bytes)?;
+    ensure!(bytes.len() as u64 <= MAX_STDIN, "piped stdin exceeds 8 MiB");
+    if bytes.is_empty() {
+        return Ok(prompt);
+    }
+    let input = String::from_utf8(bytes).context("piped stdin is not UTF-8")?;
+    Ok(format!("{input}\n{prompt}"))
 }

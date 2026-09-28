@@ -40,6 +40,7 @@ ion                        # terminal chat
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
 ion --json run 'Inspect and fix the failing test' > events.jsonl
+git diff | ion -p 'Review this change'
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
@@ -61,6 +62,7 @@ Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
+Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB.
 Stdout contains one JSON object per line: a `session` record with the ID and
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
