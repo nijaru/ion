@@ -42,6 +42,7 @@ ion -p 'Summarize the changes'
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
+ion --continue clone       # copy the latest conversation to a new session
 ion --continue compact     # summarize old context; retain the raw Session
 ```
 
@@ -50,11 +51,14 @@ session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or
 open an exact SQLite path for scripts. An existing session uses its recorded
 directory, and an explicit `--cwd` must match it. Headless runs print the
-session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session`,
+session ID to stderr. In the TUI, `/new`, `/clone`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions.
+Cloning copies committed conversation and context into a new session with
+independent future turns. Both sessions still use the same live working
+directory; cloning does not copy or restore files.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
 recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse

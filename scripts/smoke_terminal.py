@@ -41,7 +41,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
-        sent_file_start = selected_file = sent_first = sent_steering = sent_second = sent_tool = closed_tool = sent_compact = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
+        sent_file_start = selected_file = sent_first = sent_steering = sent_second = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -80,7 +80,10 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     time.sleep(0.2)
                     os.write(master, b"/compact\r")
                     sent_compact = True
-                if sent_compact and b"Context summarized; raw history retained" in output and not sent_controls:
+                if sent_compact and b"Context summarized; raw history retained" in output and not sent_clone:
+                    os.write(master, b"/clone\r")
+                    sent_clone = True
+                if sent_clone and b"Cloned conversation as" in output and not sent_controls:
                     time.sleep(0.2)
                     os.write(master, b"/name Smoke repair\r")
                     time.sleep(0.2)
@@ -111,16 +114,20 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and sent_tool and closed_tool and sent_compact and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"
             listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
             named = [line for line in listing.splitlines() if "Smoke repair" in line]
-            assert len(named) == 1 and len(listing.splitlines()) == 2, listing
+            assert len(named) == 1 and len(listing.splitlines()) == 3, listing
             session_id = named[0].split("\t")[0]
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]
+            source = [line for line in listing.splitlines() if "\t\t2 turn(s)" in line]
+            assert len(source) == 1, listing
+            original = subprocess.run([binary, "--cwd", workspace, "--session", source[0].split("\t")[0], "inspect"], env=env, check=True, capture_output=True)
+            assert json.loads(original.stdout)["entries"] == entries[:-1], "clone changed the source transcript"
             assert [entry["kind"] for entry in entries].count("turn_ended") == 2
             assert [entry["kind"] for entry in entries].count("steering") == 1
             assert [entry["kind"] for entry in entries].count("compacted") == 1

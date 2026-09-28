@@ -146,6 +146,18 @@ impl ChatRuntime {
         Ok(())
     }
 
+    fn clone_session(&mut self) -> Result<String> {
+        let path = self.sessions.new_path()?;
+        let session = Arc::new(self.session.clone_to(&path)?);
+        let id = path
+            .file_stem()
+            .context("cloned session has no ID")?
+            .to_string_lossy()
+            .into_owned();
+        self.session = session;
+        Ok(id)
+    }
+
     fn select_model(&mut self, model: ModelRef) -> Result<()> {
         let selected = self.models.resolve_identity(&model)?;
         selected.require_access(&self.credentials)?;
@@ -370,7 +382,7 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /resume /session /name NAME /model /compact /tools /tool [N] /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /login PROVIDER /logout PROVIDER /quit".into(),
         ),
         "/session" => {
             let view = runtime.session.view()?;
@@ -388,6 +400,13 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
             runtime.new_session()?;
             ui.refresh_session(&runtime.session)?;
             ui.note("Started a new session".into());
+        }
+        "/clone" => {
+            let id = runtime.clone_session()?;
+            ui.refresh_session(&runtime.session)?;
+            ui.note(format!(
+                "Cloned conversation as {id}; both sessions use the same working directory"
+            ));
         }
         "/resume" => {
             if !args.is_empty() {

@@ -146,7 +146,12 @@ keeping terminal input and restoration reliable. Headless mode exposes the
 same loop without terminal dependencies, with useful output and exit status.
 Start a fresh Session by default, explicitly continue recent work or select
 an earlier Session by human-visible identity. Users can name sessions and
-explore an alternate approach without erasing the source history. Exact
+clone the current conversation into a new Session to explore an alternate
+approach without erasing the source history. A clone copies committed
+conversation facts and context boundaries; its future history is independent.
+Both Sessions still act on the same live working directory, so cloning is not
+a filesystem snapshot. An unfinished Turn retains its interruption and
+unknown-effect semantics in the clone. Exact
 session paths remain available to scripts. The TUI preserves draft input
 during a running Turn, distinguishes steering from follow-up work, and makes
 full tool results inspectable even when the default view is compact. Active

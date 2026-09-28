@@ -303,6 +303,31 @@ impl Session {
         })
     }
 
+    /// Copy committed conversation and context into a new Session. Future
+    /// entries are independent; the working directory remains shared.
+    pub fn clone_to(&self, path: impl AsRef<Path>) -> Result<Self, SessionError> {
+        let path = path.as_ref();
+        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let entries = read_entries(&source.connection)?;
+        let clone = Self::create(path, &self.header.cwd)?;
+        let copied = {
+            let mut target = clone.store.lock().map_err(|_| SessionError::Poisoned)?;
+            append(&mut target, &entries)
+        };
+        if let Err(error) = copied {
+            drop(clone);
+            for suffix in ["-wal", "-shm"] {
+                let mut sidecar = path.as_os_str().to_os_string();
+                sidecar.push(suffix);
+                let _ = fs::remove_file(PathBuf::from(sidecar));
+            }
+            let _ = fs::remove_file(path.with_extension("lock"));
+            let _ = fs::remove_file(path);
+            return Err(error);
+        }
+        Ok(clone)
+    }
+
     /// Read persisted facts without taking write ownership or repairing history.
     pub fn inspect(path: impl AsRef<Path>) -> Result<SessionView, SessionError> {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
@@ -950,6 +975,54 @@ mod tests {
             4
         );
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn cloned_session_preserves_context_but_diverges_independently() {
+        let (root, path) = fixture();
+        let clone_path = root.join("clone.sqlite");
+        let source = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        source.set_name(Some("Source")).unwrap();
+        let (first, _) = source.begin_turn("first".into(), model.clone()).unwrap();
+        source
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                Usage::known(10, 2),
+                false,
+            )
+            .unwrap();
+        source
+            .record_compaction(3, "first is done".into(), Usage::unknown())
+            .unwrap();
+        let (second, _) = source.begin_turn("second".into(), model.clone()).unwrap();
+        let original = source.view().unwrap();
+        let cloned = source.clone_to(&clone_path).unwrap();
+        assert_eq!(cloned.view().unwrap().entries, original.entries);
+        assert_eq!(
+            cloned.context_messages().unwrap(),
+            source.context_messages().unwrap()
+        );
+        assert_eq!(cloned.view().unwrap().unfinished_turn, Some(second));
+        assert_eq!(cloned.view().unwrap().name, None);
+        let (third, interrupted) = cloned.begin_turn("alternate".into(), model).unwrap();
+        assert_eq!((third, interrupted), (second + 1, 0));
+        assert_eq!(source.view().unwrap().entries, original.entries);
+        drop(cloned);
+        drop(source);
+        assert_eq!(
+            Session::inspect(&clone_path).unwrap().last_end,
+            Some((second, TurnEndReason::Interrupted))
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

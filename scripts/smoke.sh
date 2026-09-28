@@ -75,4 +75,15 @@ fi
 grep -q -- '--cwd does not match the session' "$WORK/wrong-inspect.err"
 "$BIN" --session "$session_db" inspect > "$WORK/after-wrong-cwd.json"
 cmp "$WORK/second.json" "$WORK/after-wrong-cwd.json"
+"$BIN" --cwd "$WORK/workspace" --session "$session_db" clone > "$WORK/clone.out"
+clone_id="$(awk '{print $NF}' "$WORK/clone.out")"
+"$BIN" --cwd "$WORK/workspace" --session "$clone_id" inspect > "$WORK/clone.json"
+python3 - "$WORK/second.json" "$WORK/clone.json" <<'PY'
+import json, sys
+source, clone = (json.load(open(path)) for path in sys.argv[1:])
+assert source['entries'] == clone['entries']
+assert clone['cwd'] == source['cwd']
+PY
+"$BIN" --session "$session_db" inspect > "$WORK/source-after-clone.json"
+cmp "$WORK/second.json" "$WORK/source-after-clone.json"
 echo 'Ion offline headless coding and session reopen: OK'

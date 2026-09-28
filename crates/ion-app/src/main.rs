@@ -79,6 +79,8 @@ enum Action {
     Chat,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
+    /// Copy a saved conversation into an independent Session in this directory.
+    Clone,
     /// Summarize settled history for continued work, retaining the raw log.
     Compact,
 }
@@ -190,7 +192,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 catalog.resolve_explicit(explicit)?
             } else if cli.continue_session {
                 catalog.latest()?
-            } else if matches!(action, Some(Action::Inspect | Action::Compact)) {
+            } else if matches!(
+                action,
+                Some(Action::Inspect | Action::Compact | Action::Clone)
+            ) {
                 bail!("use --continue or --session ID; run `ion sessions` to find one")
             } else {
                 catalog.new_path()?
@@ -210,6 +215,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
             if matches!(action, Some(Action::Inspect)) {
                 let view = existing.context("session does not exist")?;
                 println!("{}", serde_json::to_string_pretty(&view)?);
+                return Ok(());
+            }
+            if matches!(action, Some(Action::Clone)) {
+                ensure!(existing.is_some(), "session does not exist");
+                let source = CodingSession::open(&path)?;
+                let target = catalog.new_path()?;
+                let cloned = source.clone_to(&target)?;
+                let id = cloned
+                    .path()
+                    .file_stem()
+                    .context("cloned session has no ID")?;
+                println!("Cloned session as {}", id.to_string_lossy());
                 return Ok(());
             }
             if matches!(action, Some(Action::Compact)) {
@@ -247,6 +264,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     }
                     Ok(())
                 }
+                Some(Action::Clone) => unreachable!("clone handled before model selection"),
                 Some(Action::Chat) | None if cli.print.is_none() => {
                     terminal_client::chat(
                         session,
