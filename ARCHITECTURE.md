@@ -126,6 +126,9 @@ representative tasks. If the saved prefix is too large for one summary
 request, summarize bounded settled prefixes in sequence; do not require a
 larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
+A complete assistant response without tool calls is also a settled cut,
+including when queued steering keeps the Turn active. A steering message
+alone is not a settled assistant batch.
 If a later model cannot encode stored history faithfully, report that or make
 an explicit context change rather than silently dropping content.
 An output-limit stop with observed output usage below the requested ceiling

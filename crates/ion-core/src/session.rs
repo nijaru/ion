@@ -217,6 +217,9 @@ impl State {
                 }
                 messages.push(message.clone());
                 self.last_usage = Some(*usage);
+                if self.pending.is_empty() {
+                    self.settled.insert(self.sequence + 1);
+                }
             }
             SessionEntry::ToolResult { turn, result } => {
                 let position = self
@@ -1021,7 +1024,7 @@ mod tests {
         assert_eq!(plan.messages.len(), 2);
         assert!(
             session
-                .record_compaction(2, "invalid".into(), Usage::unknown())
+                .record_compaction(1, "invalid".into(), Usage::unknown())
                 .is_err()
         );
         session
@@ -1117,6 +1120,54 @@ mod tests {
             4
         );
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn completed_text_response_is_a_compaction_boundary_during_steering() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("first request".into(), model).unwrap();
+        assert!(
+            !session
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("first response".into())],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    true,
+                )
+                .unwrap()
+        );
+        session
+            .record_steering(turn, "follow-up steering".into())
+            .unwrap();
+        assert_eq!(
+            session
+                .compaction_plan(0, usize::MAX)
+                .unwrap()
+                .unwrap()
+                .through_entry,
+            2
+        );
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .compaction_plan(0, usize::MAX)
+                .unwrap()
+                .unwrap()
+                .through_entry,
+            2
+        );
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 
