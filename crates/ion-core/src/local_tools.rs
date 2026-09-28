@@ -558,7 +558,9 @@ impl OutputCapture {
     ) -> (Captured, bool) {
         let idle = tokio::time::sleep(POST_EXIT_OUTPUT_IDLE);
         tokio::pin!(idle);
-        let mut progress_open = true;
+        // Once cancellation has begun, take only a short bounded drain even
+        // if a surviving descendant continues to write indefinitely.
+        let mut progress_open = !already_cancelled;
         let mut cancelled = false;
         let finished = loop {
             tokio::select! {
@@ -846,6 +848,33 @@ mod tests {
         assert_eq!(output.value["cancelled"], true);
         assert_eq!(output.value["stdout_truncated"], true);
         assert!(!output.value["stdout"].as_str().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn cancelled_capture_does_not_follow_endless_output() {
+        use tokio::io::AsyncWriteExt;
+
+        let (reader, mut writer) = tokio::io::duplex(64);
+        let writer_task = tokio::spawn(async move {
+            loop {
+                if writer.write_all(b"x").await.is_err() {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        });
+        let stop = CancellationToken::new();
+        stop.cancel();
+        let output = tokio::time::timeout(
+            Duration::from_millis(500),
+            OutputCapture::start(reader).finish(&stop, true),
+        )
+        .await;
+        writer_task.abort();
+        let _ = writer_task.await;
+        let (captured, _) = output.expect("cancelled capture followed endless output");
+        assert!(!captured.complete);
+        assert!(!captured.bytes.is_empty());
     }
 
     #[tokio::test]
