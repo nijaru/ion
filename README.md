@@ -86,7 +86,8 @@ that has not reached the model returns to the editor if the turn fails or is
 cancelled.
 
 Ion loads `AGENTS.md` instructions found along the working directory's
-ancestor path. `ion use` also accepts a custom model with
+ancestor path. A nested linked worktree's copy shadows the main checkout's
+copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote

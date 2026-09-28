@@ -136,6 +136,10 @@ representative tasks. If the saved prefix is too large for one summary
 request, summarize bounded settled prefixes in sequence; do not require a
 larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
+Project `AGENTS.md` files inherit from ancestor directories. In a linked
+worktree nested inside its main checkout, the worktree root's copy shadows
+the main checkout's copy of the same file; other ancestor instructions still
+apply.
 A complete assistant response without tool calls is also a settled cut,
 including when queued steering keeps the Turn active. A steering message
 alone is not a settled assistant batch.
