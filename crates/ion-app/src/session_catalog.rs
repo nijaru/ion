@@ -88,12 +88,6 @@ impl SessionCatalog {
             Err(error) if error.kind() == io::ErrorKind::NotFound => {}
             Err(error) => return Err(error).context("cannot list sessions"),
         }
-        // The former one-session-per-directory path remains discoverable so
-        // users do not lose their current work when new sessions become default.
-        let legacy = self.root.join(format!("{}.sqlite", self.key));
-        if legacy.is_file() {
-            paths.push(legacy);
-        }
         Ok(paths)
     }
 
