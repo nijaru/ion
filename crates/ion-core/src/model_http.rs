@@ -1000,6 +1000,9 @@ impl AnthropicState {
         Ok(Usage::known(input, self.output))
     }
     fn update_usage(&mut self, value: &Value, initial: bool) -> Result<(), ProviderError> {
+        if !initial && value.is_null() {
+            return Ok(());
+        }
         let fields = value
             .as_object()
             .ok_or_else(|| invalid("invalid Anthropic usage"))?;
@@ -1017,7 +1020,7 @@ impl AnthropicState {
                     return Err(invalid("cumulative usage regressed"));
                 }
                 *current = count;
-            } else if key == "output_tokens" || (initial && key == "input_tokens") {
+            } else if initial && (key == "input_tokens" || key == "output_tokens") {
                 return Err(invalid("missing required token usage"));
             }
         }
@@ -1717,5 +1720,42 @@ mod tests {
                 raw_arguments: None,
             })]
         );
+    }
+
+    #[test]
+    fn anthropic_partial_usage_delta_keeps_previous_counts() {
+        let request = request();
+        let mut state = AnthropicState::default();
+        state
+            .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+            .unwrap();
+        state
+            .accept(&json!({"type":"content_block_start","index":0,"content_block":{"type":"text","text":"ok"}}), &request)
+            .unwrap();
+        state
+            .accept(&json!({"type":"content_block_stop","index":0}), &request)
+            .unwrap();
+        state
+            .accept(&json!({"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}), &request)
+            .unwrap();
+        assert_eq!(state.usage().unwrap(), Usage::known(3, 2));
+        let completed = state
+            .accept(&json!({"type":"message_stop"}), &request)
+            .unwrap();
+        assert!(
+            matches!(&completed[0], ModelStreamEvent::Completed(response) if response.usage == Usage::known(3, 2))
+        );
+
+        let mut state = AnthropicState::default();
+        state
+            .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+            .unwrap();
+        state
+            .accept(
+                &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+                &request,
+            )
+            .unwrap();
+        assert_eq!(state.usage().unwrap(), Usage::known(3, 0));
     }
 }
