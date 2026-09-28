@@ -392,6 +392,7 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        let mut length_recovery_attempted = false;
         for _ in 0..self.limits.max_steps {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
@@ -467,8 +468,21 @@ impl Agent {
                             *input * 100 >= u64::from(window) * 99
                         })
                     ));
-                if overflow
-                    && !emitted_text
+                let recoverable_length = !length_recovery_attempted
+                    && matches!(
+                        &generated,
+                        Ok(ModelResponse {
+                            termination: ResponseTermination::Incomplete(
+                                IncompleteReason::MaxOutputTokens
+                            ),
+                            usage: ion_ai::Usage {
+                                output_tokens: Some(output),
+                                ..
+                            },
+                            ..
+                        }) if *output < u64::from(self.limits.max_output_tokens)
+                    );
+                if ((overflow && !emitted_text) || recoverable_length)
                     && !recovered_overflow
                     && self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
@@ -476,6 +490,10 @@ impl Agent {
                         .is_some()
                 {
                     recovered_overflow = true;
+                    if recoverable_length {
+                        length_recovery_attempted = true;
+                        observe(AgentEvent::ResponseRestarted);
+                    }
                     continue;
                 }
                 break generated?;
@@ -631,6 +649,7 @@ pub enum AgentEvent {
     ContextCompacted {
         through_entry: u64,
     },
+    ResponseRestarted,
     ToolStarted {
         call_id: String,
         name: String,
@@ -1165,6 +1184,136 @@ mod tests {
         assert_eq!(scripts.requests().len(), 4);
         assert!(scripts.requests()[2].tools.is_empty());
         assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn short_length_stop_compacts_and_retries_without_dispatching_partial_call() {
+        let root = std::env::temp_dir().join(format!("ion-short-length-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("earlier work".into())]),
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("partial answer".into()),
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::ToolCall(ToolCall {
+                            id: "partial".into(),
+                            name: "write".into(),
+                            arguments: serde_json::json!({"path":"never-created","content":"wrong"}),
+                            raw_arguments: None,
+                        })],
+                        provider_replay: None,
+                    },
+                    usage: Usage::known(100, 10),
+                    termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                    returned_model: None,
+                }),
+            ]),
+            response(vec![Content::Text("Earlier work summarized.".into())]),
+            response(vec![Content::Text("complete answer".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        agent
+            .submit(
+                &session,
+                model(),
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let mut restarted = false;
+        let answer = agent
+            .submit(
+                &session,
+                model(),
+                "second".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |event| {
+                    if matches!(event, AgentEvent::ResponseRestarted) {
+                        restarted = true;
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "complete answer");
+        assert!(restarted);
+        assert!(!root.join("never-created").exists());
+        let requests = scripts.requests();
+        assert_eq!(requests.len(), 4);
+        assert!(requests[2].tools.is_empty());
+        assert!(session.view().unwrap().compacted_through.is_some());
+        assert!(
+            !session.view().unwrap().entries.iter().any(|entry| matches!(
+                entry,
+                crate::session::SessionEntry::Assistant {
+                    termination: ResponseTermination::Incomplete(_),
+                    ..
+                }
+            ))
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn full_output_limit_does_not_trigger_context_recovery() {
+        let root = std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let limit = 128;
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("earlier work".into())]),
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("unfinished".into())],
+                    provider_replay: None,
+                },
+                usage: Usage::known(100, limit),
+                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                returned_model: None,
+            })]),
+            response(vec![Content::Text("unexpected retry".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                max_output_tokens: limit as u32,
+                ..AgentLimits::default()
+            });
+        agent
+            .submit(
+                &session,
+                model(),
+                "first".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let error = agent
+            .submit(
+                &session,
+                model(),
+                "second".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::IncompleteModelResponse));
+        assert_eq!(scripts.requests().len(), 2);
+        assert!(session.view().unwrap().compacted_through.is_none());
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }

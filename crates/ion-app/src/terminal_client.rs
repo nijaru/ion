@@ -217,6 +217,11 @@ impl Progress {
                 self.events
                     .push(format!("Context summarized through entry {through_entry}"));
             }
+            CodingAgentEvent::ResponseRestarted => {
+                self.text.clear();
+                self.events
+                    .push("Incomplete response discarded; retrying".into());
+            }
             CodingAgentEvent::Final(_) => {}
         }
         if self.events.len() > 16 {

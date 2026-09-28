@@ -458,6 +458,7 @@ async fn headless(
                         CodingAgentEvent::ContextCompacted { through_entry } => {
                             json!({"type":"context_compacted","through_entry":through_entry})
                         }
+                        CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
                         CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
                     };
                     if output_error.is_none()
@@ -489,6 +490,13 @@ async fn headless(
                 }
                 CodingAgentEvent::ContextCompacted { through_entry } => {
                     eprintln!("[context summarized through entry {through_entry}]")
+                }
+                CodingAgentEvent::ResponseRestarted => {
+                    if streamed {
+                        println!();
+                    }
+                    eprintln!("[incomplete response discarded; retrying]");
+                    streamed = false;
                 }
                 CodingAgentEvent::Final(text) if !streamed => print!("{text}"),
                 CodingAgentEvent::Final(_) => {}

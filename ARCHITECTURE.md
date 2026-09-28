@@ -128,6 +128,11 @@ larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
 If a later model cannot encode stored history faithfully, report that or make
 an explicit context change rather than silently dropping content.
+An output-limit stop with observed output usage below the requested ceiling
+may reflect context pressure. Try one compact-and-retry before committing
+that incomplete response or dispatching its calls, and notify streaming
+clients that any partial text from the attempt was replaced. A normal
+output-limit stop does not trigger this recovery.
 
 Default file and shell tools act on the live working directory with the host
 user's permissions. There is no implicit sandbox, VM, importer or private

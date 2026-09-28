@@ -70,8 +70,9 @@ directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
 `tool_started` and `tool_finished` share a `call_id`; `tool_rejected` reports
 a call that was never dispatched because the model response was truncated.
-Diagnostics stay on
-stderr, and failure also sets a nonzero exit status. The `final` record is
+`response_restarted` means earlier text deltas from that incomplete attempt
+were replaced after context compaction; consumers should discard those deltas.
+Diagnostics stay on stderr, and failure also sets a nonzero exit status. The `final` record is
 the committed assistant answer; earlier text deltas are for live display.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
@@ -117,6 +118,9 @@ stops after producing partial output is not replayed silently.
 If an output-token limit cuts off identifiable tool calls, Ion records them
 as skipped errors and lets the model reissue complete calls. No tool from the
 truncated response runs.
+When observed output use is below the requested ceiling, Ion first makes one
+compact-and-retry attempt if a settled history prefix is available. It drops
+the incomplete attempt and reports the restart to streaming clients.
 
 ## Current limits
 
