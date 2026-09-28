@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, GenerationControls, IncompleteReason, ModelRef, ModelRequest,
+    BoxFuture, Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest,
     ModelResponse, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
     ResponseTermination, Role, ToolCall, ToolChoice, ToolResult, ToolSpec,
 };
@@ -14,6 +14,14 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::{Session, SessionError, TurnEndReason};
+
+fn user_text(prompt: String) -> Message {
+    Message {
+        role: Role::User,
+        content: vec![Content::Text(prompt)],
+        provider_replay: None,
+    }
+}
 
 /// Host-owned input waiting for a Session commit. A failed write leaves the
 /// prompts here so the host can return them to its editor after the Turn.
@@ -82,6 +90,7 @@ pub struct AgentLimits {
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
     pub context_window_tokens: Option<u32>,
+    pub image_input: bool,
 }
 
 impl Default for AgentLimits {
@@ -90,6 +99,7 @@ impl Default for AgentLimits {
             max_request_bytes: 8 * 1024 * 1024,
             max_output_tokens: 16_384,
             context_window_tokens: None,
+            image_input: false,
         }
     }
 }
@@ -149,20 +159,42 @@ impl Agent {
         }
     }
 
-    fn output_budget(&self, bytes: usize, ceiling: u32) -> Option<u32> {
+    fn output_budget(&self, bytes: usize, estimated_input: u64, ceiling: u32) -> Option<u32> {
         if bytes > self.limits.max_request_bytes || ceiling == 0 {
             return None;
         }
         let Some(window) = self.limits.context_window_tokens else {
             return Some(ceiling);
         };
-        let estimated_input = bytes.div_ceil(3) as u64;
         let available = u64::from(window).saturating_sub(estimated_input + 8_192);
         (available > 0).then(|| ceiling.min(available as u32))
     }
 
-    fn request_fits(&self, bytes: usize, output_tokens: u32) -> bool {
-        self.output_budget(bytes, output_tokens) == Some(output_tokens)
+    fn request_footprint(request: &ModelRequest) -> Result<(usize, u64), serde_json::Error> {
+        let bytes = serde_json::to_vec(request)?.len();
+        let (encoded_images, image_count) = request
+            .messages
+            .iter()
+            .flat_map(|message| &message.content)
+            .fold((0usize, 0u64), |(bytes, count), part| match part {
+                Content::Image(image) => (bytes.saturating_add(image.data().len()), count + 1),
+                _ => (bytes, count),
+            });
+        // Serialized base64 counts against the transport bound, but it is
+        // not prompt text. Reserve a conservative visual-token allowance
+        // per image until provider usage gives the observed count.
+        let estimated_input =
+            bytes.saturating_sub(encoded_images).div_ceil(3) as u64 + image_count * 16_384;
+        Ok((bytes, estimated_input))
+    }
+
+    fn request_fits(
+        &self,
+        request: &ModelRequest,
+        output_tokens: u32,
+    ) -> Result<bool, serde_json::Error> {
+        let (bytes, estimated_input) = Self::request_footprint(request)?;
+        Ok(self.output_budget(bytes, estimated_input, output_tokens) == Some(output_tokens))
     }
 
     fn keep_bytes(&self) -> usize {
@@ -224,7 +256,7 @@ impl Agent {
                     parallel_tool_calls: false,
                 },
             };
-            if self.request_fits(serde_json::to_vec(&request)?.len(), output_tokens) {
+            if self.request_fits(&request, output_tokens)? {
                 break (plan.through_entry, plan.chunked, request);
             }
             budget /= 2;
@@ -350,10 +382,38 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        if prompt.trim().is_empty() {
+            return Err(AgentError::EmptyPrompt);
+        }
         self.submit_inner(
             session,
             model,
-            prompt,
+            user_text(prompt),
+            instructions,
+            stop,
+            None,
+            &mut observe,
+        )
+        .await
+    }
+
+    /// Submit ordered text and image parts through the same durable Turn loop.
+    pub async fn submit_message<F>(
+        &self,
+        session: &Session,
+        model: ModelRef,
+        input: Message,
+        instructions: String,
+        stop: CancellationToken,
+        mut observe: F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        self.submit_inner(
+            session,
+            model,
+            input,
             instructions,
             stop,
             None,
@@ -381,10 +441,42 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        if prompt.trim().is_empty() {
+            return Err(AgentError::EmptyPrompt);
+        }
         self.submit_inner(
             session,
             model,
-            prompt,
+            user_text(prompt),
+            instructions,
+            stop,
+            Some(steering),
+            &mut observe,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit Turn input and steering"
+    )]
+    pub async fn submit_message_with_steering<F>(
+        &self,
+        session: &Session,
+        model: ModelRef,
+        input: Message,
+        instructions: String,
+        stop: CancellationToken,
+        steering: &SteeringInbox,
+        mut observe: F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        self.submit_inner(
+            session,
+            model,
+            input,
             instructions,
             stop,
             Some(steering),
@@ -401,7 +493,7 @@ impl Agent {
         &self,
         session: &Session,
         model: ModelRef,
-        prompt: String,
+        input: Message,
         instructions: String,
         stop: CancellationToken,
         steering: Option<&SteeringInbox>,
@@ -410,9 +502,6 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
-        if prompt.trim().is_empty() {
-            return Err(AgentError::EmptyPrompt);
-        }
         let _guard = tokio::select! {
             guard = session.submit_gate.lock() => guard,
             () = stop.cancelled() => return Err(AgentError::Cancelled),
@@ -420,7 +509,29 @@ impl Agent {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
-        let (turn, interrupted) = session.begin_turn(prompt, model.clone())?;
+        if !self.limits.image_input
+            && (input
+                .content
+                .iter()
+                .any(|part| matches!(part, Content::Image(_)))
+                || session.context_messages()?.iter().any(|message| {
+                    message
+                        .content
+                        .iter()
+                        .any(|part| matches!(part, Content::Image(_)))
+                }))
+        {
+            return Err(AgentError::ImagesUnsupported);
+        }
+        if input
+            .content
+            .iter()
+            .any(|part| matches!(part, Content::Image(_)))
+            && serde_json::to_vec(&input)?.len() > self.limits.max_request_bytes
+        {
+            return Err(AgentError::ContextTooLarge);
+        }
+        let (turn, interrupted) = session.begin_turn_message(input, model.clone())?;
         if interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(interrupted));
         }
@@ -484,8 +595,10 @@ impl Agent {
                         parallel_tool_calls: true,
                     },
                 };
+                let (request_bytes, estimated_input) = Self::request_footprint(&request)?;
                 let Some(output_budget) = self.output_budget(
-                    serde_json::to_vec(&request)?.len(),
+                    request_bytes,
+                    estimated_input,
                     self.limits.max_output_tokens,
                 ) else {
                     if self
@@ -743,6 +856,10 @@ pub trait ToolHost: Send + Sync {
 pub enum AgentError {
     #[error("prompt is empty")]
     EmptyPrompt,
+    #[error(
+        "selected model route does not declare image input; choose an image-capable model or configure the custom route with --images"
+    )]
+    ImagesUnsupported,
     #[error("turn was cancelled")]
     Cancelled,
     #[error(
@@ -777,7 +894,7 @@ impl AgentError {
             }
             Self::InvalidProviderReplay => TurnEndReason::Failed("invalid_provider_replay".into()),
             Self::InvalidToolCall => TurnEndReason::Failed("invalid_tool_call".into()),
-            Self::EmptyPrompt | Self::Session(_) | Self::Json(_) => {
+            Self::EmptyPrompt | Self::ImagesUnsupported | Self::Session(_) | Self::Json(_) => {
                 TurnEndReason::Failed("agent_error".into())
             }
         }
@@ -803,10 +920,10 @@ mod tests {
             context_window_tokens: Some(200_000),
             ..AgentLimits::default()
         });
-        assert_eq!(agent.output_budget(900, 128_000), Some(128_000));
-        assert_eq!(agent.output_budget(300_000, 128_000), Some(91_808));
-        assert_eq!(agent.output_budget(600_000, 128_000), None);
-        assert_eq!(agent.output_budget(9 * 1024 * 1024, 128_000), None);
+        assert_eq!(agent.output_budget(900, 300, 128_000), Some(128_000));
+        assert_eq!(agent.output_budget(300_000, 100_000, 128_000), Some(91_808));
+        assert_eq!(agent.output_budget(600_000, 200_000, 128_000), None);
+        assert_eq!(agent.output_budget(9 * 1024 * 1024, 300, 128_000), None);
         std::fs::remove_dir_all(root).unwrap();
     }
 

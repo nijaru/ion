@@ -8,8 +8,9 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use ion_ai::ModelRef;
+use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession};
+use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, Host, Resources, SavedSelection, Wire};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -40,6 +41,9 @@ struct Cli {
     /// Exact model ID for this invocation; use with --provider.
     #[arg(long, global = true)]
     model: Option<String>,
+    /// Attach an image file to the first submitted prompt (repeatable).
+    #[arg(long, global = true)]
+    image: Vec<PathBuf>,
     #[command(subcommand)]
     action: Option<Action>,
 }
@@ -58,6 +62,9 @@ enum Action {
         wire: Option<Wire>,
         #[arg(long)]
         api_key_env: Option<String>,
+        /// Declare that a custom endpoint's model accepts image input.
+        #[arg(long)]
+        images: bool,
     },
     /// Save a provider API key entered at a masked terminal prompt.
     Login { provider: String },
@@ -90,6 +97,14 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
+    if !cli.image.is_empty()
+        && !matches!(
+            &cli.action,
+            Some(Action::Run { .. }) | Some(Action::Chat) | None
+        )
+    {
+        bail!("--image requires a coding prompt or chat");
+    }
     if cli.json
         && (!matches!(&cli.action, Some(Action::Run { .. }) | None)
             || cli.action.is_none() && cli.print.is_none())
@@ -127,6 +142,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             endpoint,
             wire,
             api_key_env,
+            images,
         }) => {
             let saved = SavedSelection {
                 provider,
@@ -134,6 +150,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 endpoint,
                 wire,
                 api_key_env,
+                image_input: images,
             };
             let resolved = models.save_default(&saved)?;
             println!("Selected {}/{}", resolved.provider, resolved.model);
@@ -244,7 +261,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
             if matches!(action, Some(Action::Inspect)) {
                 let view = existing.context("session does not exist")?;
-                println!("{}", serde_json::to_string_pretty(&view)?);
+                let mut output = serde_json::to_value(view)?;
+                redact_image_payloads(&mut output);
+                println!("{}", serde_json::to_string_pretty(&output)?);
                 return Ok(());
             }
             if matches!(action, Some(Action::Clone)) {
@@ -262,10 +281,23 @@ async fn run_cli(cli: Cli) -> Result<()> {
             if matches!(action, Some(Action::Compact)) {
                 ensure!(existing.is_some(), "session does not exist");
             }
-            let previous = existing.and_then(|view| view.last_model);
+            let session_cwd = existing.as_ref().map_or(&cwd, |view| &view.cwd);
+            let previous = existing.as_ref().and_then(|view| view.last_model.clone());
             let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
             selected.require_access(credentials)?;
             let model = selected.identity();
+            let images = cli
+                .image
+                .iter()
+                .map(|path| {
+                    let path = if path.is_absolute() {
+                        path.clone()
+                    } else {
+                        session_cwd.join(path)
+                    };
+                    ion_host::image_input::load_image(&selected, &path)
+                })
+                .collect::<Result<Vec<_>>>()?;
             let session = Arc::new(if path.is_file() {
                 CodingSession::open(&path)?
             } else {
@@ -289,6 +321,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         model,
                         instructions,
                         with_piped_input(expand_input(&resources, prompt)?)?,
+                        images,
                         cli.json,
                     )
                     .await
@@ -313,13 +346,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 Some(Action::Clone) => unreachable!("clone handled before model selection"),
                 Some(Action::Chat) | None if cli.print.is_none() => {
                     terminal_client::chat(
-                        session,
-                        agent,
-                        selected,
-                        instructions,
-                        resources,
-                        catalog,
-                        host,
+                        session, agent, selected, resources, images, catalog, host,
                     )
                     .await
                 }
@@ -333,6 +360,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             &resources,
                             cli.print.expect("matched Some"),
                         )?)?,
+                        images,
                         cli.json,
                     )
                     .await
@@ -364,6 +392,7 @@ async fn headless(
     model: ModelRef,
     instructions: String,
     prompt: String,
+    images: Vec<LoadedImage>,
     json_output: bool,
 ) -> Result<()> {
     let id = session
@@ -385,11 +414,18 @@ async fn headless(
         }
     });
     let mut output_error = None;
+    let input = Message {
+        role: Role::User,
+        content: std::iter::once(Content::Text(prompt))
+            .chain(images.into_iter().flat_map(LoadedImage::into_parts))
+            .collect(),
+        provider_replay: None,
+    };
     let result = agent
-        .submit(
+        .submit_message(
             &session,
             model,
-            prompt,
+            input,
             instructions,
             stop,
             |event| {
@@ -489,6 +525,27 @@ fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
     stdout.write_all(&bytes)?;
     stdout.flush()
+}
+
+fn redact_image_payloads(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(fields) => {
+            if let Some(serde_json::Value::Object(image)) = fields.get_mut("Image")
+                && let Some(serde_json::Value::String(data)) = image.get_mut("data")
+            {
+                *data = format!("[base64 image data omitted: {} characters]", data.len());
+            }
+            for child in fields.values_mut() {
+                redact_image_payloads(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for child in items {
+                redact_image_payloads(child);
+            }
+        }
+        _ => {}
+    }
 }
 
 fn with_piped_input(prompt: String) -> Result<String> {

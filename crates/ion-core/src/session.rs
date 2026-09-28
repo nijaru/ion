@@ -19,7 +19,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 
-const FORMAT_VERSION: u32 = 1;
+const FORMAT_VERSION: u32 = 2;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -54,7 +54,7 @@ pub enum SessionEntry {
     },
     TurnStarted {
         turn: u64,
-        prompt: String,
+        input: Message,
         model: ModelRef,
     },
     Assistant {
@@ -147,25 +147,17 @@ impl State {
                 }
                 self.compaction = Some((*through_entry, summary.clone()));
             }
-            SessionEntry::TurnStarted {
-                turn,
-                prompt,
-                model,
-            } => {
+            SessionEntry::TurnStarted { turn, input, model } => {
                 if self.active.is_some()
                     || *turn != self.last_id.saturating_add(1)
-                    || prompt.trim().is_empty()
+                    || !valid_user_message(input)
                 {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.active = Some(*turn);
                 self.last_id = *turn;
                 self.last_model = Some(model.clone());
-                messages.push(Message {
-                    role: Role::User,
-                    content: vec![Content::Text(prompt.clone())],
-                    provider_replay: None,
-                });
+                messages.push(input.clone());
             }
             SessionEntry::Steering { turn, prompt } => {
                 if self.active != Some(*turn)
@@ -407,6 +399,15 @@ impl Session {
             .clone())
     }
 
+    pub fn entry_count(&self) -> Result<u64, SessionError> {
+        Ok(self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .state
+            .sequence)
+    }
+
     /// The model-facing projection. Inspect and export still use raw history.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
@@ -542,13 +543,29 @@ impl Session {
 
     /// Close any interrupted Turn and accept the next input in one transaction.
     /// Caller holds `submit_gate` for the entire resulting Turn.
+    #[cfg(test)]
     pub(crate) fn begin_turn(
         &self,
         prompt: String,
         model: ModelRef,
     ) -> Result<(u64, usize), SessionError> {
-        if prompt.trim().is_empty() {
-            return Err(SessionError::EmptyPrompt);
+        self.begin_turn_message(
+            Message {
+                role: Role::User,
+                content: vec![Content::Text(prompt)],
+                provider_replay: None,
+            },
+            model,
+        )
+    }
+
+    pub(crate) fn begin_turn_message(
+        &self,
+        input: Message,
+        model: ModelRef,
+    ) -> Result<(u64, usize), SessionError> {
+        if !valid_user_message(&input) {
+            return Err(SessionError::InvalidUserInput);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let mut entries = Vec::new();
@@ -565,11 +582,7 @@ impl Session {
             .last_id
             .checked_add(1)
             .ok_or(SessionError::TurnIdExhausted)?;
-        entries.push(SessionEntry::TurnStarted {
-            turn,
-            prompt,
-            model,
-        });
+        entries.push(SessionEntry::TurnStarted { turn, input, model });
         append(&mut store, &entries)?;
         Ok((turn, interrupted))
     }
@@ -759,13 +772,12 @@ fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
 
 fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
     match entry {
-        SessionEntry::TurnStarted { prompt, .. } | SessionEntry::Steering { prompt, .. } => {
-            Some(Message {
-                role: Role::User,
-                content: vec![Content::Text(prompt.clone())],
-                provider_replay: None,
-            })
-        }
+        SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
+        SessionEntry::Steering { prompt, .. } => Some(Message {
+            role: Role::User,
+            content: vec![Content::Text(prompt.clone())],
+            provider_replay: None,
+        }),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
         SessionEntry::ToolResult { result, .. } => Some(Message {
             role: Role::Tool,
@@ -776,6 +788,22 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
     }
+}
+
+fn valid_user_message(message: &Message) -> bool {
+    message.role == Role::User
+        && message.provider_replay.is_none()
+        && !message.content.is_empty()
+        && message.content.iter().all(|part| match part {
+            Content::Text(_) => true,
+            Content::Image(image) => image.validate().is_ok(),
+            Content::ToolCall(_) | Content::ToolResult(_) => false,
+        })
+        && message.content.iter().any(|part| match part {
+            Content::Text(text) => !text.trim().is_empty(),
+            Content::Image(_) => true,
+            Content::ToolCall(_) | Content::ToolResult(_) => false,
+        })
 }
 
 fn project(entries: &[SessionEntry]) -> Result<(State, BTreeSet<u64>, Vec<Message>), SessionError> {
@@ -872,6 +900,8 @@ pub enum SessionError {
     UnsupportedFormat(u32),
     #[error("prompt is empty")]
     EmptyPrompt,
+    #[error("user input must contain text or valid images")]
+    InvalidUserInput,
     #[error("session name must be at most 120 bytes without control characters")]
     InvalidName,
     #[error("session entry exceeds storage limit")]
@@ -919,8 +949,56 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert!(matches!(
             &reopened.view().unwrap().entries[0],
-            SessionEntry::TurnStarted { prompt: stored, .. } if stored == &prompt
+            SessionEntry::TurnStarted { input, .. }
+                if input.content == vec![Content::Text(prompt)]
         ));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn image_input_survives_reopen_and_invalid_content_never_commits() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let image: ion_ai::ImageContent = serde_json::from_value(serde_json::json!({
+            "mime_type":"image/png",
+            "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        }))
+        .unwrap();
+        let input = Message {
+            role: Role::User,
+            content: vec![
+                Content::Text("inspect".into()),
+                Content::Image(image.clone()),
+            ],
+            provider_replay: None,
+        };
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "vision".into(),
+        };
+        let (turn, _) = session
+            .begin_turn_message(input.clone(), model.clone())
+            .unwrap();
+        session.end_turn(turn, TurnEndReason::Cancelled).unwrap();
+        let invalid = Message {
+            content: vec![Content::Image(
+                serde_json::from_value(serde_json::json!({
+                    "mime_type":"image/png", "data":"broken"
+                }))
+                .unwrap(),
+            )],
+            ..input.clone()
+        };
+        let before = session.entry_count().unwrap();
+        assert!(matches!(
+            session.begin_turn_message(invalid, model),
+            Err(SessionError::InvalidUserInput)
+        ));
+        assert_eq!(session.entry_count().unwrap(), before);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.context_messages().unwrap()[0], input);
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }

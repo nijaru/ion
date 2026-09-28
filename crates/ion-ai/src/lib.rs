@@ -10,7 +10,7 @@ mod service;
 mod tool;
 mod usage;
 
-pub use content::{Content, ToolCall, ToolResult};
+pub use content::{Content, ImageContent, ImageContentError, ImageMime, ToolCall, ToolResult};
 pub use controls::{GenerationControls, Reasoning, ToolChoice};
 pub use error::{ProviderError, ProviderErrorKind};
 pub use message::{Message, ProviderReplay, Role};

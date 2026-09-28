@@ -63,6 +63,8 @@ default for new sessions.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
+This unreleased branch uses Session format 2; earlier development Session
+files are not reopened.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
 Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
 selected model's context window and Ion's encoded request bound can reject
@@ -99,6 +101,19 @@ For a llama.cpp server whose model emits unreplayable reasoning, use
 endpoints require HTTPS and a key supplied through
 `ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Loopback HTTP, including
 `localhost`, can run without a key.
+
+Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
+`ion --image PATH chat`; repeat `--image` for several images. In chat,
+`/image PATH` attaches a file to the next prompt. Relative paths resolve in
+the Session's working directory. Ion decodes and checks the file, applies
+image orientation and resizes large images before accepting the Turn. Source
+files are limited to 32 MiB, and each inline image to 5 MiB within the
+current 8 MiB request bound. A resize note gives the model the sent dimensions.
+Image bytes are stored in the Session so follow-up requests can still see
+them after the source file changes; `ion inspect` shows an image marker
+instead of printing base64. A custom endpoint needs `ion use ... --images`
+to declare that its model accepts image input. Clipboard image paste is not
+yet a TUI input path; save the image to a file and attach it.
 
 Ion also discovers Agent Skills from `~/.agents/skills/`,
 `~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project

@@ -45,6 +45,8 @@ pub struct SavedSelection {
     pub endpoint: Option<String>,
     pub wire: Option<Wire>,
     pub api_key_env: Option<String>,
+    #[serde(default)]
+    pub image_input: bool,
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -62,6 +64,7 @@ pub struct Selection {
     pub max_output_tokens: u32,
     pub context_window_tokens: Option<u32>,
     pub requires_key: bool,
+    pub image_input: bool,
 }
 
 impl Selection {
@@ -106,7 +109,7 @@ impl ModelStore {
         let effective =
             if saved.endpoint.is_none() && catalog::find(&saved.provider, &saved.model).is_none() {
                 ensure!(
-                    saved.wire.is_none() && saved.api_key_env.is_none(),
+                    saved.wire.is_none() && saved.api_key_env.is_none() && !saved.image_input,
                     "custom route overrides require --endpoint and --wire"
                 );
                 self.routes()?
@@ -175,6 +178,7 @@ impl ModelStore {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                image_input: false,
             });
         }
         let routes = self.routes()?;
@@ -231,7 +235,10 @@ impl ModelStore {
     fn resolve_saved(&self, saved: &SavedSelection) -> Result<Selection> {
         if let Some(model) = catalog::find(&saved.provider, &saved.model) {
             ensure!(
-                saved.endpoint.is_none() && saved.wire.is_none() && saved.api_key_env.is_none(),
+                saved.endpoint.is_none()
+                    && saved.wire.is_none()
+                    && saved.api_key_env.is_none()
+                    && !saved.image_input,
                 "catalog model route cannot be overridden; use a custom provider identifier"
             );
             return Ok(Selection {
@@ -249,6 +256,7 @@ impl ModelStore {
                 max_output_tokens: model.max_output_tokens,
                 context_window_tokens: Some(model.context_window),
                 requires_key: true,
+                image_input: model.image_input,
             });
         }
         let endpoint = saved
@@ -275,6 +283,7 @@ impl ModelStore {
             max_output_tokens: 8192,
             context_window_tokens: None,
             requires_key: !local,
+            image_input: saved.image_input,
         })
     }
 }
@@ -338,6 +347,7 @@ mod tests {
             endpoint: Some("http://localhost:1234/v1/chat/completions".into()),
             wire: Some(Wire::ChatCompletions),
             api_key_env: None,
+            image_input: false,
         };
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
         route.endpoint = Some("https://localhost/v1/chat/completions".into());
@@ -357,6 +367,7 @@ mod tests {
             endpoint: Some("http://127.0.0.1:8080/v1/chat/completions".into()),
             wire: Some(Wire::LlamaCppNoThinking),
             api_key_env: None,
+            image_input: false,
         };
         store.save_default(&custom).unwrap();
         store
@@ -366,6 +377,7 @@ mod tests {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                image_input: false,
             })
             .unwrap();
         store
@@ -375,6 +387,7 @@ mod tests {
                 endpoint: None,
                 wire: None,
                 api_key_env: None,
+                image_input: false,
             })
             .unwrap();
         let credentials = CredentialStore::new(root.join("credentials"));

@@ -3,6 +3,7 @@
 
 pub mod auth;
 pub mod catalog;
+pub mod image_input;
 pub mod model_setup;
 pub mod project_instructions;
 pub mod resources;
@@ -101,6 +102,7 @@ impl Host {
             AgentLimits {
                 max_output_tokens: selected.max_output_tokens,
                 context_window_tokens: selected.context_window_tokens,
+                image_input: selected.image_input,
                 ..AgentLimits::default()
             },
         )))

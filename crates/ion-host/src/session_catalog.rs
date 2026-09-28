@@ -9,7 +9,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
-use ion_ai::ModelRef;
+use ion_ai::{Content, ModelRef};
 use ion_core::{CodingSession, SessionEntry};
 use sha2::{Digest, Sha256};
 
@@ -101,8 +101,15 @@ impl SessionCatalog {
         }
         let updated = modified(&path).ok()?;
         let preview = view.entries.iter().find_map(|entry| match entry {
-            SessionEntry::TurnStarted { prompt, .. } => Some(
-                prompt
+            SessionEntry::TurnStarted { input, .. } => Some(
+                input
+                    .content
+                    .iter()
+                    .find_map(|part| match part {
+                        Content::Text(text) if !text.trim().is_empty() => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .unwrap_or("[image]")
                     .lines()
                     .next()
                     .unwrap_or("")

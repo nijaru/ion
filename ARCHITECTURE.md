@@ -260,6 +260,13 @@ images for their own wire format. On resume, switch or compaction, the context
 builder either preserves content selected for replay or reports an explicit
 incompatibility. It must not replace an image with an unannounced placeholder.
 Image generation is a separate capability.
+File input is decoded at the host boundary, oriented and bounded for
+inline transport, then stored as normalized image bytes rather than a path to
+a mutable source file. A resize note identifies the dimensions sent to the
+model. The request byte bound still includes encoded image data; context-token
+estimation treats image payloads separately from text and yields to observed
+provider usage when available. Inspection and terminal history show an image
+marker rather than the stored base64.
 
 The host discovers applicable project instructions, Agent Skills and prompt
 templates. Skill summaries belong in the model's available instructions;

@@ -548,14 +548,34 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
         }
         let mut text = String::new();
         let mut blocks = Vec::new();
+        let mut user_blocks = Vec::new();
+        let mut has_image = false;
         let mut calls = Vec::new();
         let mut results = Vec::new();
         for item in &message.content {
             match (message.role, item) {
                 (Role::User | Role::Assistant, Content::Text(part)) => {
                     text.push_str(part);
+                    if message.role == Role::User {
+                        user_blocks.push(json!({"type":"text","text":part}));
+                    }
                     if anthropic && !part.is_empty() {
                         blocks.push(json!({"type":"text","text":part}));
+                    }
+                }
+                (Role::User, Content::Image(image)) => {
+                    image
+                        .validate()
+                        .map_err(|_| invalid("invalid image data in transcript"))?;
+                    has_image = true;
+                    if anthropic {
+                        blocks.push(json!({"type":"image","source":{
+                            "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
+                        }}));
+                    } else {
+                        user_blocks.push(json!({"type":"image_url","image_url":{
+                            "url":format!("data:{};base64,{}", image.mime_type().as_str(), image.data())
+                        }}));
                     }
                 }
                 (Role::Assistant, Content::ToolCall(call)) => {
@@ -619,7 +639,14 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
             } else {
                 "user"
             };
-            let mut value = json!({"role":role,"content":if text.is_empty() { Value::Null } else { json!(text) }});
+            let content = if has_image {
+                Value::Array(user_blocks)
+            } else if text.is_empty() {
+                Value::Null
+            } else {
+                json!(text)
+            };
+            let mut value = json!({"role":role,"content":content});
             if !calls.is_empty() {
                 value["tool_calls"] = Value::Array(calls);
             }
@@ -1424,6 +1451,37 @@ mod tests {
                 parallel_tool_calls: false,
             },
         }
+    }
+
+    #[test]
+    fn user_images_keep_order_and_encode_for_each_supported_wire() {
+        let image: ion_ai::ImageContent = serde_json::from_value(json!({
+            "mime_type":"image/png",
+            "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        }))
+        .unwrap();
+        let mut request = request();
+        request.messages[0].content = vec![
+            Content::Text("inspect".into()),
+            Content::Image(image),
+            Content::Text("and explain".into()),
+        ];
+        let chat = wire_messages(&request, false).unwrap();
+        assert_eq!(chat[0]["content"][0]["text"], "inspect");
+        assert!(
+            chat[0]["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+        assert_eq!(chat[0]["content"][2]["text"], "and explain");
+        let anthropic = wire_messages(&request, true).unwrap();
+        assert_eq!(anthropic[0]["content"][0]["text"], "inspect");
+        assert_eq!(
+            anthropic[0]["content"][1]["source"]["media_type"],
+            "image/png"
+        );
+        assert_eq!(anthropic[0]["content"][2]["text"], "and explain");
     }
 
     #[test]

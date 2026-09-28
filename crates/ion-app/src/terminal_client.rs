@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, SteeringInbox};
+use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
 use ion_terminal::{
     InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
@@ -28,6 +29,7 @@ const MAX_ROWS: usize = 4096;
 #[derive(Default)]
 struct Frontend {
     draft: String,
+    images: Vec<LoadedImage>,
     cursor: usize,
     history: Vec<Message>,
     scroll: usize,
@@ -238,11 +240,12 @@ pub async fn chat(
     session: Arc<CodingSession>,
     agent: Arc<CodingAgent>,
     selected: Selection,
-    instructions: String,
     resources: Resources,
+    images: Vec<LoadedImage>,
     sessions: SessionCatalog,
     host: Arc<Host>,
 ) -> Result<()> {
+    let instructions = resources.instructions().to_owned();
     let mut runtime = ChatRuntime {
         session,
         agent,
@@ -261,6 +264,7 @@ pub async fn chat(
     let mut ui = Frontend {
         status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
         context_window_tokens: runtime.selected.context_window_tokens,
+        images,
         ..Frontend::default()
     };
     ui.refresh_session(&runtime.session)?;
@@ -451,8 +455,15 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
         ),
+        "/image" => {
+            anyhow::ensure!(!args.is_empty(), "use /image PATH");
+            let path = Path::new(args);
+            let path = if path.is_absolute() { path.to_owned() } else { runtime.session.cwd().join(path) };
+            ui.images.push(ion_host::image_input::load_image(&runtime.selected, &path)?);
+            ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
+        }
         "/skills" => ui.note(runtime.resources.skills().map(|skill| format!("{} — {}", skill.name, skill.description)).collect::<Vec<_>>().join("\n")),
         "/prompts" => ui.note(runtime.resources.templates().map(|template| format!("/{} — {}", template.name, template.description)).collect::<Vec<_>>().join("\n")),
         "/reload" => {
@@ -758,16 +769,25 @@ async fn run_turn(
     resources: &Resources,
     prompt: String,
 ) -> Result<()> {
+    let prior_entry_count = session.entry_count()? as usize;
+    let attached = std::mem::take(&mut ui.images);
+    let user_message = Message {
+        role: Role::User,
+        content: std::iter::once(Content::Text(prompt.clone()))
+            .chain(attached.iter().cloned().flat_map(LoadedImage::into_parts))
+            .collect(),
+        provider_replay: None,
+    };
     let progress = Arc::new(Mutex::new(Progress::default()));
     let observer = progress.clone();
     let stop = CancellationToken::new();
     let steering = SteeringInbox::default();
     let mut input_ended = false;
     let result = {
-        let turn = agent.submit_with_steering(
+        let turn = agent.submit_message_with_steering(
             session,
             model.clone(),
-            prompt,
+            user_message,
             instructions.to_owned(),
             stop.clone(),
             &steering,
@@ -810,6 +830,19 @@ async fn run_turn(
         return_pending_to_editor(ui);
     }
     let view = session.view()?;
+    if result.is_err()
+        && !view.entries[prior_entry_count..]
+            .iter()
+            .any(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
+    {
+        ui.images.extend(attached);
+        ui.draft = if ui.draft.is_empty() {
+            prompt
+        } else {
+            format!("{prompt}\n\n{}", ui.draft)
+        };
+        ui.cursor = ui.draft.len();
+    }
     ui.context_label = context_label(&view, ui.context_window_tokens);
     ui.load_history(view.messages);
     ui.scroll = 0;
@@ -975,7 +1008,7 @@ impl Frontend {
                 let prompt = self.draft.trim().to_owned();
                 self.draft.clear();
                 self.cursor = 0;
-                if prompt.is_empty() {
+                if prompt.is_empty() && self.images.is_empty() {
                     Action::None
                 } else if prompt == "/exit" || prompt == "/quit" {
                     Action::Quit
@@ -1434,7 +1467,13 @@ fn draw(
     if chrome_height > 0 {
         rows[history_height] = Line::raw("─".repeat(width));
         if chrome_height == 3 {
-            rows[history_height + 1] = Line::raw(brief(&ui.status, width));
+            let attachment_label = if ui.images.is_empty() {
+                String::new()
+            } else {
+                format!(" · {} image(s) attached", ui.images.len())
+            };
+            rows[history_height + 1] =
+                Line::raw(brief(&format!("{}{}", ui.status, attachment_label), width));
             rows[history_height + 2] = Line::raw(brief(
                 &format!(
                     "{} · {} · {}/{} · {}",
@@ -1516,12 +1555,18 @@ fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
         match message.role {
             Role::User => {
                 for item in &message.content {
-                    if let Content::Text(text) = item {
-                        push_wrapped(
+                    match item {
+                        Content::Text(text) => push_wrapped(
                             &mut rows,
                             &format!("you> {}", brief(text, MAX_PREVIEW)),
                             width,
-                        );
+                        ),
+                        Content::Image(image) => push_wrapped(
+                            &mut rows,
+                            &format!("you> [image: {}]", image.mime_type().as_str()),
+                            width,
+                        ),
+                        Content::ToolCall(_) | Content::ToolResult(_) => {}
                     }
                 }
             }
@@ -1542,6 +1587,7 @@ fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
                             ),
                             width,
                         ),
+                        Content::Image(_) => {}
                         Content::ToolResult(_) => {}
                     }
                 }

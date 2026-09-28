@@ -140,7 +140,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert [entry["kind"] for entry in entries].count("turn_ended") == 2
             assert [entry["kind"] for entry in entries].count("steering") == 1
             assert [entry["kind"] for entry in entries].count("compacted") == 1
-            turns = [entry["data"]["prompt"] for entry in entries if entry["kind"] == "turn_started"]
+            turns = [entry["data"]["input"]["content"][0]["Text"] for entry in entries if entry["kind"] == "turn_started"]
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert entries[-1]["kind"] == "model_selected", entries[-1]
             assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
