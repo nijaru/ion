@@ -193,7 +193,9 @@ Coalesce streamed tool calls by their call index: later repeated or changed
 metadata must not corrupt the first call identity, while argument fragments
 continue to accumulate and distinct completed calls retain unique IDs.
 Usage sent on later stream events can be partial; retain previously observed
-fields when a provider omits them.
+fields when a provider omits them. Anthropic may send several `message_delta`
+events; keep their cumulative usage and require a consistent terminal reason
+before `message_stop`.
 Retry only before any streamed event is observed; a partial response is
 reported as incomplete rather than silently replayed. A valid provider retry
 delay takes precedence over local backoff, up to a bounded automatic wait;

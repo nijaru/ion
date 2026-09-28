@@ -1283,34 +1283,41 @@ impl AnthropicState {
                 Ok(Vec::new())
             }
             "message_delta" => {
-                if self.in_message_delta
-                    || self
-                        .blocks
-                        .iter()
-                        .any(|b| !matches!(b, AnthropicBlock::Closed(_)))
+                if self
+                    .blocks
+                    .iter()
+                    .any(|b| !matches!(b, AnthropicBlock::Closed(_)))
                 {
-                    return Err(invalid("duplicate message_delta or unfinished block"));
+                    return Err(invalid("message_delta before content block finished"));
                 }
-                let reason = value["delta"]["stop_reason"]
-                    .as_str()
-                    .ok_or_else(|| invalid("missing Anthropic stop_reason"))?;
-                if !matches!(
-                    reason,
-                    "end_turn"
-                        | "tool_use"
-                        | "max_tokens"
-                        | "refusal"
-                        | "model_context_window_exceeded"
-                ) {
-                    return Err(unsupported("unsupported Anthropic stop_reason"));
-                }
-                if (reason == "tool_use" && self.ids.is_empty())
-                    || (reason == "end_turn" && !self.ids.is_empty())
-                {
-                    return Err(invalid("stop_reason contradicts tool calls"));
+                let delta = value["delta"]
+                    .as_object()
+                    .ok_or_else(|| invalid("invalid Anthropic message_delta"))?;
+                if let Some(reason) = delta.get("stop_reason").filter(|reason| !reason.is_null()) {
+                    let reason = reason
+                        .as_str()
+                        .ok_or_else(|| invalid("invalid Anthropic stop_reason"))?;
+                    if !matches!(
+                        reason,
+                        "end_turn"
+                            | "tool_use"
+                            | "max_tokens"
+                            | "refusal"
+                            | "model_context_window_exceeded"
+                    ) {
+                        return Err(unsupported("unsupported Anthropic stop_reason"));
+                    }
+                    if self.finish.as_deref().is_some_and(|prior| prior != reason) {
+                        return Err(invalid("conflicting Anthropic stop_reason"));
+                    }
+                    if (reason == "tool_use" && self.ids.is_empty())
+                        || (reason == "end_turn" && !self.ids.is_empty())
+                    {
+                        return Err(invalid("stop_reason contradicts tool calls"));
+                    }
+                    self.finish = Some(reason.into());
                 }
                 self.in_message_delta = true;
-                self.finish = Some(reason.into());
                 self.update_usage(&value["usage"], false)?;
                 Ok(vec![ModelStreamEvent::Usage(self.usage()?)])
             }
@@ -1966,6 +1973,32 @@ mod tests {
         assert_eq!(completed.unwrap().message.content, response.message.content);
     }
 
+    #[tokio::test]
+    async fn anthropic_stream_accepts_multiple_message_deltas() {
+        let body = concat!(
+            "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"returned\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":3,\"output_tokens\":0}}}\n\n",
+            "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"ok\"}}\n\n",
+            "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":null},\"usage\":{\"output_tokens\":1}}\n\n",
+            "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":2}}\n\n",
+            "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        );
+        let endpoint = serve_split(body.into(), "200 OK", 1).await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None))
+                .unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        let mut completed = None;
+        while let Some(event) = stream.next().await {
+            if let ModelStreamEvent::Completed(response) = event.unwrap() {
+                completed = Some(response);
+            }
+        }
+        let response = completed.unwrap();
+        assert_eq!(response.usage, Usage::known(3, 2));
+        assert_eq!(response.message.content, vec![Content::Text("ok".into())]);
+    }
+
     #[test]
     fn anthropic_partial_usage_delta_keeps_previous_counts() {
         let request = request();
@@ -2001,5 +2034,39 @@ mod tests {
             )
             .unwrap();
         assert_eq!(state.usage().unwrap(), Usage::known(3, 0));
+    }
+
+    #[test]
+    fn anthropic_multiple_message_deltas_need_consistent_stop_reason() {
+        let request = request();
+        let mut state = AnthropicState::default();
+        state
+            .accept(&json!({"type":"message_start","message":{"type":"message","role":"assistant","model":"returned","content":[],"stop_reason":null,"usage":{"input_tokens":3,"output_tokens":0}}}), &request)
+            .unwrap();
+        state
+            .accept(
+                &json!({"type":"message_delta","delta":{},"usage":{"output_tokens":1}}),
+                &request,
+            )
+            .unwrap();
+        assert!(
+            state
+                .accept(&json!({"type":"message_stop"}), &request)
+                .is_err()
+        );
+        state
+            .accept(
+                &json!({"type":"message_delta","delta":{"stop_reason":"end_turn"}}),
+                &request,
+            )
+            .unwrap();
+        assert!(
+            state
+                .accept(
+                    &json!({"type":"message_delta","delta":{"stop_reason":"tool_use"}}),
+                    &request
+                )
+                .is_err()
+        );
     }
 }
