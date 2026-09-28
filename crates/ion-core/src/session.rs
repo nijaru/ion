@@ -111,7 +111,6 @@ struct State {
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
     sequence: u64,
-    settled: BTreeSet<u64>,
     compaction: Option<(u64, String)>,
     last_usage: Option<Usage>,
 }
@@ -121,6 +120,8 @@ impl State {
         &mut self,
         entry: &SessionEntry,
         messages: &mut Vec<Message>,
+        settled: &BTreeSet<u64>,
+        new_settled: &mut Vec<u64>,
     ) -> Result<(), SessionError> {
         match entry {
             SessionEntry::ModelSelected { model } => {
@@ -136,7 +137,7 @@ impl State {
             } => {
                 if !self.pending.is_empty()
                     || summary.trim().is_empty()
-                    || !self.settled.contains(through_entry)
+                    || !(settled.contains(through_entry) || new_settled.contains(through_entry))
                     || self
                         .compaction
                         .as_ref()
@@ -219,7 +220,7 @@ impl State {
                 messages.push(message.clone());
                 self.last_usage = Some(*usage);
                 if self.pending.is_empty() {
-                    self.settled.insert(self.sequence + 1);
+                    new_settled.push(self.sequence + 1);
                 }
             }
             SessionEntry::ToolResult { turn, result } => {
@@ -237,7 +238,7 @@ impl State {
                     provider_replay: None,
                 });
                 if self.pending.is_empty() {
-                    self.settled.insert(self.sequence + 1);
+                    new_settled.push(self.sequence + 1);
                 }
             }
             SessionEntry::TurnEnded { turn, reason } => {
@@ -246,7 +247,7 @@ impl State {
                 }
                 self.active = None;
                 self.last_end = Some((*turn, reason.clone()));
-                self.settled.insert(self.sequence + 1);
+                new_settled.push(self.sequence + 1);
             }
         }
         self.sequence += 1;
@@ -257,6 +258,7 @@ impl State {
 struct Store {
     connection: Connection,
     state: State,
+    settled: BTreeSet<u64>,
     messages: Vec<Message>,
 }
 
@@ -312,6 +314,7 @@ impl Session {
             store: Mutex::new(Store {
                 connection,
                 state: State::default(),
+                settled: BTreeSet::new(),
                 messages: Vec::new(),
             }),
             _lock: lock,
@@ -330,11 +333,12 @@ impl Session {
         let connection = Connection::open(path)?;
         initialize(&connection)?;
         let header = read_header(&connection)?;
-        let (state, messages) = project(&read_entries(&connection)?)?;
+        let (state, settled, messages) = project(&read_entries(&connection)?)?;
         Ok(Self {
             store: Mutex::new(Store {
                 connection,
                 state,
+                settled,
                 messages,
             }),
             _lock: lock,
@@ -374,7 +378,7 @@ impl Session {
         let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
         let header = read_header(&connection)?;
         let entries = read_entries(&connection)?;
-        let (state, messages) = project(&entries)?;
+        let (state, _, messages) = project(&entries)?;
         Ok(SessionView {
             cwd: header.cwd,
             name: header.name,
@@ -408,9 +412,9 @@ impl Session {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         match &store.state.compaction {
             Some((through, summary)) => {
-                let entries = read_entries(&store.connection)?;
+                let entries = read_entries_after(&store.connection, *through)?;
                 let mut messages = vec![summary_message(summary)];
-                messages.extend(messages_from_entries(&entries[*through as usize..]));
+                messages.extend(messages_from_entries(&entries));
                 Ok(messages)
             }
             None => Ok(store.messages.clone()),
@@ -447,28 +451,22 @@ impl Session {
                     .saturating_add(serde_json::to_vec(&message)?.len())
                     .saturating_add(1);
             }
-            if prefix_bytes <= max_summary_bytes && store.state.settled.contains(&boundary) {
+            if prefix_bytes <= max_summary_bytes && store.settled.contains(&boundary) {
                 prefix_fit = Some(boundary);
             }
         }
         let mut suffix_bytes = 2usize;
         let mut through = None;
         for boundary in ((previous + 1)..=entries.len() as u64).rev() {
-            if store.state.settled.contains(&boundary) && suffix_bytes <= suffix_budget {
+            if store.settled.contains(&boundary) && suffix_bytes <= suffix_budget {
                 through = Some(boundary);
             }
             if let Some(message) = message_from_entry(&entries[boundary as usize - 1]) {
                 suffix_bytes = suffix_bytes.saturating_add(serde_json::to_vec(&message)?.len() + 1);
             }
         }
-        let through = through.or_else(|| {
-            store
-                .state
-                .settled
-                .range((previous + 1)..)
-                .next_back()
-                .copied()
-        });
+        let through =
+            through.or_else(|| store.settled.range((previous + 1)..).next_back().copied());
         let Some((suffix_target, prefix_fit)) = through.zip(prefix_fit) else {
             return Ok(None);
         };
@@ -722,10 +720,11 @@ fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry>
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
     let mut candidate = store.state.clone();
     let mut new_messages = Vec::new();
+    let mut new_settled = Vec::new();
     let encoded = entries
         .iter()
         .map(|entry| {
-            candidate.apply(entry, &mut new_messages)?;
+            candidate.apply(entry, &mut new_messages, &store.settled, &mut new_settled)?;
             let bytes = serde_json::to_vec(entry)?;
             if bytes.len() > MAX_ENTRY_BYTES {
                 return Err(SessionError::EntryTooLarge);
@@ -739,6 +738,7 @@ fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionErro
     }
     tx.commit()?;
     store.state = candidate;
+    store.settled.extend(new_settled);
     store.messages.extend(new_messages);
     Ok(())
 }
@@ -778,18 +778,36 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
     }
 }
 
-fn project(entries: &[SessionEntry]) -> Result<(State, Vec<Message>), SessionError> {
+fn project(entries: &[SessionEntry]) -> Result<(State, BTreeSet<u64>, Vec<Message>), SessionError> {
     let mut state = State::default();
+    let mut settled = BTreeSet::new();
     let mut messages = Vec::new();
     for entry in entries {
-        state.apply(entry, &mut messages)?;
+        let mut new_settled = Vec::new();
+        state.apply(entry, &mut messages, &settled, &mut new_settled)?;
+        settled.extend(new_settled);
     }
-    Ok((state, messages))
+    Ok((state, settled, messages))
 }
 
 fn read_entries(connection: &Connection) -> Result<Vec<SessionEntry>, SessionError> {
     let mut statement = connection.prepare("SELECT body FROM entries ORDER BY seq")?;
     let rows = statement.query_map([], |row| row.get::<_, Vec<u8>>(0))?;
+    let mut entries = Vec::new();
+    for body in rows {
+        entries.push(serde_json::from_slice(&body?)?);
+    }
+    Ok(entries)
+}
+
+fn read_entries_after(
+    connection: &Connection,
+    through: u64,
+) -> Result<Vec<SessionEntry>, SessionError> {
+    let through = i64::try_from(through).map_err(|_| SessionError::InvalidHistory)?;
+    let mut statement =
+        connection.prepare("SELECT body FROM entries WHERE seq > ?1 ORDER BY seq")?;
+    let rows = statement.query_map(params![through], |row| row.get::<_, Vec<u8>>(0))?;
     let mut entries = Vec::new();
     for body in rows {
         entries.push(serde_json::from_slice(&body?)?);
@@ -1051,6 +1069,56 @@ mod tests {
             Session::inspect(&path).unwrap().last_usage,
             Some(Usage::known(123, 45))
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejected_batch_does_not_publish_projection_or_settled_cut() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session
+            .begin_turn(
+                "first".into(),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+            )
+            .unwrap();
+        let answer = Message {
+            role: Role::Assistant,
+            content: vec![Content::Text("done".into())],
+            provider_replay: None,
+        };
+        {
+            let mut store = session.store.lock().unwrap();
+            let before = store.settled.clone();
+            assert!(matches!(
+                append(
+                    &mut store,
+                    &[
+                        SessionEntry::Assistant {
+                            turn,
+                            message: answer.clone(),
+                            usage: Usage::unknown(),
+                            termination: ResponseTermination::Completed,
+                        },
+                        SessionEntry::Steering {
+                            turn,
+                            prompt: String::new(),
+                        },
+                    ],
+                ),
+                Err(SessionError::InvalidHistory)
+            ));
+            assert_eq!(store.settled, before);
+            assert_eq!(store.messages.len(), 1);
+        }
+        session
+            .record_assistant(turn, answer, Usage::unknown(), false)
+            .unwrap();
+        assert_eq!(session.view().unwrap().entries.len(), 3);
+        drop(session);
         fs::remove_dir_all(root).unwrap();
     }
 
