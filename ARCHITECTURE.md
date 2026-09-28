@@ -1,8 +1,9 @@
 # Ion architecture
 
-**Chosen implementation target, 2026-09-26.** This file states the
-coding-agent contracts. The coding loop has completed end-to-end tasks on
-specific live routes; broader model and account qualification remains.
+**Chosen implementation target, updated 2026-09-27.** This file states the
+coding-agent contracts. The short coding loop has completed end-to-end tasks
+on specific live routes; daily-use session, model and context workflows
+remain under implementation and qualification.
 [README.md](README.md) describes what the current executable can do. Ion is
 unreleased v0, so obsolete runtime representations can be replaced directly.
 
@@ -19,6 +20,13 @@ A usable first version includes project instructions, model discovery and
 selection, automatic environment API keys, optional masked key entry, and
 honest resume. Ion needs to complete real coding tasks end to end; scripted
 model and storage tests alone do not establish that outcome.
+
+Pi is a direct reference for the small interactions that make a coding agent
+usable: editing and steering prompts, inspecting tools, finding sessions,
+switching models and managing context. Ion adopts those user outcomes through
+its own Session and client design rather than copying every Pi command or
+its plugin runtime.
+
 Workers, personal memory, gateways, schedules and general workflow authoring
 are outside this initial scope.
 
@@ -94,11 +102,13 @@ Project instructions, the current request and useful Session history form a
 bounded model input. Raw history and the model-context view are distinct;
 context changes must leave the recorded conversation inspectable. Keep tool
 calls and results intelligible together. If a request is too large, show an
-actionable capacity error. When actual sessions need compaction, evaluate a
-summary policy on representative tasks. No particular checkpoint or tail
-algorithm is fixed by the baseline. If a later model cannot encode stored
-history faithfully, report that or make an explicit context change rather
-than silently dropping content.
+actionable capacity error without hiding or dropping history. Daily use also
+needs an explicit, recoverable way to reduce model context. A summary must
+commit as a Session fact, retain the raw transcript, and keep complete
+tool-call/result groups on either side of the cut. Evaluate its policy on
+representative tasks; no particular checkpoint or tail algorithm is fixed.
+If a later model cannot encode stored history faithfully, report that or make
+an explicit context change rather than silently dropping content.
 
 Default file and shell tools act on the live working directory with the host
 user's permissions. There is no implicit sandbox, VM, importer or private
@@ -123,11 +133,25 @@ operate on host-owned credentials. Do not silently
 switch identities after a saved login fails. The exact initial provider list
 is an implementation recommendation to verify, not a product requirement.
 
+The host resolves a model identity to its endpoint, wire behavior and
+credential source. Each Turn records the selected nonsecret identity. A
+resumed Session restores that model when its route is available and reports a
+missing route clearly; a global default applies to new Sessions. A custom
+route stays resolvable after another model becomes the default. Explicit
+per-invocation selection overrides the resumed choice for that invocation.
+Model and provider transport remain stable while a Turn runs.
+
 The TUI shows prompt, streaming response, tool calls/results and errors while
 keeping terminal input and restoration reliable. Headless mode exposes the
 same loop without terminal dependencies, with useful output and exit status.
-Resume selects an existing Session rather than starting an unrelated hidden
-conversation.
+Start a fresh Session by default, explicitly continue recent work or select
+an earlier Session by human-visible identity. Users can name sessions and
+explore an alternate approach without erasing the source history. Exact
+session paths remain available to scripts. The TUI preserves draft input
+during a running Turn, distinguishes steering from follow-up work, and makes
+full tool results inspectable even when the default view is compact. Active
+directory, Session, model and known context pressure are visible. Headless
+integration can expose structured events from the same loop.
 
 ## Qualification
 
