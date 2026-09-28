@@ -1,9 +1,10 @@
 # Ion architecture
 
 **Chosen implementation target, updated 2026-09-27.** This file states the
-coding-agent contracts. The short coding loop has completed end-to-end tasks
-on specific live routes; daily-use session, model and context workflows
-remain under implementation and qualification.
+coding-agent contracts. The core loop and the session, model, input and context
+workflows described here have completed end-to-end macOS tasks on the live
+routes named in [README.md](README.md). That qualification is for the stated
+first usable coding scope, not for every Pi feature, model or platform.
 [README.md](README.md) describes what the current executable can do. Ion is
 unreleased v0, so obsolete runtime representations can be replaced directly.
 
