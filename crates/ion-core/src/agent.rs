@@ -8,6 +8,7 @@ use ion_ai::{
 };
 use serde_json::Value;
 use thiserror::Error;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 use crate::session::{Session, SessionError, TurnEndReason};
@@ -61,6 +62,66 @@ impl Agent {
     where
         F: FnMut(AgentEvent) + Send,
     {
+        self.submit_inner(
+            session,
+            model,
+            prompt,
+            instructions,
+            stop,
+            None,
+            &mut observe,
+        )
+        .await
+    }
+
+    /// Accept user steering at model-step boundaries during an active turn.
+    /// Messages still in the receiver when the turn ends belong to the host.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit turn and input lifecycles"
+    )]
+    pub async fn submit_with_steering<F>(
+        &self,
+        session: &Session,
+        model: ModelRef,
+        prompt: String,
+        instructions: String,
+        stop: CancellationToken,
+        steering: &mut mpsc::UnboundedReceiver<String>,
+        mut observe: F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
+        self.submit_inner(
+            session,
+            model,
+            prompt,
+            instructions,
+            stop,
+            Some(steering),
+            &mut observe,
+        )
+        .await
+    }
+
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit turn and input lifecycles"
+    )]
+    async fn submit_inner<F>(
+        &self,
+        session: &Session,
+        model: ModelRef,
+        prompt: String,
+        instructions: String,
+        stop: CancellationToken,
+        steering: Option<&mut mpsc::UnboundedReceiver<String>>,
+        observe: &mut F,
+    ) -> Result<String, AgentError>
+    where
+        F: FnMut(AgentEvent) + Send,
+    {
         if prompt.trim().is_empty() {
             return Err(AgentError::EmptyPrompt);
         }
@@ -76,7 +137,7 @@ impl Agent {
             observe(AgentEvent::InterruptedCalls(interrupted));
         }
         let outcome = self
-            .drive(session, turn, model, instructions, &stop, &mut observe)
+            .drive(session, turn, model, instructions, &stop, steering, observe)
             .await;
         match outcome {
             Ok(answer) => Ok(answer),
@@ -91,6 +152,10 @@ impl Agent {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "explicit turn and input lifecycles"
+    )]
     async fn drive<F>(
         &self,
         session: &Session,
@@ -98,6 +163,7 @@ impl Agent {
         model: ModelRef,
         instructions: String,
         stop: &CancellationToken,
+        mut steering: Option<&mut mpsc::UnboundedReceiver<String>>,
         observe: &mut F,
     ) -> Result<String, AgentError>
     where
@@ -106,6 +172,9 @@ impl Agent {
         for _ in 0..self.limits.max_steps {
             if stop.is_cancelled() {
                 return Err(AgentError::Cancelled);
+            }
+            for prompt in drain_steering(&mut steering) {
+                session.record_steering(turn, prompt)?;
             }
             let request = ModelRequest {
                 model: model.clone(),
@@ -181,7 +250,15 @@ impl Agent {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
-            let complete = session.record_assistant(turn, response.message)?;
+            // Keep steering in the channel until tools settle. Cancellation
+            // during a tool must return unsent input to the host.
+            let pending_steering = if calls.is_empty() {
+                drain_steering(&mut steering)
+            } else {
+                Vec::new()
+            };
+            let complete =
+                session.record_assistant(turn, response.message, !pending_steering.is_empty())?;
             if complete {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
@@ -208,9 +285,24 @@ impl Agent {
                     output,
                 });
             }
+            for prompt in pending_steering {
+                session.record_steering(turn, prompt)?;
+            }
         }
         Err(AgentError::StepLimit)
     }
+}
+
+fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -> Vec<String> {
+    let mut prompts = Vec::new();
+    if let Some(receiver) = receiver {
+        while let Ok(prompt) = receiver.try_recv() {
+            if !prompt.trim().is_empty() {
+                prompts.push(prompt);
+            }
+        }
+    }
+    prompts
 }
 
 #[derive(Debug, Clone)]
@@ -369,6 +461,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn steering_is_recorded_before_the_next_model_step_in_one_turn() {
+        let root = std::env::temp_dir().join(format!("ion-steering-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::ToolCall(ToolCall {
+                id: "call-1".into(),
+                name: "read".into(),
+                arguments: serde_json::json!({"path":"file.txt"}),
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        std::fs::write(root.join("file.txt"), "content").unwrap();
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let (sender, mut steering) = mpsc::unbounded_channel();
+        agent
+            .submit_with_steering(
+                &session,
+                model(),
+                "read file".into(),
+                "test".into(),
+                CancellationToken::new(),
+                &mut steering,
+                move |event| {
+                    if matches!(event, AgentEvent::ToolFinished { .. }) {
+                        sender.send("also check the content".into()).unwrap();
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        let requests = scripts.requests();
+        assert_eq!(requests.len(), 2);
+        assert_eq!(requests[1].messages.last().unwrap().role, Role::User);
+        assert_eq!(
+            session
+                .view()
+                .unwrap()
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, crate::session::SessionEntry::Steering { .. }))
+                .count(),
+            1
+        );
+        assert_eq!(
+            session
+                .view()
+                .unwrap()
+                .entries
+                .iter()
+                .filter(|entry| matches!(entry, crate::session::SessionEntry::TurnStarted { .. }))
+                .count(),
+            1
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn incomplete_tool_call_is_reported_without_reexecution() {
         let root =
             std::env::temp_dir().join(format!("ion-agent-interrupt-{}", uuid::Uuid::now_v7()));
@@ -388,6 +540,7 @@ mod tests {
                     })],
                     provider_replay: None,
                 },
+                false,
             )
             .unwrap();
         drop(session);

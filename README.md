@@ -54,6 +54,10 @@ session ID to stderr. In the TUI, `/new`, `/resume`, `/name`, `/session` and
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
 default for new sessions.
+While a turn runs, the editor remains available: Enter steers the next model
+step, Alt-Enter queues a separate follow-up turn, and Ctrl-C cancels. Input
+that has not reached the model returns to the editor if the turn fails or is
+cancelled.
 
 Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. `ion use` also accepts a custom model with
@@ -81,8 +85,7 @@ independently; this is evidence for short tasks, not broad model or platform
 parity.
 
 Long histories end with an explicit request-size error because compaction is
-not implemented yet. The TUI does not yet accept steering or follow-up input
-while a turn runs, and tool output is clipped in its default view. Direct
+not implemented yet. The TUI clips tool output in its default view. Direct
 OpenAI was rate-limited in the available account; Anthropic and live Linux
 coding were not qualified. [ARCHITECTURE.md](ARCHITECTURE.md) holds the design
 contracts.

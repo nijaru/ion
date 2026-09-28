@@ -33,6 +33,10 @@ pub enum SessionEntry {
     ModelSelected {
         model: ModelRef,
     },
+    Steering {
+        turn: u64,
+        prompt: String,
+    },
     TurnStarted {
         turn: u64,
         prompt: String,
@@ -109,6 +113,19 @@ impl State {
                 self.active = Some(*turn);
                 self.last_id = *turn;
                 self.last_model = Some(model.clone());
+                messages.push(Message {
+                    role: Role::User,
+                    content: vec![Content::Text(prompt.clone())],
+                    provider_replay: None,
+                });
+            }
+            SessionEntry::Steering { turn, prompt } => {
+                if self.active != Some(*turn)
+                    || !self.pending.is_empty()
+                    || prompt.trim().is_empty()
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
                 messages.push(Message {
                     role: Role::User,
                     content: vec![Content::Text(prompt.clone())],
@@ -346,13 +363,14 @@ impl Session {
         &self,
         turn: u64,
         message: Message,
+        continue_turn: bool,
     ) -> Result<bool, SessionError> {
         let has_calls = message
             .content
             .iter()
             .any(|part| matches!(part, Content::ToolCall(_)));
         let mut entries = vec![SessionEntry::Assistant { turn, message }];
-        if !has_calls {
+        if !has_calls && !continue_turn {
             entries.push(SessionEntry::TurnEnded {
                 turn,
                 reason: TurnEndReason::Completed,
@@ -360,7 +378,12 @@ impl Session {
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
-        Ok(!has_calls)
+        Ok(!has_calls && !continue_turn)
+    }
+
+    pub(crate) fn record_steering(&self, turn: u64, prompt: String) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &[SessionEntry::Steering { turn, prompt }])
     }
 
     pub(crate) fn record_tool_result(
@@ -538,6 +561,7 @@ mod tests {
                     })],
                     provider_replay: None,
                 },
+                false,
             )
             .unwrap();
         drop(session);
@@ -578,7 +602,8 @@ mod tests {
                         role: Role::Assistant,
                         content: vec![Content::Text("done".into())],
                         provider_replay: None
-                    }
+                    },
+                    false,
                 )
                 .unwrap()
         );

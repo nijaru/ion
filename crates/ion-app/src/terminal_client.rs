@@ -1,5 +1,6 @@
 //! Terminal view over the same coding loop used by headless and library hosts.
 use std::{
+    collections::VecDeque,
     fs,
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -13,6 +14,7 @@ use ion_terminal::{
     install_panic_hook,
 };
 use ratatui::text::Line;
+use tokio::sync::mpsc;
 use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
@@ -41,6 +43,7 @@ struct Frontend {
     picker: Option<Picker>,
     session_label: String,
     cwd_label: String,
+    pending: VecDeque<String>,
 }
 
 enum PickerValue {
@@ -203,6 +206,23 @@ pub async fn chat(
     };
     ui.refresh_session(&runtime.session)?;
     loop {
+        if let Some(prompt) = ui.pending.pop_front() {
+            ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
+            ui.scroll = 0;
+            run_turn(
+                &mut terminal,
+                &mut screen,
+                &mut input,
+                &mut ui,
+                &runtime.session,
+                &runtime.agent,
+                runtime.selected.identity(),
+                &runtime.instructions,
+                prompt,
+            )
+            .await?;
+            continue;
+        }
         draw(
             &mut terminal,
             &mut screen,
@@ -219,7 +239,7 @@ pub async fn chat(
                 Action::None => {}
                 Action::Quit => break,
                 Action::Submit(prompt) => {
-                    ui.status = "Working · Ctrl-C cancels the current turn".into();
+                    ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
                     ui.scroll = 0;
                     run_turn(
                         &mut terminal,
@@ -252,6 +272,7 @@ pub async fn chat(
                         }
                     }
                 }
+                Action::Queue(prompt) => ui.pending.push_back(prompt),
                 Action::Pick(value) => {
                     let result = match value {
                         PickerValue::Session(path) => runtime.switch_session(path),
@@ -431,43 +452,77 @@ async fn run_turn(
     let progress = Arc::new(Mutex::new(Progress::default()));
     let observer = progress.clone();
     let stop = CancellationToken::new();
-    let turn = agent.submit(
-        session,
-        model.clone(),
-        prompt,
-        instructions.to_owned(),
-        stop.clone(),
-        move |event| {
-            observer
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .observe(event);
-        },
-    );
-    tokio::pin!(turn);
-    let mut tick = interval(Duration::from_millis(50));
+    let (steering_tx, mut steering_rx) = mpsc::unbounded_channel();
     let mut input_ended = false;
-    let result = loop {
-        tokio::select! {
-            result = &mut turn => break result,
-            event = input.next(), if !input_ended => match event {
-                Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
-                Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
-                    MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
-                    MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
-                    _ => {},
-                },
-                Some(Ok(_)) => {},
-                Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
-                None => { stop.cancel(); input_ended = true; },
+    let result = {
+        let turn = agent.submit_with_steering(
+            session,
+            model.clone(),
+            prompt,
+            instructions.to_owned(),
+            stop.clone(),
+            &mut steering_rx,
+            move |event| {
+                observer
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .observe(event);
             },
-            _ = tick.tick() => {
-                let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                draw(terminal, screen, ui, Some(&preview), &model, true)?;
+        );
+        tokio::pin!(turn);
+        let mut tick = interval(Duration::from_millis(50));
+        loop {
+            tokio::select! {
+                result = &mut turn => break result,
+                event = input.next(), if !input_ended => match event {
+                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(key))) => match ui.key(key) {
+                        Action::Submit(prompt) => {
+                            let _ = steering_tx.send(prompt);
+                            ui.status = "Steering sent for the next model step".into();
+                        }
+                        Action::Queue(prompt) => {
+                            ui.pending.push_back(prompt);
+                            ui.status = format!("{} follow-up(s) queued", ui.pending.len());
+                        }
+                        Action::Command(command) => {
+                            ui.draft = command;
+                            ui.cursor = ui.draft.len();
+                            ui.status = "Commands are available after this turn".into();
+                        }
+                        Action::Quit => stop.cancel(),
+                        Action::Pick(_) | Action::None => {},
+                    },
+                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
+                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                        _ => {},
+                    },
+                    Some(Ok(_)) => {},
+                    Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
+                    None => { stop.cancel(); input_ended = true; },
+                },
+                _ = tick.tick() => {
+                    let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+                    draw(terminal, screen, ui, Some(&preview), &model, true)?;
+                }
             }
         }
     };
+    while let Ok(prompt) = steering_rx.try_recv() {
+        ui.pending.push_back(prompt);
+    }
+    if result.is_err() && !ui.pending.is_empty() {
+        let remaining = ui.pending.drain(..).collect::<Vec<_>>().join("\n\n");
+        if ui.draft.is_empty() {
+            ui.draft = remaining;
+        } else {
+            ui.draft = format!("{remaining}\n\n{}", ui.draft);
+        }
+        ui.cursor = ui.draft.len();
+    }
     ui.history = session.view()?.messages;
     ui.scroll = 0;
     ui.status = match result {
@@ -483,6 +538,7 @@ async fn run_turn(
 enum Action {
     None,
     Submit(String),
+    Queue(String),
     Command(String),
     Pick(PickerValue),
     Quit,
@@ -546,6 +602,19 @@ impl Frontend {
             } if modifiers.contains(Modifiers::SHIFT) || modifiers.contains(Modifiers::CONTROL) => {
                 self.insert("\n");
                 Action::None
+            }
+            KeyEvent {
+                code: KeyCode::Enter,
+                modifiers,
+            } if modifiers.contains(Modifiers::ALT) => {
+                let prompt = self.draft.trim().to_owned();
+                self.draft.clear();
+                self.cursor = 0;
+                if prompt.is_empty() {
+                    Action::None
+                } else {
+                    Action::Queue(prompt)
+                }
             }
             KeyEvent {
                 code: KeyCode::Char('j'),
@@ -725,7 +794,7 @@ fn draw(
     ui: &Frontend,
     progress: Option<&Progress>,
     model: &ModelRef,
-    busy: bool,
+    _busy: bool,
 ) -> Result<()> {
     let (width, height) = terminal.size()?;
     screen.resize(width, height);
@@ -734,10 +803,7 @@ fn draw(
     let (draft, cursor) = ui.picker.as_ref().map_or((&ui.draft, ui.cursor), |picker| {
         (&picker.query, picker.query.len())
     });
-    let mut composer = wrap_input(draft, cursor, width);
-    if busy {
-        composer.lines = vec!["… working (Ctrl-C cancels)".into()];
-    }
+    let composer = wrap_input(draft, cursor, width);
     let chrome_height = if height >= 5 {
         3
     } else if height >= 3 {
@@ -746,14 +812,10 @@ fn draw(
         0
     };
     let composer_height = composer.lines.len().min(4).min(height - chrome_height);
-    let composer_start = if busy {
-        0
-    } else {
-        composer
-            .cursor_row
-            .saturating_sub(composer_height - 1)
-            .min(composer.lines.len().saturating_sub(composer_height))
-    };
+    let composer_start = composer
+        .cursor_row
+        .saturating_sub(composer_height - 1)
+        .min(composer.lines.len().saturating_sub(composer_height));
     let history_height = height - composer_height - chrome_height;
     let mut history = if let Some(picker) = &ui.picker {
         let matching = picker.matches();
@@ -820,12 +882,9 @@ fn draw(
     for i in 0..composer_height {
         rows[composer_row + i] = Line::raw(composer.lines[composer_start + i].clone());
     }
-    let cursor = if busy {
-        None
-    } else {
-        let row = composer_row + composer.cursor_row.saturating_sub(composer_start);
-        (row < height).then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16))
-    };
+    let row = composer_row + composer.cursor_row.saturating_sub(composer_start);
+    let cursor =
+        (row < height).then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
     screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
 }
@@ -1002,5 +1061,15 @@ mod tests {
         let mut rows = Vec::new();
         push_wrapped(&mut rows, "safe\u{1b}[31m", 30);
         assert_eq!(rows, vec!["safe�[31m"]);
+    }
+    #[test]
+    fn alt_enter_queues_a_followup_without_discarding_the_editor() {
+        let mut ui = Frontend::default();
+        ui.insert("follow up");
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Enter, Modifiers::ALT)),
+            Action::Queue(prompt) if prompt == "follow up"
+        ));
+        assert!(ui.draft.is_empty());
     }
 }

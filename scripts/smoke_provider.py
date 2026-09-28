@@ -1,7 +1,9 @@
 """Deterministic local Chat Completions stream for the executable smoke check."""
 
 import json
+import os
 import sys
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -14,6 +16,7 @@ steps = [
     ("exec", {"command": "cat data.txt created.txt"}),
 ]
 count = 0
+require_steering = os.environ.get("ION_SMOKE_STEERING") == "1"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -30,16 +33,22 @@ class Handler(BaseHTTPRequestHandler):
             if count < 4:
                 if count:
                     last = body["messages"][-1]
-                    assert last["role"] == "tool" and last["tool_call_id"] == f"ion_call_{count - 1}"
+                    if count == 1 and require_steering:
+                        assert last["role"] == "user" and "also check" in last["content"].lower()
+                        assert body["messages"][-2]["role"] == "tool"
+                    else:
+                        assert last["role"] == "tool" and last["tool_call_id"] == f"ion_call_{count - 1}"
                 name, arguments = steps[count]
                 delta = {"tool_calls": [{"index": 0, "id": f"call-{count + 1}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
                 finish = "tool_calls"
+                if count == 0 and require_steering:
+                    time.sleep(0.75)
             elif count == 4:
                 assert body["messages"][-1]["role"] == "tool"
                 assert "sample data updated" in body["messages"][-1]["content"]
                 delta, finish = {"content": "TASK_COMPLETE"}, "stop"
             elif count == 5:
-                assert len([m for m in body["messages"] if m["role"] == "user"]) == 2
+                assert len([m for m in body["messages"] if m["role"] == "user"]) == (3 if require_steering else 2)
                 delta, finish = {"content": "RESUMED"}, "stop"
             else:
                 raise AssertionError("unexpected extra model request")
