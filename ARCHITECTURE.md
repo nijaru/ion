@@ -143,7 +143,12 @@ Model and provider transport remain stable while a Turn runs.
 
 The TUI shows prompt, streaming response, tool calls/results and errors while
 keeping terminal input and restoration reliable. Headless mode exposes the
-same loop without terminal dependencies, with useful output and exit status.
+same loop without terminal dependencies, with useful text output and exit
+status. A JSONL output mode emits one session identity, ordered progress
+events and a terminal invocation result on stdout; diagnostics stay on stderr.
+Tool lifecycle events carry call IDs so a host can correlate them. This is a
+view of the same loop, not a second Session authority or a copy of Pi's event
+schema.
 Start a fresh Session by default, explicitly continue recent work or select
 an earlier Session by human-visible identity. Users can name sessions and
 clone the current conversation into a new Session to explore an alternate
@@ -155,8 +160,7 @@ unknown-effect semantics in the clone. Exact
 session paths remain available to scripts. The TUI preserves draft input
 during a running Turn, distinguishes steering from follow-up work, and makes
 full tool results inspectable even when the default view is compact. Active
-directory, Session, model and known context pressure are visible. Headless
-integration can expose structured events from the same loop.
+directory, Session, model and known context pressure are visible.
 
 ## Qualification
 

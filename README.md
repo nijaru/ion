@@ -39,6 +39,7 @@ From the project directory:
 ion                        # terminal chat
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
+ion --json run 'Inspect and fix the failing test' > events.jsonl
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
@@ -59,6 +60,13 @@ default for new sessions.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
+For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
+Stdout contains one JSON object per line: a `session` record with the ID and
+directory, ordered `text_delta`, tool lifecycle, recovery and final records,
+then a `run_end` record with `completed`, `cancelled` or `failed` status.
+`tool_started` and `tool_finished` share a `call_id`. Diagnostics stay on
+stderr, and failure also sets a nonzero exit status. The `final` record is
+the committed assistant answer; earlier text deltas are for live display.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
 recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse

@@ -188,10 +188,12 @@ impl Progress {
                     self.text.drain(..start);
                 }
             }
-            CodingAgentEvent::ToolStarted { name, arguments } => self
+            CodingAgentEvent::ToolStarted {
+                name, arguments, ..
+            } => self
                 .events
                 .push(format!("→ {name} {}", brief(&arguments.to_string(), 2048))),
-            CodingAgentEvent::ToolFinished { name, output } => self.events.push(format!(
+            CodingAgentEvent::ToolFinished { name, output, .. } => self.events.push(format!(
                 "← {name} {}: {}",
                 if output.is_error { "error" } else { "done" },
                 brief(&output.value.to_string(), 2048)

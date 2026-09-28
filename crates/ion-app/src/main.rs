@@ -11,8 +11,10 @@ use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::ModelRef;
 use ion_core::{
-    AgentLimits, CodingAgent, CodingAgentEvent, CodingSession, HttpModelService, LocalTools,
+    AgentLimits, CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, HttpModelService,
+    LocalTools,
 };
+use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
 mod auth;
@@ -31,6 +33,9 @@ struct Cli {
     /// Run one prompt headlessly, then exit.
     #[arg(short = 'p', long = "print", global = true)]
     print: Option<String>,
+    /// Emit JSONL progress records for a headless prompt.
+    #[arg(long, global = true)]
+    json: bool,
     /// Working directory for a new session (defaults to the current directory).
     #[arg(long, global = true)]
     cwd: Option<PathBuf>,
@@ -94,6 +99,12 @@ async fn main() {
 }
 
 async fn run_cli(cli: Cli) -> Result<()> {
+    if cli.json
+        && (!matches!(&cli.action, Some(Action::Run { .. }) | None)
+            || cli.action.is_none() && cli.print.is_none())
+    {
+        bail!("--json requires `run PROMPT` or `--print PROMPT`");
+    }
     let config = config_root()?;
     let credentials = CredentialStore::new(config.join("credentials"));
     let models = ModelStore::new(config);
@@ -245,7 +256,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let instructions = project_instructions(session.cwd())?;
             match action {
                 Some(Action::Run { prompt }) => {
-                    headless(session, agent, model, instructions, prompt).await
+                    headless(session, agent, model, instructions, prompt, cli.json).await
                 }
                 Some(Action::Compact) => {
                     let stop = CancellationToken::new();
@@ -284,6 +295,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         model,
                         instructions,
                         cli.print.expect("matched Some"),
+                        cli.json,
                     )
                     .await
                 }
@@ -379,11 +391,20 @@ async fn headless(
     model: ModelRef,
     instructions: String,
     prompt: String,
+    json_output: bool,
 ) -> Result<()> {
-    if let Some(id) = session.path().file_stem() {
-        eprintln!("[session: {}]", id.to_string_lossy());
+    let id = session
+        .path()
+        .file_stem()
+        .context("session has no ID")?
+        .to_string_lossy();
+    if json_output {
+        write_json_record(&json!({"type":"session","id":id,"cwd":session.cwd()}))?;
+    } else {
+        eprintln!("[session: {id}]");
     }
     let stop = CancellationToken::new();
+    let output_stop = stop.clone();
     let signal_stop = stop.clone();
     let signal = tokio::spawn(async move {
         if tokio::signal::ctrl_c().await.is_ok() {
@@ -391,6 +412,7 @@ async fn headless(
         }
     });
     let mut streamed = false;
+    let mut output_error = None;
     let result = agent
         .submit(
             &session,
@@ -398,14 +420,46 @@ async fn headless(
             prompt,
             instructions,
             stop,
-            |event| match event {
+            |event| {
+                if json_output {
+                    let record = match event {
+                        CodingAgentEvent::TextDelta(text) => {
+                            json!({"type":"text_delta","text":text})
+                        }
+                        CodingAgentEvent::ToolStarted {
+                            call_id,
+                            name,
+                            arguments,
+                        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments}),
+                        CodingAgentEvent::ToolFinished {
+                            call_id,
+                            name,
+                            output,
+                        } => json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error}),
+                        CodingAgentEvent::InterruptedCalls(count) => {
+                            json!({"type":"interrupted_calls","count":count})
+                        }
+                        CodingAgentEvent::ContextCompacted { through_entry } => {
+                            json!({"type":"context_compacted","through_entry":through_entry})
+                        }
+                        CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
+                    };
+                    if output_error.is_none()
+                        && let Err(error) = write_json_record(&record)
+                    {
+                        output_error = Some(error);
+                        output_stop.cancel();
+                    }
+                    return;
+                }
+                match event {
                 CodingAgentEvent::TextDelta(text) => {
                     print!("{text}");
                     let _ = io::stdout().flush();
                     streamed = true;
                 }
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
-                CodingAgentEvent::ToolFinished { name, output } => {
+                CodingAgentEvent::ToolFinished { name, output, .. } => {
                     eprintln!("[tool: {name}] {}", output.value)
                 }
                 CodingAgentEvent::InterruptedCalls(count) => {
@@ -416,11 +470,36 @@ async fn headless(
                 }
                 CodingAgentEvent::Final(text) if !streamed => print!("{text}"),
                 CodingAgentEvent::Final(_) => {}
+                }
             },
         )
         .await;
     signal.abort();
+    if json_output {
+        if let Some(error) = output_error {
+            return Err(error.into());
+        }
+        match &result {
+            Ok(_) => write_json_record(&json!({"type":"run_end","status":"completed"}))?,
+            Err(CodingAgentError::Cancelled) => write_json_record(
+                &json!({"type":"run_end","status":"cancelled","error":"turn was cancelled"}),
+            )?,
+            Err(error) => write_json_record(
+                &json!({"type":"run_end","status":"failed","error":error.to_string()}),
+            )?,
+        }
+        result?;
+        return Ok(());
+    }
     println!();
     result?;
     Ok(())
+}
+
+fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
+    let mut bytes = serde_json::to_vec(value).map_err(io::Error::other)?;
+    bytes.push(b'\n');
+    let mut stdout = io::stdout().lock();
+    stdout.write_all(&bytes)?;
+    stdout.flush()
 }

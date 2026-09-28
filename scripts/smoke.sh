@@ -86,4 +86,38 @@ assert clone['cwd'] == source['cwd']
 PY
 "$BIN" --session "$session_db" inspect > "$WORK/source-after-clone.json"
 cmp "$WORK/second.json" "$WORK/source-after-clone.json"
+
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+python3 "$ROOT/scripts/smoke_provider.py" "$WORK/json-port" "$WORK/json-requests" > "$WORK/json-server.out" 2> "$WORK/json-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/json-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/json-port" ]] || { cat "$WORK/json-server.err" >&2; echo 'JSON mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/json-port")/v1/chat/completions" --wire chat-completions > "$WORK/json-use.out"
+printf 'sample data\n' > "$WORK/other-workspace/data.txt"
+"$BIN" --json --cwd "$WORK/other-workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/events.jsonl" 2> "$WORK/events.err"
+python3 - "$WORK/events.jsonl" "$WORK/other-workspace" <<'PY'
+import json, pathlib, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[0]['type'] == 'session' and pathlib.Path(events[0]['cwd']) == pathlib.Path(sys.argv[2]).resolve()
+assert events[-1] == {'type': 'run_end', 'status': 'completed'}
+started = [event['call_id'] for event in events if event['type'] == 'tool_started']
+finished = [event['call_id'] for event in events if event['type'] == 'tool_finished']
+assert len(started) == 4 and started == finished
+assert next(event['text'] for event in events if event['type'] == 'final') == 'TASK_COMPLETE'
+assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\n'
+assert pathlib.Path(sys.argv[2], 'created.txt').read_text() == 'created by ion\n'
+PY
+mkdir "$WORK/error-workspace"
+if "$BIN" --json --cwd "$WORK/error-workspace" run 'Unexpected prompt' > "$WORK/error-events.jsonl" 2> "$WORK/error-events.err"; then
+    echo 'JSON mode accepted a failed model request' >&2; exit 1
+fi
+python3 - "$WORK/error-events.jsonl" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[0]['type'] == 'session'
+assert events[-1]['type'] == 'run_end' and events[-1]['status'] == 'failed'
+assert 'provider returned HTTP 500' in events[-1]['error']
+PY
 echo 'Ion offline headless coding and session reopen: OK'

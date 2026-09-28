@@ -445,6 +445,7 @@ impl Agent {
                     return Err(AgentError::Cancelled);
                 }
                 observe(AgentEvent::ToolStarted {
+                    call_id: call.id.clone(),
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 });
@@ -452,12 +453,13 @@ impl Agent {
                 session.record_tool_result(
                     turn,
                     ToolResult {
-                        call_id: call.id,
+                        call_id: call.id.clone(),
                         name: call.name.clone(),
                         result: output.value.clone(),
                     },
                 )?;
                 observe(AgentEvent::ToolFinished {
+                    call_id: call.id,
                     name: call.name,
                     output,
                 });
@@ -485,9 +487,19 @@ fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TextDelta(String),
-    ContextCompacted { through_entry: u64 },
-    ToolStarted { name: String, arguments: Value },
-    ToolFinished { name: String, output: ToolOutput },
+    ContextCompacted {
+        through_entry: u64,
+    },
+    ToolStarted {
+        call_id: String,
+        name: String,
+        arguments: Value,
+    },
+    ToolFinished {
+        call_id: String,
+        name: String,
+        output: ToolOutput,
+    },
     InterruptedCalls(usize),
     Final(String),
 }
