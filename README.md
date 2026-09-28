@@ -124,9 +124,11 @@ stops after producing partial output is not replayed silently.
 If an output-token limit cuts off identifiable tool calls, Ion records them
 as skipped errors and lets the model reissue complete calls. No tool from the
 truncated response runs.
-When observed output use is below the requested ceiling, Ion first makes one
+When observed output use is below the selected model's ceiling, Ion first makes one
 compact-and-retry attempt if a settled history prefix is available. It drops
 the incomplete attempt and reports the restart to streaming clients.
+Coding requests use the catalog model's output ceiling, reduced when the
+current context leaves less estimated room; there is no separate 16k app cap.
 A completed response with no answer or tool call fails the Turn; it does not
 save an empty assistant message that would break later provider replay.
 

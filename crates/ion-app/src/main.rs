@@ -326,13 +326,17 @@ fn create_agent(
         selected.wire,
         resolver,
     )?);
-    Ok(Arc::new(CodingAgent::new(service, tools).with_limits(
-        AgentLimits {
-            max_output_tokens: selected.max_output_tokens.min(16_384),
-            context_window_tokens: selected.context_window_tokens,
-            ..AgentLimits::default()
-        },
-    )))
+    Ok(Arc::new(
+        CodingAgent::new(service, tools).with_limits(agent_limits(selected)),
+    ))
+}
+
+fn agent_limits(selected: &Selection) -> AgentLimits {
+    AgentLimits {
+        max_output_tokens: selected.max_output_tokens,
+        context_window_tokens: selected.context_window_tokens,
+        ..AgentLimits::default()
+    }
 }
 
 fn config_root() -> Result<PathBuf> {
@@ -504,4 +508,23 @@ fn with_piped_input(prompt: String) -> Result<String> {
     }
     let input = String::from_utf8(bytes).context("piped stdin is not UTF-8")?;
     Ok(format!("{input}\n{prompt}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn catalog_output_limit_reaches_the_agent_without_an_app_cap() {
+        let selected = ModelStore::new(PathBuf::new())
+            .resolve_identity(&ModelRef {
+                provider: "deepseek".into(),
+                model: "deepseek-flash".into(),
+            })
+            .unwrap();
+        let limits = agent_limits(&selected);
+        assert_eq!(limits.max_output_tokens, selected.max_output_tokens);
+        assert_eq!(limits.max_output_tokens, 384_000);
+        assert_eq!(limits.context_window_tokens, Some(1_048_576));
+    }
 }

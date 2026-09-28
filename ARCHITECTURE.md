@@ -136,6 +136,9 @@ representative tasks. If the saved prefix is too large for one summary
 request, summarize bounded settled prefixes in sequence; do not require a
 larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
+Use the selected model's output ceiling for coding requests, clamped to the
+estimated remaining context on each request. Do not impose a smaller fixed
+app-wide generation cap.
 Project `AGENTS.md` files inherit from ancestor directories. In a linked
 worktree nested inside its main checkout, the worktree root's copy shadows
 the main checkout's copy of the same file; other ancestor instructions still
@@ -145,7 +148,7 @@ including when queued steering keeps the Turn active. A steering message
 alone is not a settled assistant batch.
 If a later model cannot encode stored history faithfully, report that or make
 an explicit context change rather than silently dropping content.
-An output-limit stop with observed output usage below the requested ceiling
+An output-limit stop with observed output usage below the model's ceiling
 may reflect context pressure. Try one compact-and-retry before committing
 that incomplete response or dispatching its calls, and notify streaming
 clients that any partial text from the attempt was replaced. A normal

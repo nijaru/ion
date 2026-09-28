@@ -149,14 +149,20 @@ impl Agent {
         }
     }
 
-    fn request_fits(&self, bytes: usize, output_tokens: u32) -> bool {
-        if bytes > self.limits.max_request_bytes {
-            return false;
+    fn output_budget(&self, bytes: usize, ceiling: u32) -> Option<u32> {
+        if bytes > self.limits.max_request_bytes || ceiling == 0 {
+            return None;
         }
-        self.limits.context_window_tokens.is_none_or(|window| {
-            let estimated_input = bytes.div_ceil(3) as u64;
-            estimated_input + u64::from(output_tokens) + 8_192 <= u64::from(window)
-        })
+        let Some(window) = self.limits.context_window_tokens else {
+            return Some(ceiling);
+        };
+        let estimated_input = bytes.div_ceil(3) as u64;
+        let available = u64::from(window).saturating_sub(estimated_input + 8_192);
+        (available > 0).then(|| ceiling.min(available as u32))
+    }
+
+    fn request_fits(&self, bytes: usize, output_tokens: u32) -> bool {
+        self.output_budget(bytes, output_tokens) == Some(output_tokens)
     }
 
     fn keep_bytes(&self) -> usize {
@@ -164,8 +170,7 @@ impl Agent {
             .limits
             .context_window_tokens
             .map_or(usize::MAX, |window| {
-                (window.saturating_sub(self.limits.max_output_tokens + 8_192) as usize)
-                    .saturating_mul(3)
+                (window.saturating_sub(8_192) as usize).saturating_mul(3)
             });
         self.limits.max_request_bytes.min(model_budget) / 2
     }
@@ -465,7 +470,7 @@ impl Agent {
             }
             let mut recovered_overflow = false;
             let response = loop {
-                let request = ModelRequest {
+                let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages()?,
@@ -479,10 +484,10 @@ impl Agent {
                         parallel_tool_calls: true,
                     },
                 };
-                if !self.request_fits(
+                let Some(output_budget) = self.output_budget(
                     serde_json::to_vec(&request)?.len(),
                     self.limits.max_output_tokens,
-                ) {
+                ) else {
                     if self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
                         .await?
@@ -491,7 +496,8 @@ impl Agent {
                         continue;
                     }
                     return Err(AgentError::ContextTooLarge);
-                }
+                };
+                request.controls.max_output_tokens = output_budget;
                 let mut emitted_text = false;
                 let generated = self
                     .generate(request, stop, &mut |event| {
@@ -783,6 +789,70 @@ mod tests {
     use super::*;
     use crate::{CodingSession, LocalTools};
     use ion_ai::{Message, ModelResponse, ModelStreamEvent, Script, ScriptedModelService, Usage};
+
+    #[test]
+    fn coding_output_budget_uses_model_ceiling_and_remaining_context() {
+        let root = std::env::temp_dir().join(format!("ion-budget-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let agent = Agent::new(
+            Arc::new(ScriptedModelService::new([])),
+            Arc::new(LocalTools::new(&root).unwrap()),
+        )
+        .with_limits(AgentLimits {
+            max_output_tokens: 128_000,
+            context_window_tokens: Some(200_000),
+            ..AgentLimits::default()
+        });
+        assert_eq!(agent.output_budget(900, 128_000), Some(128_000));
+        assert_eq!(agent.output_budget(300_000, 128_000), Some(91_808));
+        assert_eq!(agent.output_budget(600_000, 128_000), None);
+        assert_eq!(agent.output_budget(9 * 1024 * 1024, 128_000), None);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn coding_requests_send_the_context_clamped_model_ceiling() {
+        let root = std::env::temp_dir().join(format!("ion-budget-run-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("first".into())]),
+            response(vec![Content::Text("second".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                max_output_tokens: 128_000,
+                context_window_tokens: Some(200_000),
+                ..AgentLimits::default()
+            });
+        agent
+            .submit(
+                &session,
+                model(),
+                "short".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        agent
+            .submit(
+                &session,
+                model(),
+                "another".into(),
+                "x".repeat(300_000),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        let requests = scripts.requests();
+        assert_eq!(requests[0].controls.max_output_tokens, 128_000);
+        assert!((90_000..92_000).contains(&requests[1].controls.max_output_tokens));
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     fn response(content: Vec<Content>) -> Script {
         Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
