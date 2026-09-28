@@ -355,6 +355,10 @@ fn is_context_error_message(message: &str) -> bool {
 
 fn provider_error_detail(body: &[u8]) -> Option<String> {
     let value = serde_json::from_slice::<Value>(body).ok()?;
+    provider_error_detail_value(&value)
+}
+
+fn provider_error_detail_value(value: &Value) -> Option<String> {
     let detail = value
         .pointer("/error/message")
         .and_then(Value::as_str)
@@ -366,6 +370,32 @@ fn provider_error_detail(body: &[u8]) -> Option<String> {
         .take(500)
         .collect();
     (!detail.is_empty()).then_some(detail)
+}
+
+fn anthropic_sse_error(value: &Value) -> ProviderError {
+    let detail = provider_error_detail_value(value);
+    let kind = if detail.as_deref().is_some_and(is_context_error_message) {
+        ProviderErrorKind::ContextLength
+    } else {
+        match value.pointer("/error/type").and_then(Value::as_str) {
+            Some("authentication_error") => ProviderErrorKind::Authentication,
+            Some("permission_error") => ProviderErrorKind::Permission,
+            Some("invalid_request_error") => ProviderErrorKind::InvalidRequest,
+            Some("rate_limit_error") => ProviderErrorKind::RateLimited,
+            Some("overloaded_error") => ProviderErrorKind::Overloaded,
+            Some("timeout_error") => ProviderErrorKind::Timeout,
+            Some("api_error") => ProviderErrorKind::Server,
+            _ => ProviderErrorKind::Transport,
+        }
+    };
+    ProviderError {
+        kind,
+        message: detail.map_or_else(
+            || "provider sent an SSE error".into(),
+            |detail| format!("provider sent an SSE error: {detail}"),
+        ),
+        retry_after_ms: None,
+    }
 }
 
 fn is_loopback(host: &str) -> bool {
@@ -1070,9 +1100,20 @@ impl AnthropicState {
             .as_str()
             .ok_or_else(|| invalid("Anthropic event missing type"))?;
         if kind == "error" {
-            return Err(transport("provider sent an SSE error"));
+            return Err(anthropic_sse_error(value));
         }
         if kind == "ping" {
+            return Ok(Vec::new());
+        }
+        if !matches!(
+            kind,
+            "message_start"
+                | "content_block_start"
+                | "content_block_delta"
+                | "content_block_stop"
+                | "message_delta"
+                | "message_stop"
+        ) {
             return Ok(Vec::new());
         }
         if kind == "message_start" {
@@ -1312,7 +1353,7 @@ impl AnthropicState {
                 }
                 Ok(vec![ModelStreamEvent::Completed(response)])
             }
-            _ => Err(unsupported("unsupported Anthropic SSE event")),
+            _ => Ok(Vec::new()),
         }
     }
 }
@@ -1407,6 +1448,63 @@ mod tests {
         assert_eq!(
             provider_error_detail(br#"{"error":{"message":"bad\nrequest"}}"#).as_deref(),
             Some("badrequest")
+        );
+    }
+
+    #[test]
+    fn anthropic_sse_error_keeps_provider_reason_and_kind() {
+        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        let error = decode_frame(
+            b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"Too busy\"}}\n\n",
+            &mut decoder,
+            &request(),
+            HttpWire::AnthropicMessages,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Overloaded);
+        assert!(error.message.contains("Too busy"));
+
+        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        let error = decode_frame(
+            b"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"rate_limit_error\",\"message\":\"Slow down\"}}\n\n",
+            &mut decoder,
+            &request(),
+            HttpWire::AnthropicMessages,
+        )
+        .unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::RateLimited);
+        assert!(error.message.contains("Slow down"));
+    }
+
+    #[test]
+    fn anthropic_unknown_sse_event_does_not_interrupt_a_message() {
+        let mut decoder = Decoder::Anthropic(AnthropicState::default());
+        assert!(
+            decode_frame(
+                b"event: future_event\ndata: {\"type\":\"future_event\"}\n\n",
+                &mut decoder,
+                &request(),
+                HttpWire::AnthropicMessages,
+            )
+            .unwrap()
+            .is_empty()
+        );
+        assert!(decode_frame(
+            b"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"role\":\"assistant\",\"model\":\"returned\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            &mut decoder,
+            &request(),
+            HttpWire::AnthropicMessages,
+        )
+        .is_ok());
+        assert!(
+            decode_frame(
+                b"event: future_event\ndata: {\"type\":\"future_event\"}\n\n",
+                &mut decoder,
+                &request(),
+                HttpWire::AnthropicMessages,
+            )
+            .unwrap()
+            .is_empty()
         );
     }
 
