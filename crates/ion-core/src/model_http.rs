@@ -219,7 +219,7 @@ impl ModelService for HttpModelService {
                         total += 1;
                         if frame.len() == MAX_FRAME { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
-                        if !frame.ends_with(b"\n\n") && !frame.ends_with(b"\r\n\r\n") { continue; }
+                        if !has_sse_event_boundary(&frame) { continue; }
                         let events = decode_frame(&frame, &mut decoder, &request, wire)?;
                         frame.clear();
                         for event in events {
@@ -409,7 +409,7 @@ fn parse_frame(bytes: &[u8]) -> Result<Option<SseFrame>, ProviderError> {
     let mut event = None;
     let mut data = String::new();
     let mut has_data = false;
-    for line in text.lines() {
+    for line in text.split(['\r', '\n']) {
         if line.is_empty() || line.starts_with(':') {
             continue;
         }
@@ -436,6 +436,20 @@ fn parse_frame(bytes: &[u8]) -> Result<Option<SseFrame>, ProviderError> {
         return Ok(None);
     }
     Ok(Some(SseFrame { event, data }))
+}
+
+fn has_sse_event_boundary(frame: &[u8]) -> bool {
+    fn last_line_break_start(bytes: &[u8]) -> Option<usize> {
+        match bytes.last()? {
+            b'\n' if bytes.get(bytes.len().saturating_sub(2)) == Some(&b'\r') => {
+                Some(bytes.len() - 2)
+            }
+            b'\n' | b'\r' => Some(bytes.len() - 1),
+            _ => None,
+        }
+    }
+    last_line_break_start(frame)
+        .is_some_and(|last_start| last_line_break_start(&frame[..last_start]).is_some())
 }
 
 fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
@@ -1297,6 +1311,10 @@ mod tests {
     };
 
     async fn serve(body: String, status: &str) -> String {
+        serve_split(body, status, usize::MAX).await
+    }
+
+    async fn serve_split(body: String, status: &str, chunk_size: usize) -> String {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/v1/messages", listener.local_addr().unwrap());
         let status = status.to_owned();
@@ -1308,7 +1326,10 @@ mod tests {
                 "HTTP/1.1 {status}\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
                 body.len()
             );
-            socket.write_all(response.as_bytes()).await.unwrap();
+            for chunk in response.as_bytes().chunks(chunk_size) {
+                socket.write_all(chunk).await.unwrap();
+                tokio::task::yield_now().await;
+            }
         });
         endpoint
     }
@@ -1636,11 +1657,49 @@ mod tests {
 
     #[test]
     fn sse_parsing_preserves_data_and_rejects_bad_utf8() {
+        assert!(!has_sse_event_boundary(b"data: x\r\n"));
+        for terminator in [
+            b"\n\n".as_slice(),
+            b"\r\n\r\n",
+            b"\r\r",
+            b"\r\n\n",
+            b"\n\r\n",
+            b"\r\r\n",
+        ] {
+            let mut frame = b"data: x".to_vec();
+            frame.extend_from_slice(terminator);
+            assert!(has_sse_event_boundary(&frame), "{terminator:?}");
+        }
         let frame = parse_frame(b": ping\r\ndata: {\"a\":\r\ndata: 1}\r\n\r\n")
             .unwrap()
             .unwrap();
         assert_eq!(frame.data, "{\"a\":\n1}");
+        let frame = parse_frame(b": ping\rdata: {\"a\":\rdata: 1}\r\r")
+            .unwrap()
+            .unwrap();
+        assert_eq!(frame.data, "{\"a\":\n1}");
         assert!(parse_frame(b"data: \xff\n\n").is_err());
+    }
+
+    #[tokio::test]
+    async fn chat_stream_accepts_cr_and_mixed_sse_line_endings() {
+        let body = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\r\r",
+            "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\n",
+            "data: [DONE]\n\r\n"
+        );
+        let endpoint = serve_split(body.into(), "200 OK", 1).await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::TextDelta(text) if text == "hi"
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::Completed(_)
+        ));
     }
 
     #[tokio::test]
@@ -1742,6 +1801,19 @@ mod tests {
                 raw_arguments: None,
             })]
         );
+
+        let endpoint = serve_split(body.replace('\n', "\r"), "200 OK", 1).await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::AnthropicMessages, Arc::new(|| None))
+                .unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        let mut completed = None;
+        while let Some(event) = stream.next().await {
+            if let ModelStreamEvent::Completed(response) = event.unwrap() {
+                completed = Some(response);
+            }
+        }
+        assert_eq!(completed.unwrap().message.content, response.message.content);
     }
 
     #[test]

@@ -176,7 +176,9 @@ Model and provider transport remain stable while a Turn runs.
 Provider adapters accept valid terminal responses and reject incomplete ones,
 including stream truncation. Classify context overflow from a provider signal
 or a narrow documented response pattern; a generic HTTP status is not enough
-to rewrite model context. Transient request recovery, when enabled, must be
+to rewrite model context. Stream framing accepts SSE line endings across
+arbitrary transport chunk boundaries.
+Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
 Coalesce streamed tool calls by their call index: later repeated or changed
 metadata must not corrupt the first call identity, while argument fragments
