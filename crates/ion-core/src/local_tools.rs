@@ -6,6 +6,7 @@ use std::{
     os::unix::{fs::PermissionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
+    sync::{Arc, Mutex},
     time::Duration,
 };
 
@@ -14,7 +15,7 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::{io::AsyncReadExt, process::Command, sync::watch};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{ToolHost, ToolOutput};
@@ -22,6 +23,7 @@ use crate::agent::{ToolHost, ToolOutput};
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
 const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+const POST_EXIT_OUTPUT_IDLE: Duration = Duration::from_millis(100);
 
 pub struct LocalTools {
     cwd: PathBuf,
@@ -277,8 +279,8 @@ impl LocalTools {
             .id()
             .and_then(|id| i32::try_from(id).ok())
             .and_then(Pid::from_raw);
-        let out = tokio::spawn(capture(child.stdout.take().expect("piped")));
-        let err = tokio::spawn(capture(child.stderr.take().expect("piped")));
+        let stdout = OutputCapture::start(child.stdout.take().expect("piped"));
+        let stderr = OutputCapture::start(child.stderr.take().expect("piped"));
         let mut cancelled = false;
         let mut timed_out = false;
         let deadline = async {
@@ -294,10 +296,20 @@ impl LocalTools {
             () = stop.cancelled() => { cancelled = true; stop_child(&mut child, pid).await },
             () = &mut deadline => { timed_out = true; stop_child(&mut child, pid).await },
         };
-        // A detached descendant can retain stdout/stderr after the direct
-        // command exits. Do not let that pipe keep this Turn open forever.
-        let stdout = finish_capture(out).await;
-        let stderr = finish_capture(err).await;
+        // A descendant may hold the pipes after the direct command exits.
+        // Continue reading while output arrives, then release idle pipes.
+        let (stdout, stdout_cancelled) = stdout.finish(&stop, cancelled).await;
+        if stdout_cancelled {
+            cancelled = true;
+            if let Some(pid) = pid {
+                let _ = kill_process_group(pid, Signal::TERM);
+            }
+        }
+        let (stderr, stderr_cancelled) = stderr.finish(&stop, cancelled).await;
+        cancelled |= stderr_cancelled;
+        if stderr_cancelled && let Some(pid) = pid {
+            let _ = kill_process_group(pid, Signal::TERM);
+        }
         match status {
             Ok(status) => {
                 let result = json!({"exit_code": status.code(), "signal": status.signal(), "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "cancelled": cancelled, "timed_out": timed_out});
@@ -481,53 +493,109 @@ struct Captured {
     complete: bool,
     omitted_bytes: Option<u64>,
 }
-impl Captured {
-    fn lost() -> Self {
+#[derive(Default)]
+struct CaptureState {
+    bytes: VecDeque<u8>,
+    total: u64,
+    complete: bool,
+}
+struct OutputCapture {
+    task: tokio::task::JoinHandle<()>,
+    state: Arc<Mutex<CaptureState>>,
+    progress: watch::Receiver<u64>,
+}
+impl OutputCapture {
+    fn start(mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> Self {
+        let state = Arc::new(Mutex::new(CaptureState {
+            bytes: VecDeque::with_capacity(MAX_OUTPUT_BYTES),
+            ..CaptureState::default()
+        }));
+        let capture_state = Arc::clone(&state);
+        let (progress_tx, progress) = watch::channel(0u64);
+        let task = tokio::spawn(async move {
+            let mut chunk = [0u8; 8192];
+            loop {
+                match pipe.read(&mut chunk).await {
+                    Ok(0) => {
+                        capture_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner)
+                            .complete = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        let mut state = capture_state
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        state.total = state.total.saturating_add(n as u64);
+                        let overflow = state
+                            .bytes
+                            .len()
+                            .saturating_add(n)
+                            .saturating_sub(MAX_OUTPUT_BYTES);
+                        let remove_existing = overflow.min(state.bytes.len());
+                        state.bytes.drain(..remove_existing);
+                        state.bytes.extend(&chunk[overflow - remove_existing..n]);
+                        let total = state.total;
+                        drop(state);
+                        let _ = progress_tx.send(total);
+                    }
+                    Err(_) => break,
+                }
+            }
+        });
         Self {
-            bytes: Vec::new(),
-            complete: false,
-            omitted_bytes: None,
+            task,
+            state,
+            progress,
         }
     }
-}
-async fn capture(mut pipe: impl tokio::io::AsyncRead + Unpin) -> Captured {
-    let mut bytes = VecDeque::with_capacity(MAX_OUTPUT_BYTES);
-    let mut total = 0u64;
-    let mut complete = true;
-    let mut chunk = [0u8; 8192];
-    loop {
-        match pipe.read(&mut chunk).await {
-            Ok(0) => break,
-            Ok(n) => {
-                total = total.saturating_add(n as u64);
-                let overflow = bytes
-                    .len()
-                    .saturating_add(n)
-                    .saturating_sub(MAX_OUTPUT_BYTES);
-                let remove_existing = overflow.min(bytes.len());
-                bytes.drain(..remove_existing);
-                bytes.extend(&chunk[overflow - remove_existing..n]);
+
+    async fn finish(
+        mut self,
+        stop: &CancellationToken,
+        already_cancelled: bool,
+    ) -> (Captured, bool) {
+        let idle = tokio::time::sleep(POST_EXIT_OUTPUT_IDLE);
+        tokio::pin!(idle);
+        let mut progress_open = true;
+        let mut cancelled = false;
+        let finished = loop {
+            tokio::select! {
+                result = &mut self.task => break result.is_ok(),
+                _ = &mut idle => break false,
+                _ = stop.cancelled(), if !already_cancelled => {
+                    cancelled = true;
+                    break false;
+                }
+                update = self.progress.changed(), if progress_open => {
+                    if update.is_ok() {
+                        idle.as_mut().reset(tokio::time::Instant::now() + POST_EXIT_OUTPUT_IDLE);
+                    } else {
+                        progress_open = false;
+                    }
+                }
             }
-            Err(_) => {
-                complete = false;
-                break;
-            }
+        };
+        if !finished {
+            self.task.abort();
+            let _ = self.task.await;
         }
-    }
-    let bytes: Vec<u8> = bytes.into();
-    Captured {
-        omitted_bytes: complete.then(|| total.saturating_sub(bytes.len() as u64)),
-        bytes,
-        complete,
-    }
-}
-async fn finish_capture(mut task: tokio::task::JoinHandle<Captured>) -> Captured {
-    match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
-        Ok(Ok(captured)) => captured,
-        _ => {
-            task.abort();
-            Captured::lost()
-        }
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let bytes: Vec<u8> = std::mem::take(&mut state.bytes).into();
+        let complete = finished && state.complete;
+        let omitted_bytes = complete.then(|| state.total.saturating_sub(bytes.len() as u64));
+        (
+            Captured {
+                bytes,
+                complete,
+                omitted_bytes,
+            },
+            cancelled,
+        )
     }
 }
 async fn stop_child(
@@ -707,6 +775,77 @@ mod tests {
                 .unwrap()
                 .ends_with("END_MARKER\n")
         );
+    }
+
+    #[tokio::test]
+    async fn direct_exit_keeps_output_when_descendant_holds_pipe_open() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let output = tools
+            .execute(
+                &ToolCall {
+                    id: "inherited-pipe".into(),
+                    name: "exec".into(),
+                    arguments: json!({"command":"sleep 3 & printf 'DIRECT_EXIT_MARKER\\n'"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["exit_code"], 0);
+        assert_eq!(output.value["stdout"], "DIRECT_EXIT_MARKER\n");
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn post_exit_output_activity_keeps_the_pipe_open_until_idle() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let output = tools
+            .execute(
+                &ToolCall {
+                    id: "active-pipe".into(),
+                    name: "exec".into(),
+                    arguments: json!({"command":"(n=1; while [ \"$n\" -le 24 ]; do sleep 0.05; printf 'CHUNK_%s\\n' \"$n\"; n=$((n+1)); done) &"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!output.is_error, "{}", output.value);
+        let expected = (1..=24).map(|n| format!("CHUNK_{n}\n")).collect::<String>();
+        assert_eq!(output.value["stdout"], expected);
+        assert_eq!(output.value["stdout_truncated"], false);
+    }
+
+    #[tokio::test]
+    async fn cancellation_stops_post_exit_capture() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let stop = CancellationToken::new();
+        let trigger = stop.clone();
+        let task = tokio::spawn(async move {
+            tools
+                .execute(
+                    &ToolCall {
+                        id: "cancel-active-pipe".into(),
+                        name: "exec".into(),
+                        arguments: json!({"command":"(while :; do printf x; sleep 0.05; done) &"}),
+                        raw_arguments: None,
+                    },
+                    stop,
+                )
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        trigger.cancel();
+        let output = tokio::time::timeout(Duration::from_secs(2), task)
+            .await
+            .expect("post-exit capture ignored cancellation")
+            .unwrap();
+        assert!(output.is_error);
+        assert_eq!(output.value["cancelled"], true);
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert!(!output.value["stdout"].as_str().unwrap().is_empty());
     }
 
     #[tokio::test]

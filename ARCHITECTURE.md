@@ -152,7 +152,10 @@ workspace registry. Shell commands use Bash where available, then POSIX sh.
 File edits reject ambiguous matches. Writes report
 creation or replacement; commands report exit status, launch/transport
 failure and truncation. When command output is bounded, retain the diagnostic
-tail and state what was omitted. Exact text edits must handle ordinary BOM and
+tail and state what was omitted. If a descendant keeps an output pipe open
+after the direct command exits, retain bytes already observed and finish
+after output becomes idle; mark an unfinished capture rather than reporting
+it as complete. Exact text edits must handle ordinary BOM and
 line-ending conventions without silently changing unrelated text. An atomic
 replacement of an existing file must still respect its effective write
 permission; directory rename access alone does not make it an editable target.
