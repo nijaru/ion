@@ -91,8 +91,8 @@ ancestor path. `ion use` also accepts a custom model with
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
 endpoints require HTTPS and a key supplied through
-`ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Literal loopback HTTP can run
-without a key.
+`ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Loopback HTTP, including
+`localhost`, can run without a key.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion

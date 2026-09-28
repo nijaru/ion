@@ -262,11 +262,22 @@ struct Store {
 /// A writable Session holds a cross-process lock. `submit_gate` also keeps a
 /// whole live Turn exclusive within this process, including its async effects.
 pub struct Session {
+    // Field order closes SQLite before releasing the writer lock.
     store: Mutex<Store>,
-    _lock: File,
+    _lock: SessionLock,
     header: Header,
     path: PathBuf,
     pub(crate) submit_gate: AsyncMutex<()>,
+}
+
+struct SessionLock(File);
+
+impl Drop for SessionLock {
+    fn drop(&mut self) {
+        // A child may briefly inherit a duplicate file description. Release
+        // this writer's lease explicitly before closing our descriptor.
+        let _ = flock(&self.0, FlockOperation::Unlock);
+    }
 }
 
 impl Session {
@@ -767,7 +778,7 @@ fn initialize(connection: &Connection) -> Result<(), SessionError> {
     Ok(())
 }
 
-fn lock(path: &Path) -> Result<File, SessionError> {
+fn lock(path: &Path) -> Result<SessionLock, SessionError> {
     let file = OpenOptions::new()
         .write(true)
         .create(true)
@@ -781,7 +792,7 @@ fn lock(path: &Path) -> Result<File, SessionError> {
             SessionError::Io(error.into())
         }
     })?;
-    Ok(file)
+    Ok(SessionLock(file))
 }
 
 #[derive(Debug, Error)]
@@ -873,6 +884,22 @@ mod tests {
         ));
         assert!(matches!(entries[4], SessionEntry::TurnStarted { .. }));
         drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn releasing_a_session_unlocks_an_inherited_file_description() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        assert!(matches!(
+            Session::open(&path),
+            Err(SessionError::AlreadyOpen)
+        ));
+        let inherited = session._lock.0.try_clone().unwrap();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        drop(reopened);
+        drop(inherited);
         fs::remove_dir_all(root).unwrap();
     }
 

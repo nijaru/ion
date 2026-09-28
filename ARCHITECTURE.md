@@ -70,7 +70,10 @@ model error; it is not committed as a successful empty assistant answer.
 
 A Session owns the working-directory identity and one typed, append-only
 history in SQLite. It admits at most one executing coding Turn. One writer
-serializes submissions and append transactions. Turn acceptance and its user message commit
+holds an advisory lock for that Session, serializes submissions and append
+transactions, then explicitly releases the lock after the store closes. A
+briefly inherited file description cannot keep the Session locked after its
+writer exits. Turn acceptance and its user message commit
 together; record the nonsecret context needed to interpret the history without
 duplicating a full request manifest. Save a complete assistant message
 containing tool calls durably before executing those calls, then
@@ -168,6 +171,8 @@ is an implementation recommendation to verify, not a product requirement.
 
 The host resolves a model identity to its endpoint, wire behavior and
 credential source. Each Turn records the selected nonsecret identity. A
+custom route is validated by the transport's endpoint and anonymous-loopback
+rules when selected; model setup must not maintain a second URL policy. A
 resumed Session restores that model when its route is available and reports a
 missing route clearly; a global default applies to new Sessions. A custom
 route stays resolvable after another model becomes the default. Explicit

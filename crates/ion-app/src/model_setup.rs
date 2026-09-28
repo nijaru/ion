@@ -9,7 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use ion_ai::ModelRef;
-use ion_core::HttpWire;
+use ion_core::{HttpModelService, HttpWire};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
@@ -269,17 +269,8 @@ impl ModelStore {
             .as_deref()
             .context("unknown model; supply --endpoint and --wire to configure a custom route")?;
         let wire = saved.wire.context("custom route requires --wire")?;
-        let url = reqwest::Url::parse(endpoint)?;
-        let host = url.host_str().context("custom endpoint has no host")?;
-        let local = matches!(host, "127.0.0.1" | "::1" | "[::1]");
-        ensure!(
-            url.scheme() == "https" || (url.scheme() == "http" && local),
-            "custom endpoint requires HTTPS or literal loopback HTTP"
-        );
-        ensure!(
-            url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
-            "custom endpoint must not contain credentials or a fragment"
-        );
+        let local = HttpModelService::endpoint_allows_anonymous(endpoint)
+            .context("invalid custom endpoint")?;
         ensure!(!saved.model.is_empty(), "model ID is empty");
         Ok(Selection {
             provider: saved.provider.clone(),
@@ -349,6 +340,24 @@ fn write_json<T: Serialize>(path: &Path, value: &T) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn custom_route_uses_transport_endpoint_policy() {
+        let root = std::env::temp_dir().join(format!("ion-endpoint-policy-{}", std::process::id()));
+        let store = ModelStore::new(root);
+        let mut route = SavedSelection {
+            provider: "desktop".into(),
+            model: "local".into(),
+            endpoint: Some("http://localhost:1234/v1/chat/completions".into()),
+            wire: Some(Wire::ChatCompletions),
+            api_key_env: None,
+        };
+        assert!(!store.resolve_saved(&route).unwrap().requires_key);
+        route.endpoint = Some("https://localhost/v1/chat/completions".into());
+        assert!(store.resolve_saved(&route).unwrap().requires_key);
+        route.endpoint = Some("https://example.com/v1/chat/completions?token=hidden".into());
+        assert!(store.resolve_saved(&route).is_err());
+    }
 
     #[test]
     fn resumed_custom_route_survives_a_new_global_default() {

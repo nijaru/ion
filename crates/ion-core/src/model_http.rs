@@ -49,28 +49,18 @@ pub struct HttpModelService {
 }
 
 impl HttpModelService {
+    /// Validate a route with the same rule used at dispatch. Only HTTP over
+    /// loopback may omit a credential.
+    pub fn endpoint_allows_anonymous(endpoint: &str) -> Result<bool, ProviderError> {
+        Ok(parse_endpoint(endpoint)?.scheme() == "http")
+    }
+
     pub fn new(
         endpoint: &str,
         wire: HttpWire,
         credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, ProviderError> {
-        let endpoint = Url::parse(endpoint).map_err(|_| invalid("invalid provider endpoint"))?;
-        if endpoint.scheme() != "https"
-            && !(endpoint.scheme() == "http" && endpoint.host_str().is_some_and(is_loopback))
-        {
-            return Err(invalid(
-                "provider endpoint must use HTTPS or literal loopback HTTP",
-            ));
-        }
-        if !endpoint.username().is_empty()
-            || endpoint.password().is_some()
-            || endpoint.query().is_some()
-            || endpoint.fragment().is_some()
-        {
-            return Err(invalid(
-                "provider endpoint must not contain credentials, query or fragment",
-            ));
-        }
+        let endpoint = parse_endpoint(endpoint)?;
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
@@ -84,6 +74,25 @@ impl HttpModelService {
             credentials,
         })
     }
+}
+
+fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
+    let endpoint = Url::parse(endpoint).map_err(|_| invalid("invalid provider endpoint"))?;
+    if endpoint.scheme() != "https"
+        && !(endpoint.scheme() == "http" && endpoint.host_str().is_some_and(is_loopback))
+    {
+        return Err(invalid("provider endpoint must use HTTPS or loopback HTTP"));
+    }
+    if !endpoint.username().is_empty()
+        || endpoint.password().is_some()
+        || endpoint.query().is_some()
+        || endpoint.fragment().is_some()
+    {
+        return Err(invalid(
+            "provider endpoint must not contain credentials, query or fragment",
+        ));
+    }
+    Ok(endpoint)
 }
 
 impl ModelService for HttpModelService {
