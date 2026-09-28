@@ -2,6 +2,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
+    time::Duration,
 };
 
 use async_stream::try_stream;
@@ -13,7 +14,7 @@ use ion_ai::{
 };
 use reqwest::{
     Client, Url,
-    header::{AUTHORIZATION, HeaderValue},
+    header::{AUTHORIZATION, HeaderMap, HeaderValue},
 };
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
@@ -22,6 +23,7 @@ use crate::CredentialResolver;
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
+const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
@@ -72,6 +74,7 @@ impl HttpModelService {
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .retry(reqwest::retry::never())
+            .connect_timeout(Duration::from_secs(30))
             .build()
             .map_err(|_| transport("HTTP client setup failed"))?;
         Ok(Self {
@@ -146,17 +149,28 @@ impl ModelService for HttpModelService {
             if self.wire == HttpWire::AnthropicMessages {
                 post = post.header("anthropic-version", "2023-06-01");
             }
-            let mut response = post
-                .send()
+            let mut response = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, post.send())
                 .await
+                .map_err(|_| {
+                    error(
+                        ProviderErrorKind::Timeout,
+                        "provider response headers timed out",
+                    )
+                })?
                 .map_err(|_| transport("provider HTTP request failed"))?;
             if !response.status().is_success() {
                 let status = response.status().as_u16();
+                let retry_after_ms = parse_retry_after(response.headers());
                 let mut body = Vec::new();
                 while body.len() < 16 * 1024 {
-                    let Some(chunk) = response
-                        .chunk()
+                    let Some(chunk) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, response.chunk())
                         .await
+                        .map_err(|_| {
+                            error(
+                                ProviderErrorKind::Timeout,
+                                "provider error response timed out",
+                            )
+                        })?
                         .map_err(|_| transport("provider HTTP error response failed"))?
                     else {
                         break;
@@ -167,7 +181,19 @@ impl ModelService for HttpModelService {
                     body.extend_from_slice(&chunk);
                 }
                 let kind = classify_http_error(status, &body);
-                return Err(error(kind, &format!("provider returned HTTP {status}")));
+                let detail = provider_error_detail(&body);
+                let mut message = detail.map_or_else(
+                    || format!("provider returned HTTP {status}"),
+                    |detail| format!("provider returned HTTP {status}: {detail}"),
+                );
+                if let Some(delay_ms) = retry_after_ms {
+                    message.push_str(&format!("; retry after {} ms", delay_ms));
+                }
+                return Err(ProviderError {
+                    kind,
+                    message,
+                    retry_after_ms,
+                });
             }
             let is_sse = response
                 .headers()
@@ -184,7 +210,9 @@ impl ModelService for HttpModelService {
                 let mut frame = Vec::new();
                 let mut total = 0usize;
                 let mut decoder = if wire.is_chat() { Decoder::Chat(ChatState::default()) } else { Decoder::Anthropic(AnthropicState::default()) };
-                while let Some(next) = bytes.next().await {
+                while let Some(next) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, bytes.next())
+                    .await
+                    .map_err(|_| error(ProviderErrorKind::Timeout, "provider stream idle timeout"))? {
                     let chunk = next.map_err(|_| transport("provider stream transport failed"))?;
                     for byte in chunk {
                         if total == MAX_RESPONSE { Err(invalid("provider stream exceeded byte limit"))?; }
@@ -192,27 +220,28 @@ impl ModelService for HttpModelService {
                         if frame.len() == MAX_FRAME { Err(invalid("provider SSE frame exceeded byte limit"))?; }
                         frame.push(byte);
                         if !frame.ends_with(b"\n\n") && !frame.ends_with(b"\r\n\r\n") { continue; }
-                        let parsed = parse_frame(&frame)?;
+                        let events = decode_frame(&frame, &mut decoder, &request, wire)?;
                         frame.clear();
-                        let Some(parsed) = parsed else { continue; };
-                        if wire.is_chat() && parsed.data == "[DONE]" {
-                            let response = decoder.complete(&request)?;
-                            yield ModelStreamEvent::Completed(response);
-                            return;
-                        }
-                        let value: Value = serde_json::from_str(&parsed.data)
-                            .map_err(|_| invalid("provider sent invalid SSE JSON"))?;
-                        if wire == HttpWire::AnthropicMessages
-                            && parsed.event.as_deref() != value["type"].as_str()
-                        {
-                            Err(invalid("Anthropic SSE event and data type disagree"))?;
-                        }
-                        for event in decoder.accept(&value, &request)? {
+                        for event in events {
                             let terminal = matches!(event, ModelStreamEvent::Completed(_));
                             yield event;
                             if terminal { return; }
                         }
                     }
+                }
+                // SSE permits a final event without a trailing blank line. Some
+                // Chat Completions servers also close after finish_reason rather
+                // than sending a separate [DONE] sentinel.
+                if !frame.is_empty() {
+                    for event in decode_frame(&frame, &mut decoder, &request, wire)? {
+                        let terminal = matches!(event, ModelStreamEvent::Completed(_));
+                        yield event;
+                        if terminal { return; }
+                    }
+                }
+                if wire.is_chat() {
+                    yield ModelStreamEvent::Completed(decoder.complete(&request)?);
+                    return;
                 }
                 Err(transport("provider stream ended before completion"))?;
             });
@@ -222,10 +251,22 @@ impl ModelService for HttpModelService {
 }
 
 fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
-    if status == 413 {
-        return ProviderErrorKind::ContextLength;
+    if status == 429 {
+        let value = serde_json::from_slice::<Value>(body).ok();
+        let code = value.as_ref().and_then(|value| {
+            value
+                .pointer("/error/code")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("code").and_then(Value::as_str))
+        });
+        if matches!(
+            code,
+            Some("insufficient_quota" | "billing_hard_limit_reached")
+        ) {
+            return ProviderErrorKind::Quota;
+        }
     }
-    if status == 400 {
+    if matches!(status, 400 | 413) {
         let value = serde_json::from_slice::<Value>(body).ok();
         let code = value.as_ref().and_then(|value| {
             value
@@ -245,6 +286,15 @@ fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
         ) {
             return ProviderErrorKind::ContextLength;
         }
+        let message = value.as_ref().and_then(|value| {
+            value
+                .pointer("/error/message")
+                .and_then(Value::as_str)
+                .or_else(|| value.get("message").and_then(Value::as_str))
+        });
+        if message.is_some_and(is_context_error_message) {
+            return ProviderErrorKind::ContextLength;
+        }
     }
     match status {
         401 => ProviderErrorKind::Authentication,
@@ -257,6 +307,58 @@ fn classify_http_error(status: u16, body: &[u8]) -> ProviderErrorKind {
     }
 }
 
+fn parse_retry_after(headers: &HeaderMap) -> Option<u64> {
+    if let Some(value) = headers
+        .get("retry-after-ms")
+        .and_then(|value| value.to_str().ok())
+        && let Ok(ms) = value.trim().parse::<u64>()
+    {
+        return Some(ms);
+    }
+    let value = headers.get("retry-after")?.to_str().ok()?.trim();
+    if let Ok(seconds) = value.parse::<u64>() {
+        return seconds.checked_mul(1000);
+    }
+    let instant = httpdate::parse_http_date(value).ok()?;
+    Some(
+        instant
+            .duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX),
+    )
+}
+
+fn is_context_error_message(message: &str) -> bool {
+    let lower = message.to_ascii_lowercase();
+    [
+        "context length",
+        "context window",
+        "prompt is too long",
+        "prompt too long",
+        "available context size",
+        "request_too_large",
+    ]
+    .iter()
+    .any(|part| lower.contains(part))
+}
+
+fn provider_error_detail(body: &[u8]) -> Option<String> {
+    let value = serde_json::from_slice::<Value>(body).ok()?;
+    let detail = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("message").and_then(Value::as_str))
+        .or_else(|| value.pointer("/error/code").and_then(Value::as_str))?;
+    let detail: String = detail
+        .chars()
+        .filter(|ch| !ch.is_control())
+        .take(500)
+        .collect();
+    (!detail.is_empty()).then_some(detail)
+}
+
 fn is_loopback(host: &str) -> bool {
     matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
 }
@@ -264,6 +366,7 @@ fn error(kind: ProviderErrorKind, message: &str) -> ProviderError {
     ProviderError {
         kind,
         message: message.into(),
+        retry_after_ms: None,
     }
 }
 fn invalid(message: &str) -> ProviderError {
@@ -279,6 +382,27 @@ fn transport(message: &str) -> ProviderError {
 struct SseFrame {
     event: Option<String>,
     data: String,
+}
+fn decode_frame(
+    frame: &[u8],
+    decoder: &mut Decoder,
+    request: &ModelRequest,
+    wire: HttpWire,
+) -> Result<Vec<ModelStreamEvent>, ProviderError> {
+    let Some(parsed) = parse_frame(frame)? else {
+        return Ok(Vec::new());
+    };
+    if wire.is_chat() && parsed.data == "[DONE]" {
+        return Ok(vec![ModelStreamEvent::Completed(
+            decoder.complete(request)?,
+        )]);
+    }
+    let value: Value = serde_json::from_str(&parsed.data)
+        .map_err(|_| invalid("provider sent invalid SSE JSON"))?;
+    if wire == HttpWire::AnthropicMessages && parsed.event.as_deref() != value["type"].as_str() {
+        return Err(invalid("Anthropic SSE event and data type disagree"));
+    }
+    decoder.accept(&value, request)
 }
 fn parse_frame(bytes: &[u8]) -> Result<Option<SseFrame>, ProviderError> {
     let text = std::str::from_utf8(bytes).map_err(|_| invalid("provider sent non-UTF-8 SSE"))?;
@@ -309,9 +433,6 @@ fn parse_frame(bytes: &[u8]) -> Result<Option<SseFrame>, ProviderError> {
         }
     }
     if !has_data {
-        if event.is_some() {
-            return Err(invalid("SSE event has no data"));
-        }
         return Ok(None);
     }
     Ok(Some(SseFrame { event, data }))
@@ -409,7 +530,7 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
                         return Err(invalid("tool result name does not match call"));
                     }
                     if anthropic {
-                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":result.result.to_string()}));
+                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":result.result.to_string(),"is_error":result.is_error}));
                     } else {
                         results.push(json!({"role":"tool","tool_call_id":wire_id,"content":result.result.to_string()}));
                     }
@@ -616,12 +737,8 @@ fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(
             "provider violated requested tool choice or parallel limit",
         ));
     }
-    if names
-        .iter()
-        .any(|name| !request.tools.iter().any(|tool| tool.name == *name))
-    {
-        return Err(invalid("provider returned a tool outside the loadout"));
-    }
+    // A model can invent a tool name. Keep the call in the transcript and let
+    // the host return a tool-not-found result so the next model step can fix it.
     Ok(())
 }
 
@@ -640,9 +757,9 @@ impl Decoder {
             Self::Anthropic(state) => state.accept(value, request),
         }
     }
-    fn complete(self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
+    fn complete(&mut self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
         match self {
-            Self::Chat(state) => state.complete(request),
+            Self::Chat(state) => std::mem::take(state).complete(request),
             Self::Anthropic(_) => Err(invalid("[DONE] is not an Anthropic completion")),
         }
     }
@@ -653,6 +770,13 @@ struct ChatCall {
     id: String,
     name: String,
     arguments: String,
+}
+
+fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(arguments) if arguments.is_object() => (arguments, None),
+        _ => (json!({}), Some(raw)),
+    }
 }
 #[derive(Default)]
 struct ChatState {
@@ -678,9 +802,13 @@ impl ChatState {
             self.usage.set_chat(usage)?;
             events.push(ModelStreamEvent::Usage(self.usage.value()));
         }
-        let choices = value["choices"]
-            .as_array()
-            .ok_or_else(|| invalid("missing response choices"))?;
+        let choices = match value.get("choices") {
+            Some(choices) => choices
+                .as_array()
+                .ok_or_else(|| invalid("invalid response choices"))?,
+            None if !events.is_empty() => return Ok(events),
+            None => return Err(invalid("missing response choices")),
+        };
         if choices.len() > 1 {
             return Err(invalid("multiple response choices are unsupported"));
         }
@@ -760,15 +888,12 @@ impl ChatState {
                 if call.id.is_empty() || !ids.insert(call.id.clone()) || !valid_name(&call.name) {
                     return Err(invalid("incomplete or duplicate streamed function call"));
                 }
-                let arguments: Value = serde_json::from_str(&call.arguments)
-                    .map_err(|_| invalid("invalid function arguments JSON"))?;
-                if !arguments.is_object() {
-                    return Err(invalid("function arguments must be an object"));
-                }
+                let (arguments, raw_arguments) = parse_tool_arguments(call.arguments);
                 content.push(Content::ToolCall(ToolCall {
                     id: call.id,
                     name: call.name,
                     arguments,
+                    raw_arguments,
                 }));
             }
         }
@@ -1050,22 +1175,19 @@ impl AnthropicState {
                         initial,
                         fragments,
                     } => {
-                        let arguments = if let Some(fragments) = fragments {
-                            let parsed: Value = serde_json::from_str(fragments)
-                                .map_err(|_| invalid("malformed tool input JSON"))?;
-                            if !initial.as_object().is_some_and(serde_json::Map::is_empty)
-                                || !parsed.is_object()
-                            {
-                                return Err(invalid("ambiguous or invalid tool input"));
+                        let (arguments, raw_arguments) = if let Some(fragments) = fragments {
+                            if !initial.as_object().is_some_and(serde_json::Map::is_empty) {
+                                return Err(invalid("ambiguous initial tool input and fragments"));
                             }
-                            parsed
+                            parse_tool_arguments(std::mem::take(fragments))
                         } else {
-                            std::mem::take(initial)
+                            (std::mem::take(initial), None)
                         };
                         Content::ToolCall(ToolCall {
                             id: std::mem::take(id),
                             name: std::mem::take(name),
                             arguments,
+                            raw_arguments,
                         })
                     }
                     AnthropicBlock::Closed(_) => {
@@ -1217,8 +1339,42 @@ mod tests {
         );
         assert_eq!(
             classify_http_error(413, b""),
+            ProviderErrorKind::InvalidRequest
+        );
+        assert_eq!(
+            classify_http_error(413, br#"{"error":{"type":"request_too_large"}}"#),
             ProviderErrorKind::ContextLength
         );
+        assert_eq!(
+            classify_http_error(400, br#"{"error":{"message":"Prompt is too long"}}"#),
+            ProviderErrorKind::ContextLength
+        );
+        assert_eq!(
+            classify_http_error(429, br#"{"error":{"code":"insufficient_quota"}}"#),
+            ProviderErrorKind::Quota
+        );
+        assert_eq!(
+            provider_error_detail(br#"{"error":{"message":"bad\nrequest"}}"#).as_deref(),
+            Some("badrequest")
+        );
+    }
+
+    #[test]
+    fn server_retry_headers_are_parsed_without_unbounded_arithmetic() {
+        let mut headers = HeaderMap::new();
+        headers.insert("retry-after", HeaderValue::from_static("2"));
+        assert_eq!(parse_retry_after(&headers), Some(2000));
+        headers.insert("retry-after-ms", HeaderValue::from_static("75"));
+        assert_eq!(parse_retry_after(&headers), Some(75));
+        headers.remove("retry-after-ms");
+        headers.insert(
+            "retry-after",
+            HeaderValue::from_static("18446744073709551615"),
+        );
+        assert_eq!(parse_retry_after(&headers), None);
+        let date = httpdate::fmt_http_date(std::time::SystemTime::now() + Duration::from_secs(5));
+        headers.insert("retry-after", HeaderValue::from_str(&date).unwrap());
+        assert!(parse_retry_after(&headers).is_some_and(|delay| delay <= 5000));
     }
 
     #[test]
@@ -1230,6 +1386,7 @@ mod tests {
                 id: "provider-id".into(),
                 name: "read".into(),
                 arguments: json!({"path":"a"}),
+                raw_arguments: None,
             })],
             provider_replay: None,
         });
@@ -1239,6 +1396,7 @@ mod tests {
                 call_id: "provider-id".into(),
                 name: "read".into(),
                 result: json!({"ok":true}),
+                is_error: false,
             })],
             provider_replay: None,
         });
@@ -1256,10 +1414,31 @@ mod tests {
             anthropic["messages"][2]["content"][0]["tool_use_id"],
             "ion_call_0"
         );
+        assert_eq!(anthropic["messages"][2]["content"][0]["is_error"], false);
+        request.messages[2].content = vec![Content::ToolResult(ToolResult {
+            call_id: "provider-id".into(),
+            name: "read".into(),
+            result: json!({"error":"file missing"}),
+            is_error: true,
+        })];
+        let anthropic = anthropic_body(&request).unwrap();
+        assert_eq!(anthropic["messages"][2]["content"][0]["is_error"], true);
+        request.messages[1].content = vec![Content::ToolCall(ToolCall {
+            id: "provider-id".into(),
+            name: "read".into(),
+            arguments: json!({}),
+            raw_arguments: Some("{\"path\":".into()),
+        })];
+        assert_eq!(
+            chat_body(&request, HttpWire::ChatCompletions).unwrap()["messages"][2]["tool_calls"][0]
+                ["function"]["arguments"],
+            "{}"
+        );
         request.messages[2].content = vec![Content::ToolResult(ToolResult {
             call_id: "wrong".into(),
             name: "read".into(),
             result: json!(null),
+            is_error: true,
         })];
         assert!(chat_body(&request, HttpWire::ChatCompletions).is_err());
     }
@@ -1327,6 +1506,31 @@ mod tests {
         let mut state = ChatState::default();
         state.accept(&json!({"choices":[]})).unwrap();
         assert!(state.complete(&request).is_err());
+
+        let mut state = ChatState::default();
+        state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"invented","function":{"name":"not_a_tool","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
+        assert_eq!(
+            state.complete(&request).unwrap().message.content,
+            vec![Content::ToolCall(ToolCall {
+                id: "invented".into(),
+                name: "not_a_tool".into(),
+                arguments: json!({}),
+                raw_arguments: None,
+            })]
+        );
+
+        let mut state = ChatState::default();
+        state.accept(&json!({"choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"broken","function":{"name":"exec","arguments":"{\"command\":"}}]},"finish_reason":"tool_calls"}]})).unwrap();
+        let response = state.complete(&request).unwrap();
+        assert_eq!(
+            response.message.content,
+            vec![Content::ToolCall(ToolCall {
+                id: "broken".into(),
+                name: "exec".into(),
+                arguments: json!({}),
+                raw_arguments: Some("{\"command\":".into()),
+            })]
+        );
     }
 
     #[test]
@@ -1336,6 +1540,17 @@ mod tests {
         state.accept(&json!({"choices":[{"index":0,"delta":{"role":"assistant","content":"ok"},"finish_reason":null}]})).unwrap();
         state.accept(&json!({"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}]})).unwrap();
         state.accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1},"choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":"stop"}]})).unwrap();
+        assert_eq!(state.complete(&request).unwrap().usage, Usage::known(2, 1));
+
+        let mut state = ChatState::default();
+        state
+            .accept(
+                &json!({"choices":[{"index":0,"delta":{"content":"ok"},"finish_reason":"stop"}]}),
+            )
+            .unwrap();
+        state
+            .accept(&json!({"usage":{"prompt_tokens":2,"completion_tokens":1}}))
+            .unwrap();
         assert_eq!(state.complete(&request).unwrap().usage, Usage::known(2, 1));
 
         let mut state = ChatState::default();
@@ -1355,7 +1570,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn chat_stream_requires_done_and_reports_usage() {
+    async fn chat_stream_accepts_eof_after_finish_and_reports_usage() {
         let body = concat!(
             "data: {\"model\":\"returned\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"hi\"},\"finish_reason\":null}]}\n\n",
             "data: {\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -1381,13 +1596,44 @@ mod tests {
         let model =
             HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
         let mut stream = model.stream(request()).await.unwrap();
+        let mut completed = false;
         while let Some(event) = stream.next().await {
-            if let Err(error) = event {
-                assert_eq!(error.kind, ProviderErrorKind::Transport);
-                return;
+            if matches!(event.unwrap(), ModelStreamEvent::Completed(_)) {
+                completed = true;
             }
         }
-        panic!("stream without [DONE] must fail");
+        assert!(completed);
+
+        let endpoint = serve("data: {\"choices\":[{\"delta\":{\"content\":\"partial\"},\"finish_reason\":null}]}\n\n".into(), "200 OK").await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::TextDelta(_)
+        ));
+        assert_eq!(
+            stream.next().await.unwrap().unwrap_err().kind,
+            ProviderErrorKind::Transport
+        );
+
+        let endpoint = serve(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"},\"finish_reason\":\"stop\"}]}"
+                .into(),
+            "200 OK",
+        )
+        .await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::ChatCompletions, Arc::new(|| None)).unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::TextDelta(_)
+        ));
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::Completed(_)
+        ));
     }
 
     #[tokio::test]
@@ -1418,7 +1664,8 @@ mod tests {
             vec![Content::ToolCall(ToolCall {
                 id: "tool_1".into(),
                 name: "read".into(),
-                arguments: json!({"path":"x"})
+                arguments: json!({"path":"x"}),
+                raw_arguments: None,
             })]
         );
     }

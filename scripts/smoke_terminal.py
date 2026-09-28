@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     workspace.mkdir()
     (workspace / "data.txt").write_text("sample data\n")
     env = os.environ.copy()
-    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1")
+    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke")
     port_file, trace = work / "port", work / "requests"
     server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env, stderr=subprocess.PIPE)
     try:
@@ -67,7 +67,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_steering = True
                 if sent_steering and not sent_second:
                     time.sleep(0.1)
-                    os.write(master, b"What did we finish previously?\x1b[13;3u")
+                    os.write(master, b"What did we finish previously?\x1b")
+                    time.sleep(0.02)
+                    os.write(master, b"[13;3u")
                     sent_second = True
                 if sent_second and b"RESUMED" in output and not resized:
                     fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 7, 24, 0, 0))
@@ -127,7 +129,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert (workspace / "created.txt").read_text() == "created by ion\n"
             listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
             named = [line for line in listing.splitlines() if "Smoke repair" in line]
-            assert len(named) == 1 and len(listing.splitlines()) == 3, listing
+            assert len(named) == 1 and len(listing.splitlines()) == 2, listing
             session_id = named[0].split("\t")[0]
             inspected = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "inspect"], env=env, check=True, capture_output=True)
             entries = json.loads(inspected.stdout)["entries"]

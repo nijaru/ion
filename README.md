@@ -51,8 +51,10 @@ ion --continue compact     # summarize old context; retain the raw Session
 `--cwd PATH` chooses a working directory. By default, a run starts a new
 session; `--continue` reopens the most recently active one in that directory.
 `--session ID` selects a listed session, and `--session PATH` can create or
-open an exact SQLite path for scripts. An existing session uses its recorded
-directory, and an explicit `--cwd` must match it. Headless runs print the
+open an exact SQLite path for scripts. Opening and quitting an empty chat does
+not displace the latest conversation in `--continue` or `sessions`. An
+existing session uses its recorded directory, and an explicit `--cwd` must
+match it. Headless runs print the
 session ID to stderr. In the TUI, `/new`, `/clone`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
@@ -93,13 +95,23 @@ Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun
 the call automatically. `ion --continue inspect` reads the existing log
-without making that repair. Ion summarizes settled history when its request
+without making that repair. `exec` retains the final 64 KiB of each output
+stream and reports omitted bytes. Commands use Bash when available, then
+fall back to POSIX sh. Commands have no default timeout; pass
+`timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a
+UTF-8-safe `next_offset`; `edit` accepts ordinary LF or CRLF text and preserves
+the file's BOM and unaffected line endings. A damaged Session file is skipped
+by `sessions` and `--continue`, while opening its exact path reports the
+error. Ion summarizes settled history when its request
 nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this
 explicitly. Longer saved histories are summarized in bounded steps when one
 summary request cannot fit. A single oversized prompt or tool result may
 still exceed the context limit when no settled group can be summarized.
+Transient provider failures can trigger up to two cancellable retries before
+stream output; retry events appear in the TUI and JSONL output. A response that
+stops after producing partial output is not replayed silently.
 
 ## Current limits
 

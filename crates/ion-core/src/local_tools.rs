@@ -1,8 +1,9 @@
 //! Direct coding tools with the caller's host permissions.
 use std::{
+    collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::process::ExitStatusExt,
+    os::unix::{fs::PermissionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
     time::Duration,
@@ -71,8 +72,7 @@ impl ToolHost for LocalTools {
 #[serde(deny_unknown_fields)]
 struct ReadInput {
     path: String,
-    #[serde(default)]
-    offset: u64,
+    offset: Option<u64>,
     limit: Option<usize>,
 }
 #[derive(Deserialize)]
@@ -103,6 +103,7 @@ impl LocalTools {
             Err(e) => return error(format!("invalid read arguments: {e}")),
         };
         let limit = input.limit.unwrap_or(16 * 1024);
+        let offset = input.offset.unwrap_or(0);
         if !(1..=MAX_READ_BYTES).contains(&limit) {
             return error("read limit must be between 1 and 65536 bytes");
         }
@@ -119,6 +120,11 @@ impl LocalTools {
             Ok(_) => return error("read target is not a regular file"),
             Err(e) => return error(e.to_string()),
         };
+        if offset > size {
+            return error(format!(
+                "offset {offset} is beyond end of file ({size} bytes)"
+            ));
+        }
         let digest = if size <= MAX_FILE_BYTES as u64 {
             let mut all = Vec::new();
             if let Err(e) = file.read_to_end(&mut all) {
@@ -128,19 +134,27 @@ impl LocalTools {
         } else {
             None
         };
-        if let Err(e) = file.seek(SeekFrom::Start(input.offset)) {
+        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
             return error(e.to_string());
         }
         let mut bytes = Vec::new();
         if let Err(e) = file.take(limit as u64).read_to_end(&mut bytes) {
             return error(e.to_string());
         }
-        match String::from_utf8(bytes) {
-            Ok(content) => success(
-                json!({"path": input.path, "offset": input.offset, "content": content, "file_bytes": size, "has_more": input.offset.saturating_add(content.len() as u64) < size, "base_digest": digest}),
-            ),
-            Err(_) => error("read range is not UTF-8; use exec for binary data"),
-        }
+        let content = match std::str::from_utf8(&bytes) {
+            Ok(content) => content,
+            Err(utf8_error) if utf8_error.error_len().is_none() && utf8_error.valid_up_to() > 0 => {
+                std::str::from_utf8(&bytes[..utf8_error.valid_up_to()]).expect("validated prefix")
+            }
+            Err(utf8_error) if utf8_error.error_len().is_none() => {
+                return error("read limit ends before the next UTF-8 character; increase limit");
+            }
+            Err(_) => return error("read range is not UTF-8; use exec for binary data"),
+        };
+        let next_offset = offset.saturating_add(content.len() as u64);
+        success(
+            json!({"path": input.path, "offset": offset, "next_offset": next_offset, "content": content, "file_bytes": size, "has_more": next_offset < size, "base_digest": digest}),
+        )
     }
 
     fn edit(&self, args: &Value) -> ToolOutput {
@@ -171,10 +185,11 @@ impl LocalTools {
             Ok(text) => text,
             Err(_) => return error("edit target is not UTF-8"),
         };
-        if text.matches(&input.old_text).count() != 1 {
-            return error("old_text must occur exactly once");
-        }
-        let replacement = text.replacen(&input.old_text, &input.new_text, 1);
+        let replacement =
+            match replace_text_preserving_format(&text, &input.old_text, &input.new_text) {
+                Ok(replacement) => replacement,
+                Err(message) => return error(message),
+            };
         if replacement.len() > MAX_FILE_BYTES {
             return error("edited file exceeds 8 MiB");
         }
@@ -227,17 +242,16 @@ impl LocalTools {
             Ok(value) => value,
             Err(e) => return error(format!("invalid exec arguments: {e}")),
         };
-        if input.command.is_empty() || input.command.contains('\0') || input.command.len() > 8192 {
+        if input.command.is_empty() || input.command.contains('\0') {
             return error("invalid command");
         }
-        let timeout = input.timeout_ms.unwrap_or(30_000);
-        if !(1..=120_000).contains(&timeout) {
-            return error("timeout_ms must be between 1 and 120000");
+        if input.timeout_ms == Some(0) {
+            return error("timeout_ms must be positive");
         }
         if stop.is_cancelled() {
             return error("cancelled before command start");
         }
-        let mut command = Command::new("/bin/sh");
+        let mut command = Command::new(shell_program());
         command
             .arg("-c")
             .arg(input.command)
@@ -259,10 +273,18 @@ impl LocalTools {
         let err = tokio::spawn(capture(child.stderr.take().expect("piped")));
         let mut cancelled = false;
         let mut timed_out = false;
+        let deadline = async {
+            if let Some(timeout) = input.timeout_ms {
+                tokio::time::sleep(Duration::from_millis(timeout)).await;
+            } else {
+                std::future::pending::<()>().await;
+            }
+        };
+        tokio::pin!(deadline);
         let status = tokio::select! {
             status = child.wait() => status,
             () = stop.cancelled() => { cancelled = true; stop_child(&mut child, pid).await },
-            () = tokio::time::sleep(Duration::from_millis(timeout)) => { timed_out = true; stop_child(&mut child, pid).await },
+            () = &mut deadline => { timed_out = true; stop_child(&mut child, pid).await },
         };
         // A detached descendant can retain stdout/stderr after the direct
         // command exits. Do not let that pipe keep this Turn open forever.
@@ -270,7 +292,7 @@ impl LocalTools {
         let stderr = finish_capture(err).await;
         match status {
             Ok(status) => {
-                let result = json!({"exit_code": status.code(), "signal": status.signal(), "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete, "stderr_truncated": !stderr.complete, "cancelled": cancelled, "timed_out": timed_out});
+                let result = json!({"exit_code": status.code(), "signal": status.signal(), "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "cancelled": cancelled, "timed_out": timed_out});
                 ToolOutput {
                     value: result,
                     is_error: !status.success() || cancelled || timed_out,
@@ -281,6 +303,27 @@ impl LocalTools {
             )),
         }
     }
+}
+
+fn shell_program() -> PathBuf {
+    let primary = PathBuf::from("/bin/bash");
+    if is_executable(&primary) {
+        return primary;
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        for directory in std::env::split_paths(&path) {
+            let candidate = directory.join("bash");
+            if is_executable(&candidate) {
+                return candidate;
+            }
+        }
+    }
+    PathBuf::from("/bin/sh")
+}
+
+fn is_executable(path: &Path) -> bool {
+    fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
 }
 
 fn success(value: Value) -> ToolOutput {
@@ -297,6 +340,74 @@ fn error(message: impl Into<String>) -> ToolOutput {
 }
 fn hex_digest(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
+}
+
+fn normalize_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn raw_offset_for_normalized(text: &str, normalized_offset: usize) -> usize {
+    let bytes = text.as_bytes();
+    let mut raw = 0;
+    let mut normalized = 0;
+    while normalized < normalized_offset {
+        if bytes[raw] == b'\r' && bytes.get(raw + 1) == Some(&b'\n') {
+            raw += 2;
+        } else {
+            raw += 1;
+        }
+        normalized += 1;
+    }
+    raw
+}
+
+fn line_ending(text: &str) -> &'static str {
+    let bytes = text.as_bytes();
+    for (index, byte) in bytes.iter().enumerate() {
+        if *byte == b'\r' {
+            return if bytes.get(index + 1) == Some(&b'\n') {
+                "\r\n"
+            } else {
+                "\r"
+            };
+        }
+        if *byte == b'\n' {
+            return "\n";
+        }
+    }
+    "\n"
+}
+
+fn replace_text_preserving_format(
+    source: &str,
+    old_text: &str,
+    new_text: &str,
+) -> Result<String, &'static str> {
+    let bom_bytes = if source.starts_with('\u{feff}') { 3 } else { 0 };
+    let body = &source[bom_bytes..];
+    let normalized = normalize_newlines(body);
+    let old = normalize_newlines(old_text);
+    let mut matches = normalized.match_indices(&old);
+    let Some((start, _)) = matches.next() else {
+        return Err("old_text must occur exactly once");
+    };
+    if matches.next().is_some() {
+        return Err("old_text must occur exactly once");
+    }
+    let raw_start = bom_bytes + raw_offset_for_normalized(body, start);
+    let raw_end = bom_bytes + raw_offset_for_normalized(body, start + old.len());
+    let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
+        line_ending(&source[raw_start..raw_end])
+    } else {
+        line_ending(body)
+    };
+    let replacement = normalize_newlines(new_text).replace('\n', style);
+    let mut result =
+        String::with_capacity(source.len() - (raw_end - raw_start) + replacement.len());
+    result.push_str(&source[..raw_start]);
+    result.push_str(&replacement);
+    result.push_str(&source[raw_end..]);
+    Ok(result)
 }
 fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
     let meta = fs::metadata(path)?;
@@ -355,28 +466,34 @@ fn replace_file(
 struct Captured {
     bytes: Vec<u8>,
     complete: bool,
+    omitted_bytes: Option<u64>,
 }
 impl Captured {
     fn lost() -> Self {
         Self {
             bytes: Vec::new(),
             complete: false,
+            omitted_bytes: None,
         }
     }
 }
 async fn capture(mut pipe: impl tokio::io::AsyncRead + Unpin) -> Captured {
-    let mut bytes = Vec::new();
+    let mut bytes = VecDeque::with_capacity(MAX_OUTPUT_BYTES);
+    let mut total = 0u64;
     let mut complete = true;
     let mut chunk = [0u8; 8192];
     loop {
         match pipe.read(&mut chunk).await {
             Ok(0) => break,
             Ok(n) => {
-                let keep = n.min(MAX_OUTPUT_BYTES.saturating_sub(bytes.len()));
-                bytes.extend_from_slice(&chunk[..keep]);
-                if keep < n {
-                    complete = false;
-                }
+                total = total.saturating_add(n as u64);
+                let overflow = bytes
+                    .len()
+                    .saturating_add(n)
+                    .saturating_sub(MAX_OUTPUT_BYTES);
+                let remove_existing = overflow.min(bytes.len());
+                bytes.drain(..remove_existing);
+                bytes.extend(&chunk[overflow - remove_existing..n]);
             }
             Err(_) => {
                 complete = false;
@@ -384,7 +501,12 @@ async fn capture(mut pipe: impl tokio::io::AsyncRead + Unpin) -> Captured {
             }
         }
     }
-    Captured { bytes, complete }
+    let bytes: Vec<u8> = bytes.into();
+    Captured {
+        omitted_bytes: complete.then(|| total.saturating_sub(bytes.len() as u64)),
+        bytes,
+        complete,
+    }
 }
 async fn finish_capture(mut task: tokio::task::JoinHandle<Captured>) -> Captured {
     match tokio::time::timeout(Duration::from_secs(1), &mut task).await {
@@ -415,10 +537,10 @@ async fn stop_child(
 }
 fn specs() -> Vec<ToolSpec> {
     vec![
-        ToolSpec { name: "read".into(), description: "Read UTF-8 file content from the live working directory. Paths may be relative or absolute. Large files can be read in ranges; a complete file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
+        ToolSpec { name: "read".into(), description: "Read UTF-8 file content from the live working directory. Paths may be relative or absolute. Large files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
         ToolSpec { name: "edit".into(), description: "Replace one exact occurrence of old_text in a UTF-8 file; optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","old_text","new_text"],"properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
-        ToolSpec { name: "exec".into(), description: "Run a native shell command in the live working directory with the host user's permissions; this is not sandboxed. Returns direct command exit, output and truncation. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1,"maximum":120000}}}) },
+        ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
 }
 
@@ -446,6 +568,62 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn edit_matches_lf_text_in_crlf_file_and_preserves_bom() {
+        let root = std::env::temp_dir().join(format!("ion-edit-crlf-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        let original = "\u{feff}one\r\ntwo\r\nthree\r\n";
+        fs::write(&path, original).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let output = tools.edit(&json!({
+            "path":"file.txt",
+            "old_text":"two\nthree",
+            "new_text":"TWO\nthree",
+            "base_digest": hex_digest(original.as_bytes()),
+        }));
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            "\u{feff}one\r\nTWO\r\nthree\r\n"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn edit_preserves_unmatched_mixed_line_endings_and_rejects_ambiguity() {
+        let result = replace_text_preserving_format(
+            "first\r\nsecond\nthird\r\n",
+            "second\nthird",
+            "SECOND\nthird",
+        )
+        .unwrap();
+        assert_eq!(result, "first\r\nSECOND\nthird\r\n");
+        assert!(replace_text_preserving_format("same\r\nsame\n", "same", "new").is_err());
+    }
+
+    #[test]
+    fn read_continuation_stays_on_utf8_boundaries() {
+        let root = std::env::temp_dir().join(format!("ion-read-utf8-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("file.txt"), "aéZ").unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let first = tools.read(&json!({"path":"file.txt","offset":null,"limit":2}));
+        assert!(!first.is_error, "{}", first.value);
+        assert_eq!(first.value["content"], "a");
+        assert_eq!(first.value["next_offset"], 1);
+        assert_eq!(first.value["has_more"], true);
+        let second = tools.read(&json!({"path":"file.txt","offset":1,"limit":2}));
+        assert_eq!(second.value["content"], "é");
+        assert_eq!(second.value["next_offset"], 3);
+        let third = tools.read(&json!({"path":"file.txt","offset":3,"limit":2}));
+        assert_eq!(third.value["content"], "Z");
+        assert_eq!(third.value["has_more"], false);
+        let beyond = tools.read(&json!({"path":"file.txt","offset":5}));
+        assert!(beyond.is_error);
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[tokio::test]
     async fn cancelled_command_reports_observed_exit_without_waiting_for_timeout() {
         let tools = LocalTools::new(std::env::temp_dir()).unwrap();
@@ -459,6 +637,7 @@ mod tests {
                         id: "test".into(),
                         name: "exec".into(),
                         arguments: json!({"command":"sleep 10","timeout_ms":120000}),
+                        raw_arguments: None,
                     },
                     stop,
                 )
@@ -473,5 +652,83 @@ mod tests {
         assert!(output.is_error);
         assert_eq!(output.value["cancelled"], true);
         assert!(started.elapsed() < Duration::from_secs(4));
+    }
+
+    #[tokio::test]
+    async fn long_command_output_retains_the_failure_summary_at_the_end() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let output = tools
+            .execute(
+                &ToolCall {
+                    id: "tail".into(),
+                    name: "exec".into(),
+                    arguments: json!({"command":"yes x | head -c 70000; printf 'END_MARKER\\n'"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert!(output.value["stdout_omitted_bytes"].as_u64().unwrap() > 0);
+        assert!(
+            output.value["stdout"]
+                .as_str()
+                .unwrap()
+                .ends_with("END_MARKER\n")
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_is_opt_in_and_accepts_long_explicit_limits() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        for args in [
+            json!({"command":"printf ok"}),
+            json!({"command":"printf ok","timeout_ms":600000}),
+        ] {
+            let output = tools
+                .execute(
+                    &ToolCall {
+                        id: "timeout".into(),
+                        name: "exec".into(),
+                        arguments: args,
+                        raw_arguments: None,
+                    },
+                    CancellationToken::new(),
+                )
+                .await;
+            assert!(!output.is_error, "{}", output.value);
+            assert_eq!(output.value["stdout"], "ok");
+        }
+        assert!(
+            specs()
+                .iter()
+                .find(|spec| spec.name == "exec")
+                .unwrap()
+                .input_schema["properties"]["timeout_ms"]
+                .get("maximum")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn shell_uses_bash_when_available() {
+        if !Path::new("/bin/bash").is_file() {
+            return;
+        }
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let output = tools
+            .execute(
+                &ToolCall {
+                    id: "bash".into(),
+                    name: "exec".into(),
+                    arguments: json!({"command":"set -o pipefail; false | true"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert_eq!(output.value["exit_code"], 1);
+        assert!(output.is_error);
     }
 }

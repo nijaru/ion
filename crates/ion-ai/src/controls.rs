@@ -121,6 +121,7 @@ fn invalid(message: &str) -> ProviderError {
     ProviderError {
         kind: ProviderErrorKind::InvalidRequest,
         message: message.to_owned(),
+        retry_after_ms: None,
     }
 }
 

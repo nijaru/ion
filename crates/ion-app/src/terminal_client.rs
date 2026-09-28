@@ -188,6 +188,13 @@ impl Progress {
                     self.text.drain(..start);
                 }
             }
+            CodingAgentEvent::ProviderRetry {
+                attempt,
+                max_retries,
+                delay_ms,
+            } => self.events.push(format!(
+                "Provider retry {attempt}/{max_retries} in {delay_ms}ms"
+            )),
             CodingAgentEvent::ToolStarted {
                 name, arguments, ..
             } => self
@@ -237,7 +244,7 @@ pub async fn chat(
     terminal.enter_alt_screen()?;
     let (width, height) = terminal.size()?;
     let mut screen = Screen::new(width, 0, height);
-    let mut input = terminal.input();
+    let mut input = terminal.input()?;
     let mut ui = Frontend {
         status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
         context_window_tokens: runtime.selected.context_window_tokens,
@@ -351,7 +358,6 @@ pub async fn chat(
                 MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
                 _ => {}
             },
-            InputEvent::Focus(_) => {}
         }
     }
     terminal.restore()?;
@@ -366,16 +372,24 @@ fn login_in_terminal(
     provider: &str,
 ) -> Result<Result<()>> {
     anyhow::ensure!(!provider.is_empty(), "use /login PROVIDER");
-    terminal.suspend()?;
+    input
+        .suspend()
+        .context("release terminal input for login")?;
+    terminal.suspend().context("suspend terminal for login")?;
     let result = (|| -> Result<()> {
-        let key = rpassword::prompt_password(format!("{provider} API key: "))?;
+        let key = rpassword::prompt_password(format!("{provider} API key: "))
+            .context("read login credential")?;
         credentials.save_api_key(provider, &key)
     })();
-    terminal.resume()?;
-    terminal.enter_alt_screen()?;
-    let (width, height) = terminal.size()?;
+    terminal.resume().context("resume terminal after login")?;
+    terminal
+        .enter_alt_screen()
+        .context("restore chat screen after login")?;
+    let (width, height) = terminal.size().context("read terminal size after login")?;
     *screen = Screen::new(width, 0, height);
-    *input = terminal.input();
+    *input = terminal
+        .input()
+        .context("resume terminal input after login")?;
     Ok(result)
 }
 
@@ -539,7 +553,6 @@ async fn run_compaction(
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
                         _ => {},
                     },
-                    Some(Ok(_)) => {},
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
@@ -689,7 +702,6 @@ async fn run_turn(
                         MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
                         _ => {},
                     },
-                    Some(Ok(_)) => {},
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
@@ -1570,6 +1582,7 @@ mod tests {
                     call_id: "call".into(),
                     name: "exec".into(),
                     result: serde_json::json!({"stdout": output}),
+                    is_error: false,
                 })],
                 provider_replay: None,
             }],

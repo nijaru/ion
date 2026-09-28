@@ -1,10 +1,11 @@
 # Ion architecture
 
-**Chosen implementation target, updated 2026-09-27.** This file states the
-coding-agent contracts. The core loop and the session, model, input and context
-workflows described here have completed end-to-end macOS tasks on the live
-routes named in [README.md](README.md). That qualification is for the stated
-first usable coding scope, not for every Pi feature, model or platform.
+**Chosen implementation target, under source-level qualification as of
+2026-09-28.** This file states the coding-agent contracts. The core loop has
+completed end-to-end macOS tasks on the live routes named in
+[README.md](README.md); provider and tool edge-case correctness is still being
+checked against current Pi implementation and focused failures. Those tasks
+do not establish Pi-level correctness across the supported path.
 [README.md](README.md) describes what the current executable can do. Ion is
 unreleased v0, so obsolete runtime representations can be replaced directly.
 
@@ -55,6 +56,9 @@ until a final response, stop or limit. A tool result is available to the
 model before a dependent request. Tool failure can be a result the model
 reasons about; transport, storage and unrecoverable dispatch errors surface
 to the client. Neither client infers task success from the model's prose alone.
+An invented tool name or invalid arguments should reach a visible tool error
+when the call can be represented safely. Preserve malformed streamed argument
+text as a failed call, and never dispatch it or a truncated call.
 
 ## Session and recovery
 
@@ -96,6 +100,11 @@ related event batch. Its entries are the only authority for conversation and
 Turn state. A derived index may be rebuilt. This avoids inventing a second
 JSONL publication and recovery protocol for the first product. In unreleased
 v0, do not keep two production runtimes or compatibility facades.
+Discovery of recent Sessions must tolerate one damaged or partially created
+file; opening that exact path must still report its error. A failed tool
+result retains its error identity through persistence and provider replay.
+An idle new Session with no accepted user Turn must not displace the latest
+conversation or clutter the normal Session list.
 
 ## Context, tools and trust
 
@@ -116,10 +125,14 @@ an explicit context change rather than silently dropping content.
 
 Default file and shell tools act on the live working directory with the host
 user's permissions. There is no implicit sandbox, VM, importer or private
-workspace registry. File edits reject ambiguous matches. Writes report
+workspace registry. Shell commands use Bash where available, then POSIX sh.
+File edits reject ambiguous matches. Writes report
 creation or replacement; commands report exit status, launch/transport
-failure and truncation. Bound runtime, payload and output sizes at usable
-values. Do not claim stronger effect or isolation guarantees than a tool
+failure and truncation. When command output is bounded, retain the diagnostic
+tail and state what was omitted. Exact text edits must handle ordinary BOM and
+line-ending conventions without silently changing unrelated text. Support
+optional command timeouts and cancellation, and bound payload and output sizes
+at usable values. Do not claim stronger effect or isolation guarantees than a tool
 implements. Approval or sandboxing is a separate opt-in product decision,
 not a prerequisite for native coding.
 
@@ -144,9 +157,23 @@ missing route clearly; a global default applies to new Sessions. A custom
 route stays resolvable after another model becomes the default. Explicit
 per-invocation selection overrides the resumed choice for that invocation.
 Model and provider transport remain stable while a Turn runs.
+Provider adapters accept valid terminal responses and reject incomplete ones,
+including stream truncation. Classify context overflow from a provider signal
+or a narrow documented response pattern; a generic HTTP status is not enough
+to rewrite model context. Transient request recovery, when enabled, must be
+bounded, visible, cancellable and must not repeat a completed tool effect.
+Retry only before any streamed event is observed; a partial response is
+reported as incomplete rather than silently replayed. A valid provider retry
+delay takes precedence over local backoff, up to a bounded automatic wait;
+longer requested waits are surfaced as errors rather than held open.
 
 The TUI shows prompt, streaming response, tool calls/results and errors while
-keeping terminal input and restoration reliable. Headless mode exposes the
+keeping terminal input and restoration reliable. Terminal input is parsed
+incrementally across read boundaries; a lone Escape waits briefly for a
+possible key sequence, with a longer wait over SSH. Bracketed paste and
+enabled mouse/keyboard sequences remain semantic events rather than draft
+text. The input reader releases the tty before a synchronous login prompt.
+Headless mode exposes the
 same loop without terminal dependencies, with useful text output and exit
 status. A JSONL output mode emits one session identity, ordered progress
 events and a terminal invocation result on stdout; diagnostics stay on stderr.

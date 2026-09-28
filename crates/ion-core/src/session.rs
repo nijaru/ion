@@ -1,7 +1,7 @@
 //! The single durable authority for a local coding conversation.
 //! SQLite commits related events atomically before any external effect runs.
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeSet,
     fs::{self, File, OpenOptions},
     os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
@@ -96,7 +96,7 @@ pub(crate) struct CompactionPlan {
 #[derive(Default, Clone)]
 struct State {
     active: Option<u64>,
-    pending: BTreeMap<String, String>,
+    pending: Vec<(String, String)>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
@@ -185,9 +185,10 @@ impl State {
                         Content::ToolCall(ToolCall { id, name, .. })
                             if !id.is_empty() && !name.is_empty() =>
                         {
-                            if self.pending.insert(id.clone(), name.clone()).is_some() {
+                            if self.pending.iter().any(|(pending_id, _)| pending_id == id) {
                                 return Err(SessionError::InvalidHistory);
                             }
+                            self.pending.push((id.clone(), name.clone()));
                         }
                         Content::Text(_) => {}
                         _ => return Err(SessionError::InvalidHistory),
@@ -197,11 +198,14 @@ impl State {
                 self.last_usage = Some(*usage);
             }
             SessionEntry::ToolResult { turn, result } => {
-                if self.active != Some(*turn)
-                    || self.pending.remove(&result.call_id).as_deref() != Some(&result.name)
-                {
+                let position = self
+                    .pending
+                    .iter()
+                    .position(|(id, name)| id == &result.call_id && name == &result.name);
+                if self.active != Some(*turn) || position.is_none() {
                     return Err(SessionError::InvalidHistory);
                 }
+                self.pending.remove(position.expect("checked above"));
                 messages.push(Message {
                     role: Role::Tool,
                     content: vec![Content::ToolResult(result.clone())],
@@ -588,10 +592,11 @@ impl Session {
     }
 }
 
-fn unknown_results(turn: u64, pending: &BTreeMap<String, String>) -> Vec<SessionEntry> {
+fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry> {
     pending.iter().map(|(call_id, name)| SessionEntry::ToolResult { turn, result: ToolResult {
         call_id: call_id.clone(), name: name.clone(),
         result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
+        is_error: true,
     }}).collect()
 }
 
@@ -775,6 +780,7 @@ mod tests {
                         id: "call".into(),
                         name: "write".into(),
                         arguments: serde_json::json!({}),
+                        raw_arguments: None,
                     })],
                     provider_replay: None,
                 },
@@ -799,6 +805,55 @@ mod tests {
             }
         ));
         assert!(matches!(entries[4], SessionEntry::TurnStarted { .. }));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn interrupted_results_preserve_assistant_call_order() {
+        let (root, path) = fixture();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: ["z-call", "a-call"]
+                        .into_iter()
+                        .map(|id| {
+                            Content::ToolCall(ToolCall {
+                                id: id.into(),
+                                name: "read".into(),
+                                arguments: serde_json::json!({"path":"missing"}),
+                                raw_arguments: None,
+                            })
+                        })
+                        .collect(),
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.begin_turn("second".into(), model).unwrap().1, 2);
+        let ids = reopened
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::ToolResult { result, .. } => Some(result.call_id.clone()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(ids, ["z-call", "a-call"]);
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
@@ -956,6 +1011,7 @@ mod tests {
                                 id: id.into(),
                                 name: "read".into(),
                                 arguments: serde_json::json!({"path": id}),
+                                raw_arguments: None,
                             })
                         })
                         .collect(),
@@ -972,6 +1028,7 @@ mod tests {
                     call_id: "one".into(),
                     name: "read".into(),
                     result: serde_json::json!({"content":"a"}),
+                    is_error: false,
                 },
             )
             .unwrap();
@@ -983,6 +1040,7 @@ mod tests {
                     call_id: "two".into(),
                     name: "read".into(),
                     result: serde_json::json!({"content":"b"}),
+                    is_error: false,
                 },
             )
             .unwrap();
@@ -995,6 +1053,55 @@ mod tests {
             4
         );
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn failed_tool_result_survives_reopen() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session
+            .begin_turn("read missing file".into(), model)
+            .unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"missing"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_tool_result(
+                turn,
+                ToolResult {
+                    call_id: "call".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"error":"file missing"}),
+                    is_error: true,
+                },
+            )
+            .unwrap();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert!(matches!(
+            &reopened.messages().unwrap()[2].content[0],
+            Content::ToolResult(ToolResult { is_error: true, .. })
+        ));
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 

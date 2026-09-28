@@ -1,5 +1,6 @@
 //! One coding loop for library, headless and terminal clients.
 use std::sync::Arc;
+use std::time::Duration;
 
 use futures_util::StreamExt;
 use ion_ai::{
@@ -199,27 +200,75 @@ impl Agent {
         &self,
         request: ModelRequest,
         stop: &CancellationToken,
-        on_text: &mut F,
+        observe: &mut F,
     ) -> Result<ModelResponse, AgentError>
     where
-        F: FnMut(String) + Send,
+        F: FnMut(AgentEvent) + Send,
+    {
+        for attempt in 0..=2 {
+            let (result, observed) = self.generate_once(request.clone(), stop, observe).await;
+            match result {
+                Err(AgentError::Provider(error))
+                    if !observed && attempt < 2 && retryable_provider_error(&error) =>
+                {
+                    // A server's pacing takes precedence over local backoff.
+                    // Leave long waits to the caller instead of holding a Turn
+                    // open for an unbounded provider-requested interval.
+                    let delay_ms = error.retry_after_ms.unwrap_or(500 * (1 << attempt));
+                    if delay_ms > 60_000 {
+                        return Err(AgentError::Provider(error));
+                    }
+                    let delay = Duration::from_millis(delay_ms);
+                    observe(AgentEvent::ProviderRetry {
+                        attempt: attempt + 1,
+                        max_retries: 2,
+                        delay_ms: delay.as_millis() as u64,
+                    });
+                    tokio::select! {
+                        () = tokio::time::sleep(delay) => {},
+                        () = stop.cancelled() => return Err(AgentError::Cancelled),
+                    }
+                }
+                other => return other,
+            }
+        }
+        unreachable!("bounded retry loop returns on its final attempt")
+    }
+
+    async fn generate_once<F>(
+        &self,
+        request: ModelRequest,
+        stop: &CancellationToken,
+        observe: &mut F,
+    ) -> (Result<ModelResponse, AgentError>, bool)
+    where
+        F: FnMut(AgentEvent) + Send,
     {
         let stream = tokio::select! {
-            result = self.model.stream(request) => result?,
-            () = stop.cancelled() => return Err(AgentError::Cancelled),
+            result = self.model.stream(request) => match result {
+                Ok(stream) => stream,
+                Err(error) => return (Err(AgentError::Provider(error)), false),
+            },
+            () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
         };
         tokio::pin!(stream);
+        let mut observed = false;
         loop {
             let event = tokio::select! {
                 item = stream.next() => item,
-                () = stop.cancelled() => return Err(AgentError::Cancelled),
+                () = stop.cancelled() => return (Err(AgentError::Cancelled), observed),
             };
             match event {
-                Some(Ok(ModelStreamEvent::TextDelta(text))) => on_text(text),
-                Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {}
-                Some(Ok(ModelStreamEvent::Completed(response))) => return Ok(response),
-                Some(Err(error)) => return Err(AgentError::Provider(error)),
-                None => return Err(AgentError::IncompleteModelResponse),
+                Some(Ok(ModelStreamEvent::TextDelta(text))) => {
+                    observed = true;
+                    observe(AgentEvent::TextDelta(text));
+                }
+                Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {
+                    observed = true;
+                }
+                Some(Ok(ModelStreamEvent::Completed(response))) => return (Ok(response), observed),
+                Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
+                None => return (Err(AgentError::IncompleteModelResponse), observed),
             }
         }
     }
@@ -380,13 +429,14 @@ impl Agent {
                     return Err(AgentError::ContextTooLarge);
                 }
                 let mut emitted_text = false;
-                let generated = {
-                    let mut on_text = |text| {
-                        emitted_text = true;
-                        observe(AgentEvent::TextDelta(text));
-                    };
-                    self.generate(request, stop, &mut on_text).await
-                };
+                let generated = self
+                    .generate(request, stop, &mut |event| {
+                        if matches!(event, AgentEvent::TextDelta(_)) {
+                            emitted_text = true;
+                        }
+                        observe(event);
+                    })
+                    .await;
                 let overflow = matches!(
                     &generated,
                     Err(AgentError::Provider(ProviderError {
@@ -401,7 +451,22 @@ impl Agent {
                         ),
                         ..
                     })
-                );
+                ) || (model.provider == "xiaomi"
+                    && matches!(
+                        &generated,
+                        Ok(ModelResponse {
+                            termination: ResponseTermination::Incomplete(
+                                IncompleteReason::MaxOutputTokens
+                            ),
+                            usage: ion_ai::Usage {
+                                output_tokens: Some(0),
+                                input_tokens: Some(input),
+                            },
+                            ..
+                        }) if self.limits.context_window_tokens.is_some_and(|window| {
+                            *input * 100 >= u64::from(window) * 99
+                        })
+                    ));
                 if overflow
                     && !emitted_text
                     && !recovered_overflow
@@ -477,13 +542,21 @@ impl Agent {
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 });
-                let output = self.tools.execute(&call, stop.clone()).await;
+                let output = if call.raw_arguments.is_some() {
+                    ToolOutput {
+                        value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
+                        is_error: true,
+                    }
+                } else {
+                    self.tools.execute(&call, stop.clone()).await
+                };
                 session.record_tool_result(
                     turn,
                     ToolResult {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         result: output.value.clone(),
+                        is_error: output.is_error,
                     },
                 )?;
                 observe(AgentEvent::ToolFinished {
@@ -498,6 +571,17 @@ impl Agent {
         }
         Err(AgentError::StepLimit)
     }
+}
+
+fn retryable_provider_error(error: &ProviderError) -> bool {
+    matches!(
+        error.kind,
+        ProviderErrorKind::Transport
+            | ProviderErrorKind::Timeout
+            | ProviderErrorKind::RateLimited
+            | ProviderErrorKind::Overloaded
+            | ProviderErrorKind::Server
+    )
 }
 
 fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -> Vec<String> {
@@ -515,6 +599,11 @@ fn drain_steering(receiver: &mut Option<&mut mpsc::UnboundedReceiver<String>>) -
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TextDelta(String),
+    ProviderRetry {
+        attempt: usize,
+        max_retries: usize,
+        delay_ms: u64,
+    },
     ContextCompacted {
         through_entry: u64,
     },
@@ -621,6 +710,82 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transient_provider_error_retries_only_before_stream_output() {
+        let root = std::env::temp_dir().join(format!("ion-retry-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let service = Arc::new(ScriptedModelService::new([
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::Overloaded,
+                message: "busy".into(),
+                retry_after_ms: Some(10),
+            }),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let request = ModelRequest {
+            model: model(),
+            instructions: None,
+            messages: Vec::new(),
+            tools: Vec::new(),
+            controls: GenerationControls {
+                max_output_tokens: 128,
+                temperature: None,
+                top_p: None,
+                reasoning: Reasoning::ProviderDefault,
+                tool_choice: ToolChoice::None,
+                parallel_tool_calls: false,
+            },
+        };
+        let mut retry_delay = None;
+        agent
+            .generate(request.clone(), &CancellationToken::new(), &mut |event| {
+                if let AgentEvent::ProviderRetry { delay_ms, .. } = event {
+                    retry_delay = Some(delay_ms);
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(retry_delay, Some(10));
+        assert_eq!(service.requests(), vec![request.clone(), request.clone()]);
+        assert_eq!(service.requests().len(), 2);
+
+        let service = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![ModelStreamEvent::TextDelta("partial".into())]),
+            response(vec![Content::Text("should not be used".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let mut visible = String::new();
+        let error = agent
+            .generate(request.clone(), &CancellationToken::new(), &mut |event| {
+                if let AgentEvent::TextDelta(text) = event {
+                    visible.push_str(&text);
+                }
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::IncompleteModelResponse));
+        assert_eq!(visible, "partial");
+        assert_eq!(service.requests().len(), 1);
+
+        let service = Arc::new(ScriptedModelService::new([
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::RateLimited,
+                message: "retry later".into(),
+                retry_after_ms: Some(60_001),
+            }),
+            response(vec![Content::Text("should not be used".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let error = agent
+            .generate(request, &CancellationToken::new(), &mut |_| {})
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::Provider(_)));
+        assert_eq!(service.requests().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn coding_task_uses_one_loop_and_resumes_after_reopen() {
         let root = std::env::temp_dir().join(format!("ion-agent-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -632,11 +797,13 @@ mod tests {
                     id: "call-1".into(),
                     name: "write".into(),
                     arguments: serde_json::json!({"path":"answer.txt","content":"hello ion\n"}),
+                    raw_arguments: None,
                 }),
                 Content::ToolCall(ToolCall {
                     id: "call-2".into(),
                     name: "read".into(),
                     arguments: serde_json::json!({"path":"answer.txt"}),
+                    raw_arguments: None,
                 }),
             ]),
             response(vec![Content::Text("created and checked".into())]),
@@ -694,6 +861,7 @@ mod tests {
                 id: "call-1".into(),
                 name: "read".into(),
                 arguments: serde_json::json!({"path":"file.txt"}),
+                raw_arguments: None,
             })]),
             response(vec![Content::Text("done".into())]),
         ]));
@@ -802,6 +970,7 @@ mod tests {
             Script::OpenError(ProviderError {
                 kind: ProviderErrorKind::ContextLength,
                 message: "too long".into(),
+                retry_after_ms: None,
             }),
             response(vec![Content::Text("First result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
@@ -831,6 +1000,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn mimo_zero_output_at_window_compacts_before_retry() {
+        let root = std::env::temp_dir().join(format!("ion-mimo-overflow-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("earlier result".into())]),
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: Vec::new(),
+                    provider_replay: None,
+                },
+                usage: Usage::known(49_900, 0),
+                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                returned_model: Some("mimo-v2.6-flash".into()),
+            })]),
+            response(vec![Content::Text("Earlier result is complete.".into())]),
+            response(vec![Content::Text("continued".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+            .with_limits(AgentLimits {
+                context_window_tokens: Some(50_000),
+                ..AgentLimits::default()
+            });
+        let mimo = ModelRef {
+            provider: "xiaomi".into(),
+            model: "mimo-v2.6-flash".into(),
+        };
+        for prompt in ["first", "second"] {
+            agent
+                .submit(
+                    &session,
+                    mimo.clone(),
+                    prompt.into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+        }
+        assert_eq!(scripts.requests().len(), 4);
+        assert!(scripts.requests()[2].tools.is_empty());
+        assert!(session.view().unwrap().compacted_through.is_some());
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn invented_tool_returns_error_and_model_can_correct_it() {
+        let root = std::env::temp_dir().join(format!("ion-invented-tool-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::ToolCall(ToolCall {
+                id: "invented".into(),
+                name: "not_a_tool".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::Text("I can use read instead.".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let answer = agent
+            .submit(
+                &session,
+                model(),
+                "inspect".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "I can use read instead.");
+        assert_eq!(scripts.requests().len(), 2);
+        let result = &scripts.requests()[1].messages[2].content[0];
+        assert!(
+            matches!(result, Content::ToolResult(result) if result.result["error"] == "unknown tool: not_a_tool")
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn malformed_tool_arguments_return_error_without_dispatch() {
+        struct NeverDispatch;
+        impl ToolHost for NeverDispatch {
+            fn specs(&self) -> Vec<ToolSpec> {
+                Vec::new()
+            }
+            fn execute<'a>(
+                &'a self,
+                _call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async { panic!("malformed call was dispatched") })
+            }
+        }
+        let root =
+            std::env::temp_dir().join(format!("ion-malformed-call-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::ToolCall(ToolCall {
+                id: "broken".into(),
+                name: "exec".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: Some("{\"command\":\"touch should-not-exist\"".into()),
+            })]),
+            response(vec![Content::Text("I need to correct the call".into())]),
+        ]));
+        let agent = Agent::new(scripts, Arc::new(NeverDispatch));
+        agent
+            .submit(
+                &session,
+                model(),
+                "try a command".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert!(!root.join("should-not-exist").exists());
+        assert!(matches!(
+            &session.messages().unwrap()[2].content[0],
+            Content::ToolResult(ToolResult { is_error: true, .. })
+        ));
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn failed_summary_does_not_change_the_context_projection() {
         let root = std::env::temp_dir().join(format!("ion-summary-fail-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
@@ -849,12 +1152,13 @@ mod tests {
             )
             .unwrap();
         let before = session.context_messages().unwrap();
-        let scripts = Arc::new(ScriptedModelService::new([Script::OpenError(
-            ProviderError {
+        let scripts = Arc::new(ScriptedModelService::new((0..3).map(|_| {
+            Script::OpenError(ProviderError {
                 kind: ProviderErrorKind::Server,
                 message: "unavailable".into(),
-            },
-        )]));
+                retry_after_ms: None,
+            })
+        })));
         let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
         assert!(
             agent
@@ -1087,6 +1391,7 @@ mod tests {
                         id: "missing".into(),
                         name: "write".into(),
                         arguments: serde_json::json!({"path":"should-not-exist","content":"wrong"}),
+                        raw_arguments: None,
                     })],
                     provider_replay: None,
                 },

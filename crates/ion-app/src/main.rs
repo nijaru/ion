@@ -434,6 +434,9 @@ async fn headless(
                         CodingAgentEvent::TextDelta(text) => {
                             json!({"type":"text_delta","text":text})
                         }
+                        CodingAgentEvent::ProviderRetry { attempt, max_retries, delay_ms } => {
+                            json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
+                        }
                         CodingAgentEvent::ToolStarted {
                             call_id,
                             name,
@@ -465,6 +468,9 @@ async fn headless(
                     print!("{text}");
                     let _ = io::stdout().flush();
                     streamed = true;
+                }
+                CodingAgentEvent::ProviderRetry { attempt, max_retries, delay_ms } => {
+                    eprintln!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]")
                 }
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
                 CodingAgentEvent::ToolFinished { name, output, .. } => {

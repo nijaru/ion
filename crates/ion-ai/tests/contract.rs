@@ -57,6 +57,7 @@ async fn scripted_service_streams_provider_neutral_events() {
         id: "call-1".to_owned(),
         name: "read".to_owned(),
         arguments: serde_json::json!({"path": "src/lib.rs"}),
+        raw_arguments: None,
     };
     let response = response(
         Message {
@@ -158,6 +159,7 @@ async fn typed_open_failure_has_no_hidden_retry() {
     let service = ScriptedModelService::new([Script::OpenError(ProviderError {
         kind: ProviderErrorKind::RateLimited,
         message: "try later".to_owned(),
+        retry_after_ms: None,
     })]);
 
     let error = match service.stream(request()).await {

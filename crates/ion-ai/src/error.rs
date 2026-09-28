@@ -24,4 +24,6 @@ pub enum ProviderErrorKind {
 pub struct ProviderError {
     pub kind: ProviderErrorKind,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub retry_after_ms: Option<u64>,
 }

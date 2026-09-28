@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{SynchronizedUpdate, execute, terminal};
@@ -79,7 +78,6 @@ pub struct TerminalSession {
     capabilities: TerminalCapabilities,
     restored: bool,
     keyboard_enhancement_enabled: bool,
-    focus_reporting_enabled: bool,
     mouse_enabled: bool,
     /// True while the fullscreen frontend owns the alternate screen.
     /// Every restore path must leave it, or the user's terminal is
@@ -100,7 +98,6 @@ impl TerminalSession {
             capabilities: TerminalCapabilities::default(),
             restored: true,
             keyboard_enhancement_enabled: false,
-            focus_reporting_enabled: false,
             mouse_enabled: false,
             alt_screen: false,
         };
@@ -112,7 +109,7 @@ impl TerminalSession {
         &mut self.output
     }
 
-    pub fn input(&self) -> InputStream {
+    pub fn input(&self) -> io::Result<InputStream> {
         InputStream::new()
     }
 
@@ -198,13 +195,6 @@ impl TerminalSession {
                 Err(_) => {}
             }
         }
-        if self.focus_reporting_enabled {
-            match execute!(self.output, DisableFocusChange) {
-                Ok(()) => self.focus_reporting_enabled = false,
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
-            }
-        }
         if self.requirements.bracketed_paste
             && let Err(err) = execute!(self.output, DisableBracketedPaste)
             && first_error.is_none()
@@ -245,17 +235,6 @@ impl TerminalSession {
             self.capabilities.bracketed_paste = CapabilitySupport::Supported;
         } else {
             self.capabilities.bracketed_paste = CapabilitySupport::Unsupported;
-        }
-
-        if self.requirements.focus_reporting {
-            if let Err(err) = execute!(self.output, EnableFocusChange) {
-                let _ = self.restore();
-                return Err(err);
-            }
-            self.focus_reporting_enabled = true;
-            self.capabilities.focus_reporting = CapabilitySupport::Supported;
-        } else {
-            self.capabilities.focus_reporting = CapabilitySupport::Unsupported;
         }
 
         if self.requirements.mouse {
