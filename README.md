@@ -121,6 +121,8 @@ truncated response runs.
 When observed output use is below the requested ceiling, Ion first makes one
 compact-and-retry attempt if a settled history prefix is available. It drops
 the incomplete attempt and reports the restart to streaming clients.
+A completed response with no answer or tool call fails the Turn; it does not
+save an empty assistant message that would break later provider replay.
 
 ## Current limits
 

@@ -63,6 +63,8 @@ response reaches its output-token limit with identifiable tool calls, commit
 the incomplete assistant attempt and synthetic failure results in one Session
 transaction, then let the model reissue complete calls. An unrepresentable
 partial call ends the Turn without dispatch.
+A completed response with no nonblank text and no calls ends the Turn as a
+model error; it is not committed as a successful empty assistant answer.
 
 ## Session and recovery
 

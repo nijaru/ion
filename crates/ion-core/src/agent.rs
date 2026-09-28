@@ -558,6 +558,9 @@ impl Agent {
                 })
                 .collect::<Vec<_>>()
                 .join("\n");
+            if calls.is_empty() && final_text.trim().is_empty() {
+                return Err(AgentError::IncompleteModelResponse);
+            }
             // Keep steering in the channel until tools settle. Cancellation
             // during a tool must return unsent input to the host.
             let pending_steering = if calls.is_empty() {
@@ -696,7 +699,7 @@ pub enum AgentError {
     ContextTooLarge,
     #[error("model returned an invalid context summary")]
     InvalidSummary,
-    #[error("model stream ended without a complete assistant response")]
+    #[error("model did not return a complete, nonempty assistant response")]
     IncompleteModelResponse,
     #[error("model returned continuation material for another provider")]
     InvalidProviderReplay,
@@ -894,6 +897,60 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "still here");
         assert_eq!(reopened.messages().unwrap().len(), 7);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_completed_responses_fail_without_poisoning_resume() {
+        let root =
+            std::env::temp_dir().join(format!("ion-empty-response-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let service = Arc::new(ScriptedModelService::new([
+            response(Vec::new()),
+            response(vec![Content::Text(" \n".into())]),
+            response(vec![Content::Text("working again".into())]),
+        ]));
+        let agent = Agent::new(service, Arc::new(LocalTools::new(&root).unwrap()));
+        for prompt in ["empty", "blank"] {
+            let error = agent
+                .submit(
+                    &session,
+                    model(),
+                    prompt.into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap_err();
+            assert!(matches!(error, AgentError::IncompleteModelResponse));
+        }
+        assert!(
+            !session
+                .messages()
+                .unwrap()
+                .iter()
+                .any(|message| message.role == Role::Assistant)
+        );
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert_eq!(
+            agent
+                .submit(
+                    &reopened,
+                    model(),
+                    "continue".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap(),
+            "working again"
+        );
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
