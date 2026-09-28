@@ -184,6 +184,7 @@ struct Progress {
 impl Progress {
     fn observe(&mut self, event: CodingAgentEvent) {
         match event {
+            CodingAgentEvent::TurnAccepted { .. } => {}
             CodingAgentEvent::TextDelta(text) => {
                 self.text.push_str(&text);
                 if self.text.len() > MAX_PREVIEW {

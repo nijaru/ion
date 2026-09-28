@@ -532,6 +532,7 @@ impl Agent {
             return Err(AgentError::ContextTooLarge);
         }
         let (turn, interrupted) = session.begin_turn_message(input, model.clone())?;
+        observe(AgentEvent::TurnAccepted { turn });
         if interrupted > 0 {
             observe(AgentEvent::InterruptedCalls(interrupted));
         }
@@ -808,6 +809,9 @@ fn retryable_provider_error(error: &ProviderError) -> bool {
 
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
+    TurnAccepted {
+        turn: u64,
+    },
     TextDelta(String),
     ProviderRetry {
         attempt: usize,

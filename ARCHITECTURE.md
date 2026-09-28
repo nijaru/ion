@@ -291,6 +291,14 @@ TypeScript modules. One-shot JSONL remains a progress stream; a long-lived
 bidirectional control mode must correlate requests, distinguish acceptance
 from settlement, and expose Session, model and resource operations through the
 same host.
+The control process reads one LF-delimited JSON command at a time and reserves
+stdout for JSON records. A prompt response confirms the user Turn was committed
+to its Session; it does not claim model completion. A separate terminal record
+reports the Turn outcome. Command IDs correlate responses, while Turn IDs
+correlate progress and settlement. A running Turn keeps its selected Session
+and model fixed. Cancellation requests the current Turn to stop; it never
+claims to undo tool effects. Closing input cancels active work and waits for
+its terminal record before exiting. Clients must keep draining stdout.
 
 Earlier-point exploration must select a committed conversation point without
 erasing later history. A new Session fork at that point or an active branch

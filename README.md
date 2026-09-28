@@ -40,6 +40,7 @@ ion                        # terminal chat
 ion run 'Inspect and fix the failing test'
 ion -p 'Summarize the changes'
 ion --json run 'Inspect and fix the failing test' > events.jsonl
+ion rpc                    # persistent JSONL control on stdin/stdout
 git diff | ion -p 'Review this change'
 ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
@@ -81,6 +82,23 @@ a call that was never dispatched because the model response was truncated.
 were replaced after context compaction; consumers should discard those deltas.
 Diagnostics stay on stderr, and failure also sets a nonzero exit status. The `final` record is
 the committed assistant answer; earlier text deltas are for live display.
+
+`ion rpc` keeps a Session open for a subprocess client. It emits a `ready`
+record, then accepts one LF-terminated JSON command per stdin line. Commands
+can carry a string `id`; each response repeats it. For example, send
+`{"id":"1","type":"prompt","message":"Inspect this project"}`. A successful
+prompt response includes a Turn ID and confirms that the input entered the
+Session. Keep reading progress records with that Turn ID until `turn_end`
+reports `completed`, `cancelled` or `failed`; a response alone is not the
+answer. `final` is the committed answer. Other commands are `steer`, `abort`,
+`get_state`, `inspect`, `list_sessions`, `list_models`, `list_resources`,
+`reload_resources`, `set_model`, `new_session`, `switch_session` and `set_name`.
+`prompt` also accepts `images` as an array of local paths, relative to the
+Session's working directory. `steer` queues text for the active Turn; `abort` requests
+cancellation. Session, resource and model changes require an idle Turn.
+Malformed commands receive a failed response, and commands over 1 MiB are
+rejected. Stdout is reserved for protocol records, stderr for diagnostics.
+Closing stdin cancels a running Turn and waits for its terminal record.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
 recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse

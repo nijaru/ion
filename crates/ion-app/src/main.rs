@@ -15,6 +15,7 @@ use ion_host::{CredentialStatus, Host, Resources, SavedSelection, Wire};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+mod rpc;
 mod terminal_client;
 
 #[derive(Parser)]
@@ -80,6 +81,8 @@ enum Action {
     Run { prompt: String },
     /// Open the terminal chat client.
     Chat,
+    /// Control a persistent coding session over JSONL stdin/stdout.
+    Rpc,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
     /// Copy a saved conversation into an independent Session in this directory.
@@ -344,6 +347,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     Ok(())
                 }
                 Some(Action::Clone) => unreachable!("clone handled before model selection"),
+                Some(Action::Rpc) => rpc::run(session, selected, resources, catalog, host).await,
                 Some(Action::Chat) | None if cli.print.is_none() => {
                     terminal_client::chat(
                         session, agent, selected, resources, images, catalog, host,
@@ -422,56 +426,25 @@ async fn headless(
         provider_replay: None,
     };
     let result = agent
-        .submit_message(
-            &session,
-            model,
-            input,
-            instructions,
-            stop,
-            |event| {
-                if json_output {
-                    let record = match event {
-                        CodingAgentEvent::TextDelta(text) => {
-                            json!({"type":"text_delta","text":text})
-                        }
-                        CodingAgentEvent::ProviderRetry { attempt, max_retries, delay_ms } => {
-                            json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
-                        }
-                        CodingAgentEvent::ToolStarted {
-                            call_id,
-                            name,
-                            arguments,
-                        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments}),
-                        CodingAgentEvent::ToolFinished {
-                            call_id,
-                            name,
-                            output,
-                        } => json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error}),
-                        CodingAgentEvent::ToolRejected {
-                            call_id,
-                            name,
-                            output,
-                        } => json!({"type":"tool_rejected","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error}),
-                        CodingAgentEvent::InterruptedCalls(count) => {
-                            json!({"type":"interrupted_calls","count":count})
-                        }
-                        CodingAgentEvent::ContextCompacted { through_entry } => {
-                            json!({"type":"context_compacted","through_entry":through_entry})
-                        }
-                        CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
-                        CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
-                    };
-                    if output_error.is_none()
-                        && let Err(error) = write_json_record(&record)
-                    {
-                        output_error = Some(error);
-                        output_stop.cancel();
-                    }
-                    return;
+        .submit_message(&session, model, input, instructions, stop, |event| {
+            if json_output {
+                let record = rpc::event_record(event);
+                if output_error.is_none()
+                    && let Err(error) = write_json_record(&record)
+                {
+                    output_error = Some(error);
+                    output_stop.cancel();
                 }
-                match event {
+                return;
+            }
+            match event {
+                CodingAgentEvent::TurnAccepted { .. } => {}
                 CodingAgentEvent::TextDelta(_) => {}
-                CodingAgentEvent::ProviderRetry { attempt, max_retries, delay_ms } => {
+                CodingAgentEvent::ProviderRetry {
+                    attempt,
+                    max_retries,
+                    delay_ms,
+                } => {
                     eprintln!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]")
                 }
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
@@ -491,9 +464,8 @@ async fn headless(
                     eprintln!("[incomplete response discarded; retrying]");
                 }
                 CodingAgentEvent::Final(_) => {}
-                }
-            },
-        )
+            }
+        })
         .await;
     signal.abort();
     if json_output {

@@ -1,0 +1,457 @@
+//! Long-lived JSONL client of the shared host and coding loop.
+use std::{path::PathBuf, sync::Arc};
+
+use anyhow::{Context, Result, anyhow, bail, ensure};
+use ion_ai::{Content, Message, Role};
+use ion_core::{CodingAgentEvent, CodingSession, SteeringInbox};
+use ion_host::{Host, Resources, Selection, SessionCatalog};
+use serde_json::{Value, json};
+use tokio::{
+    io::{AsyncBufRead, AsyncBufReadExt, BufReader},
+    sync::mpsc,
+};
+use tokio_util::sync::CancellationToken;
+
+use crate::{expand_input, redact_image_payloads, write_json_record};
+
+const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+
+enum Input {
+    Line(Vec<u8>),
+    TooLarge,
+    Eof,
+}
+
+enum Output {
+    Record(Value),
+    Done,
+}
+
+struct Active {
+    stop: CancellationToken,
+    steering: Arc<SteeringInbox>,
+}
+
+/// The only mutable control state. The Session and selected route are fixed
+/// inside each spawned Turn, so idle commands cannot change a running Turn.
+struct Control {
+    host: Arc<Host>,
+    catalog: SessionCatalog,
+    session: Arc<CodingSession>,
+    selected: Selection,
+    resources: Resources,
+    active: Option<Active>,
+    output: mpsc::Sender<Output>,
+}
+
+pub async fn run(
+    session: Arc<CodingSession>,
+    selected: Selection,
+    resources: Resources,
+    catalog: SessionCatalog,
+    host: Arc<Host>,
+) -> Result<()> {
+    let (output, mut events) = mpsc::channel::<Output>(128);
+    let mut control = Control {
+        host,
+        catalog,
+        session,
+        selected,
+        resources,
+        active: None,
+        output,
+    };
+    write_json_record(
+        &json!({"type":"ready","session":control.session_id(),"cwd":control.session.cwd()}),
+    )?;
+    let mut input = BufReader::new(tokio::io::stdin());
+    let mut closing = false;
+    loop {
+        tokio::select! {
+            line = read_command(&mut input), if !closing => {
+                match line? {
+                    Input::Line(line) => control.command(&line).await?,
+                    Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 1 MiB"))?,
+                    Input::Eof => {
+                        closing = true;
+                        if let Some(active) = &control.active { active.stop.cancel(); }
+                    }
+                }
+            }
+            Some(output) = events.recv(), if control.active.is_some() => {
+                match output {
+                    Output::Record(record) => write_json_record(&record)?,
+                    Output::Done => control.active = None,
+                }
+            }
+        }
+        if closing && control.active.is_none() {
+            break;
+        }
+    }
+    Ok(())
+}
+
+async fn read_command<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Input> {
+    let mut line = Vec::new();
+    let mut too_large = false;
+    loop {
+        let chunk = reader.fill_buf().await?;
+        if chunk.is_empty() {
+            return if line.is_empty() && !too_large {
+                Ok(Input::Eof)
+            } else {
+                Ok(Input::TooLarge) // Incomplete trailing records are never executed.
+            };
+        }
+        let end = chunk.iter().position(|byte| *byte == b'\n');
+        let count = end.map_or(chunk.len(), |index| index + 1);
+        if !too_large {
+            if line.len() + count > MAX_COMMAND_BYTES {
+                too_large = true;
+                line.clear();
+            } else {
+                line.extend_from_slice(&chunk[..count]);
+            }
+        }
+        reader.consume(count);
+        if end.is_some() {
+            if too_large {
+                return Ok(Input::TooLarge);
+            }
+            line.pop();
+            if line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            return Ok(Input::Line(line));
+        }
+    }
+}
+
+impl Control {
+    fn session_id(&self) -> String {
+        self.session
+            .path()
+            .file_stem()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned()
+    }
+
+    fn idle(&self) -> Result<()> {
+        ensure!(
+            self.active.is_none(),
+            "a Turn is active; abort or wait for turn_end"
+        );
+        Ok(())
+    }
+
+    async fn command(&mut self, line: &[u8]) -> Result<()> {
+        let value: Value = match serde_json::from_slice(line) {
+            Ok(value) => value,
+            Err(error) => {
+                write_json_record(&failure(None, "parse", &error.to_string()))?;
+                return Ok(());
+            }
+        };
+        let id = value.get("id").cloned();
+        let command = value.get("type").and_then(Value::as_str).unwrap_or("parse");
+        if !value.is_object() || id.as_ref().is_some_and(|id| !id.is_string()) {
+            write_json_record(&failure(
+                None,
+                "parse",
+                "command must be an object with an optional string id",
+            ))?;
+            return Ok(());
+        }
+        if command == "prompt" {
+            if let Err(error) = self.prompt(&value, id.clone()).await {
+                write_json_record(&failure(id, command, &format!("{error:#}")))?;
+            }
+            return Ok(());
+        }
+        let outcome: Result<Value> = (|| {
+            match command {
+                "steer" => {
+                    let active = self.active.as_ref().context("no active Turn")?;
+                    let message = required_string(&value, "message")?;
+                    let expanded = expand_input(&self.resources, message.to_owned())?;
+                    ensure!(!expanded.trim().is_empty(), "message is empty");
+                    active.steering.push(expanded);
+                    Ok(json!({"disposition":"queued"}))
+                }
+                "abort" => {
+                    let active = self.active.as_ref().context("no active Turn")?;
+                    active.stop.cancel();
+                    Ok(json!({"disposition":"requested"}))
+                }
+                "get_state" => {
+                    let view = self.session.view()?;
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.selected.identity(),"busy":self.active.is_some(),"entries":view.entries.len()}))
+                }
+                "inspect" => {
+                    let mut view = serde_json::to_value(self.session.view()?)?;
+                    redact_image_payloads(&mut view);
+                    Ok(view)
+                }
+                "list_sessions" => Ok(json!(self.catalog.list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
+                "list_models" => Ok(json!(self.host.models().choices(self.host.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
+                "list_resources" => Ok(json!({"skills":self.resources.skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.resources.templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.resources.diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
+                "reload_resources" => {
+                    self.idle()?;
+                    self.resources = self.host.resources(self.session.cwd())?;
+                    Ok(json!({"skills":self.resources.skills().count(),"prompts":self.resources.templates().count()}))
+                }
+                "set_model" => {
+                    self.idle()?;
+                    let provider = required_string(&value, "provider")?;
+                    let model = required_string(&value, "model")?;
+                    let selected = self.host.models().choose(Some(provider.to_owned()), Some(model.to_owned()), None, self.host.credentials())?;
+                    selected.require_access(self.host.credentials())?;
+                    self.selected = selected;
+                    Ok(json!({"model":self.selected.identity()}))
+                }
+                "new_session" => {
+                    self.idle()?;
+                    let path = self.catalog.new_path()?;
+                    self.session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
+                    Ok(json!({"session":self.session_id()}))
+                }
+                "switch_session" => {
+                    self.idle()?;
+                    let path = self.catalog.resolve_explicit(PathBuf::from(required_string(&value, "session")?))?;
+                    let view = CodingSession::inspect(&path)?;
+                    ensure!(view.cwd == self.session.cwd(), "session belongs to another working directory");
+                    let selected = self.host.models().choose(None, None, view.last_model, self.host.credentials())?;
+                    selected.require_access(self.host.credentials())?;
+                    self.session = Arc::new(CodingSession::open(path)?);
+                    self.selected = selected;
+                    self.resources = self.host.resources(self.session.cwd())?;
+                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
+                }
+                "set_name" => {
+                    self.idle()?;
+                    let name = value.get("name").and_then(Value::as_str);
+                    self.session.set_name(name)?;
+                    Ok(json!({"name":name}))
+                }
+                _ => bail!("unknown command: {command}"),
+            }
+        })();
+        write_json_record(&match outcome {
+            Ok(data) => success(id, command, data),
+            Err(error) => failure(id, command, &format!("{error:#}")),
+        })?;
+        Ok(())
+    }
+
+    async fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
+        self.idle()?;
+        let prompt = required_string(value, "message")?;
+        let prompt = expand_input(&self.resources, prompt.to_owned())?;
+        let images = value.get("images").map_or(Ok(Vec::new()), |images| {
+            images
+                .as_array()
+                .context("images must be an array of local paths")?
+                .iter()
+                .map(|image| {
+                    let path =
+                        PathBuf::from(image.as_str().context("image path must be a string")?);
+                    let path = if path.is_absolute() {
+                        path
+                    } else {
+                        self.session.cwd().join(path)
+                    };
+                    ion_host::image_input::load_image(&self.selected, &path)
+                })
+                .collect::<Result<Vec<_>>>()
+        })?;
+        ensure!(
+            !prompt.trim().is_empty() || !images.is_empty(),
+            "message is empty"
+        );
+        let input = Message {
+            role: Role::User,
+            content: std::iter::once(Content::Text(prompt))
+                .chain(
+                    images
+                        .into_iter()
+                        .flat_map(ion_host::image_input::LoadedImage::into_parts),
+                )
+                .collect(),
+            provider_replay: None,
+        };
+        let agent = self.host.agent(&self.session, &self.selected)?;
+        let instructions = self.resources.instructions().to_owned();
+        let model = self.selected.identity();
+        let session = self.session.clone();
+        let stop = CancellationToken::new();
+        let steering = Arc::new(SteeringInbox::default());
+        let output = self.output.clone();
+        let task_stop = stop.clone();
+        let task_steering = steering.clone();
+        self.active = Some(Active { stop, steering });
+        tokio::spawn(async move {
+            let mut accepted = None;
+            let mut output_fault = None;
+            let result = agent
+                .submit_message_with_steering(
+                    &session,
+                    model,
+                    input,
+                    instructions,
+                    task_stop.clone(),
+                    &task_steering,
+                    |event| match event {
+                        CodingAgentEvent::TurnAccepted { turn } => {
+                            accepted = Some(turn);
+                            if output
+                                .try_send(Output::Record(success(
+                                    id.clone(),
+                                    "prompt",
+                                    json!({"disposition":"started","turn":turn}),
+                                )))
+                                .is_err()
+                            {
+                                output_fault = Some("RPC output queue is full".to_owned());
+                                task_stop.cancel();
+                            }
+                        }
+                        event => {
+                            if let Some(turn) = accepted {
+                                let mut record = event_record(event);
+                                record["turn"] = json!(turn);
+                                if output.try_send(Output::Record(record)).is_err() {
+                                    output_fault = Some("RPC output queue is full".to_owned());
+                                    task_stop.cancel();
+                                }
+                            }
+                        }
+                    },
+                )
+                .await;
+            if let Some(turn) = accepted {
+                let status = match &result {
+                    Ok(_) => "completed",
+                    Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
+                    Err(_) => "failed",
+                };
+                let mut record = json!({"type":"turn_end","turn":turn,"status":status});
+                if let Err(error) = &result {
+                    record["error"] = json!(error.to_string());
+                }
+                if let Some(fault) = output_fault {
+                    record["output_error"] = json!(fault);
+                }
+                let _ = output.send(Output::Record(record)).await;
+            } else {
+                let error = result.err().map_or_else(
+                    || "Turn was not accepted".to_owned(),
+                    |error| error.to_string(),
+                );
+                let _ = output
+                    .send(Output::Record(failure(id, "prompt", &error)))
+                    .await;
+            }
+            for pending in task_steering.take_uncommitted() {
+                let _ = output
+                    .send(Output::Record(
+                        json!({"type":"uncommitted_steering","message":pending}),
+                    ))
+                    .await;
+            }
+            let _ = output.send(Output::Done).await;
+        });
+        Ok(())
+    }
+}
+
+fn required_string<'a>(value: &'a Value, field: &str) -> Result<&'a str> {
+    let text = value
+        .get(field)
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow!("{field} must be a string"))?;
+    Ok(text)
+}
+
+fn success(id: Option<Value>, command: &str, data: Value) -> Value {
+    let mut record = json!({"type":"response","command":command,"success":true,"data":data});
+    if let Some(id) = id {
+        record["id"] = id;
+    }
+    record
+}
+
+fn failure(id: Option<Value>, command: &str, error: &str) -> Value {
+    let mut record = json!({"type":"response","command":command,"success":false,"error":error});
+    if let Some(id) = id {
+        record["id"] = id;
+    }
+    record
+}
+
+pub(super) fn event_record(event: CodingAgentEvent) -> Value {
+    match event {
+        CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
+        CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
+        CodingAgentEvent::ProviderRetry {
+            attempt,
+            max_retries,
+            delay_ms,
+        } => {
+            json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
+        }
+        CodingAgentEvent::ToolStarted {
+            call_id,
+            name,
+            arguments,
+        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments}),
+        CodingAgentEvent::ToolFinished {
+            call_id,
+            name,
+            output,
+        } => {
+            json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error})
+        }
+        CodingAgentEvent::ToolRejected {
+            call_id,
+            name,
+            output,
+        } => {
+            json!({"type":"tool_rejected","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error})
+        }
+        CodingAgentEvent::InterruptedCalls(count) => {
+            json!({"type":"interrupted_calls","count":count})
+        }
+        CodingAgentEvent::ContextCompacted { through_entry } => {
+            json!({"type":"context_compacted","through_entry":through_entry})
+        }
+        CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
+        CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn framing_is_lf_only_and_recovers_after_oversize() {
+        let mut input = Vec::new();
+        input.extend_from_slice(b"{\"message\":\"a\xE2\x80\xA8b\"}\r\n");
+        input.extend(std::iter::repeat_n(b'x', MAX_COMMAND_BYTES + 1));
+        input.extend_from_slice(b"\n{}\n");
+        let mut reader = BufReader::new(input.as_slice());
+        assert!(matches!(
+            read_command(&mut reader).await.unwrap(),
+            Input::Line(_)
+        ));
+        assert!(matches!(
+            read_command(&mut reader).await.unwrap(),
+            Input::TooLarge
+        ));
+        assert!(
+            matches!(read_command(&mut reader).await.unwrap(), Input::Line(line) if line == b"{}")
+        );
+    }
+}
