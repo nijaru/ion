@@ -6,7 +6,8 @@
   `README.md` describes implemented and validated behavior.
 - Build one Pi-like local coding loop for TUI, headless and library hosts:
   read, edit, write, native shell, project instructions, model catalog,
-  automatic environment keys, interactive login and resumable sessions.
+  automatic environment keys, optional masked API-key entry and resumable
+  sessions. OAuth is not a first-use gate.
 - Ion is unreleased v0. Replace obsolete R1 representations directly. Do
   not keep a generic task graph, second runtime, private importer/registry,
   attempt ledger or compatibility facade simply because it existed before.
@@ -22,9 +23,12 @@
 
 ## Changes
 
-- Before a substantial slice, trace affected code and current Git status;
-  identify the behavior, owner, failure boundary and useful verification.
-  Reconcile design/code disagreement before adding another feature.
+- Before a substantial coding-path slice, trace affected Ion code and Git
+  status, then inspect analogous current Pi source, tests and recent fixes at
+  a recorded revision. Check other harnesses when the design choice needs
+  them. Start from the user workflow and Ion's semantic owner: a reference
+  difference alone is not a requirement. Reconcile the accepted contract
+  before changing implementation, and verify the failure boundary.
 - Preserve user work and secrets. Delete obsolete production paths once the
   replacement owns the behavior; Git retains historical source. Update
   public documentation when behavior or a maintainer contract changes.

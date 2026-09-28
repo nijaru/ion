@@ -1,13 +1,8 @@
 # Ion architecture
 
-**Chosen implementation target, under source-level qualification as of
-2026-09-28.** This file states the coding-agent contracts. The core loop has
-completed end-to-end macOS tasks on the live routes named in
-[README.md](README.md); provider and tool edge-case correctness is still being
-checked against current Pi implementation and focused failures. Those tasks
-do not establish Pi-level correctness across the supported path.
-[README.md](README.md) describes what the current executable can do. Ion is
-unreleased v0, so obsolete runtime representations can be replaced directly.
+This file states the chosen coding-agent contracts. [README.md](README.md)
+describes implemented and validated behavior. Ion is unreleased v0, so
+obsolete runtime representations can be replaced directly.
 
 ## Product
 
@@ -23,11 +18,13 @@ selection, automatic environment API keys, optional masked key entry, and
 honest resume. Ion needs to complete real coding tasks end to end; scripted
 model and storage tests alone do not establish that outcome.
 
-Pi is a direct reference for the small interactions that make a coding agent
-usable: editing and steering prompts, inspecting tools, finding sessions,
-switching models and managing context. Ion adopts those user outcomes through
-its own Session and client design rather than copying every Pi command or
-its plugin runtime.
+Pi is a direct source reference for the small interactions and failure cases
+that make a coding agent usable: editing and steering prompts, inspecting
+tools, finding sessions, switching models and managing context. Ion adopts
+those user outcomes through its own Session and client design rather than
+copying every Pi command or its plugin runtime. The same coding loop must be
+usable from terminal, headless and library clients; client-specific rendering
+or input cannot own model/tool semantics.
 
 Workers, personal memory, gateways, schedules and general workflow authoring
 are outside this initial scope.

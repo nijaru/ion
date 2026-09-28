@@ -138,16 +138,17 @@ Ion has completed live coding repairs with DeepSeek V4.1 Flash, MiMo V2.6
 Flash, OpenRouter DeepSeek V4.1 Flash, and a custom llama.cpp endpoint reached
 through a loopback tunnel on macOS. OpenRouter DeepSeek V4.1 Flash also
 completed a live read/edit/shell repair and cross-process resume in an
-unprivileged Linux ARM64 container. The code and session results were checked
-independently; these are short-task samples, not broad model or platform
-parity.
+unprivileged Linux ARM64 container. On native Fedora, a custom local
+llama.cpp Qwen endpoint completed a read/edit/shell repair and cross-process
+resume. The code and session results were checked independently; these are
+short-task samples, not broad model or platform parity.
 
 The TUI clips tool output in its default view; the full stored result is
 available through Ctrl-O or `/tool`. Context pressure currently
 uses a rough request-size token estimate; custom routes without a known
 context window use only the transport bound. Direct
-OpenAI returned a no-credits HTTP 429 in the available account; Anthropic and
-the separate Fedora host were not qualified. [ARCHITECTURE.md](ARCHITECTURE.md)
+OpenAI returned a no-credits HTTP 429 in the available account; Anthropic was
+not qualified. [ARCHITECTURE.md](ARCHITECTURE.md)
 holds the design contracts.
 
 Repository checks:
