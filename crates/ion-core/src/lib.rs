@@ -15,7 +15,7 @@ pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;
 pub use model_http::{HttpModelService, HttpWire};
 pub use session::{
-    Session as CodingSession, SessionEntry, SessionError as CodingSessionError, SessionView,
-    TurnEndReason,
+    ForkPoint, Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
+    SessionView, TurnEndReason, TurnSummary,
 };
 pub use tool_set::ToolSet;

@@ -3,7 +3,7 @@ use std::{path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::{Content, Message, Role};
-use ion_core::{CodingAgentEvent, CodingSession, CodingToolHost, SteeringInbox};
+use ion_core::{CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox};
 use ion_host::{Host, Resources, Selection, SessionCatalog};
 use serde_json::{Value, json};
 use tokio::{
@@ -12,7 +12,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::{expand_input, redact_image_payloads, write_json_record};
+use crate::{expand_input, preview_input, redact_image_payloads, write_json_record};
 
 const MAX_COMMAND_BYTES: usize = 1024 * 1024;
 
@@ -198,6 +198,7 @@ impl Control {
                     Ok(view)
                 }
                 "list_sessions" => Ok(json!(self.catalog.list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
+                "list_turns" => Ok(json!(self.session.view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
                 "list_models" => Ok(json!(self.host.models().choices(self.host.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
                 "list_resources" => Ok(json!({"skills":self.resources.skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.resources.templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.resources.diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
                 "reload_resources" => {
@@ -219,6 +220,19 @@ impl Control {
                     let path = self.catalog.new_path()?;
                     self.session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
                     Ok(json!({"session":self.session_id()}))
+                }
+                "fork" => {
+                    self.idle()?;
+                    let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
+                    let after = value.get("after").and_then(Value::as_bool).unwrap_or(false);
+                    let model = self.session.view()?.turns().into_iter().find(|item| item.turn == turn).map(|item| item.model).context("selected Turn does not exist")?;
+                    let selected = self.host.models().choose(None, None, Some(model), self.host.credentials())?;
+                    selected.require_access(self.host.credentials())?;
+                    let path = self.catalog.new_path()?;
+                    let fork = self.session.fork_to(&path, if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
+                    self.session = Arc::new(fork);
+                    self.selected = selected;
+                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
                 }
                 "switch_session" => {
                     self.idle()?;

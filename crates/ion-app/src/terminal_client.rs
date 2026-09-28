@@ -9,7 +9,9 @@ use std::{
 use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
-use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, SteeringInbox};
+use ion_core::{
+    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox,
+};
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
 use ion_terminal::{
@@ -57,6 +59,10 @@ struct ToolView {
 enum PickerValue {
     Session(PathBuf),
     Model(ModelRef),
+    ForkBefore {
+        turn: u64,
+        input: Message,
+    },
     File {
         path: String,
         start: usize,
@@ -164,6 +170,38 @@ impl ChatRuntime {
             .to_string_lossy()
             .into_owned();
         self.session = session;
+        Ok(id)
+    }
+
+    fn fork_session(&mut self, point: ForkPoint) -> Result<String> {
+        let turn = match point {
+            ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
+        };
+        let selected_model = self
+            .session
+            .view()?
+            .turns()
+            .into_iter()
+            .find(|item| item.turn == turn)
+            .context("selected Turn does not exist")?
+            .model;
+        let selected = self.host.models().resolve_identity(&selected_model)?;
+        selected.require_access(self.host.credentials())?;
+        let path = self.sessions.new_path()?;
+        let session = Arc::new(self.session.fork_to(&path, point)?);
+        let agent = self.host.agent_with_optional_tools(
+            &session,
+            &selected,
+            self.external_tools.clone(),
+        )?;
+        let id = path
+            .file_stem()
+            .context("forked session has no ID")?
+            .to_string_lossy()
+            .into_owned();
+        self.session = session;
+        self.selected = selected;
+        self.agent = agent;
         Ok(id)
     }
 
@@ -417,10 +455,23 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         ui.insert_file(path, start, end);
                         continue;
                     }
+                    if let PickerValue::ForkBefore { turn, input } = value {
+                        if let Err(error) = apply_fork(
+                            &mut runtime,
+                            &mut ui,
+                            ForkPoint::BeforeTurn(turn),
+                            Some(input),
+                        ) {
+                            ui.status = format!("{error:#}");
+                        }
+                        continue;
+                    }
                     let result = match value {
                         PickerValue::Session(path) => runtime.switch_session(path),
                         PickerValue::Model(model) => runtime.select_model(model),
-                        PickerValue::File { .. } => unreachable!("handled above"),
+                        PickerValue::File { .. } | PickerValue::ForkBefore { .. } => {
+                            unreachable!("handled above")
+                        }
                     };
                     match result {
                         Ok(()) => {
@@ -474,6 +525,60 @@ fn login_in_terminal(
     Ok(result)
 }
 
+fn apply_fork(
+    runtime: &mut ChatRuntime,
+    ui: &mut Frontend,
+    point: ForkPoint,
+    restore: Option<Message>,
+) -> Result<()> {
+    let id = runtime.fork_session(point)?;
+    ui.refresh_session(&runtime.session)?;
+    let mut too_large_to_restore = false;
+    if let Some(input) = restore {
+        let draft = input
+            .content
+            .iter()
+            .filter_map(|part| match part {
+                Content::Text(text) => Some(text.as_str()),
+                _ => None,
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        if draft.len() > MAX_DRAFT {
+            too_large_to_restore = true;
+            ui.draft.clear();
+            ui.cursor = 0;
+            ui.images.clear();
+        } else {
+            ui.draft = draft;
+            ui.cursor = ui.draft.len();
+            ui.images = input
+                .content
+                .into_iter()
+                .filter_map(|part| match part {
+                    Content::Image(content) => Some(LoadedImage {
+                        content,
+                        note: None,
+                    }),
+                    _ => None,
+                })
+                .collect();
+        }
+    }
+    ui.status = if too_large_to_restore {
+        format!(
+            "Forked as {}; selected input exceeds editor limit; inspect source to copy it",
+            &id[..id.len().min(12)]
+        )
+    } else {
+        format!(
+            "Forked as {}; both sessions use the same working directory",
+            &id[..id.len().min(12)]
+        )
+    };
+    Ok(())
+}
+
 fn handle_command(
     runtime: &mut ChatRuntime,
     ui: &mut Frontend,
@@ -483,7 +588,7 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
         ),
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
@@ -521,6 +626,24 @@ fn handle_command(
             ui.note(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
+        }
+        "/fork" => {
+            let turns = runtime.session.view()?.turns();
+            if args.is_empty() {
+                let items = turns.into_iter().map(|item| PickerItem {
+                    label: format!("Turn {}  {}", item.turn, crate::preview_input(&item.input)),
+                    value: PickerValue::ForkBefore { turn: item.turn, input: item.input },
+                }).collect();
+                ui.picker = Some(Picker { title: "Fork before Turn", query: String::new(), selected: 0, items });
+            } else {
+                let turn: u64 = args.parse().context("use /fork TURN")?;
+                let input = turns.into_iter().find(|item| item.turn == turn).context("selected Turn does not exist")?.input;
+                apply_fork(runtime, ui, ForkPoint::BeforeTurn(turn), Some(input))?;
+            }
+        }
+        "/fork-after" => {
+            let turn: u64 = args.parse().context("use /fork-after TURN")?;
+            apply_fork(runtime, ui, ForkPoint::AfterTurn(turn), None)?;
         }
         "/resume" => {
             if !args.is_empty() {
@@ -1189,6 +1312,10 @@ impl Frontend {
                 let value = selected.map(|item| match &item.value {
                     PickerValue::Session(path) => PickerValue::Session(path.clone()),
                     PickerValue::Model(model) => PickerValue::Model(model.clone()),
+                    PickerValue::ForkBefore { turn, input } => PickerValue::ForkBefore {
+                        turn: *turn,
+                        input: input.clone(),
+                    },
                     PickerValue::File { path, start, end } => PickerValue::File {
                         path: path.clone(),
                         start: *start,

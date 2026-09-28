@@ -9,7 +9,9 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::{Content, Message, ModelRef, Role};
-use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost};
+use ion_core::{
+    CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint,
+};
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, Host, McpServer, Resources, SavedSelection, Wire};
 use serde_json::json;
@@ -90,8 +92,16 @@ enum Action {
     Rpc,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
+    /// List numbered Turns in a saved Session.
+    Turns,
     /// Copy a saved conversation into an independent Session in this directory.
     Clone,
+    /// Fork a saved Session before a Turn, or after it with --after.
+    Fork {
+        turn: u64,
+        #[arg(long)]
+        after: bool,
+    },
     /// Summarize settled history for continued work, retaining the raw log.
     Compact,
 }
@@ -286,7 +296,13 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 catalog.latest()?
             } else if matches!(
                 action,
-                Some(Action::Inspect | Action::Compact | Action::Clone)
+                Some(
+                    Action::Inspect
+                        | Action::Turns
+                        | Action::Compact
+                        | Action::Clone
+                        | Action::Fork { .. }
+                )
             ) {
                 bail!("use --continue or --session ID; run `ion sessions` to find one")
             } else {
@@ -311,6 +327,22 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 println!("{}", serde_json::to_string_pretty(&output)?);
                 return Ok(());
             }
+            if matches!(action, Some(Action::Turns)) {
+                let view = existing.context("session does not exist")?;
+                for turn in view.turns() {
+                    println!(
+                        "{}\t{}\t{}",
+                        turn.turn,
+                        if turn.end.is_some() {
+                            "ended"
+                        } else {
+                            "active"
+                        },
+                        preview_input(&turn.input)
+                    );
+                }
+                return Ok(());
+            }
             if matches!(action, Some(Action::Clone)) {
                 ensure!(existing.is_some(), "session does not exist");
                 let source = CodingSession::open(&path)?;
@@ -321,6 +353,25 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     .file_stem()
                     .context("cloned session has no ID")?;
                 println!("Cloned session as {}", id.to_string_lossy());
+                return Ok(());
+            }
+            if let Some(Action::Fork { turn, after }) = &action {
+                ensure!(existing.is_some(), "session does not exist");
+                let source = CodingSession::open(&path)?;
+                let target = catalog.new_path()?;
+                let fork = source.fork_to(
+                    &target,
+                    if *after {
+                        ForkPoint::AfterTurn(*turn)
+                    } else {
+                        ForkPoint::BeforeTurn(*turn)
+                    },
+                )?;
+                let id = fork
+                    .path()
+                    .file_stem()
+                    .context("forked session has no ID")?;
+                println!("Forked session as {}", id.to_string_lossy());
                 return Ok(());
             }
             if matches!(action, Some(Action::Compact)) {
@@ -398,7 +449,9 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         }
                         Ok(())
                     }
-                    Some(Action::Clone) => unreachable!("clone handled before model selection"),
+                    Some(Action::Clone | Action::Turns | Action::Fork { .. }) => {
+                        unreachable!("session action handled before model selection")
+                    }
                     Some(Action::Rpc) => {
                         rpc::run(session, selected, resources, catalog, host, external_tools).await
                     }
@@ -447,6 +500,24 @@ fn expand_input(resources: &Resources, prompt: String) -> Result<String> {
         .expand_command(&prompt)
         .transpose()
         .map(|expanded| expanded.unwrap_or(prompt))
+}
+
+fn preview_input(input: &Message) -> String {
+    let text = input
+        .content
+        .iter()
+        .find_map(|part| match part {
+            Content::Text(text) if !text.trim().is_empty() => Some(text.as_str()),
+            _ => None,
+        })
+        .unwrap_or("[image]");
+    text.lines()
+        .next()
+        .unwrap_or("")
+        .chars()
+        .take(120)
+        .map(|ch| if ch.is_control() { ' ' } else { ch })
+        .collect()
 }
 
 fn status_label(status: CredentialStatus) -> &'static str {

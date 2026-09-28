@@ -306,12 +306,15 @@ and model fixed. Cancellation requests the current Turn to stop; it never
 claims to undo tool effects. Closing input cancels active work and waits for
 its terminal record before exiting. Clients must keep draining stdout.
 
-Earlier-point exploration must select a committed conversation point without
-erasing later history. A new Session fork at that point or an active branch
-projection can provide it, provided unresolved tool effects and context
-boundaries remain honest. The choice of storage representation follows the
-selected navigation workflow; the current whole-Session clone does not solve
-earlier-point navigation by itself.
+Earlier-point exploration selects a committed Turn boundary without erasing
+later history. Forking before a selected user Turn makes that input editable
+again; forking after its settled end continues from its result. Each fork is a
+new Session containing the valid prefix, including applicable compaction facts.
+An unfinished Turn cannot be an after-Turn point. The source and fork still
+act on the same live filesystem; a Session fork is never a worktree snapshot.
+If related alternatives later need in-Session switching or branch-local
+extension state, introduce an active branch projection then, rather than
+duplicating that state in the current linear Session.
 
 ## Qualification
 

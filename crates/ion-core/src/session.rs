@@ -84,6 +84,12 @@ pub enum TurnEndReason {
     Failed(String),
 }
 
+#[derive(Debug, Clone, Copy)]
+pub enum ForkPoint {
+    BeforeTurn(u64),
+    AfterTurn(u64),
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct SessionView {
     pub cwd: PathBuf,
@@ -95,6 +101,39 @@ pub struct SessionView {
     pub last_model: Option<ModelRef>,
     pub compacted_through: Option<u64>,
     pub last_usage: Option<Usage>,
+}
+
+#[derive(Debug, Clone)]
+pub struct TurnSummary {
+    pub turn: u64,
+    pub input: Message,
+    pub model: ModelRef,
+    pub end: Option<TurnEndReason>,
+}
+
+impl SessionView {
+    pub fn turns(&self) -> Vec<TurnSummary> {
+        let mut turns: Vec<TurnSummary> = Vec::new();
+        for entry in &self.entries {
+            match entry {
+                SessionEntry::TurnStarted { turn, input, model } => turns.push(TurnSummary {
+                    turn: *turn,
+                    input: input.clone(),
+                    model: model.clone(),
+                    end: None,
+                }),
+                SessionEntry::TurnEnded { turn, reason } => {
+                    if let Some(last) = turns.last_mut()
+                        && last.turn == *turn
+                    {
+                        last.end = Some(reason.clone());
+                    }
+                }
+                _ => {}
+            }
+        }
+        turns
+    }
 }
 
 pub(crate) struct CompactionPlan {
@@ -343,13 +382,48 @@ impl Session {
     /// Copy committed conversation and context into a new Session. Future
     /// entries are independent; the working directory remains shared.
     pub fn clone_to(&self, path: impl AsRef<Path>) -> Result<Self, SessionError> {
-        let path = path.as_ref();
         let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         let entries = read_entries(&source.connection)?;
+        drop(source);
+        self.copy_entries_to(path.as_ref(), &entries)
+    }
+
+    /// Copy the valid prefix at a selected Turn boundary into an independent
+    /// Session. The source and target still share the live working directory.
+    pub fn fork_to(&self, path: impl AsRef<Path>, point: ForkPoint) -> Result<Self, SessionError> {
+        let source = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let mut entries = read_entries(&source.connection)?;
+        let boundary = entries
+            .iter()
+            .position(|entry| match (point, entry) {
+                (ForkPoint::BeforeTurn(selected), SessionEntry::TurnStarted { turn, .. }) => {
+                    selected == *turn
+                }
+                (ForkPoint::AfterTurn(selected), SessionEntry::TurnEnded { turn, .. }) => {
+                    selected == *turn
+                }
+                _ => false,
+            })
+            .ok_or(SessionError::InvalidForkPoint)?;
+        let selected_model = match (&point, &entries[boundary]) {
+            (ForkPoint::BeforeTurn(_), SessionEntry::TurnStarted { model, .. }) => {
+                Some(model.clone())
+            }
+            _ => None,
+        };
+        entries.truncate(boundary + usize::from(matches!(point, ForkPoint::AfterTurn(_))));
+        if let Some(model) = selected_model {
+            entries.push(SessionEntry::ModelSelected { model });
+        }
+        drop(source);
+        self.copy_entries_to(path.as_ref(), &entries)
+    }
+
+    fn copy_entries_to(&self, path: &Path, entries: &[SessionEntry]) -> Result<Self, SessionError> {
         let clone = Self::create(path, &self.header.cwd)?;
         let copied = {
             let mut target = clone.store.lock().map_err(|_| SessionError::Poisoned)?;
-            append(&mut target, &entries)
+            append(&mut target, entries)
         };
         if let Err(error) = copied {
             drop(clone);
@@ -904,6 +978,8 @@ pub enum SessionError {
     InvalidUserInput,
     #[error("session name must be at most 120 bytes without control characters")]
     InvalidName,
+    #[error("selected Turn boundary does not exist or has not ended")]
+    InvalidForkPoint,
     #[error("session entry exceeds storage limit")]
     EntryTooLarge,
     #[error("turn identifier space exhausted")]
@@ -922,6 +998,69 @@ pub enum SessionError {
 mod tests {
     use super::*;
     use ion_ai::ToolCall;
+
+    #[test]
+    fn selected_point_forks_preserve_valid_prefix_and_source_history() {
+        let (root, path) = fixture();
+        let source = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "model".into(),
+        };
+        for prompt in ["first", "second"] {
+            let (turn, _) = source.begin_turn(prompt.into(), model.clone()).unwrap();
+            source
+                .record_assistant(
+                    turn,
+                    Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text(format!("answer {turn}"))],
+                        provider_replay: None,
+                    },
+                    Usage::unknown(),
+                    false,
+                )
+                .unwrap();
+            if turn == 1 {
+                source
+                    .record_compaction(
+                        source.entry_count().unwrap(),
+                        "summary".into(),
+                        Usage::unknown(),
+                    )
+                    .unwrap();
+            }
+        }
+        let (active, _) = source.begin_turn("third".into(), model.clone()).unwrap();
+        assert!(matches!(
+            source.fork_to(root.join("invalid.sqlite"), ForkPoint::AfterTurn(active)),
+            Err(SessionError::InvalidForkPoint)
+        ));
+        let before = source
+            .fork_to(root.join("before.sqlite"), ForkPoint::BeforeTurn(2))
+            .unwrap();
+        let after = source
+            .fork_to(root.join("after.sqlite"), ForkPoint::AfterTurn(2))
+            .unwrap();
+        assert_eq!(source.view().unwrap().unfinished_turn, Some(3));
+        assert_eq!(before.view().unwrap().last_model, Some(model.clone()));
+        assert_eq!(before.context_messages().unwrap().len(), 1); // summary only
+        assert_eq!(
+            after.view().unwrap().last_end.as_ref().map(|item| item.0),
+            Some(2)
+        );
+        assert_eq!(after.context_messages().unwrap().len(), 3); // summary, second input/answer
+        assert!(
+            !after
+                .view()
+                .unwrap()
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, SessionEntry::TurnStarted { turn: 3, .. }))
+        );
+        drop((source, before, after));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     fn fixture() -> (PathBuf, PathBuf) {
         let root = std::env::temp_dir().join(format!("ion-session-{}", uuid::Uuid::now_v7()));

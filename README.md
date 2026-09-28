@@ -46,6 +46,9 @@ ion --continue             # reopen the latest session in this directory
 ion sessions               # list saved sessions and their IDs
 ion --session ID inspect   # committed history for a selected session as JSON
 ion --continue clone       # copy the latest conversation to a new session
+ion --continue turns       # list Turn numbers and prompt previews
+ion --continue fork 2      # new session before Turn 2, preserving the source
+ion --continue fork 2 --after # new session after settled Turn 2
 ion --continue compact     # summarize old context; retain the raw Session
 ```
 
@@ -56,7 +59,7 @@ open an exact SQLite path for scripts. Opening and quitting an empty chat does
 not displace the latest conversation in `--continue` or `sessions`. An
 existing session uses its recorded directory, and an explicit `--cwd` must
 match it. Headless runs print the
-session ID to stderr. In the TUI, `/new`, `/clone`, `/resume`, `/name`, `/session`,
+session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after TURN`, `/resume`, `/name`, `/session`,
 `/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
 manage saved keys. The TUI model picker searches catalog and configured
 custom routes. A resumed session restores its model; `ion use` sets the
@@ -64,6 +67,13 @@ default for new sessions.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
+`/fork` opens a searchable Turn picker and restores the selected user input
+to the editor in a new Session; `/fork TURN` selects directly. `/fork-after
+TURN` continues after that Turn's recorded end. CLI `fork` prints the new
+Session ID. The source retains all later history. These operations copy
+conversation facts, not working files, and an unfinished Turn cannot be an
+after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
+optional `after: true`.
 This unreleased branch uses Session format 2; earlier development Session
 files are not reopened.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
@@ -91,8 +101,9 @@ prompt response includes a Turn ID and confirms that the input entered the
 Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`, `abort`,
-`get_state`, `inspect`, `list_sessions`, `list_models`, `list_resources`,
-`reload_resources`, `set_model`, `new_session`, `switch_session` and `set_name`.
+`get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
+`list_resources`, `reload_resources`, `set_model`, `new_session`, `fork`,
+`switch_session` and `set_name`.
 `prompt` also accepts `images` as an array of local paths, relative to the
 Session's working directory. `steer` queues text for the active Turn; `abort` requests
 cancellation. Session, resource and model changes require an idle Turn.
