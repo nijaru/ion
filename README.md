@@ -1,7 +1,7 @@
 # Ion
 
 Ion is an unreleased Rust coding agent for a local working directory. It has
-one coding loop for terminal chat, headless prompts and library hosts. The
+one coding loop for terminal chat, headless prompts and Rust library hosts. The
 agent can read, edit and write files and run a native shell command. Sessions
 are saved in SQLite and continue across launches. Ion is usable for short
 coding tasks; its session and model controls are still simpler than Pi's.
@@ -165,6 +165,13 @@ python3 scripts/smoke_terminal.py
 
 The smoke checks use an offline local model stream. See [AGENTS.md](AGENTS.md)
 for maintainer instructions.
+
+For Rust embedding, `ion-host::Host` composes the same model catalog,
+credentials, project instructions and Session discovery used by the CLI.
+`ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
+conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
+Ion does not yet provide long-lived subprocess control or resource loading
+through this host API.
 
 ## License
 

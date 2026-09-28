@@ -1044,19 +1044,16 @@ name = "ion"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
  "clap",
- "getrandom 0.3.4",
  "ignore",
  "ion-ai",
  "ion-core",
+ "ion-host",
  "ion-terminal",
  "ratatui",
- "reqwest",
  "rpassword",
  "serde",
  "serde_json",
- "sha2",
  "tokio",
  "tokio-util",
  "unicode-segmentation",
@@ -1093,6 +1090,22 @@ dependencies = [
  "tokio",
  "tokio-util",
  "uuid",
+]
+
+[[package]]
+name = "ion-host"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "base64 0.22.1",
+ "getrandom 0.3.4",
+ "ion-ai",
+ "ion-core",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]

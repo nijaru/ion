@@ -13,16 +13,20 @@ session after relaunch. The same behavior is available headlessly and through
 a library host. The first tool set is read, edit, write and shell. Shell can
 handle search and listing until a dedicated tool shows a benefit.
 
-A usable first version includes project instructions, model discovery and
+A usable coding core includes project instructions, model discovery and
 selection, automatic environment API keys, optional masked key entry, and
-honest resume. Ion needs to complete real coding tasks end to end; scripted
-model and storage tests alone do not establish that outcome.
+honest resume. The broader product target includes the common workflows of a
+Pi-level coding agent: image input, reusable skills and prompt templates,
+custom tools and extensions, earlier-point conversation exploration, and
+long-lived programmatic control. Ion needs to complete real coding tasks end
+to end through these surfaces; scripted model and storage tests alone do not
+establish that outcome.
 
 Pi is a direct source reference for the small interactions and failure cases
 that make a coding agent usable: editing and steering prompts, inspecting
 tools, finding sessions, switching models and managing context. Ion adopts
 those user outcomes through its own Session and client design rather than
-copying every Pi command or its plugin runtime. The same coding loop must be
+copying every Pi command or its TypeScript plugin runtime. The same coding loop must be
 usable from terminal, headless and library clients; client-specific rendering
 or input cannot own model/tool semantics.
 
@@ -34,8 +38,10 @@ are outside this initial scope.
 `ion-ai` owns provider-neutral messages, streams and usage facts. Provider
 adapters own wire encoding and provider-specific constraints. `ion-core`
 owns one committed Session log and the coding Turn loop: ordered conversation,
-continuation, recovery and bounded model context. The executable composes
-models, credentials, project instructions, host tools and clients. Terminal
+continuation, recovery and bounded model context. A public host composition
+layer selects models, credentials, project resources, tools and Sessions;
+terminal, one-shot headless and sustained-control clients use that layer.
+Terminal
 rendering and input never become a second agent loop.
 
 ```text
@@ -244,6 +250,42 @@ session paths remain available to scripts. The TUI preserves draft input
 during a running Turn, distinguishes steering from follow-up work, and makes
 full tool results inspectable even when the default view is compact. Active
 directory, Session, model and known context pressure are visible.
+
+## Common-workflow expansion
+
+A user request may contain ordered text and image parts. The host validates
+image type, size and selected-model capability before accepting it; a Session
+commits the accepted content as one user message. Provider adapters encode
+images for their own wire format. On resume, switch or compaction, the context
+builder either preserves content selected for replay or reports an explicit
+incompatibility. It must not replace an image with an unannounced placeholder.
+Image generation is a separate capability.
+
+The host discovers applicable project instructions, Agent Skills and prompt
+templates. Skill summaries belong in the model's available instructions;
+complete skill content is read when invoked. Templates expand before user
+input commits to a Turn. Resource discovery, precedence, errors and trust
+belong to one host owner and are consistent across interactive and
+programmatic clients. A public Rust host interface also composes the model
+catalog, credentials, tools and Session selection; embedding should not
+require reproducing executable-private setup.
+
+An embedded host can supply custom tools through `ToolHost`. External
+extensions need a documented lifecycle for registering tools and commands,
+observing relevant Turn events, and using client UI capabilities when present.
+Extension callbacks cannot mutate committed Session entries or provider wire
+state behind their owners. The external mechanism need not execute Pi's
+TypeScript modules. One-shot JSONL remains a progress stream; a long-lived
+bidirectional control mode must correlate requests, distinguish acceptance
+from settlement, and expose Session, model and resource operations through the
+same host.
+
+Earlier-point exploration must select a committed conversation point without
+erasing later history. A new Session fork at that point or an active branch
+projection can provide it, provided unresolved tool effects and context
+boundaries remain honest. The choice of storage representation follows the
+selected navigation workflow; the current whole-Session clone does not solve
+earlier-point navigation by itself.
 
 ## Qualification
 

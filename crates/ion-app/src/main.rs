@@ -9,24 +9,12 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
 use ion_ai::ModelRef;
-use ion_core::{
-    AgentLimits, CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, HttpModelService,
-    LocalTools,
-};
+use ion_core::{CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession};
+use ion_host::{CredentialStatus, Host, SavedSelection, Wire};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
-mod auth;
-mod catalog;
-mod model_setup;
-mod project_instructions;
-mod session_catalog;
 mod terminal_client;
-
-use auth::{CredentialStatus, CredentialStore};
-use model_setup::{ModelStore, SavedSelection, Selection, Wire};
-use project_instructions::load as project_instructions;
-use session_catalog::SessionCatalog;
 
 #[derive(Parser)]
 #[command(about = "Ion: a local coding agent")]
@@ -106,14 +94,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
     {
         bail!("--json requires `run PROMPT` or `--print PROMPT`");
     }
-    let config = config_root()?;
-    let credentials = CredentialStore::new(config.join("credentials"));
-    let models = ModelStore::new(config);
+    let host = Arc::new(Host::from_environment()?);
+    let credentials = host.credentials();
+    let models = host.models();
     match cli.action {
         Some(_) if cli.print.is_some() => bail!("--print cannot be combined with a subcommand"),
         Some(Action::Models { query }) => {
             let query = query.unwrap_or_default().to_ascii_lowercase();
-            for choice in models.choices(&credentials)? {
+            for choice in models.choices(credentials)? {
                 let model = choice.selected;
                 if !model.provider.contains(&query)
                     && !model.model.to_ascii_lowercase().contains(&query)
@@ -166,7 +154,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Action::Auth) => {
             let mut seen = BTreeSet::new();
-            for choice in models.choices(&credentials)? {
+            for choice in models.choices(credentials)? {
                 let model = choice.selected;
                 if seen.insert(model.provider.clone()) {
                     println!("{}: {}", model.provider, status_label(choice.credential));
@@ -176,7 +164,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
         }
         Some(Action::Sessions) => {
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
-            let catalog = SessionCatalog::new(state_root()?.join("sessions"), cwd);
+            let catalog = host.sessions(cwd);
             for session in catalog.list()? {
                 println!(
                     "{}\t{}\t{} turn(s)\t{}\t{}",
@@ -199,7 +187,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let explicit_cwd = cli.cwd.is_some();
             let cwd = cli.cwd.unwrap_or(std::env::current_dir()?).canonicalize()?;
             ensure!(cwd.is_dir(), "working directory is not a directory");
-            let catalog = SessionCatalog::new(state_root()?.join("sessions"), cwd.clone());
+            let catalog = host.sessions(cwd.clone());
             let path = if let Some(explicit) = cli.session {
                 catalog.resolve_explicit(explicit)?
             } else if cli.continue_session {
@@ -245,16 +233,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 ensure!(existing.is_some(), "session does not exist");
             }
             let previous = existing.and_then(|view| view.last_model);
-            let selected = models.choose(cli.provider, cli.model, previous, &credentials)?;
-            selected.require_access(&credentials)?;
+            let selected = models.choose(cli.provider, cli.model, previous, credentials)?;
+            selected.require_access(credentials)?;
             let model = selected.identity();
             let session = Arc::new(if path.is_file() {
                 CodingSession::open(&path)?
             } else {
                 CodingSession::create(&path, &cwd)?
             });
-            let agent = create_agent(&session, &selected, &credentials)?;
-            let instructions = project_instructions(session.cwd())?;
+            let agent = host.agent(&session, &selected)?;
+            let instructions = host.instructions(session.cwd())?;
             match action {
                 Some(Action::Run { prompt }) => {
                     headless(
@@ -286,16 +274,8 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 }
                 Some(Action::Clone) => unreachable!("clone handled before model selection"),
                 Some(Action::Chat) | None if cli.print.is_none() => {
-                    terminal_client::chat(
-                        session,
-                        agent,
-                        selected,
-                        instructions,
-                        catalog,
-                        models,
-                        credentials,
-                    )
-                    .await
+                    terminal_client::chat(session, agent, selected, instructions, catalog, host)
+                        .await
                 }
                 None => {
                     headless(
@@ -312,46 +292,6 @@ async fn run_cli(cli: Cli) -> Result<()> {
             }
         }
     }
-}
-
-fn create_agent(
-    session: &CodingSession,
-    selected: &Selection,
-    credentials: &CredentialStore,
-) -> Result<Arc<CodingAgent>> {
-    let tools = Arc::new(LocalTools::new(session.cwd())?);
-    let resolver = credentials.resolver(&selected.provider, &selected.api_key_env)?;
-    let service = Arc::new(HttpModelService::new(
-        &selected.endpoint,
-        selected.wire,
-        resolver,
-    )?);
-    Ok(Arc::new(
-        CodingAgent::new(service, tools).with_limits(agent_limits(selected)),
-    ))
-}
-
-fn agent_limits(selected: &Selection) -> AgentLimits {
-    AgentLimits {
-        max_output_tokens: selected.max_output_tokens,
-        context_window_tokens: selected.context_window_tokens,
-        ..AgentLimits::default()
-    }
-}
-
-fn config_root() -> Result<PathBuf> {
-    app_root("XDG_CONFIG_HOME", ".config")
-}
-fn state_root() -> Result<PathBuf> {
-    app_root("XDG_STATE_HOME", ".local/state")
-}
-fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
-    if let Some(path) = std::env::var_os(variable) {
-        ensure!(!path.is_empty(), "{variable} must not be empty");
-        return Ok(PathBuf::from(path).join("ion"));
-    }
-    let home = std::env::var_os("HOME").context("HOME is required for Ion paths")?;
-    Ok(PathBuf::from(home).join(fallback).join("ion"))
 }
 
 fn status_label(status: CredentialStatus) -> &'static str {
@@ -508,23 +448,4 @@ fn with_piped_input(prompt: String) -> Result<String> {
     }
     let input = String::from_utf8(bytes).context("piped stdin is not UTF-8")?;
     Ok(format!("{input}\n{prompt}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn catalog_output_limit_reaches_the_agent_without_an_app_cap() {
-        let selected = ModelStore::new(PathBuf::new())
-            .resolve_identity(&ModelRef {
-                provider: "deepseek".into(),
-                model: "deepseek-flash".into(),
-            })
-            .unwrap();
-        let limits = agent_limits(&selected);
-        assert_eq!(limits.max_output_tokens, selected.max_output_tokens);
-        assert_eq!(limits.max_output_tokens, 384_000);
-        assert_eq!(limits.context_window_tokens, Some(1_048_576));
-    }
 }

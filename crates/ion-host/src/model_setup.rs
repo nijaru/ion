@@ -17,12 +17,25 @@ use crate::{
     catalog,
 };
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Wire {
     ChatCompletions,
     LlamaCppNoThinking,
     AnthropicMessages,
+}
+
+impl std::str::FromStr for Wire {
+    type Err = String;
+
+    fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
+        match value {
+            "chat-completions" => Ok(Self::ChatCompletions),
+            "llama-cpp-no-thinking" => Ok(Self::LlamaCppNoThinking),
+            "anthropic-messages" => Ok(Self::AnthropicMessages),
+            _ => Err(format!("unknown wire format: {value}")),
+        }
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -96,21 +109,11 @@ impl ModelStore {
                     saved.wire.is_none() && saved.api_key_env.is_none(),
                     "custom route overrides require --endpoint and --wire"
                 );
-                let existing =
-                    self.routes()?.custom.into_iter().find(|route| {
-                        route.provider == saved.provider && route.model == saved.model
-                    });
-                match existing {
-                    Some(route) => route,
-                    None => self
-                        .default()?
-                        .filter(|route| {
-                            route.provider == saved.provider
-                                && route.model == saved.model
-                                && route.endpoint.is_some()
-                        })
-                        .context("custom model has no configured route")?,
-                }
+                self.routes()?
+                    .custom
+                    .into_iter()
+                    .find(|route| route.provider == saved.provider && route.model == saved.model)
+                    .context("custom model has no configured route")?
             } else {
                 saved.clone()
             };
@@ -123,7 +126,7 @@ impl ModelStore {
             routes.custom.push(effective.clone());
             write_json(&self.root.join("routes.json"), &routes)?;
         }
-        write_json(&self.root.join("selection.json"), &effective)?;
+        write_json(&self.root.join("selection.json"), &selected.identity())?;
         Ok(selected)
     }
 
@@ -148,8 +151,8 @@ impl ModelStore {
                 )
             });
         }
-        if let Some(saved) = self.default()? {
-            return self.resolve_saved(&saved);
+        if let Some(selected) = self.default()? {
+            return self.resolve_identity(&selected);
         }
         for entry in catalog::models() {
             if credentials.status(entry.provider, entry.api_key_env)? != CredentialStatus::Missing {
@@ -182,14 +185,6 @@ impl ModelStore {
         {
             return self.resolve_saved(route);
         }
-        // Existing installations may have one custom route only in selection.json.
-        if let Some(saved) = self.default()?
-            && saved.provider == model.provider
-            && saved.model == model.model
-            && saved.endpoint.is_some()
-        {
-            return self.resolve_saved(&saved);
-        }
         bail!("no configured route for {}/{}", model.provider, model.model)
     }
 
@@ -205,14 +200,6 @@ impl ModelStore {
             .collect::<Result<Vec<_>>>()?;
         for route in self.routes()?.custom {
             options.push(self.resolve_saved(&route)?);
-        }
-        if let Some(saved) = self.default()?
-            && saved.endpoint.is_some()
-            && !options
-                .iter()
-                .any(|option| option.provider == saved.provider && option.model == saved.model)
-        {
-            options.push(self.resolve_saved(&saved)?);
         }
         Ok(options)
     }
@@ -233,7 +220,7 @@ impl ModelStore {
             .collect()
     }
 
-    fn default(&self) -> Result<Option<SavedSelection>> {
+    fn default(&self) -> Result<Option<ModelRef>> {
         read_json(&self.root.join("selection.json"))
     }
 

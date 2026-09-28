@@ -10,6 +10,7 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{CodingAgent, CodingAgentEvent, CodingSession, SteeringInbox};
+use ion_host::{CredentialStatus, CredentialStore, Host, Selection, SessionCatalog};
 use ion_terminal::{
     InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
     install_panic_hook,
@@ -19,14 +20,6 @@ use tokio::time::{Duration, interval};
 use tokio_util::sync::CancellationToken;
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
-
-use crate::{
-    auth::{CredentialStatus, CredentialStore},
-    create_agent,
-    model_setup::{ModelStore, Selection},
-    project_instructions,
-    session_catalog::SessionCatalog,
-};
 
 const MAX_DRAFT: usize = 64 * 1024;
 const MAX_PREVIEW: usize = 64 * 1024;
@@ -103,8 +96,7 @@ struct ChatRuntime {
     selected: Selection,
     instructions: String,
     sessions: SessionCatalog,
-    models: ModelStore,
-    credentials: CredentialStore,
+    host: Arc<Host>,
 }
 
 impl ChatRuntime {
@@ -117,12 +109,15 @@ impl ChatRuntime {
             session.cwd() == self.session.cwd(),
             "session belongs to another directory"
         );
-        let selected =
-            self.models
-                .choose(None, None, session.view()?.last_model, &self.credentials)?;
-        selected.require_access(&self.credentials)?;
-        let agent = create_agent(&session, &selected, &self.credentials)?;
-        let instructions = project_instructions(session.cwd())?;
+        let selected = self.host.models().choose(
+            None,
+            None,
+            session.view()?.last_model,
+            self.host.credentials(),
+        )?;
+        selected.require_access(self.host.credentials())?;
+        let agent = self.host.agent(&session, &selected)?;
+        let instructions = self.host.instructions(session.cwd())?;
         self.session = session;
         self.selected = selected;
         self.agent = agent;
@@ -131,12 +126,15 @@ impl ChatRuntime {
     }
 
     fn new_session(&mut self) -> Result<()> {
-        let selected = self.models.choose(None, None, None, &self.credentials)?;
-        selected.require_access(&self.credentials)?;
-        let instructions = project_instructions(self.session.cwd())?;
+        let selected = self
+            .host
+            .models()
+            .choose(None, None, None, self.host.credentials())?;
+        selected.require_access(self.host.credentials())?;
+        let instructions = self.host.instructions(self.session.cwd())?;
         let path = self.sessions.new_path()?;
         let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-        let agent = create_agent(&session, &selected, &self.credentials)?;
+        let agent = self.host.agent(&session, &selected)?;
         session.select_model(selected.identity())?;
         self.session = session;
         self.selected = selected;
@@ -158,9 +156,9 @@ impl ChatRuntime {
     }
 
     fn select_model(&mut self, model: ModelRef) -> Result<()> {
-        let selected = self.models.resolve_identity(&model)?;
-        selected.require_access(&self.credentials)?;
-        let agent = create_agent(&self.session, &selected, &self.credentials)?;
+        let selected = self.host.models().resolve_identity(&model)?;
+        selected.require_access(self.host.credentials())?;
+        let agent = self.host.agent(&self.session, &selected)?;
         self.session.select_model(model)?;
         self.selected = selected;
         self.agent = agent;
@@ -235,8 +233,7 @@ pub async fn chat(
     selected: Selection,
     instructions: String,
     sessions: SessionCatalog,
-    models: ModelStore,
-    credentials: CredentialStore,
+    host: Arc<Host>,
 ) -> Result<()> {
     let mut runtime = ChatRuntime {
         session,
@@ -244,8 +241,7 @@ pub async fn chat(
         selected,
         instructions,
         sessions,
-        models,
-        credentials,
+        host,
     };
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
@@ -316,7 +312,7 @@ pub async fn chat(
                             &mut terminal,
                             &mut screen,
                             &mut input,
-                            &runtime.credentials,
+                            runtime.host.credentials(),
                             provider.trim(),
                         )? {
                             Ok(()) => ui.status = "Credential saved".into(),
@@ -485,8 +481,9 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
                 ui.status = format!("Selected {args}");
             } else {
                 let items = runtime
-                    .models
-                    .choices(&runtime.credentials)?
+                    .host
+                    .models()
+                    .choices(runtime.host.credentials())?
                     .into_iter()
                     .map(|choice| {
                         let option = choice.selected;
@@ -516,7 +513,7 @@ fn handle_command(runtime: &mut ChatRuntime, ui: &mut Frontend, command: &str) -
         }
         "/logout" => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
-            runtime.credentials.remove(args)?;
+            runtime.host.credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
         "/tools" => ui.list_tools(),

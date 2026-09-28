@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 
-pub(crate) fn load(cwd: &Path) -> Result<String> {
+pub fn load(cwd: &Path) -> Result<String> {
     let cwd = cwd
         .canonicalize()
         .with_context(|| format!("cannot resolve working directory {}", cwd.display()))?;
