@@ -31,6 +31,7 @@ pub(crate) fn load(cwd: &Path) -> Result<String> {
                 let text = String::from_utf8(bytes).with_context(|| {
                     format!("project instructions {} are not UTF-8", path.display())
                 })?;
+                let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
                 ensure!(
                     instructions.len().saturating_add(text.len()) <= 128 * 1024,
                     "project instructions exceed 128 KiB"
@@ -76,10 +77,9 @@ mod tests {
     use super::*;
 
     fn fixture() -> (PathBuf, PathBuf) {
-        let unique = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_nanos();
+        let mut random = [0u8; 8];
+        getrandom::fill(&mut random).unwrap();
+        let unique = u64::from_le_bytes(random);
         let base =
             std::env::temp_dir().join(format!("ion-context-{}-{unique}", std::process::id()));
         let main = base.join("main");
@@ -116,6 +116,16 @@ mod tests {
         let instructions = load(&nested.join("src")).unwrap();
         assert!(instructions.contains("PARENT_MARKER"));
         assert!(instructions.contains("MAIN_CHECKOUT_MARKER"));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn instruction_bom_is_not_sent_to_the_model() {
+        let (base, nested) = fixture();
+        fs::write(nested.join("AGENTS.md"), "\u{feff}# Nested rules\n").unwrap();
+        let instructions = load(&nested.join("src")).unwrap();
+        assert!(instructions.contains("# Nested rules"));
+        assert!(!instructions.contains('\u{feff}'));
         fs::remove_dir_all(base).unwrap();
     }
 }
