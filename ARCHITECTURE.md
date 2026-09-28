@@ -166,7 +166,9 @@ line-ending conventions without silently changing unrelated text. An atomic
 replacement of an existing file must still respect its effective write
 permission; directory rename access alone does not make it an editable target.
 Support optional command timeouts and cancellation, and bound payload and
-output sizes at usable values. Do not claim stronger effect or isolation
+output sizes at usable values. A raw input or provider response admitted by
+the host must fit its encoded Session entry; model context can still be a
+separate, actionable limit. Do not claim stronger effect or isolation
 guarantees than a tool implements. Approval or sandboxing is a separate opt-in
 product decision, not a prerequisite for native coding.
 

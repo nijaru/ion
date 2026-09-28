@@ -746,7 +746,7 @@ pub enum AgentError {
     #[error("turn was cancelled")]
     Cancelled,
     #[error(
-        "model context is too large after available compaction; shorten the current input or select a larger-context model"
+        "model input exceeds the context or request-size limit after available compaction; shorten the current input or, for a context-window limit, select a larger-context model"
     )]
     ContextTooLarge,
     #[error("model returned an invalid context summary")]
@@ -1251,7 +1251,7 @@ mod tests {
         )])]));
         let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
         let steering = SteeringInbox::default();
-        let prompt = "x".repeat(4 * 1024 * 1024);
+        let prompt = "\0".repeat(11 * 1024 * 1024);
         steering.push(prompt.clone());
         let result = agent
             .submit_with_steering(
@@ -1292,7 +1292,7 @@ mod tests {
         ])]));
         let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
         let steering = SteeringInbox::default();
-        let prompt = "x".repeat(4 * 1024 * 1024);
+        let prompt = "\0".repeat(11 * 1024 * 1024);
         let result = agent
             .submit_with_steering(
                 &session,

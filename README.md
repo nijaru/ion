@@ -64,7 +64,9 @@ Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
-Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB.
+Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
+selected model's context window and Ion's encoded request bound can reject
+large input even when it fits that raw input limit.
 Plain text mode writes the committed final answer to stdout after a successful
 turn. Tool progress and errors go to stderr; a failed turn does not print a
 provisional answer as if it had completed.

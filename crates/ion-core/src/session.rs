@@ -20,7 +20,9 @@ use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 
 const FORMAT_VERSION: u32 = 1;
-const MAX_ENTRY_BYTES: usize = 4 * 1024 * 1024;
+// An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
+// escapes control characters. Keep the storage bound above that encoded size.
+const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
 
 fn completed_termination() -> ResponseTermination {
     ResponseTermination::Completed
@@ -877,6 +879,32 @@ mod tests {
         let root = std::env::temp_dir().join(format!("ion-session-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
         (root.clone(), root.join("session.sqlite"))
+    }
+
+    #[test]
+    fn raw_input_limit_can_be_persisted_after_json_encoding() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let mut prompt = "line\n".repeat(8 * 1024 * 1024 / 5);
+        prompt.push_str("abc");
+        assert_eq!(prompt.len(), 8 * 1024 * 1024);
+        session
+            .begin_turn(
+                prompt.clone(),
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+            )
+            .unwrap();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert!(matches!(
+            &reopened.view().unwrap().entries[0],
+            SessionEntry::TurnStarted { prompt: stored, .. } if stored == &prompt
+        ));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
