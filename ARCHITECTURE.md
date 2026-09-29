@@ -48,6 +48,12 @@ continuation, recovery and bounded model context. A public host composition
 layer selects models, credentials, project resources, tools and Sessions;
 terminal, one-shot headless and sustained-control clients use that layer.
 Terminal rendering and input never become a second agent loop.
+For an active interactive or sustained client, the host owns one binding of
+Session, selected model, resources and agent. New, clone, fork, switch, model
+selection and resource reload update that binding through the same operations
+for both clients. A replacement is prepared before it becomes visible; a
+failed preparation leaves the previous binding usable. Client input queues,
+rendering and protocol records remain client-owned.
 
 ```text
 user input -> model stream -> final answer

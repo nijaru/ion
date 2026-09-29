@@ -2,6 +2,7 @@
 //! Session history and model/tool execution remain owned by `ion-core`.
 
 pub mod auth;
+mod binding;
 pub mod catalog;
 pub mod image_input;
 pub mod mcp;
@@ -21,6 +22,7 @@ use ion_core::{
 };
 
 pub use auth::{CredentialStatus, CredentialStore};
+pub use binding::SessionBinding;
 pub use mcp::{McpConfig, McpServer, McpTools};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};

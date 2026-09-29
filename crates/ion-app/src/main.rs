@@ -13,7 +13,9 @@ use ion_core::{
     CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint,
 };
 use ion_host::image_input::LoadedImage;
-use ion_host::{CredentialStatus, Host, McpServer, Resources, SavedSelection, Wire};
+use ion_host::{
+    CredentialStatus, Host, McpServer, Resources, SavedSelection, SessionBinding, Wire,
+};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
@@ -430,26 +432,23 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let external_tools: Option<Arc<dyn CodingToolHost>> = external_mcp
                 .as_ref()
                 .map(|tools| tools.clone() as Arc<dyn CodingToolHost>);
-            let agent =
-                host.agent_with_optional_tools(&session, &selected, external_tools.clone())?;
-            let resources = host.resources(session.cwd())?;
-            for diagnostic in resources.diagnostics() {
+            let binding = SessionBinding::new(host, session, selected, external_tools)?;
+            for diagnostic in binding.resources().diagnostics() {
                 eprintln!(
                     "[resource: {}: {}]",
                     diagnostic.path.display(),
                     diagnostic.message
                 );
             }
-            let instructions = resources.instructions().to_owned();
             let result = async {
                 match action {
                     Some(Action::Run { prompt }) => {
                         headless(
-                            session,
-                            agent,
+                            binding.session().clone(),
+                            binding.agent().clone(),
                             model,
-                            instructions,
-                            with_piped_input(expand_input(&resources, prompt)?)?,
+                            binding.instructions().to_owned(),
+                            with_piped_input(expand_input(binding.resources(), prompt)?)?,
                             images,
                             cli.json,
                         )
@@ -463,7 +462,10 @@ async fn run_cli(cli: Cli) -> Result<()> {
                                 signal_stop.cancel();
                             }
                         });
-                        let result = agent.compact(&session, model, stop, |_| {}).await;
+                        let result = binding
+                            .agent()
+                            .compact(binding.session(), model, stop, |_| {})
+                            .await;
                         signal.abort();
                         if result? {
                             println!("Context summarized; raw Session history retained");
@@ -475,39 +477,18 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     Some(Action::Clone | Action::Turns | Action::Fork { .. }) => {
                         unreachable!("session action handled before model selection")
                     }
-                    Some(Action::Rpc) => {
-                        rpc::run(
-                            session,
-                            selected,
-                            agent,
-                            resources,
-                            catalog,
-                            host,
-                            external_tools,
-                        )
-                        .await
-                    }
+                    Some(Action::Rpc) => rpc::run(binding).await,
                     Some(Action::Chat) | None if cli.print.is_none() => {
-                        terminal_client::chat(terminal_client::ChatInit {
-                            session,
-                            agent,
-                            selected,
-                            resources,
-                            images,
-                            sessions: catalog,
-                            host,
-                            external_tools,
-                        })
-                        .await
+                        terminal_client::chat(terminal_client::ChatInit { binding, images }).await
                     }
                     None => {
                         headless(
-                            session,
-                            agent,
+                            binding.session().clone(),
+                            binding.agent().clone(),
                             model,
-                            instructions,
+                            binding.instructions().to_owned(),
                             with_piped_input(expand_input(
-                                &resources,
+                                binding.resources(),
                                 cli.print.expect("matched Some"),
                             )?)?,
                             images,

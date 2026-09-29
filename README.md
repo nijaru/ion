@@ -284,8 +284,10 @@ For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
 conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
-`Host::resources` loads project skills and prompt templates. `ion rpc`
-provides long-lived subprocess control.
+`Host::resources` loads project skills and prompt templates. For a long-lived
+Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
+and resources and handles idle model and Session changes. `ion rpc` provides
+long-lived subprocess control.
 
 ## License
 

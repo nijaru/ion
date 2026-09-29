@@ -1,12 +1,9 @@
 //! Long-lived JSONL client of the shared host and coding loop.
-use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::Message;
-use ion_core::{
-    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox,
-};
-use ion_host::{Host, Resources, Selection, SessionCatalog};
+use ion_core::{CodingAgentEvent, ForkPoint, SteeringInbox};
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufRead, AsyncBufReadExt, BufReader},
@@ -44,44 +41,24 @@ struct QueuedFollowUp {
 /// The only mutable control state. The Session and selected route are fixed
 /// inside each spawned Turn, so idle commands cannot change a running Turn.
 struct Control {
-    host: Arc<Host>,
-    catalog: SessionCatalog,
-    session: Arc<CodingSession>,
-    selected: Selection,
-    agent: Arc<CodingAgent>,
-    resources: Resources,
+    binding: ion_host::SessionBinding,
     active: Option<Active>,
     follow_ups: VecDeque<QueuedFollowUp>,
     queued_bytes: usize,
     output: mpsc::Sender<Output>,
-    external_tools: Option<Arc<dyn CodingToolHost>>,
 }
 
-pub async fn run(
-    session: Arc<CodingSession>,
-    selected: Selection,
-    agent: Arc<CodingAgent>,
-    resources: Resources,
-    catalog: SessionCatalog,
-    host: Arc<Host>,
-    external_tools: Option<Arc<dyn CodingToolHost>>,
-) -> Result<()> {
+pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
     let (output, mut events) = mpsc::channel::<Output>(128);
     let mut control = Control {
-        host,
-        catalog,
-        session,
-        selected,
-        agent,
-        resources,
+        binding,
         active: None,
         follow_ups: VecDeque::new(),
         queued_bytes: 0,
         output,
-        external_tools,
     };
     write_json_record(
-        &json!({"type":"ready","session":control.session_id(),"cwd":control.session.cwd()}),
+        &json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),
     )?;
     let mut input = BufReader::new(tokio::io::stdin());
     let mut closing = false;
@@ -153,12 +130,7 @@ async fn read_command<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Input> 
 
 impl Control {
     fn session_id(&self) -> String {
-        self.session
-            .path()
-            .file_stem()
-            .unwrap_or_default()
-            .to_string_lossy()
-            .into_owned()
+        self.binding.session_id()
     }
 
     fn idle(&self) -> Result<()> {
@@ -167,11 +139,6 @@ impl Control {
             "a Turn is active; abort or wait for turn_end"
         );
         Ok(())
-    }
-
-    fn prepare_agent(&self, selected: &Selection) -> Result<Arc<CodingAgent>> {
-        self.host
-            .agent_with_optional_tools(&self.session, selected, self.external_tools.clone())
     }
 
     fn command(&mut self, line: &[u8]) -> Result<()> {
@@ -203,7 +170,7 @@ impl Control {
                 "steer" => {
                     let active = self.active.as_ref().context("no active Turn")?;
                     let message = required_string(&value, "message")?;
-                    let prompt = expand_input(&self.resources, message.to_owned())?;
+                    let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
                     active.steering.push_message(Message::user_input(prompt, images))?;
@@ -212,7 +179,7 @@ impl Control {
                 "follow_up" => {
                     ensure!(self.active.is_some(), "no active Turn; use prompt instead");
                     let message = required_string(&value, "message")?;
-                    let prompt = expand_input(&self.resources, message.to_owned())?;
+                    let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
                     let input = Message::user_input(prompt, images);
@@ -237,91 +204,51 @@ impl Control {
                     Ok(json!({"disposition":"requested"}))
                 }
                 "get_state" => {
-                    let view = self.session.view()?;
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.selected.identity(),"busy":self.active.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
+                    let view = self.binding.session().view()?;
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"busy":self.active.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
-                    let mut view = serde_json::to_value(self.session.view()?)?;
+                    let mut view = serde_json::to_value(self.binding.session().view()?)?;
                     redact_image_payloads(&mut view);
                     Ok(view)
                 }
-                "list_sessions" => Ok(json!(self.catalog.list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
-                "list_turns" => Ok(json!(self.session.view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
-                "list_models" => Ok(json!(self.host.models().choices(self.host.credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
-                "list_resources" => Ok(json!({"skills":self.resources.skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.resources.templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.resources.diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
+                "list_sessions" => Ok(json!(self.binding.catalog().list()?.iter().map(|item| json!({"id":item.id,"name":item.name,"preview":item.preview,"turns":item.turns,"model":item.model})).collect::<Vec<_>>())),
+                "list_turns" => Ok(json!(self.binding.session().view()?.turns().iter().map(|item| json!({"turn":item.turn,"preview":preview_input(&item.input),"ended":item.end.is_some()})).collect::<Vec<_>>())),
+                "list_models" => Ok(json!(self.binding.host().models().choices(self.binding.host().credentials())?.iter().map(|item| json!({"provider":item.selected.provider,"model":item.selected.model,"label":item.label,"image_input":item.selected.image_input})).collect::<Vec<_>>())),
+                "list_resources" => Ok(json!({"skills":self.binding.resources().skills().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"prompts":self.binding.resources().templates().map(|item| json!({"name":item.name,"description":item.description})).collect::<Vec<_>>(),"diagnostics":self.binding.resources().diagnostics().iter().map(|item| json!({"path":item.path,"message":item.message})).collect::<Vec<_>>()})),
                 "reload_resources" => {
                     self.idle()?;
-                    self.resources = self.host.resources(self.session.cwd())?;
-                    Ok(json!({"skills":self.resources.skills().count(),"prompts":self.resources.templates().count()}))
+                    self.binding.reload_resources()?;
+                    Ok(json!({"skills":self.binding.resources().skills().count(),"prompts":self.binding.resources().templates().count()}))
                 }
                 "set_model" => {
                     self.idle()?;
                     let provider = required_string(&value, "provider")?;
                     let model = required_string(&value, "model")?;
-                    let selected = self.host.models().choose(Some(provider.to_owned()), Some(model.to_owned()), None, self.host.credentials())?;
-                    selected.require_access(self.host.credentials())?;
-                    let agent = self.prepare_agent(&selected)?;
-                    self.session.select_model(selected.identity())?;
-                    self.selected = selected;
-                    self.agent = agent;
-                    Ok(json!({"model":self.selected.identity()}))
+                    self.binding.select_model(ion_ai::ModelRef { provider: provider.to_owned(), model: model.to_owned() })?;
+                    Ok(json!({"model":self.binding.selected().identity()}))
                 }
                 "new_session" => {
                     self.idle()?;
-                    let selected = self.host.models().choose(None, None, None, self.host.credentials())?;
-                    selected.require_access(self.host.credentials())?;
-                    let resources = self.host.resources(self.session.cwd())?;
-                    let agent = self.prepare_agent(&selected)?;
-                    let path = self.catalog.new_path()?;
-                    let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-                    session.select_model(selected.identity())?;
-                    self.session = session;
-                    self.selected = selected;
-                    self.agent = agent;
-                    self.resources = resources;
-                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
+                    self.binding.new_session()?;
+                    Ok(json!({"session":self.session_id(),"model":self.binding.selected().identity()}))
                 }
                 "fork" => {
                     self.idle()?;
                     let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
                     let after = value.get("after").and_then(Value::as_bool).unwrap_or(false);
-                    let model = self.session.view()?.turns().into_iter().find(|item| item.turn == turn).map(|item| item.model).context("selected Turn does not exist")?;
-                    let selected = self.host.models().choose(None, None, Some(model), self.host.credentials())?;
-                    selected.require_access(self.host.credentials())?;
-                    let resources = self.host.resources(self.session.cwd())?;
-                    let agent = self.prepare_agent(&selected)?;
-                    let path = self.catalog.new_path()?;
-                    let fork = self.session.fork_to(&path, if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
-                    self.session = Arc::new(fork);
-                    self.selected = selected;
-                    self.agent = agent;
-                    self.resources = resources;
-                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
+                    self.binding.fork_session(if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
+                    Ok(json!({"session":self.session_id(),"model":self.binding.selected().identity()}))
                 }
                 "switch_session" => {
                     self.idle()?;
-                    let path = self.catalog.resolve_explicit(PathBuf::from(required_string(&value, "session")?))?;
-                    let view = CodingSession::inspect(&path)?;
-                    ensure!(view.cwd == self.session.cwd(), "session belongs to another working directory");
-                    let resources = self.host.resources(&view.cwd)?;
-                    if fs::canonicalize(&path)? == fs::canonicalize(self.session.path())? {
-                        self.resources = resources;
-                    } else {
-                        let selected = self.host.models().choose(None, None, view.last_model, self.host.credentials())?;
-                        selected.require_access(self.host.credentials())?;
-                        let agent = self.prepare_agent(&selected)?;
-                        let session = Arc::new(CodingSession::open(path)?);
-                        self.session = session;
-                        self.selected = selected;
-                        self.agent = agent;
-                        self.resources = resources;
-                    }
-                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
+                    self.binding.switch_session(PathBuf::from(required_string(&value, "session")?))?;
+                    Ok(json!({"session":self.session_id(),"model":self.binding.selected().identity()}))
                 }
                 "set_name" => {
                     self.idle()?;
                     let name = value.get("name").and_then(Value::as_str);
-                    self.session.set_name(name)?;
+                    self.binding.session().set_name(name)?;
                     Ok(json!({"name":name}))
                 }
                 _ => bail!("unknown command: {command}"),
@@ -346,13 +273,17 @@ impl Control {
                         let path = if path.is_absolute() {
                             path
                         } else {
-                            self.session.cwd().join(path)
+                            self.binding.session().cwd().join(path)
                         };
-                        ion_host::image_input::load_image(&self.selected, &path)
+                        ion_host::image_input::load_image(self.binding.selected(), &path)
                     } else {
                         let mime_type = required_string(image, "mime_type")?;
                         let data = required_string(image, "data")?;
-                        ion_host::image_input::load_encoded_image(&self.selected, mime_type, data)
+                        ion_host::image_input::load_encoded_image(
+                            self.binding.selected(),
+                            mime_type,
+                            data,
+                        )
                     }
                 })
                 .collect::<Result<Vec<_>>>()
@@ -362,7 +293,7 @@ impl Control {
     fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
         self.idle()?;
         let prompt = required_string(value, "message")?;
-        let prompt = expand_input(&self.resources, prompt.to_owned())?;
+        let prompt = expand_input(self.binding.resources(), prompt.to_owned())?;
         let images = self.load_images(value)?;
         ensure!(
             !prompt.trim().is_empty() || !images.is_empty(),
@@ -398,10 +329,10 @@ impl Control {
 
     fn start_message(&mut self, input: Message, id: Option<Value>, queued: bool) -> Result<()> {
         self.idle()?;
-        let agent = self.agent.clone();
-        let instructions = self.resources.instructions().to_owned();
-        let model = self.selected.identity();
-        let session = self.session.clone();
+        let agent = self.binding.agent().clone();
+        let instructions = self.binding.resources().instructions().to_owned();
+        let model = self.binding.selected().identity();
+        let session = self.binding.session().clone();
         let stop = CancellationToken::new();
         let steering = Arc::new(SteeringInbox::default());
         let output = self.output.clone();

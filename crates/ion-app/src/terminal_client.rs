@@ -1,7 +1,8 @@
 //! Terminal view over the same coding loop used by headless and library hosts.
+#[cfg(test)]
+use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
-    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -10,11 +11,11 @@ use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{
-    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SessionEntry,
-    SessionView, SteeringInbox, TurnEndReason,
+    CodingAgent, CodingAgentEvent, CodingSession, ForkPoint, SessionEntry, SessionView,
+    SteeringInbox, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
-use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
+use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
 use ion_terminal::{
     InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
     install_panic_hook,
@@ -134,144 +135,6 @@ impl Picker {
     }
 }
 
-struct ChatRuntime {
-    session: Arc<CodingSession>,
-    agent: Arc<CodingAgent>,
-    selected: Selection,
-    instructions: String,
-    resources: Resources,
-    sessions: SessionCatalog,
-    host: Arc<Host>,
-    external_tools: Option<Arc<dyn CodingToolHost>>,
-}
-
-impl ChatRuntime {
-    fn switch_session(&mut self, path: PathBuf) -> Result<()> {
-        if fs::canonicalize(self.session.path())? == fs::canonicalize(&path)? {
-            return self.reload_resources();
-        }
-        let session = Arc::new(CodingSession::open(&path)?);
-        anyhow::ensure!(
-            session.cwd() == self.session.cwd(),
-            "session belongs to another directory"
-        );
-        let selected = self.host.models().choose(
-            None,
-            None,
-            session.view()?.last_model,
-            self.host.credentials(),
-        )?;
-        selected.require_access(self.host.credentials())?;
-        let resources = self.host.resources(session.cwd())?;
-        let agent = self.host.agent_with_optional_tools(
-            &session,
-            &selected,
-            self.external_tools.clone(),
-        )?;
-        let instructions = resources.instructions().to_owned();
-        self.session = session;
-        self.selected = selected;
-        self.agent = agent;
-        self.resources = resources;
-        self.instructions = instructions;
-        Ok(())
-    }
-
-    fn new_session(&mut self) -> Result<()> {
-        let selected = self
-            .host
-            .models()
-            .choose(None, None, None, self.host.credentials())?;
-        selected.require_access(self.host.credentials())?;
-        let resources = self.host.resources(self.session.cwd())?;
-        let agent = self.host.agent_with_optional_tools(
-            &self.session,
-            &selected,
-            self.external_tools.clone(),
-        )?;
-        let path = self.sessions.new_path()?;
-        let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-        session.select_model(selected.identity())?;
-        let instructions = resources.instructions().to_owned();
-        self.session = session;
-        self.selected = selected;
-        self.agent = agent;
-        self.resources = resources;
-        self.instructions = instructions;
-        Ok(())
-    }
-
-    fn clone_session(&mut self) -> Result<String> {
-        let resources = self.host.resources(self.session.cwd())?;
-        let path = self.sessions.new_path()?;
-        let session = Arc::new(self.session.clone_to(&path)?);
-        let id = path
-            .file_stem()
-            .context("cloned session has no ID")?
-            .to_string_lossy()
-            .into_owned();
-        self.session = session;
-        self.instructions = resources.instructions().to_owned();
-        self.resources = resources;
-        Ok(id)
-    }
-
-    fn fork_session(&mut self, point: ForkPoint) -> Result<String> {
-        let turn = match point {
-            ForkPoint::BeforeTurn(turn) | ForkPoint::AfterTurn(turn) => turn,
-        };
-        let selected_model = self
-            .session
-            .view()?
-            .turns()
-            .into_iter()
-            .find(|item| item.turn == turn)
-            .context("selected Turn does not exist")?
-            .model;
-        let selected = self.host.models().resolve_identity(&selected_model)?;
-        selected.require_access(self.host.credentials())?;
-        let resources = self.host.resources(self.session.cwd())?;
-        let agent = self.host.agent_with_optional_tools(
-            &self.session,
-            &selected,
-            self.external_tools.clone(),
-        )?;
-        let path = self.sessions.new_path()?;
-        let session = Arc::new(self.session.fork_to(&path, point)?);
-        let id = path
-            .file_stem()
-            .context("forked session has no ID")?
-            .to_string_lossy()
-            .into_owned();
-        self.session = session;
-        self.selected = selected;
-        self.agent = agent;
-        self.instructions = resources.instructions().to_owned();
-        self.resources = resources;
-        Ok(id)
-    }
-
-    fn select_model(&mut self, model: ModelRef) -> Result<()> {
-        let selected = self.host.models().resolve_identity(&model)?;
-        selected.require_access(self.host.credentials())?;
-        let agent = self.host.agent_with_optional_tools(
-            &self.session,
-            &selected,
-            self.external_tools.clone(),
-        )?;
-        self.session.select_model(model)?;
-        self.selected = selected;
-        self.agent = agent;
-        Ok(())
-    }
-
-    fn reload_resources(&mut self) -> Result<()> {
-        self.resources = self.host.resources(self.session.cwd())?;
-        self.instructions = self.resources.instructions().to_owned();
-        Ok(())
-    }
-}
-
 #[derive(Default)]
 struct Progress {
     text: String,
@@ -336,38 +199,13 @@ impl Progress {
 }
 
 pub struct ChatInit {
-    pub session: Arc<CodingSession>,
-    pub agent: Arc<CodingAgent>,
-    pub selected: Selection,
-    pub resources: Resources,
+    pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
-    pub sessions: SessionCatalog,
-    pub host: Arc<Host>,
-    pub external_tools: Option<Arc<dyn CodingToolHost>>,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
-    let ChatInit {
-        session,
-        agent,
-        selected,
-        resources,
-        images,
-        sessions,
-        host,
-        external_tools,
-    } = init;
-    let instructions = resources.instructions().to_owned();
-    let mut runtime = ChatRuntime {
-        session,
-        agent,
-        selected,
-        instructions,
-        resources,
-        sessions,
-        host,
-        external_tools,
-    };
+    let mut runtime = init.binding;
+    let images = init.images;
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
     terminal.enter_alt_screen()?;
@@ -376,16 +214,16 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut input = terminal.input()?;
     let mut ui = Frontend {
         status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
-        context_window_tokens: runtime.selected.context_window_tokens,
+        context_window_tokens: runtime.selected().context_window_tokens,
         images,
         ..Frontend::default()
     };
-    ui.refresh_session(&runtime.session)?;
+    ui.refresh_session(runtime.session())?;
     loop {
-        ui.context_window_tokens = runtime.selected.context_window_tokens;
-        ui.update_context(&runtime.session)?;
+        ui.context_window_tokens = runtime.selected().context_window_tokens;
+        ui.update_context(runtime.session())?;
         if let Some(PendingInput { prompt, images }) = ui.pending.pop_front() {
-            let prompt = match expand_resource_input(&runtime.resources, prompt) {
+            let prompt = match expand_resource_input(runtime.resources(), prompt) {
                 Ok(prompt) => prompt,
                 Err((original, error)) => {
                     ui.images.splice(0..0, images);
@@ -406,11 +244,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 &mut screen,
                 &mut input,
                 &mut ui,
-                &runtime.session,
-                &runtime.agent,
-                &runtime.selected,
-                &runtime.instructions,
-                &runtime.resources,
+                runtime.session(),
+                runtime.agent(),
+                runtime.selected(),
+                runtime.instructions(),
+                runtime.resources(),
                 prompt,
                 images,
             )
@@ -422,7 +260,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             &mut screen,
             &ui,
             None,
-            &runtime.selected.identity(),
+            &runtime.selected().identity(),
             false,
         )?;
         let Some(event) = input.next().await else {
@@ -441,11 +279,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut screen,
                         &mut input,
                         &mut ui,
-                        &runtime.session,
-                        &runtime.agent,
-                        &runtime.selected,
-                        &runtime.instructions,
-                        &runtime.resources,
+                        runtime.session(),
+                        runtime.agent(),
+                        runtime.selected(),
+                        runtime.instructions(),
+                        runtime.resources(),
                         prompt,
                         images,
                     )
@@ -457,8 +295,8 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut screen,
                         &mut input,
                         &mut ui,
-                        &runtime.session,
-                        &runtime.selected,
+                        runtime.session(),
+                        runtime.selected(),
                         command.clone(),
                         exclude_from_context,
                     )
@@ -476,7 +314,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             &mut terminal,
                             &mut screen,
                             &mut input,
-                            runtime.host.credentials(),
+                            runtime.host().credentials(),
                             provider.trim(),
                         )? {
                             Ok(()) => ui.status = "Credential saved".into(),
@@ -488,13 +326,13 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             &mut screen,
                             &mut input,
                             &mut ui,
-                            &runtime.session,
-                            &runtime.agent,
-                            &runtime.selected,
+                            runtime.session(),
+                            runtime.agent(),
+                            runtime.selected(),
                         )
                         .await?;
                     } else if command == "/copy" {
-                        match copy_last_answer(&runtime.session, &mut terminal).await {
+                        match copy_last_answer(runtime.session(), &mut terminal).await {
                             Ok(crate::clipboard::CopyOutcome::Copied) => {
                                 ui.status = "Copied last assistant answer".into()
                             }
@@ -531,11 +369,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     &mut screen,
                                     &mut input,
                                     &mut ui,
-                                    &runtime.session,
-                                    &runtime.agent,
-                                    &runtime.selected,
-                                    &runtime.instructions,
-                                    &runtime.resources,
+                                    runtime.session(),
+                                    runtime.agent(),
+                                    runtime.selected(),
+                                    runtime.instructions(),
+                                    runtime.resources(),
                                     prompt,
                                     images,
                                 )
@@ -551,7 +389,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     images: std::mem::take(&mut ui.images),
                 }),
                 Action::PasteClipboard => {
-                    if let Err(error) = paste_clipboard(&mut ui, &runtime.selected).await {
+                    if let Err(error) = paste_clipboard(&mut ui, runtime.selected()).await {
                         ui.status = format!("Paste failed: {error:#}");
                     }
                 }
@@ -580,7 +418,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     };
                     match result {
                         Ok(()) => {
-                            ui.refresh_session(&runtime.session)?;
+                            ui.refresh_session(runtime.session())?;
                             ui.status = "Ready".into();
                         }
                         Err(error) => ui.status = format!("{error:#}"),
@@ -809,13 +647,13 @@ async fn edit_draft_in_terminal(
 }
 
 fn apply_fork(
-    runtime: &mut ChatRuntime,
+    runtime: &mut ion_host::SessionBinding,
     ui: &mut Frontend,
     point: ForkPoint,
     restore: Option<Message>,
 ) -> Result<()> {
     let id = runtime.fork_session(point)?;
-    ui.refresh_session(&runtime.session)?;
+    ui.refresh_session(runtime.session())?;
     let mut too_large_to_restore = false;
     if let Some(input) = restore {
         let draft = input
@@ -863,7 +701,7 @@ fn apply_fork(
 }
 
 fn handle_command(
-    runtime: &mut ChatRuntime,
+    runtime: &mut ion_host::SessionBinding,
     ui: &mut Frontend,
     command: &str,
 ) -> Result<Option<String>> {
@@ -876,21 +714,21 @@ fn handle_command(
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
             let path = Path::new(args);
-            let path = if path.is_absolute() { path.to_owned() } else { runtime.session.cwd().join(path) };
-            ui.images.push(ion_host::image_input::load_image(&runtime.selected, &path)?);
+            let path = if path.is_absolute() { path.to_owned() } else { runtime.session().cwd().join(path) };
+            ui.images.push(ion_host::image_input::load_image(runtime.selected(), &path)?);
             ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
         }
-        "/skills" => ui.note(runtime.resources.skills().map(|skill| format!("{} — {}", skill.name, skill.description)).collect::<Vec<_>>().join("\n")),
-        "/prompts" => ui.note(runtime.resources.templates().map(|template| format!("/{} — {}", template.name, template.description)).collect::<Vec<_>>().join("\n")),
+        "/skills" => ui.note(runtime.resources().skills().map(|skill| format!("{} — {}", skill.name, skill.description)).collect::<Vec<_>>().join("\n")),
+        "/prompts" => ui.note(runtime.resources().templates().map(|template| format!("/{} — {}", template.name, template.description)).collect::<Vec<_>>().join("\n")),
         "/reload" => {
             runtime.reload_resources()?;
-            ui.note(format!("Reloaded resources ({} diagnostic(s))", runtime.resources.diagnostics().len()));
+            ui.note(format!("Reloaded resources ({} diagnostic(s))", runtime.resources().diagnostics().len()));
         }
         "/session" => {
-            let view = runtime.session.view()?;
+            let view = runtime.session().view()?;
             ui.note(format!(
                 "Session {} · {} turn(s) · {}",
-                runtime.session.path().display(),
+                runtime.session().path().display(),
                 view.entries
                     .iter()
                     .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
@@ -901,24 +739,24 @@ fn handle_command(
         "/export" => {
             anyhow::ensure!(!args.is_empty(), "use /export PATH");
             let target = Path::new(args);
-            let target = if target.is_absolute() { target.to_owned() } else { runtime.session.cwd().join(target) };
-            crate::transcript::save_new(&runtime.session.view()?, &target)?;
+            let target = if target.is_absolute() { target.to_owned() } else { runtime.session().cwd().join(target) };
+            crate::transcript::save_new(&runtime.session().view()?, &target)?;
             ui.status = format!("Transcript saved to {}", target.display());
         }
         "/new" => {
             runtime.new_session()?;
-            ui.refresh_session(&runtime.session)?;
+            ui.refresh_session(runtime.session())?;
             ui.note("Started a new session".into());
         }
         "/clone" => {
             let id = runtime.clone_session()?;
-            ui.refresh_session(&runtime.session)?;
+            ui.refresh_session(runtime.session())?;
             ui.note(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
         }
         "/fork" => {
-            let turns = runtime.session.view()?.turns();
+            let turns = runtime.session().view()?.turns();
             if args.is_empty() {
                 let items = turns.into_iter().map(|item| PickerItem {
                     label: format!("Turn {}  {}", item.turn, crate::preview_input(&item.input)),
@@ -937,11 +775,11 @@ fn handle_command(
         }
         "/resume" => {
             if !args.is_empty() {
-                runtime.switch_session(runtime.sessions.by_id(args)?)?;
-                ui.refresh_session(&runtime.session)?;
+                runtime.switch_session(runtime.catalog().by_id(args)?)?;
+                ui.refresh_session(runtime.session())?;
             } else {
                 let items = runtime
-                    .sessions
+                    .catalog()
                     .list()?
                     .into_iter()
                     .map(|session| PickerItem {
@@ -966,14 +804,14 @@ fn handle_command(
             if args.is_empty() {
                 ui.note(
                     runtime
-                        .session
+                        .session()
                         .view()?
                         .name
                         .unwrap_or_else(|| "Session has no name".into()),
                 );
             } else {
-                runtime.session.set_name(Some(args))?;
-                ui.refresh_session(&runtime.session)?;
+                runtime.session().set_name(Some(args))?;
+                ui.refresh_session(runtime.session())?;
             }
         }
         "/model" => {
@@ -987,9 +825,9 @@ fn handle_command(
                 ui.status = format!("Selected {args}");
             } else {
                 let items = runtime
-                    .host
+                    .host()
                     .models()
-                    .choices(runtime.host.credentials())?
+                    .choices(runtime.host().credentials())?
                     .into_iter()
                     .map(|choice| {
                         let option = choice.selected;
@@ -1019,7 +857,7 @@ fn handle_command(
         }
         "/logout" => {
             anyhow::ensure!(!args.is_empty(), "use /logout PROVIDER");
-            runtime.host.credentials().remove(args)?;
+            runtime.host().credentials().remove(args)?;
             ui.status = format!("Removed saved {args} credential");
         }
         "/tools" => ui.list_tools(),
@@ -1032,7 +870,7 @@ fn handle_command(
             ui.open_tool(number);
         }
         _ => {
-            if let Some(prompt) = runtime.resources.expand_command(command) {
+            if let Some(prompt) = runtime.resources().expand_command(command) {
                 return prompt.map(Some);
             }
             ui.status = format!("Unknown command: {name}. Type /help");
