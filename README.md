@@ -221,7 +221,9 @@ capture has no full-output path.
 Commands use Bash when available, then fall back to POSIX sh. Commands have
 no default timeout; pass
 `timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a
-UTF-8-safe `next_offset`; `edit` accepts ordinary LF or CRLF text and preserves
+UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
+`read.base_digest` covers the full file and can guard a later `edit`;
+`edit` accepts ordinary LF or CRLF text and preserves
 the file's BOM and unaffected line endings. A damaged Session file is skipped
 by `sessions` and `--continue`, while opening its exact path reports the
 error. Ion summarizes settled history when its request
@@ -257,9 +259,11 @@ resume. The code and session results were checked independently; these are
 short-task samples, not broad model or platform parity.
 Direct DeepSeek and MiMo routes keep their default thinking behavior and
 retain provider reasoning needed for tool-call continuation across saved
-turns. Both passed live two-turn read-tool checks after this change.
-OpenRouter and custom llama.cpp routes still disable reasoning until their
-different continuation formats are supported.
+turns. Both passed live multi-turn read-tool checks. The cataloged OpenRouter
+DeepSeek Flash route also retains plain reasoning across tool calls and saved
+turns; a live two-turn read/shell task passed. OpenRouter responses with signed,
+encrypted or summarized reasoning details remain unsupported, as does
+thinking on custom llama.cpp routes.
 
 An OpenRouter DeepSeek V4.1 Flash task also read a workspace PNG through the
 model's `read` tool, identified its left-half color, wrote `red\n` to a file

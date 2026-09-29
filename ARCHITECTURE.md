@@ -189,6 +189,9 @@ complete. Exact text edits must handle ordinary BOM and
 line-ending conventions without silently changing unrelated text. An atomic
 replacement of an existing file must still respect its effective write
 permission; directory rename access alone does not make it an editable target.
+For bounded text files, `read.base_digest` hashes the same full-file bytes
+used for the returned page and can be passed directly to `edit` as its
+change guard.
 The read tool can return a workspace image as a typed tool result. Image
 normalization and bounds have one provider-neutral owner shared with user
 attachments. Session history retains the normalized bytes for replay; terminal
@@ -243,10 +246,13 @@ DeepSeek and MiMo Chat Completions carry their exact streamed
 `reasoning_content` string on every later assistant message when tools are
 offered. This material is not answer text or a tool argument. A route that
 cannot replay a recorded form reports incompatibility before sending the next
-request; it must not silently strip it. Other reasoning formats, including
-OpenRouter `reasoning_details` and Anthropic signed thinking blocks, need
-their own validated replay encoding before thinking is enabled on those
-routes.
+request; it must not silently strip it. The cataloged OpenRouter DeepSeek
+Flash route may use the documented plain `reasoning` string when every
+observed structured detail is unsigned `reasoning.text` and matches the
+stream's plain reasoning. Signed, encrypted or summarized details are a
+different replay contract and fail explicitly. Anthropic signed thinking
+blocks likewise need ordered, unmodified block replay before thinking is
+enabled on that route.
 Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
 Coalesce streamed tool calls by their call index: later repeated or changed

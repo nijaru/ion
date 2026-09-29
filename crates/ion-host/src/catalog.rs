@@ -13,7 +13,7 @@ pub enum CatalogWire {
     ChatCompletions,
     DeepSeekChat,
     MiMoChat,
-    OpenRouterNoReasoning,
+    OpenRouterPlainReasoning,
     AnthropicMessages,
 }
 
@@ -73,7 +73,7 @@ const MODELS: &[CatalogModel] = &[
         provider: "openrouter",
         id: "deepseek/deepseek-v4.1-flash",
         label: "DeepSeek V4.1 Flash via OpenRouter",
-        wire: CatalogWire::OpenRouterNoReasoning,
+        wire: CatalogWire::OpenRouterPlainReasoning,
         endpoint: OPENROUTER_ENDPOINT,
         api_key_env: "OPENROUTER_API_KEY",
         context_window: 1_048_576,

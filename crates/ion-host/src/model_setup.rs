@@ -249,7 +249,9 @@ impl ModelStore {
                     catalog::CatalogWire::ChatCompletions => HttpWire::ChatCompletions,
                     catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
-                    catalog::CatalogWire::OpenRouterNoReasoning => HttpWire::OpenRouterNoReasoning,
+                    catalog::CatalogWire::OpenRouterPlainReasoning => {
+                        HttpWire::OpenRouterPlainReasoning
+                    }
                     catalog::CatalogWire::AnthropicMessages => HttpWire::AnthropicMessages,
                 },
                 api_key_env: model.api_key_env.into(),
