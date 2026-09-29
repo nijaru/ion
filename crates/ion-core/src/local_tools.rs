@@ -181,22 +181,39 @@ impl LocalTools {
                 "offset {offset} is beyond end of file ({size} bytes)"
             ));
         }
-        let digest = if size <= MAX_FILE_BYTES as u64 {
-            let mut all = Vec::new();
-            if let Err(e) = file.read_to_end(&mut all) {
+        let (bytes, digest, file_bytes) = if size <= MAX_FILE_BYTES as u64 {
+            if let Err(e) = file.seek(SeekFrom::Start(0)) {
                 return error(e.to_string());
             }
-            Some(hex_digest(&all))
+            let mut all = Vec::new();
+            if let Err(e) = Read::by_ref(&mut file)
+                .take(MAX_FILE_BYTES as u64 + 1)
+                .read_to_end(&mut all)
+            {
+                return error(e.to_string());
+            }
+            if all.len() > MAX_FILE_BYTES {
+                return error("text file grew beyond the 8 MiB digest bound during read");
+            }
+            let file_bytes = all.len() as u64;
+            if offset > file_bytes {
+                return error(format!(
+                    "offset {offset} is beyond end of file ({file_bytes} bytes)"
+                ));
+            }
+            let start = offset as usize;
+            let end = start.saturating_add(limit).min(all.len());
+            (all[start..end].to_vec(), Some(hex_digest(&all)), file_bytes)
         } else {
-            None
+            if let Err(e) = file.seek(SeekFrom::Start(offset)) {
+                return error(e.to_string());
+            }
+            let mut bytes = Vec::new();
+            if let Err(e) = file.take(limit as u64).read_to_end(&mut bytes) {
+                return error(e.to_string());
+            }
+            (bytes, None, size)
         };
-        if let Err(e) = file.seek(SeekFrom::Start(offset)) {
-            return error(e.to_string());
-        }
-        let mut bytes = Vec::new();
-        if let Err(e) = file.take(limit as u64).read_to_end(&mut bytes) {
-            return error(e.to_string());
-        }
         let content = match std::str::from_utf8(&bytes) {
             Ok(content) => content,
             Err(utf8_error) if utf8_error.error_len().is_none() && utf8_error.valid_up_to() > 0 => {
@@ -209,7 +226,7 @@ impl LocalTools {
         };
         let next_offset = offset.saturating_add(content.len() as u64);
         success(
-            json!({"path": input.path, "offset": offset, "next_offset": next_offset, "content": content, "file_bytes": size, "has_more": next_offset < size, "base_digest": digest}),
+            json!({"path": input.path, "offset": offset, "next_offset": next_offset, "content": content, "file_bytes": file_bytes, "has_more": next_offset < file_bytes, "base_digest": digest}),
         )
     }
 
@@ -838,6 +855,27 @@ mod tests {
             fs::read_to_string(path).unwrap(),
             "\u{feff}one\r\nTWO\r\nthree\r\n"
         );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_digest_covers_the_whole_file_and_can_guard_edit() {
+        let root = std::env::temp_dir().join(format!("ion-read-digest-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        fs::write(&path, "alpha\nbeta\ngamma\n").unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let read = tools.read(&json!({"path":"file.txt"}));
+        assert!(!read.is_error, "{}", read.value);
+        let digest = read.value["base_digest"].as_str().unwrap();
+        assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
+        let edit = tools.edit(&json!({
+            "path":"file.txt",
+            "old_text":"beta",
+            "new_text":"BETA",
+            "base_digest":digest,
+        }));
+        assert!(!edit.is_error, "{}", edit.value);
         fs::remove_dir_all(root).unwrap();
     }
 
