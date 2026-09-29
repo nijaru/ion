@@ -228,7 +228,9 @@ the environment. `ion mcp list` and `ion mcp remove NAME` manage the saved
 user configuration.
 Ion starts configured servers when a coding client starts, discovers their
 tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
-exec. Headless, TUI and RPC use the same tool set. Local server processes inherit
+exec. MCP tool names that need normalization or shortening receive a stable
+hash suffix in the model-facing name; Ion calls the server with its original
+tool name. Headless, TUI and RPC use the same tool set. Local server processes inherit
 the user's environment and permissions and run in the Session's working
 directory. A repository file does not launch an MCP server merely because
 Ion opened that directory. A failing server is reported at startup while

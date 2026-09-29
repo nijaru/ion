@@ -22,9 +22,11 @@ class Provider(BaseHTTPRequestHandler):
         requests.append(body)
         if len(requests) == 1:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert {"read", "edit", "write", "exec", "mcp__demo__greet", "mcp__demo__picture"} <= names, names
+            greet = next(name for name in names if name.startswith("mcp__demo__greet_user_"))
+            assert {"read", "edit", "write", "exec", "mcp__demo__greet_user", "mcp__demo__picture"} <= names, names
+            assert any(name.startswith("mcp__demo__query") and len(name) <= 64 for name in names), names
             changes = [
-                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-mcp", "type": "function", "function": {"name": "mcp__demo__greet", "arguments": '{"name":"Ion"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-mcp", "type": "function", "function": {"name": greet, "arguments": '{"name":"Ion"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 3:
@@ -197,11 +199,13 @@ for line in sys.stdin.buffer:
         result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'ion-smoke', 'version': '1'}}
     elif method == 'tools/list':
         result = {'tools': [
-            {'name': 'greet', 'description': 'Greet a name', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}},
+            {'name': 'greet.user', 'description': 'Greet a name', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}},
+            {'name': 'greet_user', 'description': 'A similarly named tool', 'inputSchema': {'type': 'object'}},
+            {'name': 'query' * 22, 'description': 'A long tool name', 'inputSchema': {'type': 'object'}},
             {'name': 'picture', 'description': 'Return a picture', 'inputSchema': {'type': 'object', 'properties': {}}},
         ]}
     elif method == 'tools/call':
-        if request['params']['name'] == 'greet':
+        if request['params']['name'] == 'greet.user':
             name = request['params']['arguments']['name']
             with log.open('a') as output: output.write('called:' + name + '\\n')
             result = {'content': [{'type': 'text', 'text': 'Hello, ' + name + '!'}], 'isError': False}

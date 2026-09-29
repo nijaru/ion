@@ -416,7 +416,12 @@ hiding valid servers; config edits do not discard that user content. Only
 successfully discovered tools enter the model request. Configured servers
 initialize concurrently so one slow server cannot serially delay others; a
 partly initialized server is closed before its failure is reported. MCP tools
-may return image blocks; the host validates declared
+retain their original tool names for server dispatch. Their model-facing names are
+deterministic, provider-safe aliases bounded to 64 ASCII characters; names
+requiring normalization or shortening receive a stable hash suffix so tools
+with similar names cannot silently alias one another. Duplicate original names
+or an unresolved alias collision invalidate that server's tool snapshot. MCP
+tools may return image blocks; the host validates declared
 MIME, decodes and normalizes them through the same image owner as local read,
 and hands the bounded typed result to the coding Turn. Unsupported media
 receive an explicit tool error.

@@ -26,6 +26,7 @@ use rmcp::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use tokio::process::Command;
 use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
@@ -374,18 +375,17 @@ async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> 
         .with_context(|| format!("MCP server {name} tool listing timed out"))?
         .with_context(|| format!("MCP server {name} tool listing failed"))?;
     let mut registered = Vec::new();
-    let mut names = HashSet::new();
+    let mut exposed_names = HashSet::new();
     for tool in tools {
         let tool_name = tool.name.to_string();
-        validate_name(&tool_name)?;
-        let exposed = format!("mcp__{name}__{tool_name}");
         ensure!(
-            exposed.len() <= 64,
-            "MCP tool name {exposed} exceeds provider's 64-character bound"
+            !tool_name.is_empty(),
+            "MCP server {name} listed an empty tool name"
         );
+        let exposed = exposed_tool_name(name, &tool_name);
         ensure!(
-            names.insert(exposed.clone()),
-            "duplicate MCP tool name {exposed}"
+            exposed_names.insert(exposed.clone()),
+            "MCP server {name} has duplicate or colliding tool name {tool_name:?} (alias {exposed})"
         );
         let description = tool.description.map_or_else(
             || format!("Tool {tool_name} from MCP server {name}"),
@@ -401,6 +401,36 @@ async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> 
         ));
     }
     Ok(registered)
+}
+
+fn exposed_tool_name(server: &str, original: &str) -> String {
+    const MAX_NAME_BYTES: usize = 64;
+    const HASH_HEX_BYTES: usize = 16;
+    let mut exposed = format!("mcp__{server}__");
+    exposed.extend(original.chars().map(|character| {
+        if character.is_ascii_alphanumeric() || character == '_' || character == '-' {
+            character
+        } else {
+            '_'
+        }
+    }));
+    if exposed.len() <= MAX_NAME_BYTES
+        && original
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return exposed;
+    }
+
+    let mut hasher = Sha256::new();
+    hasher.update(server.as_bytes());
+    hasher.update([0]);
+    hasher.update(original.as_bytes());
+    let hash = format!("{:x}", hasher.finalize());
+    exposed.truncate(MAX_NAME_BYTES - HASH_HEX_BYTES - 1);
+    exposed.push('_');
+    exposed.push_str(&hash[..HASH_HEX_BYTES]);
+    exposed
 }
 
 impl CodingToolHost for McpTools {
@@ -547,6 +577,25 @@ fn tool_error(message: String) -> CodingToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn model_facing_mcp_names_preserve_distinct_originals() {
+        let plain = exposed_tool_name("demo", "admin_tools_list");
+        let dotted = exposed_tool_name("demo", "admin.tools.list");
+        let long = exposed_tool_name("demo", &"query".repeat(30));
+        let other_server = exposed_tool_name("other", "admin.tools.list");
+        assert_eq!(plain, "mcp__demo__admin_tools_list");
+        assert!(dotted.starts_with("mcp__demo__admin_tools_list_"));
+        assert_ne!(dotted, plain);
+        assert_ne!(dotted, other_server);
+        assert!(long.len() <= 64);
+        assert_eq!(dotted, exposed_tool_name("demo", "admin.tools.list"));
+        assert!(
+            dotted
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+        );
+    }
 
     #[test]
     fn remote_config_requires_http_url_and_named_ambient_token() {
