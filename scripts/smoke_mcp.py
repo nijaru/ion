@@ -13,6 +13,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+remote_calls = []
 
 
 class Provider(BaseHTTPRequestHandler):
@@ -38,6 +39,30 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_IMAGE_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
+        elif len(requests) == 5:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__remote__uppercase" in names, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-remote", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"ion"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 6:
+            assert any(message.get("role") == "tool" and "ION" in message.get("content", "") for message in body["messages"]), body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_REMOTE_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
+        elif len(requests) == 7:
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-unknown", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"retry-check"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 8:
+            assert body["messages"][-1]["role"] == "tool" and "failed" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_UNCERTAIN_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
             changes = [
@@ -50,6 +75,46 @@ class Provider(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
         self.wfile.write(payload)
+
+    def log_message(self, *_args):
+        pass
+
+
+class RemoteMcp(BaseHTTPRequestHandler):
+    def do_POST(self):
+        assert self.path == "/mcp", self.path
+        assert self.headers.get("Authorization") == "Bearer test-token"
+        request = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+        method = request.get("method")
+        if method == "initialize":
+            result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ion-remote-smoke", "version": "1"}}
+        elif method == "tools/list":
+            result = {"tools": [{"name": "uppercase", "description": "Uppercase text", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}
+        elif method == "tools/call":
+            remote_calls.append(request)
+            if request["params"]["arguments"]["text"] == "retry-check":
+                self.send_response(404)
+                self.end_headers()
+                return
+            result = {"content": [{"type": "text", "text": request["params"]["arguments"]["text"].upper()}], "isError": False}
+        else:
+            self.send_response(202)
+            self.end_headers()
+            return
+        payload = json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    def do_GET(self):
+        self.send_response(405)
+        self.end_headers()
+
+    def do_DELETE(self):
+        self.send_response(200)
+        self.end_headers()
 
     def log_message(self, *_args):
         pass
@@ -139,10 +204,13 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     bad_script.write_text(bad_listing_source)
     paired_script = work / "paired.py"
     paired_script.write_text(paired_source)
-    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
+    env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
+    remote = ThreadingHTTPServer(("127.0.0.1", 0), RemoteMcp)
+    remote_thread = threading.Thread(target=remote.serve_forever, daemon=True)
+    remote_thread.start()
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
@@ -151,8 +219,9 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "bad-listing", sys.executable, str(bad_script)], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-left", sys.executable, str(paired_script), "paired-left", "paired-right"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-right", sys.executable, str(paired_script), "paired-right", "paired-left"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
-        assert "demo" in listing.stdout and str(server_script) in listing.stdout
+        assert "demo" in listing.stdout and str(server_script) in listing.stdout and "/mcp" in listing.stdout
         config_path = Path(env["XDG_CONFIG_HOME"]) / "ion" / "mcp.json"
         config = json.loads(config_path.read_text())
         config["servers"]["malformed"] = {"command": 7}
@@ -178,6 +247,12 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert "called:picture" in events and "eof" in events, events
         inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
         assert "base64 image data omitted" in inspected and "iVBORw0KGgo" not in inspected
+        remote_response = subprocess.run([binary, "--cwd", workspace, "run", "Uppercase ion using the remote tool."], env=env, check=True, capture_output=True, text=True)
+        assert remote_response.stdout.strip() == "MCP_REMOTE_OK", remote_response
+        assert len(remote_calls) == 1 and remote_calls[0]["params"]["name"] == "uppercase", remote_calls
+        uncertain = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote tool for retry-check."], env=env, check=True, capture_output=True, text=True)
+        assert uncertain.stdout.strip() == "MCP_UNCERTAIN_OK", uncertain
+        assert len(remote_calls) == 2 and remote_calls[1]["params"]["arguments"]["text"] == "retry-check", remote_calls
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
@@ -185,9 +260,13 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "bad-listing"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "paired-left"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "paired-right"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")
     finally:
         server.shutdown()
         server.server_close()
         thread.join(timeout=5)
+        remote.shutdown()
+        remote.server_close()
+        remote_thread.join(timeout=5)

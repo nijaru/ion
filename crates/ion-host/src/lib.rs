@@ -23,7 +23,7 @@ use ion_core::{
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
-pub use mcp::{McpConfig, McpServer, McpStartup, McpTools};
+pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};

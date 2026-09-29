@@ -14,7 +14,8 @@ use ion_core::{
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{
-    CredentialStatus, Host, McpServer, Resources, SavedSelection, SessionBinding, Wire,
+    CredentialStatus, Host, McpHttpServer, McpServer, McpStdioServer, Resources, SavedSelection,
+    SessionBinding, Wire,
 };
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
@@ -88,7 +89,7 @@ enum Action {
     Run { prompt: String },
     /// Open the terminal chat client.
     Chat,
-    /// Configure explicitly launched local MCP tool servers.
+    /// Configure explicitly connected MCP tool servers.
     Mcp {
         #[command(subcommand)]
         action: McpAction,
@@ -121,6 +122,12 @@ enum McpAction {
         command: String,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
+    },
+    AddHttp {
+        name: String,
+        url: String,
+        #[arg(long)]
+        bearer_token_env: Option<String>,
     },
     Remove {
         name: String,
@@ -274,7 +281,14 @@ async fn run_cli(cli: Cli) -> Result<()> {
             match action {
                 McpAction::List => {
                     for (name, server) in config.list()? {
-                        println!("{name}\t{} {}", server.command, server.args.join(" "));
+                        match server {
+                            McpServer::Stdio(server) => {
+                                println!("{name}\t{} {}", server.command, server.args.join(" "));
+                            }
+                            McpServer::Http(server) => {
+                                println!("{name}\t{}", server.url);
+                            }
+                        }
                     }
                 }
                 McpAction::Add {
@@ -282,7 +296,21 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     command,
                     args,
                 } => {
-                    config.add(&name, McpServer { command, args })?;
+                    config.add(&name, McpServer::Stdio(McpStdioServer { command, args }))?;
+                    println!("Added MCP server {name}");
+                }
+                McpAction::AddHttp {
+                    name,
+                    url,
+                    bearer_token_env,
+                } => {
+                    config.add(
+                        &name,
+                        McpServer::Http(McpHttpServer {
+                            url,
+                            bearer_token_env,
+                        }),
+                    )?;
                     println!("Added MCP server {name}");
                 }
                 McpAction::Remove { name } => {

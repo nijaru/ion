@@ -220,18 +220,23 @@ a diagnostic. Project resources are treated as lower-trust repository text
 under the same live-directory tool permissions as `AGENTS.md`; review
 unfamiliar resources before using them.
 
-Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`;
-`ion mcp list` and `ion mcp remove NAME` manage the saved user configuration.
+Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
+Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
+`--bearer-token-env VARIABLE` when it requires a bearer token already set in
+the environment. `ion mcp list` and `ion mcp remove NAME` manage the saved
+user configuration.
 Ion starts configured servers when a coding client starts, discovers their
 tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
-exec. Headless, TUI and RPC use the same tool set. Server processes inherit
+exec. Headless, TUI and RPC use the same tool set. Local server processes inherit
 the user's environment and permissions and run in the Session's working
 directory. A repository file does not launch an MCP server merely because
 Ion opened that directory. A failing server is reported at startup while
 healthy servers and the coding client remain available; a failed
 tool call becomes an error result visible to the model. Current MCP support
 handles text, structured data and normalized image tool results; audio and
-embedded resource content report an explicit unsupported-content error. For Rust embedders, `Host::agent_with_tools`
+embedded resource content report an explicit unsupported-content error.
+Remote MCP OAuth login and changing tool lists are not yet supported.
+For Rust embedders, `Host::agent_with_tools`
 composes a custom `CodingToolHost` with built-ins; a same-name custom tool
 replaces that one built-in.
 

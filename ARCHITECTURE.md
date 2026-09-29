@@ -404,8 +404,8 @@ working-directory permission boundary still applies.
 An embedded host can supply custom tools through `ToolHost`; host composition
 adds them to the local tools, with a same-name custom tool deliberately
 replacing only that built-in. External model-callable tools use named MCP
-servers over stdio rather than a second private executable protocol. Server
-startup is explicit, never triggered merely by opening a repository. A
+servers over stdio or Streamable HTTP rather than a second private executable
+protocol. Server startup is explicit, never triggered merely by opening a repository. A
 server crash or cancellation produces an honest tool error; it cannot alter
 committed Session facts outside ordinary tool results. Failed server discovery
 produces a startup diagnostic without blocking the coding client or tools from
@@ -413,12 +413,17 @@ healthy servers. A malformed entry in a parseable config is skipped without
 hiding valid servers; config edits do not discard that user content. Only
 successfully discovered tools enter the model request. Configured servers
 initialize concurrently so one slow server cannot serially delay others; a
-partly initialized server is closed before its failure is reported. External extensions
-beyond text tools may return MCP image blocks; the host validates declared
+partly initialized server is closed before its failure is reported. MCP tools
+may return image blocks; the host validates declared
 MIME, decodes and normalizes them through the same image owner as local read,
 and hands the bounded typed result to the coding Turn. Unsupported media
-receive an explicit tool error. Extensions beyond MCP tools need a documented
-lifecycle for registering commands,
+receive an explicit tool error.
+Remote server credentials come from an explicitly named environment value or
+private OAuth login, separate from Session history. Transport recovery must
+not transparently replay a possibly effectful tool call. A changed server
+tool list replaces its advertised snapshot for later model requests; a
+withdrawn tool call receives an error.
+Extensions beyond MCP tools need a documented lifecycle for registering commands,
 observing relevant Turn events, and using client UI capabilities when present.
 Extension callbacks cannot mutate committed Session entries or provider wire
 state behind their owners. The external mechanism need not execute Pi's

@@ -16,22 +16,41 @@ use rmcp::{
     RoleClient,
     model::{CallToolRequestParams, CallToolResult, ContentBlock},
     service::{RunningService, ServiceExt},
-    transport::TokioChildProcess,
+    transport::{
+        StreamableHttpClientTransport, TokioChildProcess,
+        streamable_http_client::StreamableHttpClientTransportConfig,
+    },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
+use url::Url;
 
 use crate::model_setup::write_json;
 
+#[derive(Clone, Serialize)]
+#[serde(untagged)]
+pub enum McpServer {
+    Stdio(McpStdioServer),
+    Http(McpHttpServer),
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct McpServer {
+pub struct McpStdioServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct McpHttpServer {
+    pub url: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bearer_token_env: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -90,7 +109,7 @@ impl McpConfig {
 
     pub fn add(&self, name: &str, server: McpServer) -> Result<()> {
         validate_name(name)?;
-        ensure!(!server.command.trim().is_empty(), "MCP command is empty");
+        validate_server(&server)?;
         let mut servers = self.list()?;
         ensure!(
             !servers.contains_key(name),
@@ -111,13 +130,53 @@ impl McpConfig {
 }
 
 fn parse_server(name: &str, value: Value) -> Result<McpServer> {
-    (|| {
+    (|| -> Result<McpServer> {
         validate_name(name)?;
-        let server: McpServer = serde_json::from_value(value)?;
-        ensure!(!server.command.trim().is_empty(), "MCP command is empty");
+        let object = value.as_object().context("MCP server must be an object")?;
+        let server = match (object.contains_key("command"), object.contains_key("url")) {
+            (true, false) => McpServer::Stdio(serde_json::from_value(value)?),
+            (false, true) => McpServer::Http(serde_json::from_value(value)?),
+            (true, true) => bail!("MCP server cannot combine command and URL"),
+            (false, false) => bail!("MCP server requires command or URL"),
+        };
+        validate_server(&server)?;
         Ok(server)
     })()
     .with_context(|| format!("invalid MCP server {name:?}"))
+}
+
+fn validate_server(server: &McpServer) -> Result<()> {
+    match server {
+        McpServer::Stdio(server) => {
+            ensure!(!server.command.trim().is_empty(), "MCP command is empty")
+        }
+        McpServer::Http(server) => {
+            let url = Url::parse(&server.url).context("invalid MCP server URL")?;
+            ensure!(
+                matches!(url.scheme(), "http" | "https"),
+                "MCP server URL must use HTTP or HTTPS"
+            );
+            ensure!(
+                url.username().is_empty() && url.password().is_none() && url.fragment().is_none(),
+                "MCP server URL cannot contain userinfo or fragment"
+            );
+            if let Some(name) = &server.bearer_token_env {
+                ensure!(
+                    valid_env_name(name),
+                    "invalid MCP bearer token environment variable name"
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
+fn valid_env_name(name: &str) -> bool {
+    let mut bytes = name.bytes();
+    bytes
+        .next()
+        .is_some_and(|first| first.is_ascii_alphabetic() || first == b'_')
+        && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
 type Client = RunningService<RoleClient, ()>;
@@ -185,18 +244,37 @@ impl McpTools {
         cwd: &Path,
     ) -> Result<(Server, Vec<(ToolSpec, String)>)> {
         validate_name(&name)?;
-        ensure!(
-            !definition.command.trim().is_empty(),
-            "MCP command is empty"
-        );
-        let mut command = Command::new(&definition.command);
-        command.args(&definition.args).current_dir(cwd);
-        let transport = TokioChildProcess::new(command)
-            .with_context(|| format!("cannot start MCP server {name}"))?;
-        let mut client = tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
-            .await
-            .with_context(|| format!("MCP server {name} initialization timed out"))?
-            .with_context(|| format!("MCP server {name} initialization failed"))?;
+        validate_server(&definition)?;
+        let mut client = match definition {
+            McpServer::Stdio(server) => {
+                let mut command = Command::new(&server.command);
+                command.args(&server.args).current_dir(cwd);
+                let transport = TokioChildProcess::new(command)
+                    .with_context(|| format!("cannot start MCP server {name}"))?;
+                tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
+                    .await
+                    .with_context(|| format!("MCP server {name} initialization timed out"))?
+                    .with_context(|| format!("MCP server {name} initialization failed"))?
+            }
+            McpServer::Http(server) => {
+                let mut transport = StreamableHttpClientTransportConfig::with_uri(server.url);
+                // A 404 can mean a lost MCP session. The SDK default retries
+                // ordinary POSTs after reinitialization, but a tool may have
+                // executed before the server returned that response.
+                transport.reinit_on_expired_session = false;
+                if let Some(env_name) = server.bearer_token_env {
+                    let token = std::env::var(&env_name)
+                        .with_context(|| format!("MCP server {name} needs {env_name}"))?;
+                    ensure!(!token.is_empty(), "MCP server {name} needs {env_name}");
+                    transport.auth_header = Some(token);
+                }
+                let transport = StreamableHttpClientTransport::from_config(transport);
+                tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
+                    .await
+                    .with_context(|| format!("MCP server {name} initialization timed out"))?
+                    .with_context(|| format!("MCP server {name} initialization failed"))?
+            }
+        };
         let discovered = async {
             let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
                 .await
@@ -383,6 +461,42 @@ mod tests {
     use super::*;
 
     #[test]
+    fn remote_config_requires_http_url_and_named_ambient_token() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let config = McpConfig::new(&root);
+        let remote = |url: &str, bearer_token_env: Option<&str>| {
+            McpServer::Http(McpHttpServer {
+                url: url.into(),
+                bearer_token_env: bearer_token_env.map(str::to_owned),
+            })
+        };
+        assert!(
+            config
+                .add("bad-scheme", remote("file:///tmp/mcp", None))
+                .is_err()
+        );
+        assert!(
+            config
+                .add("bad-env", remote("https://example.com/mcp", Some("1KEY")))
+                .is_err()
+        );
+        config
+            .add("remote", remote("https://example.com/mcp", Some("MCP_KEY")))
+            .unwrap();
+        assert!(
+            matches!(&config.list().unwrap()["remote"], McpServer::Http(server) if server.bearer_token_env.as_deref() == Some("MCP_KEY"))
+        );
+        assert!(
+            fs::read_to_string(&config.path)
+                .unwrap()
+                .contains("MCP_KEY")
+        );
+        config.remove("remote").unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn invalid_server_entry_does_not_hide_valid_startup_servers_or_get_discarded() {
         let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
         fs::create_dir(&root).unwrap();
@@ -395,19 +509,20 @@ mod tests {
 
         let (servers, diagnostics) = config.load_startup().unwrap();
         assert_eq!(servers.len(), 1);
-        assert_eq!(servers["good"].command, "echo");
+        assert!(matches!(&servers["good"], McpServer::Stdio(server) if server.command == "echo"));
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].contains("invalid MCP server \"bad\""));
+        assert!(diagnostics[0].contains("expected a string"));
         assert!(config.list().is_err());
         assert!(config.remove("good").is_err());
         assert!(
             config
                 .add(
                     "new",
-                    McpServer {
+                    McpServer::Stdio(McpStdioServer {
                         command: "echo".into(),
                         args: Vec::new()
-                    }
+                    })
                 )
                 .is_err()
         );
