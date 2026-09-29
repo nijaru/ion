@@ -128,12 +128,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
         rejected = read(child)
         assert rejected["id"] == "bad-inline" and rejected["success"] is False
-        send(child, {"id": "inline", "type": "prompt", "message": "Inspect inline", "images": [inline]})
+        send(child, {"id": "inline", "type": "prompt", "message": "", "images": [inline]})
         records = until(child, lambda r: r["type"] == "turn_end")
         assert records[-1]["status"] == "completed", records
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
-        assert latest[0] == {"type": "text", "text": "Inspect inline"}, latest
-        assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
+        assert len(latest) == 1 and latest[0]["type"] == "image_url", latest
+        assert latest[0]["image_url"]["url"].startswith("data:image/png;base64,"), latest
         send(child, {"id": "inline-inspect", "type": "inspect"})
         inspected = read(child)
         assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])

@@ -281,6 +281,9 @@ images for their own wire format. On resume, switch or compaction, the context
 builder either preserves content selected for replay or reports an explicit
 incompatibility. It must not replace an image with an unannounced placeholder.
 Image generation is a separate capability.
+An image-only user request may carry an empty text part in the Session; a
+multimodal provider request omits that empty text block while preserving the
+image and any nonempty text parts in order.
 File input is decoded at the host boundary, oriented and bounded for
 inline transport, then stored as normalized image bytes rather than a path to
 a mutable source file. A resize note identifies the dimensions sent to the

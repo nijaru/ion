@@ -560,7 +560,7 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
             match (message.role, item) {
                 (Role::User | Role::Assistant, Content::Text(part)) => {
                     text.push_str(part);
-                    if message.role == Role::User {
+                    if message.role == Role::User && !part.is_empty() {
                         user_blocks.push(json!({"type":"text","text":part}));
                     }
                     if anthropic && !part.is_empty() {
@@ -1494,7 +1494,7 @@ mod tests {
         let mut request = request();
         request.messages[0].content = vec![
             Content::Text("inspect".into()),
-            Content::Image(image),
+            Content::Image(image.clone()),
             Content::Text("and explain".into()),
         ];
         let chat = wire_messages(&request, false).unwrap();
@@ -1513,6 +1513,14 @@ mod tests {
             "image/png"
         );
         assert_eq!(anthropic[0]["content"][2]["text"], "and explain");
+
+        request.messages[0].content = vec![Content::Text(String::new()), Content::Image(image)];
+        let chat = wire_messages(&request, false).unwrap();
+        let chat_parts = chat[0]["content"].as_array().unwrap();
+        assert_eq!(chat_parts.len(), 1);
+        assert_eq!(chat_parts[0]["type"], "image_url");
+        let anthropic = wire_messages(&request, true).unwrap();
+        assert_eq!(anthropic[0]["content"].as_array().unwrap().len(), 1);
     }
 
     #[test]
