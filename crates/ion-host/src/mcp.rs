@@ -8,11 +8,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
-use ion_ai::{BoxFuture, ToolCall, ToolSpec};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use ion_core::{CodingToolHost, CodingToolOutput};
 use rmcp::{
     RoleClient,
-    model::{CallToolRequestParams, ContentBlock},
+    model::{CallToolRequestParams, CallToolResult, ContentBlock},
     service::{RunningService, ServiceExt},
     transport::TokioChildProcess,
 };
@@ -191,44 +192,76 @@ impl CodingToolHost for McpTools {
                 result = client.call_tool(request) => result,
             };
             match result {
-                Ok(result) => {
-                    if result
-                        .content
-                        .iter()
-                        .any(|part| !matches!(part, ContentBlock::Text(_)))
-                    {
-                        return tool_error(format!(
-                            "MCP tool {} returned non-text content that Ion cannot replay as a tool result",
-                            call.name
-                        ));
-                    }
-                    let text = result
-                        .content
-                        .iter()
-                        .filter_map(|part| match part {
-                            ContentBlock::Text(text) => Some(text.text.as_str()),
-                            _ => None,
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n");
-                    let value =
-                        json!({"content":text,"structured_content":result.structured_content});
-                    if serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
-                        CodingToolOutput {
-                            value,
-                            images: Vec::new(),
-                            is_error: result.is_error.unwrap_or(false),
-                        }
-                    } else {
-                        tool_error(format!("MCP tool {} result exceeds 64 KiB", call.name))
-                    }
-                }
+                Ok(result) => convert_tool_result(&call.name, result),
                 Err(error) => tool_error(format!(
                     "MCP server {} tool call failed: {error}",
                     server.name
                 )),
             }
         })
+    }
+}
+
+fn convert_tool_result(name: &str, result: CallToolResult) -> CodingToolOutput {
+    let mut content = Vec::new();
+    let mut images = Vec::new();
+    for part in result.content {
+        match part {
+            ContentBlock::Text(text) => content.push(text.text),
+            ContentBlock::Image(image) => {
+                if image.data.len() > MAX_SOURCE_BYTES.div_ceil(3) * 4 {
+                    return tool_error(format!(
+                        "MCP tool {name} image exceeds 32 MiB source bound"
+                    ));
+                }
+                let bytes = match STANDARD.decode(&image.data) {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return tool_error(format!(
+                            "MCP tool {name} returned invalid base64 image data"
+                        ));
+                    }
+                };
+                let Some(mime) = ImageMime::detect(&bytes) else {
+                    return tool_error(format!(
+                        "MCP tool {name} returned an unsupported image format"
+                    ));
+                };
+                if mime.as_str() != image.mime_type {
+                    return tool_error(format!(
+                        "MCP tool {name} image MIME type does not match its data"
+                    ));
+                }
+                let loaded = match normalize_image(&bytes) {
+                    Ok(image) => image,
+                    Err(error) => {
+                        return tool_error(format!(
+                            "MCP tool {name} returned an invalid image: {error}"
+                        ));
+                    }
+                };
+                content.push(format!("[image: {}]", loaded.content.mime_type().as_str()));
+                if let Some(note) = loaded.note {
+                    content.push(note);
+                }
+                images.push(loaded.content);
+            }
+            _ => {
+                return tool_error(format!(
+                    "MCP tool {name} returned unsupported non-image media or resource content"
+                ));
+            }
+        }
+    }
+    let value =
+        json!({"content":content.join("\n"),"structured_content":result.structured_content});
+    if !serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
+        return tool_error(format!("MCP tool {name} result exceeds 64 KiB text bound"));
+    }
+    CodingToolOutput {
+        value,
+        images,
+        is_error: result.is_error.unwrap_or(false),
     }
 }
 
@@ -248,5 +281,42 @@ fn tool_error(message: String) -> CodingToolOutput {
         value: json!({"error":message}),
         images: Vec::new(),
         is_error: true,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn mcp_image_result_is_typed_and_mime_mismatch_is_a_visible_error() {
+        let data = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg==";
+        let result = convert_tool_result(
+            "picture",
+            CallToolResult::success(vec![
+                ContentBlock::text("a picture"),
+                ContentBlock::image(data, "image/png"),
+            ]),
+        );
+        assert!(!result.is_error, "{}", result.value);
+        assert_eq!(result.images.len(), 1);
+        assert!(
+            result.value["content"]
+                .as_str()
+                .unwrap()
+                .contains("[image: image/png]")
+        );
+        let mismatch = convert_tool_result(
+            "picture",
+            CallToolResult::success(vec![ContentBlock::image(data, "image/jpeg")]),
+        );
+        assert!(mismatch.is_error);
+        assert!(mismatch.images.is_empty());
+        assert!(
+            mismatch.value["error"]
+                .as_str()
+                .unwrap()
+                .contains("MIME type")
+        );
     }
 }

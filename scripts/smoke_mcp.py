@@ -21,10 +21,22 @@ class Provider(BaseHTTPRequestHandler):
         requests.append(body)
         if len(requests) == 1:
             names = {tool["function"]["name"] for tool in body["tools"]}
-            assert {"read", "edit", "write", "exec", "mcp__demo__greet"} <= names, names
+            assert {"read", "edit", "write", "exec", "mcp__demo__greet", "mcp__demo__picture"} <= names, names
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-mcp", "type": "function", "function": {"name": "mcp__demo__greet", "arguments": '{"name":"Ion"}'}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 3:
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-picture", "type": "function", "function": {"name": "mcp__demo__picture", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 4:
+            assert body["messages"][-2]["role"] == "tool" and "[image: image/png]" in body["messages"][-2]["content"], body
+            assert body["messages"][-1]["role"] == "user" and body["messages"][-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,"), body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_IMAGE_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
@@ -53,12 +65,20 @@ for line in sys.stdin.buffer:
     if method == 'initialize':
         result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'ion-smoke', 'version': '1'}}
     elif method == 'tools/list':
-        result = {'tools': [{'name': 'greet', 'description': 'Greet a name', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}}]}
+        result = {'tools': [
+            {'name': 'greet', 'description': 'Greet a name', 'inputSchema': {'type': 'object', 'properties': {'name': {'type': 'string'}}, 'required': ['name']}},
+            {'name': 'picture', 'description': 'Return a picture', 'inputSchema': {'type': 'object', 'properties': {}}},
+        ]}
     elif method == 'tools/call':
-        assert request['params']['name'] == 'greet'
-        name = request['params']['arguments']['name']
-        with log.open('a') as output: output.write('called:' + name + '\\n')
-        result = {'content': [{'type': 'text', 'text': 'Hello, ' + name + '!'}], 'isError': False}
+        if request['params']['name'] == 'greet':
+            name = request['params']['arguments']['name']
+            with log.open('a') as output: output.write('called:' + name + '\\n')
+            result = {'content': [{'type': 'text', 'text': 'Hello, ' + name + '!'}], 'isError': False}
+        elif request['params']['name'] == 'picture':
+            with log.open('a') as output: output.write('called:picture\\n')
+            result = {'content': [{'type': 'text', 'text': 'A tiny picture'}, {'type': 'image', 'mimeType': 'image/png', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='}], 'isError': False}
+        else:
+            raise AssertionError(request['params']['name'])
     elif method == 'ping':
         result = {}
     else:
@@ -82,7 +102,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     thread.start()
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-        subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "demo", sys.executable, str(server_script)], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and str(server_script) in listing.stdout
@@ -91,6 +111,13 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert len(requests) == 2
         events = (workspace / "mcp-events.txt").read_text()
         assert "called:Ion" in events and "eof" in events, events
+        image_response = subprocess.run([binary, "--cwd", workspace, "run", "Inspect an MCP picture."], env=env, check=True, capture_output=True, text=True)
+        assert image_response.stdout.strip() == "MCP_IMAGE_OK", image_response
+        assert len(requests) == 4
+        events = (workspace / "mcp-events.txt").read_text()
+        assert "called:picture" in events and "eof" in events, events
+        inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
+        assert "base64 image data omitted" in inspected and "iVBORw0KGgo" not in inspected
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")

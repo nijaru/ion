@@ -317,7 +317,11 @@ servers over stdio rather than a second private executable protocol. Server
 startup is explicit, never triggered merely by opening a repository. A
 server crash or cancellation produces an honest tool error; it cannot alter
 committed Session facts outside ordinary tool results. External extensions
-beyond MCP tools need a documented lifecycle for registering commands,
+beyond text tools may return MCP image blocks; the host validates declared
+MIME, decodes and normalizes them through the same image owner as local read,
+and hands the bounded typed result to the coding Turn. Unsupported media
+receive an explicit tool error. Extensions beyond MCP tools need a documented
+lifecycle for registering commands,
 observing relevant Turn events, and using client UI capabilities when present.
 Extension callbacks cannot mutate committed Session entries or provider wire
 state behind their owners. The external mechanism need not execute Pi's

@@ -194,8 +194,8 @@ the user's environment and permissions and run in the Session's working
 directory. A repository file does not launch an MCP server merely because
 Ion opened that directory. A failing server is reported at startup; a failed
 tool call becomes an error result visible to the model. Current MCP support
-handles text and structured tool results; image/audio tool results report an
-explicit unsupported-content error. For Rust embedders, `Host::agent_with_tools`
+handles text, structured data and normalized image tool results; audio and
+embedded resource content report an explicit unsupported-content error. For Rust embedders, `Host::agent_with_tools`
 composes a custom `CodingToolHost` with built-ins; a same-name custom tool
 replaces that one built-in.
 
