@@ -21,6 +21,7 @@ use crate::{
 #[serde(rename_all = "kebab-case")]
 pub enum Wire {
     ChatCompletions,
+    OpenRouterPlainReasoning,
     LlamaCppNoThinking,
     AnthropicMessages,
 }
@@ -31,6 +32,7 @@ impl std::str::FromStr for Wire {
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
             "chat-completions" => Ok(Self::ChatCompletions),
+            "openrouter-plain-reasoning" => Ok(Self::OpenRouterPlainReasoning),
             "llama-cpp-no-thinking" => Ok(Self::LlamaCppNoThinking),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
             _ => Err(format!("unknown wire format: {value}")),
@@ -275,6 +277,7 @@ impl ModelStore {
             endpoint: endpoint.into(),
             wire: match wire {
                 Wire::ChatCompletions => HttpWire::ChatCompletions,
+                Wire::OpenRouterPlainReasoning => HttpWire::OpenRouterPlainReasoning,
                 Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
                 Wire::AnthropicMessages => HttpWire::AnthropicMessages,
             },
@@ -352,6 +355,11 @@ mod tests {
             image_input: false,
         };
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
+        route.wire = Some("openrouter-plain-reasoning".parse().unwrap());
+        assert_eq!(
+            store.resolve_saved(&route).unwrap().wire,
+            HttpWire::OpenRouterPlainReasoning
+        );
         route.endpoint = Some("https://localhost/v1/chat/completions".into());
         assert!(store.resolve_saved(&route).unwrap().requires_key);
         route.endpoint = Some("https://example.com/v1/chat/completions?token=hidden".into());

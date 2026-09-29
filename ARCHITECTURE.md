@@ -255,11 +255,13 @@ DeepSeek and MiMo Chat Completions carry their exact streamed
 `reasoning_content` string on every later assistant message when tools are
 offered. This material is not answer text or a tool argument. A route that
 cannot replay a recorded form reports incompatibility before sending the next
-request; it must not silently strip it. The cataloged OpenRouter DeepSeek
-Flash route may use the documented plain `reasoning` string when every
+request; it must not silently strip it. An explicitly selected OpenRouter
+plain-reasoning route may use the documented plain `reasoning` string when every
 observed structured detail is unsigned `reasoning.text` and matches the
-stream's plain reasoning. Signed, encrypted or summarized details are a
-different replay contract and fail explicitly. Anthropic signed thinking
+stream's plain reasoning. This route is available to cataloged and custom
+OpenRouter models, but a custom model is qualified by a live tool turn, not
+merely by accepting the wire setting. Signed, encrypted or summarized details
+are a different replay contract and fail explicitly. Anthropic signed thinking
 blocks likewise need ordered, unmodified block replay before thinking is
 enabled on that route. For models that bind signed blocks to their request
 prefix, the adapter must preserve the provider-facing system, tools and

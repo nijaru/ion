@@ -154,6 +154,11 @@ Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
 copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+For a custom OpenRouter model that returns plain `reasoning` and unsigned
+`reasoning.text` details, use `--wire openrouter-plain-reasoning`; this route
+rejects signed, encrypted, summarized or contradictory details until their
+structured replay is implemented. Qualify a new model with a tool-using turn
+before relying on it for coding.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
 endpoints require HTTPS and a key supplied through
