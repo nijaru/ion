@@ -629,6 +629,12 @@ async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
         .take()
         .context("no clipboard paste is pending")?;
     let content = job.await.context("clipboard reader stopped")??;
+    if matches!(
+        ui.status.as_str(),
+        "Reading clipboard…" | "Wait for clipboard paste, then send the prompt"
+    ) {
+        ui.status.clear();
+    }
     apply_clipboard(ui, content)
 }
 
@@ -2381,6 +2387,22 @@ mod tests {
         ));
     }
 
+    #[tokio::test]
+    async fn completed_file_paste_clears_reader_status() {
+        let mut ui = Frontend {
+            status: "Reading clipboard…".into(),
+            clipboard_job: Some(tokio::spawn(async {
+                Ok(PreparedPaste::Files(vec![PathBuf::from(
+                    "/tmp/path with spaces.txt",
+                )]))
+            })),
+            ..Frontend::default()
+        };
+        finish_clipboard_paste(&mut ui).await.unwrap();
+        assert_eq!(ui.draft, "/tmp/path with spaces.txt");
+        assert!(ui.status.is_empty());
+    }
+
     #[test]
     fn clipboard_image_during_turn_stays_with_typed_steering() {
         let selected = Selection {
@@ -2430,6 +2452,7 @@ mod tests {
     async fn busy_submit_waits_for_pending_clipboard_read() {
         let mut ui = Frontend::default();
         ui.insert("describe this");
+        ui.status = "Reading clipboard…".into();
         ui.clipboard_job = Some(tokio::spawn(async {
             Ok(PreparedPaste::Text(" image".into()))
         }));
@@ -2446,6 +2469,7 @@ mod tests {
         assert!(ui.pending.is_empty());
         finish_pending_clipboard_paste(&mut ui).await;
         assert_eq!(ui.draft, "describe this image");
+        assert!(ui.status.is_empty());
     }
 
     #[test]
