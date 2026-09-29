@@ -30,7 +30,7 @@ precedence.
 With the existing Pi FNOX profile, for example:
 
 ```sh
-fnox --profile pi exec -- target/debug/ion --provider openrouter --model deepseek/deepseek-v4.1-flash
+fnox -c ~/.config/fnox/config.toml --profile pi exec -- target/debug/ion --provider openrouter --model deepseek/deepseek-v4.1-flash
 ```
 
 From the project directory:
@@ -251,55 +251,26 @@ save an empty assistant message that would break later provider replay.
 
 ## Current limits
 
-Ion has completed live coding repairs with DeepSeek V4.1 Flash, MiMo V2.6
-Flash, OpenRouter DeepSeek V4.1 Flash, and a custom llama.cpp endpoint reached
-through a loopback tunnel on macOS. OpenRouter DeepSeek V4.1 Flash also
-completed a live read/edit/shell repair and cross-process resume in an
-unprivileged Linux ARM64 container. On native Fedora, a custom local
-llama.cpp Qwen endpoint completed a read/edit/shell repair and cross-process
-resume. The code and session results were checked independently; these are
-short-task samples, not broad model or platform parity.
-Direct DeepSeek and MiMo routes keep their default thinking behavior and
-retain provider reasoning needed for tool-call continuation across saved
-turns. Both passed live multi-turn read-tool checks. The cataloged OpenRouter
-DeepSeek Flash route also retains plain reasoning across tool calls and saved
-turns; a live two-turn read/shell task passed. OpenRouter responses with signed,
-encrypted or summarized reasoning details remain unsupported, as does
-thinking on custom llama.cpp routes.
+Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
+OpenRouter DeepSeek Flash, and a custom llama.cpp route. OpenRouter and local
+llama.cpp tasks also passed on Linux. The OpenRouter route passed user-image
+and workspace-image tasks, resource use, MCP tool use and Session
+continuation. These checks cover selected tasks and routes. Anthropic and
+direct OpenAI have not been live-qualified.
 
-An OpenRouter DeepSeek V4.1 Flash task also read a workspace PNG through the
-model's `read` tool, identified its left-half color, wrote `red\n` to a file
-and read the file back. A separate image-only PNG prompt completed on the
-same route. These qualify two live image input paths, not broad vision parity.
-
-The TUI clips tool output in its default view; the full stored result is
-available through Ctrl-O or `/tool`. Context pressure currently
-uses a rough request-size token estimate; custom routes without a known
-context window use only the transport bound. Direct
-OpenAI returned a no-credits HTTP 429 in the available account; Anthropic was
-not qualified. [ARCHITECTURE.md](ARCHITECTURE.md)
-holds the design contracts.
-
-Repository checks:
-
-```sh
-cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace
-scripts/smoke.sh
-python3 scripts/smoke_terminal.py
-```
-
-The smoke checks use an offline local model stream. See [AGENTS.md](AGENTS.md)
-for maintainer instructions.
+Direct DeepSeek and MiMo and the cataloged OpenRouter DeepSeek Flash route
+retain the reasoning needed for tool-call continuation across saved Turns.
+Signed, encrypted or summarized OpenRouter reasoning is unsupported, as is
+thinking on custom llama.cpp routes. Context pressure uses an approximate
+token estimate; custom routes without a known context window use only the
+encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
+contract and [AGENTS.md](AGENTS.md) for repository checks.
 
 For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
 conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
-`Host::resources` loads project skills and prompt templates. A separate
-minimal Rust client was compiled outside the workspace and completed an
-offline Turn through `Host`, then reopened its Session. `ion rpc`
+`Host::resources` loads project skills and prompt templates. `ion rpc`
 provides long-lived subprocess control.
 
 ## License
