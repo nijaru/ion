@@ -267,8 +267,7 @@ impl ModelStore {
             .as_deref()
             .context("unknown model; supply --endpoint and --wire to configure a custom route")?;
         let wire = saved.wire.context("custom route requires --wire")?;
-        let local = HttpModelService::endpoint_allows_anonymous(endpoint)
-            .context("invalid custom endpoint")?;
+        HttpModelService::validate_endpoint(endpoint).context("invalid custom endpoint")?;
         ensure!(!saved.model.is_empty(), "model ID is empty");
         Ok(Selection {
             provider: saved.provider.clone(),
@@ -286,7 +285,7 @@ impl ModelStore {
                 .unwrap_or_else(|| "ION_CUSTOM_API_KEY".into()),
             max_output_tokens: 8192,
             context_window_tokens: None,
-            requires_key: !local,
+            requires_key: false,
             image_input: saved.image_input,
         })
     }
@@ -368,7 +367,11 @@ mod tests {
             HttpWire::OpenRouterChat
         );
         route.endpoint = Some("https://localhost/v1/chat/completions".into());
-        assert!(store.resolve_saved(&route).unwrap().requires_key);
+        assert!(!store.resolve_saved(&route).unwrap().requires_key);
+        route.endpoint = Some("http://desktop:8080/v1/chat/completions".into());
+        assert!(!store.resolve_saved(&route).unwrap().requires_key);
+        route.endpoint = Some("https://example.com/v1/chat/completions".into());
+        assert!(!store.resolve_saved(&route).unwrap().requires_key);
         route.endpoint = Some("https://example.com/v1/chat/completions?token=hidden".into());
         assert!(store.resolve_saved(&route).is_err());
     }

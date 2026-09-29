@@ -158,6 +158,8 @@ Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
 copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+`URL` is the full request endpoint, such as
+`http://desktop:8080/v1/chat/completions`, rather than only the `/v1` base.
 For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a
@@ -173,10 +175,10 @@ before the next Turn's request. Ion avoids compaction during a signed tool
 continuation; if its prefix changes or cannot fit, the Turn fails without
 repeating a tool effect.
 For a llama.cpp server whose model emits unreplayable reasoning, use
-`--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
-endpoints require HTTPS and a key supplied through
-`ION_CUSTOM_API_KEY` or `--api-key-env NAME`. Loopback HTTP, including
-`localhost`, can run without a key.
+`--wire llama-cpp-no-thinking` to disable it on each request. Custom HTTP or
+HTTPS endpoints can run without a key. Set `ION_CUSTOM_API_KEY` or pass
+`--api-key-env NAME` when the endpoint needs one. An HTTP endpoint sends any
+configured key in cleartext; use HTTPS when the endpoint offers it.
 
 Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
 `ion --image PATH chat`; repeat `--image` for several images. In chat,

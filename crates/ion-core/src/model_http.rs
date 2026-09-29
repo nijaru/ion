@@ -62,10 +62,9 @@ pub struct HttpModelService {
 }
 
 impl HttpModelService {
-    /// Validate a route with the same rule used at dispatch. Only HTTP over
-    /// loopback may omit a credential.
-    pub fn endpoint_allows_anonymous(endpoint: &str) -> Result<bool, ProviderError> {
-        Ok(parse_endpoint(endpoint)?.scheme() == "http")
+    /// Validate an explicit route with the same URL rule used at dispatch.
+    pub fn validate_endpoint(endpoint: &str) -> Result<(), ProviderError> {
+        parse_endpoint(endpoint).map(|_| ())
     }
 
     pub fn new(
@@ -91,10 +90,8 @@ impl HttpModelService {
 
 fn parse_endpoint(endpoint: &str) -> Result<Url, ProviderError> {
     let endpoint = Url::parse(endpoint).map_err(|_| invalid("invalid provider endpoint"))?;
-    if endpoint.scheme() != "https"
-        && !(endpoint.scheme() == "http" && endpoint.host_str().is_some_and(is_loopback))
-    {
-        return Err(invalid("provider endpoint must use HTTPS or loopback HTTP"));
+    if !matches!(endpoint.scheme(), "http" | "https") {
+        return Err(invalid("provider endpoint must use HTTP or HTTPS"));
     }
     if !endpoint.username().is_empty()
         || endpoint.password().is_some()
@@ -138,12 +135,6 @@ impl ModelService for HttpModelService {
                         "credential resolution failed",
                     )
                 })?;
-            if key.is_none() && self.endpoint.scheme() != "http" {
-                return Err(error(
-                    ProviderErrorKind::Authentication,
-                    "provider credential unavailable",
-                ));
-            }
             let mut post = self
                 .client
                 .post(self.endpoint.clone())
@@ -396,9 +387,6 @@ fn provider_error_detail_value(value: &Value) -> Option<String> {
     (!detail.is_empty()).then_some(detail)
 }
 
-fn is_loopback(host: &str) -> bool {
-    matches!(host, "localhost" | "127.0.0.1" | "[::1]" | "::1")
-}
 fn error(kind: ProviderErrorKind, message: &str) -> ProviderError {
     ProviderError {
         kind,
@@ -1393,6 +1381,14 @@ mod tests {
         assert_eq!(chat_parts[0]["type"], "image_url");
         let anthropic = wire_messages(&request, HttpWire::AnthropicMessages).unwrap();
         assert_eq!(anthropic[0]["content"].as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn explicit_http_endpoint_accepts_non_loopback_host() {
+        assert!(
+            HttpModelService::validate_endpoint("http://desktop:8080/v1/chat/completions").is_ok()
+        );
+        assert!(HttpModelService::validate_endpoint("file:///tmp/model").is_err());
     }
 
     #[test]
