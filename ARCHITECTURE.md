@@ -239,7 +239,8 @@ custom route is validated by the transport's URL rule when selected; model
 setup must not maintain a second URL policy. A compatible API base URL resolves
 to the wire's standard request path once; an already complete standard request
 URL stays complete. Explicit HTTP and HTTPS custom endpoints may be anonymous
-or use a configured credential. Catalog routes
+or use an explicitly named environment key or saved provider credential;
+they do not inherit one global custom key. Catalog routes
 require their matching provider credential. A custom HTTP route sends any
 configured credential over that cleartext connection. A
 resumed Session restores that model when its route is available and reports a

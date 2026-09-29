@@ -36,7 +36,7 @@ for _ in {1..100}; do [[ -s "$WORK/port" ]] && break; sleep 0.05; done
 port="$(cat "$WORK/port")"
 
 "$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$port/v1" --wire chat-completions > "$WORK/use.out"
-"$BIN" --cwd "$WORK/workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/first.out" 2> "$WORK/first.err"
+ION_CUSTOM_API_KEY=unrelated-key "$BIN" --cwd "$WORK/workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/first.out" 2> "$WORK/first.err"
 [[ "$(cat "$WORK/workspace/data.txt")" == 'sample data updated' ]]
 [[ "$(cat "$WORK/workspace/created.txt")" == 'created by ion' ]]
 grep -q 'TASK_COMPLETE' "$WORK/first.out"

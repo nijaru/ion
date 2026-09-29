@@ -25,6 +25,7 @@ class Handler(BaseHTTPRequestHandler):
         global count
         try:
             assert self.path == "/v1/chat/completions"
+            assert "Authorization" not in self.headers
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
             with requests_file.open("a") as trace:
                 trace.write(json.dumps(body) + "\n")

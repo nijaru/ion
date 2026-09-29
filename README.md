@@ -177,8 +177,8 @@ continuation; if its prefix changes or cannot fit, the Turn fails without
 repeating a tool effect.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom HTTP or
-HTTPS endpoints can run without a key. Set `ION_CUSTOM_API_KEY` or pass
-`--api-key-env NAME` when the endpoint needs one. An HTTP endpoint sends any
+HTTPS endpoints can run without a key. Pass `--api-key-env NAME` or run
+`ion login PROVIDER` when the endpoint needs one. An HTTP endpoint sends any
 configured key in cleartext; use HTTPS when the endpoint offers it.
 
 Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or

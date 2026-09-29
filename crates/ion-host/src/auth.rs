@@ -71,8 +71,10 @@ impl CredentialStore {
         }
     }
 
-    pub fn status(&self, provider: &str, env_name: &str) -> Result<CredentialStatus> {
-        if environment_key(env_name)?.is_some() {
+    pub fn status(&self, provider: &str, env_name: Option<&str>) -> Result<CredentialStatus> {
+        if let Some(env_name) = env_name
+            && environment_key(env_name)?.is_some()
+        {
             return Ok(CredentialStatus::Environment);
         }
         Ok(if self.load_api_key(provider)?.is_some() {
@@ -84,13 +86,17 @@ impl CredentialStore {
 
     /// Resolve at request time, so environment changes and logout take effect
     /// without copying credentials into a Session or long-lived request config.
-    pub fn resolver(&self, provider: &str, env_name: &str) -> Result<Arc<dyn CredentialResolver>> {
+    pub fn resolver(
+        &self,
+        provider: &str,
+        env_name: Option<&str>,
+    ) -> Result<Arc<dyn CredentialResolver>> {
         self.key_path(provider)?;
-        ensure!(!env_name.is_empty(), "credential environment name is empty");
+        ensure!(env_name != Some(""), "credential environment name is empty");
         Ok(Arc::new(StoredResolver {
             store: self.clone(),
             provider: provider.to_owned(),
-            env_name: env_name.to_owned(),
+            env_name: env_name.map(str::to_owned),
         }))
     }
 
@@ -143,7 +149,7 @@ impl CredentialStore {
 struct StoredResolver {
     store: CredentialStore,
     provider: String,
-    env_name: String,
+    env_name: Option<String>,
 }
 
 impl CredentialResolver for StoredResolver {
@@ -155,7 +161,10 @@ impl CredentialResolver for StoredResolver {
             if stop.is_cancelled() {
                 return Err(CredentialResolutionError::Cancelled);
             }
-            let key = environment_key(&self.env_name)
+            let key = self
+                .env_name
+                .as_deref()
+                .map_or(Ok(None), environment_key)
                 .and_then(|key| match key {
                     Some(key) => Ok(Some(key)),
                     None => self.store.load_api_key(&self.provider),
@@ -228,6 +237,41 @@ mod tests {
         assert!(store.load_api_key("openrouter").unwrap().is_none());
         std::os::unix::fs::symlink(root.join("elsewhere"), root.join("openrouter.key")).unwrap();
         assert!(store.load_api_key("openrouter").is_err());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unnamed_custom_key_only_uses_provider_login() {
+        let root = std::env::temp_dir().join(format!("ion-auth-{}", uuid::Uuid::now_v7()));
+        let store = CredentialStore::new(&root);
+        assert_eq!(
+            store.status("desktop", None).unwrap(),
+            CredentialStatus::Missing
+        );
+        assert!(
+            store
+                .resolver("desktop", None)
+                .unwrap()
+                .resolve(CancellationToken::new())
+                .await
+                .unwrap()
+                .is_none()
+        );
+        store.save_api_key("desktop", "local-secret").unwrap();
+        assert_eq!(
+            store.status("desktop", None).unwrap(),
+            CredentialStatus::Saved
+        );
+        assert_eq!(
+            store
+                .resolver("desktop", None)
+                .unwrap()
+                .resolve(CancellationToken::new())
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("local-secret")
+        );
         fs::remove_dir_all(root).unwrap();
     }
 }

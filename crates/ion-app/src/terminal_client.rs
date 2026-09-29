@@ -2269,7 +2269,7 @@ mod tests {
             model: "vision".into(),
             endpoint: "http://127.0.0.1:1".into(),
             wire: ion_core::HttpWire::ChatCompletions,
-            api_key_env: String::new(),
+            api_key_env: None,
             max_output_tokens: 1024,
             context_window_tokens: None,
             requires_key: false,

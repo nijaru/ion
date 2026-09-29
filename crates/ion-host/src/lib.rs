@@ -127,7 +127,7 @@ impl Host {
         selected.require_access(&self.credentials)?;
         let resolver = self
             .credentials
-            .resolver(&selected.provider, &selected.api_key_env)?;
+            .resolver(&selected.provider, selected.api_key_env.as_deref())?;
         let service = Arc::new(HttpModelService::new(
             &selected.endpoint,
             selected.wire,

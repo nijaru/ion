@@ -63,7 +63,7 @@ pub struct Selection {
     pub model: String,
     pub endpoint: String,
     pub wire: HttpWire,
-    pub api_key_env: String,
+    pub api_key_env: Option<String>,
     pub max_output_tokens: u32,
     pub context_window_tokens: Option<u32>,
     pub requires_key: bool,
@@ -80,13 +80,20 @@ impl Selection {
 
     pub fn require_access(&self, credentials: &CredentialStore) -> Result<()> {
         if self.requires_key
-            && credentials.status(&self.provider, &self.api_key_env)? == CredentialStatus::Missing
+            && credentials.status(&self.provider, self.api_key_env.as_deref())?
+                == CredentialStatus::Missing
         {
+            if let Some(env_name) = &self.api_key_env {
+                bail!(
+                    "no {} credential; set {} or run `ion login {}`",
+                    self.provider,
+                    env_name,
+                    self.provider
+                );
+            }
             bail!(
-                "no {} credential; set {} or run `ion login {}`",
-                self.provider,
-                self.api_key_env,
-                self.provider
+                "no {provider} credential; run `ion login {provider}`",
+                provider = self.provider
             );
         }
         Ok(())
@@ -161,7 +168,9 @@ impl ModelStore {
             return self.resolve_identity(&selected);
         }
         for entry in catalog::models() {
-            if credentials.status(entry.provider, entry.api_key_env)? != CredentialStatus::Missing {
+            if credentials.status(entry.provider, Some(entry.api_key_env))?
+                != CredentialStatus::Missing
+            {
                 return self.resolve_identity(&ModelRef {
                     provider: entry.provider.into(),
                     model: entry.id.into(),
@@ -217,7 +226,8 @@ impl ModelStore {
             .map(|selected| {
                 let label = catalog::find(&selected.provider, &selected.model)
                     .map_or("Custom endpoint", |entry| entry.label);
-                let credential = credentials.status(&selected.provider, &selected.api_key_env)?;
+                let credential =
+                    credentials.status(&selected.provider, selected.api_key_env.as_deref())?;
                 Ok(ModelChoice {
                     selected,
                     label,
@@ -255,7 +265,7 @@ impl ModelStore {
                     catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
                     catalog::CatalogWire::AnthropicMessages => HttpWire::AnthropicMessages,
                 },
-                api_key_env: model.api_key_env.into(),
+                api_key_env: Some(model.api_key_env.into()),
                 max_output_tokens: model.max_output_tokens,
                 context_window_tokens: Some(model.context_window),
                 requires_key: true,
@@ -276,15 +286,16 @@ impl ModelStore {
         let endpoint = HttpModelService::resolve_endpoint(endpoint, wire)
             .context("invalid custom endpoint")?;
         ensure!(!saved.model.is_empty(), "model ID is empty");
+        ensure!(
+            saved.api_key_env.as_deref() != Some(""),
+            "credential environment name is empty"
+        );
         Ok(Selection {
             provider: saved.provider.clone(),
             model: saved.model.clone(),
             endpoint,
             wire,
-            api_key_env: saved
-                .api_key_env
-                .clone()
-                .unwrap_or_else(|| "ION_CUSTOM_API_KEY".into()),
+            api_key_env: saved.api_key_env.clone(),
             max_output_tokens: 8192,
             context_window_tokens: None,
             requires_key: false,
