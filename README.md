@@ -120,6 +120,16 @@ Ctrl-O opens the latest complete tool result; `/tools` lists results and
 `/tool N` opens a selected one. Esc or Ctrl-O closes the result view. Input
 that has not reached the model returns to the editor if the turn fails or is
 cancelled.
+Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
+`vi`; Ion keeps the original draft if the editor fails. Ctrl-X or `/copy`
+copies the last committed assistant answer to the system clipboard when one
+is available. On remote or displayless terminals, Ion sends an OSC 52
+clipboard request, whose support depends on the terminal. `/export PATH`
+saves a readable transcript to a new file; `ion --continue export` prints it
+to stdout, and `ion --continue export PATH` saves it. Export includes prompts,
+shell commands and tool output, so review it before sharing. Image inputs are
+shown as markers rather than inline bytes; an existing target file is not
+overwritten.
 In the terminal, `!command` runs a shell command in the live working
 directory and includes its observed result in later model context.
 `!!command` runs it without sharing the result with the model. Both commands

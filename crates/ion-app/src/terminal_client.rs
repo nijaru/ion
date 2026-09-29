@@ -1,6 +1,6 @@
 //! Terminal view over the same coding loop used by headless and library hosts.
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
@@ -10,8 +10,8 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{
-    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, LocalTools,
-    SessionEntry, SessionView, SteeringInbox,
+    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SessionEntry,
+    SessionView, SteeringInbox, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
@@ -443,6 +443,31 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             runtime.selected.identity(),
                         )
                         .await?;
+                    } else if command == "/copy" {
+                        match copy_last_answer(&runtime.session, &mut terminal).await {
+                            Ok(crate::clipboard::CopyOutcome::Copied) => {
+                                ui.status = "Copied last assistant answer".into()
+                            }
+                            Ok(crate::clipboard::CopyOutcome::RequestedFromTerminal) => {
+                                ui.status = "Sent clipboard request to terminal".into()
+                            }
+                            Err(error) => ui.status = format!("Copy failed: {error:#}"),
+                        }
+                    } else if command == "/editor" {
+                        match edit_draft_in_terminal(
+                            &mut terminal,
+                            &mut screen,
+                            &mut input,
+                            &mut ui,
+                        )
+                        .await
+                        {
+                            Ok(()) => ui.status = "Draft returned from editor".into(),
+                            Err(error) => {
+                                ui.status =
+                                    format!("Editor failed: {error:#}; original draft retained")
+                            }
+                        }
                     } else {
                         match handle_command(&mut runtime, &mut ui, &command) {
                             Ok(Some(prompt)) => {
@@ -545,6 +570,73 @@ fn login_in_terminal(
     Ok(result)
 }
 
+async fn copy_last_answer(
+    session: &CodingSession,
+    terminal: &mut TerminalSession,
+) -> Result<crate::clipboard::CopyOutcome> {
+    let answer = last_committed_answer(&session.view()?)?;
+    crate::clipboard::copy(&answer, terminal).await
+}
+
+fn last_committed_answer(view: &SessionView) -> Result<String> {
+    let completed: HashSet<u64> = view
+        .entries
+        .iter()
+        .filter_map(|entry| match entry {
+            SessionEntry::TurnEnded {
+                turn,
+                reason: TurnEndReason::Completed,
+            } => Some(*turn),
+            _ => None,
+        })
+        .collect();
+    view.entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            SessionEntry::Assistant { turn, message, .. } if completed.contains(turn) => {
+                let text = message
+                    .content
+                    .iter()
+                    .filter_map(|part| match part {
+                        Content::Text(text) => Some(text.as_str()),
+                        _ => None,
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                (!text.trim().is_empty()).then_some(text)
+            }
+            _ => None,
+        })
+        .context("no completed assistant answer to copy")
+}
+
+async fn edit_draft_in_terminal(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    input: &mut InputStream,
+    ui: &mut Frontend,
+) -> Result<()> {
+    input
+        .suspend()
+        .context("release terminal input for editor")?;
+    terminal.suspend().context("suspend terminal for editor")?;
+    let edited = crate::external_editor::edit(&ui.draft, MAX_DRAFT).await;
+    terminal.resume().context("resume terminal after editor")?;
+    terminal
+        .enter_alt_screen()
+        .context("restore chat screen after editor")?;
+    let (width, height) = terminal.size()?;
+    *screen = Screen::new(width, 0, height);
+    *input = terminal
+        .input()
+        .context("resume terminal input after editor")?;
+    let edited = edited?;
+    ui.draft = edited;
+    ui.cursor = ui.draft.len();
+    Ok(())
+}
+
 fn apply_fork(
     runtime: &mut ChatRuntime,
     ui: &mut Frontend,
@@ -608,7 +700,7 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\n!COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\n!COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
@@ -634,6 +726,13 @@ fn handle_command(
                     .count(),
                 view.name.unwrap_or_else(|| "unnamed".into()),
             ));
+        }
+        "/export" => {
+            anyhow::ensure!(!args.is_empty(), "use /export PATH");
+            let target = Path::new(args);
+            let target = if target.is_absolute() { target.to_owned() } else { runtime.session.cwd().join(target) };
+            crate::transcript::save_new(&runtime.session.view()?, &target)?;
+            ui.status = format!("Transcript saved to {}", target.display());
         }
         "/new" => {
             runtime.new_session()?;
@@ -855,6 +954,10 @@ fn busy_key(
             ui.status = format!("{} follow-up(s) queued", ui.pending.len());
         }
         Action::Command(command) => {
+            if command == "/copy" || command == "/editor" {
+                ui.status = "This action is available after the operation".into();
+                return;
+            }
             if let (Some(steering), Some(resources)) = (steering, resources)
                 && let Some(expanded) = resources.expand_command(&command)
             {
@@ -947,13 +1050,12 @@ async fn run_user_shell(
     command: String,
     exclude_from_context: bool,
 ) -> Result<()> {
-    let tools = LocalTools::new(session.cwd())?;
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
     ui.status = "Running shell · Ctrl-C cancels".into();
     let output = {
-        let running = tools.run_user_shell(&command, stop.clone());
+        let running = session.run_user_shell(&command, stop.clone(), exclude_from_context);
         tokio::pin!(running);
         loop {
             tokio::select! {
@@ -982,7 +1084,7 @@ async fn run_user_shell(
             }
         }
     };
-    session.record_user_shell(command, output.value, output.is_error, exclude_from_context)?;
+    let output = output?;
     let view = session.view()?;
     ui.context_label = context_label(&view, ui.context_window_tokens);
     ui.load_history(&view);
@@ -1214,6 +1316,14 @@ impl Frontend {
                 Action::None
             }
             KeyEvent {
+                code: KeyCode::Char('x'),
+                modifiers,
+            } if modifiers.contains(Modifiers::CONTROL) => Action::Command("/copy".into()),
+            KeyEvent {
+                code: KeyCode::Char('g'),
+                modifiers,
+            } if modifiers.contains(Modifiers::CONTROL) => Action::Command("/editor".into()),
+            KeyEvent {
                 code: KeyCode::Enter,
                 modifiers,
             } if modifiers.contains(Modifiers::SHIFT) || modifiers.contains(Modifiers::CONTROL) => {
@@ -1264,12 +1374,18 @@ impl Frontend {
                     Action::Command(prompt)
                 } else if let Some(command) = prompt.strip_prefix("!!") {
                     if command.trim().is_empty() {
+                        self.draft = prompt;
+                        self.cursor = self.draft.len();
+                        self.status = "Type a shell command after !!".into();
                         Action::None
                     } else {
                         Action::Shell(command.trim().to_owned(), true)
                     }
                 } else if let Some(command) = prompt.strip_prefix('!') {
                     if command.trim().is_empty() {
+                        self.draft = prompt;
+                        self.cursor = self.draft.len();
+                        self.status = "Type a shell command after !".into();
                         Action::None
                     } else {
                         Action::Shell(command.trim().to_owned(), false)
@@ -1929,6 +2045,39 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copy_uses_the_last_completed_answer() {
+        let assistant = |turn, text: &str| SessionEntry::Assistant {
+            turn,
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::Text(text.into())],
+                provider_replay: None,
+            },
+            usage: ion_ai::Usage::unknown(),
+            termination: ion_ai::ResponseTermination::Completed,
+        };
+        let view = SessionView {
+            cwd: PathBuf::from("/tmp"),
+            name: None,
+            entries: vec![
+                assistant(1, "finished"),
+                SessionEntry::TurnEnded {
+                    turn: 1,
+                    reason: TurnEndReason::Completed,
+                },
+                assistant(2, "partial"),
+            ],
+            messages: vec![],
+            unfinished_turn: Some(2),
+            last_end: None,
+            last_model: None,
+            compacted_through: None,
+            last_usage: None,
+        };
+        assert_eq!(last_committed_answer(&view).unwrap(), "finished");
+    }
     #[test]
     fn composer_keeps_unicode_cursor_across_lines() {
         let draft = "ab🦀\nnext";

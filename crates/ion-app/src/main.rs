@@ -17,8 +17,11 @@ use ion_host::{CredentialStatus, Host, McpServer, Resources, SavedSelection, Wir
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+mod clipboard;
+mod external_editor;
 mod rpc;
 mod terminal_client;
+mod transcript;
 
 #[derive(Parser)]
 #[command(about = "Ion: a local coding agent")]
@@ -92,6 +95,8 @@ enum Action {
     Rpc,
     /// Inspect committed Session history without running a model or tool.
     Inspect,
+    /// Print a readable committed transcript, or save it to a new file.
+    Export { path: Option<PathBuf> },
     /// List numbered Turns in a saved Session.
     Turns,
     /// Copy a saved conversation into an independent Session in this directory.
@@ -298,6 +303,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 action,
                 Some(
                     Action::Inspect
+                        | Action::Export { .. }
                         | Action::Turns
                         | Action::Compact
                         | Action::Clone
@@ -325,6 +331,23 @@ async fn run_cli(cli: Cli) -> Result<()> {
                 let mut output = serde_json::to_value(view)?;
                 redact_image_payloads(&mut output);
                 println!("{}", serde_json::to_string_pretty(&output)?);
+                return Ok(());
+            }
+            if let Some(Action::Export { path: output }) = &action {
+                let view = existing.as_ref().context("session does not exist")?;
+                if let Some(output) = output {
+                    let target = if output.is_absolute() {
+                        output.clone()
+                    } else {
+                        view.cwd.join(output)
+                    };
+                    transcript::save_new(view, &target).with_context(|| {
+                        format!("cannot save transcript to {}", target.display())
+                    })?;
+                    println!("{}", target.display());
+                } else {
+                    io::stdout().write_all(transcript::render(view).as_bytes())?;
+                }
                 return Ok(());
             }
             if matches!(action, Some(Action::Turns)) {

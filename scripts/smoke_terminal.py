@@ -23,8 +23,15 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     workspace = work / "workspace"
     workspace.mkdir()
     (workspace / "data.txt").write_text("sample data\n")
+    copy_bin = work / "copy-bin"
+    copy_bin.mkdir()
+    copy_file = work / "copied.txt"
+    for program in ("pbcopy", "wl-copy", "xclip", "xsel"):
+        wrapper = copy_bin / program
+        wrapper.write_text('#!/bin/sh\ncat > "$ION_SMOKE_CLIPBOARD"\n')
+        wrapper.chmod(0o755)
     env = os.environ.copy()
-    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke")
+    env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_STEERING="1", SSH_CONNECTION="ion-smoke", WAYLAND_DISPLAY="ion-smoke", ION_SMOKE_CLIPBOARD=str(copy_file), PATH=f"{copy_bin}:{env['PATH']}")
     port_file, trace = work / "port", work / "requests"
     server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port_file), str(trace)], env=env, stderr=subprocess.PIPE)
     try:
@@ -41,7 +48,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         child = subprocess.Popen([binary, "--cwd", workspace, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_controlling_terminal)
         os.close(slave)
         output = bytearray()
-        sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_quit = False
+        sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -116,14 +123,18 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if sent_key and b"Credential saved" in output and not sent_logout:
                     os.write(master, b"/logout smoke\r")
                     sent_logout = True
-                if sent_logout and b"Removed saved smoke credential" in output and not sent_quit:
+                if sent_logout and b"Removed saved smoke credential" in output and not sent_copy:
+                    os.write(master, b"\x18")
+                    sent_copy = True
+                if sent_copy and b"Copied last assistant answer" in output and not sent_quit:
                     os.write(master, b"\x03")
                     sent_quit = True
                 if child.poll() is not None:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
-            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
+            assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
             assert (workspace / "data.txt").read_text() == "sample data updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"

@@ -234,6 +234,11 @@ incrementally across read boundaries; a lone Escape waits briefly for a
 possible key sequence, with a longer wait over SSH. Bracketed paste and
 enabled mouse/keyboard sequences remain semantic events rather than draft
 text. The input reader releases the tty before a synchronous login prompt.
+An external editor receives only the unsent draft in a private temporary
+file while Ion releases terminal ownership; failure leaves the original
+draft intact. Copy uses committed assistant text. A readable export derives
+from committed Session entries, marks image content without inlining its
+bytes, and creates a new user-selected file without replacing existing data.
 Headless mode exposes the same loop without terminal dependencies. Text mode
 writes only the committed
 final answer to stdout after a successful Turn; provisional streamed text can

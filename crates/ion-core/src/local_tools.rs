@@ -46,7 +46,11 @@ impl LocalTools {
     }
 
     /// Use the same shell execution path for a user's direct terminal command.
-    pub async fn run_user_shell(&self, command: &str, stop: CancellationToken) -> ToolOutput {
+    pub(crate) async fn run_user_shell(
+        &self,
+        command: &str,
+        stop: CancellationToken,
+    ) -> ToolOutput {
         self.exec(&json!({"command": command}), stop).await
     }
 }

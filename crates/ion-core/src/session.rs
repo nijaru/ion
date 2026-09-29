@@ -9,6 +9,7 @@ use std::{
     time::Duration,
 };
 
+use crate::{agent::ToolOutput, local_tools::LocalTools};
 use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
     Usage,
@@ -18,6 +19,7 @@ use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio_util::sync::CancellationToken;
 
 const FORMAT_VERSION: u32 = 2;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
@@ -511,7 +513,7 @@ impl Session {
 
     /// Record a user-run command after its observed result is available.
     /// It is never appended while a model Turn owns the Session.
-    pub fn record_user_shell(
+    fn record_user_shell(
         &self,
         command: String,
         output: serde_json::Value,
@@ -528,6 +530,32 @@ impl Session {
                 exclude_from_context,
             }],
         )
+    }
+
+    /// Run a direct user command while holding the same exclusive gate as a
+    /// model Turn, then record the observed result before releasing it.
+    pub async fn run_user_shell(
+        &self,
+        command: &str,
+        stop: CancellationToken,
+        exclude_from_context: bool,
+    ) -> Result<ToolOutput, SessionError> {
+        let _gate = tokio::select! {
+            gate = self.submit_gate.lock() => gate,
+            () = stop.cancelled() => return Err(SessionError::UserShellCancelled),
+        };
+        if stop.is_cancelled() {
+            return Err(SessionError::UserShellCancelled);
+        }
+        let tools = LocalTools::new(self.cwd())?;
+        let output = tools.run_user_shell(command, stop).await;
+        self.record_user_shell(
+            command.to_owned(),
+            output.value.clone(),
+            output.is_error,
+            exclude_from_context,
+        )?;
+        Ok(output)
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
@@ -1094,6 +1122,8 @@ pub enum SessionError {
     UnsupportedFormat(u32),
     #[error("prompt is empty")]
     EmptyPrompt,
+    #[error("user shell command cancelled before start")]
+    UserShellCancelled,
     #[error("user input must contain text or valid images")]
     InvalidUserInput,
     #[error("session name must be at most 120 bytes without control characters")]
@@ -1118,6 +1148,34 @@ pub enum SessionError {
 mod tests {
     use super::*;
     use ion_ai::ToolCall;
+
+    #[tokio::test]
+    async fn user_shell_waits_for_turn_gate_before_effect_and_commit() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        {
+            let guard = session.submit_gate.lock().await;
+            let command =
+                session.run_user_shell("printf done > result.txt", CancellationToken::new(), false);
+            tokio::pin!(command);
+            assert!(
+                tokio::time::timeout(Duration::from_millis(30), command.as_mut())
+                    .await
+                    .is_err()
+            );
+            assert!(!root.join("result.txt").exists());
+            drop(guard);
+            let output = command.await.unwrap();
+            assert!(!output.is_error);
+        }
+        assert_eq!(fs::read_to_string(root.join("result.txt")).unwrap(), "done");
+        assert!(matches!(
+            session.view().unwrap().entries.last(),
+            Some(SessionEntry::UserShell { .. })
+        ));
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn user_shell_context_choice_survives_reopen_and_compaction() {

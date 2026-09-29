@@ -1220,6 +1220,7 @@ name = "ion"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "base64 0.22.1",
  "clap",
  "ignore",
  "ion-ai",
@@ -1230,10 +1231,12 @@ dependencies = [
  "rpassword",
  "serde",
  "serde_json",
+ "shlex",
  "tokio",
  "tokio-util",
  "unicode-segmentation",
  "unicode-width",
+ "uuid",
 ]
 
 [[package]]
