@@ -226,7 +226,8 @@ tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
 exec. Headless, TUI and RPC use the same tool set. Server processes inherit
 the user's environment and permissions and run in the Session's working
 directory. A repository file does not launch an MCP server merely because
-Ion opened that directory. A failing server is reported at startup; a failed
+Ion opened that directory. A failing server is reported at startup while
+healthy servers and the coding client remain available; a failed
 tool call becomes an error result visible to the model. Current MCP support
 handles text, structured data and normalized image tool results; audio and
 embedded resource content report an explicit unsupported-content error. For Rust embedders, `Host::agent_with_tools`

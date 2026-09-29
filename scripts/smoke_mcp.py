@@ -89,6 +89,24 @@ for line in sys.stdin.buffer:
 with log.open('a') as output: output.write('eof\\n')
 '''
 
+bad_listing_source = '''import json, sys
+from pathlib import Path
+log = Path('bad-mcp-events.txt')
+log.write_text('started\\n')
+for line in sys.stdin.buffer:
+    request = json.loads(line)
+    if request.get('method') == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {}}, 'serverInfo': {'name': 'bad-listing', 'version': '1'}}
+    elif request.get('method') == 'tools/list':
+        result = {'tools': 'invalid list'}
+    else:
+        continue
+    if 'id' in request:
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}) + '\\n')
+        sys.stdout.flush()
+with log.open('a') as output: output.write('eof\\n')
+'''
+
 
 with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     work = Path(temporary)
@@ -96,6 +114,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     workspace.mkdir()
     server_script = work / "server.py"
     server_script.write_text(server_source)
+    bad_script = work / "bad-listing.py"
+    bad_script.write_text(bad_listing_source)
     env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state")}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -104,10 +124,15 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "smoke", "mcp-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "demo", sys.executable, str(server_script)], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add", "broken", str(work / "missing-server")], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add", "bad-listing", sys.executable, str(bad_script)], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and str(server_script) in listing.stdout
         response = subprocess.run([binary, "--cwd", workspace, "run", "Use the greet tool to greet Ion."], env=env, check=True, capture_output=True, text=True)
         assert response.stdout.strip() == "MCP_OK", response
+        assert "broken" in response.stderr and "cannot start MCP server" in response.stderr, response
+        assert "bad-listing" in response.stderr and "tool listing failed" in response.stderr, response
+        assert "eof" in (workspace / "bad-mcp-events.txt").read_text()
         assert len(requests) == 2
         events = (workspace / "mcp-events.txt").read_text()
         assert "called:Ion" in events and "eof" in events, events
@@ -119,6 +144,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
         assert "base64 image data omitted" in inspected and "iVBORw0KGgo" not in inspected
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "remove", "broken"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "remove", "bad-listing"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")
     finally:

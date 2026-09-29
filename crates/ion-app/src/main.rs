@@ -424,21 +424,32 @@ async fn run_cli(cli: Cli) -> Result<()> {
             } else {
                 CodingSession::create(&path, &cwd)?
             });
-            let external_mcp = if matches!(action, Some(Action::Compact)) {
-                None
+            let startup = if matches!(action, Some(Action::Compact)) {
+                ion_host::McpStartup::default()
             } else {
-                host.external_tools(session.cwd()).await?
+                host.external_tools(session.cwd()).await
             };
+            let mut startup_diagnostics = startup
+                .diagnostics
+                .into_iter()
+                .map(|diagnostic| format!("[mcp: {diagnostic}]"))
+                .collect::<Vec<_>>();
+            let external_mcp = startup.tools;
             let external_tools: Option<Arc<dyn CodingToolHost>> = external_mcp
                 .as_ref()
                 .map(|tools| tools.clone() as Arc<dyn CodingToolHost>);
             let binding = SessionBinding::new(host, session, selected, external_tools)?;
             for diagnostic in binding.resources().diagnostics() {
-                eprintln!(
+                startup_diagnostics.push(format!(
                     "[resource: {}: {}]",
                     diagnostic.path.display(),
                     diagnostic.message
-                );
+                ));
+            }
+            if cli.print.is_some() || !matches!(&action, Some(Action::Chat) | None) {
+                for diagnostic in &startup_diagnostics {
+                    eprintln!("{diagnostic}");
+                }
             }
             let result = async {
                 match action {
@@ -479,7 +490,12 @@ async fn run_cli(cli: Cli) -> Result<()> {
                     }
                     Some(Action::Rpc) => rpc::run(binding).await,
                     Some(Action::Chat) | None if cli.print.is_none() => {
-                        terminal_client::chat(terminal_client::ChatInit { binding, images }).await
+                        terminal_client::chat(terminal_client::ChatInit {
+                            binding,
+                            images,
+                            startup_diagnostics,
+                        })
+                        .await
                     }
                     None => {
                         headless(

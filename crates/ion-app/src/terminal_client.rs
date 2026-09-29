@@ -211,6 +211,7 @@ impl Progress {
 pub struct ChatInit {
     pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
+    pub startup_diagnostics: Vec<String>,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
@@ -229,6 +230,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ..Frontend::default()
     };
     ui.refresh_session(runtime.session())?;
+    for diagnostic in init.startup_diagnostics {
+        ui.note(diagnostic);
+    }
     loop {
         ui.context_window_tokens = runtime.selected().context_window_tokens;
         ui.update_context(runtime.session())?;

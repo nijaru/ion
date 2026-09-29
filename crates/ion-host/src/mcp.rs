@@ -1,6 +1,6 @@
 //! Explicit local MCP tool connections. Session facts remain in ion-core.
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, HashMap, HashSet},
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -94,31 +94,76 @@ pub struct McpTools {
     routes: HashMap<String, (usize, String)>,
 }
 
+#[derive(Default)]
+pub struct McpStartup {
+    pub tools: Option<Arc<McpTools>>,
+    pub diagnostics: Vec<String>,
+}
+
 impl McpTools {
-    pub async fn connect(config: &McpConfig, cwd: &Path) -> Result<Option<Arc<Self>>> {
-        let saved = config.list()?;
-        if saved.is_empty() {
-            return Ok(None);
-        }
+    pub async fn connect(config: &McpConfig, cwd: &Path) -> McpStartup {
+        let saved = match config.list() {
+            Ok(saved) => saved,
+            Err(error) => {
+                return McpStartup {
+                    diagnostics: vec![format!("{error:#}")],
+                    ..McpStartup::default()
+                };
+            }
+        };
         let mut servers = Vec::new();
         let mut specs = Vec::new();
         let mut routes = HashMap::new();
+        let mut diagnostics = Vec::new();
         for (name, definition) in saved {
-            validate_name(&name)?;
-            let mut command = Command::new(&definition.command);
-            command.args(&definition.args).current_dir(cwd);
-            let transport = TokioChildProcess::new(command)
-                .with_context(|| format!("cannot start MCP server {name}"))?;
-            let client = tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
-                .await
-                .with_context(|| format!("MCP server {name} initialization timed out"))?
-                .with_context(|| format!("MCP server {name} initialization failed"))?;
-            let discovered = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
+            match Self::connect_server(name, definition, cwd).await {
+                Ok((server, discovered)) => {
+                    let index = servers.len();
+                    for (spec, tool_name) in discovered {
+                        routes.insert(spec.name.clone(), (index, tool_name));
+                        specs.push(spec);
+                    }
+                    servers.push(server);
+                }
+                Err(error) => diagnostics.push(format!("{error:#}")),
+            }
+        }
+        let tools = (!servers.is_empty()).then(|| {
+            Arc::new(Self {
+                servers,
+                specs,
+                routes,
+            })
+        });
+        McpStartup { tools, diagnostics }
+    }
+
+    async fn connect_server(
+        name: String,
+        definition: McpServer,
+        cwd: &Path,
+    ) -> Result<(Server, Vec<(ToolSpec, String)>)> {
+        validate_name(&name)?;
+        ensure!(
+            !definition.command.trim().is_empty(),
+            "MCP command is empty"
+        );
+        let mut command = Command::new(&definition.command);
+        command.args(&definition.args).current_dir(cwd);
+        let transport = TokioChildProcess::new(command)
+            .with_context(|| format!("cannot start MCP server {name}"))?;
+        let mut client = tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
+            .await
+            .with_context(|| format!("MCP server {name} initialization timed out"))?
+            .with_context(|| format!("MCP server {name} initialization failed"))?;
+        let discovered = async {
+            let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
                 .await
                 .with_context(|| format!("MCP server {name} tool listing timed out"))?
                 .with_context(|| format!("MCP server {name} tool listing failed"))?;
-            let index = servers.len();
-            for tool in discovered {
+            let mut registered = Vec::new();
+            let mut names = HashSet::new();
+            for tool in tools {
                 let tool_name = tool.name.to_string();
                 validate_name(&tool_name)?;
                 let exposed = format!("mcp__{name}__{tool_name}");
@@ -127,30 +172,38 @@ impl McpTools {
                     "MCP tool name {exposed} exceeds provider's 64-character bound"
                 );
                 ensure!(
-                    !routes.contains_key(&exposed),
+                    names.insert(exposed.clone()),
                     "duplicate MCP tool name {exposed}"
                 );
                 let description = tool.description.map_or_else(
                     || format!("Tool {tool_name} from MCP server {name}"),
                     |description| description.into_owned(),
                 );
-                specs.push(ToolSpec {
-                    name: exposed.clone(),
-                    description,
-                    input_schema: Value::Object((*tool.input_schema).clone()),
-                });
-                routes.insert(exposed, (index, tool_name));
+                registered.push((
+                    ToolSpec {
+                        name: exposed,
+                        description,
+                        input_schema: Value::Object((*tool.input_schema).clone()),
+                    },
+                    tool_name,
+                ));
             }
-            servers.push(Server {
-                name,
-                client: RwLock::new(Some(client)),
-            });
+            Ok(registered)
         }
-        Ok(Some(Arc::new(Self {
-            servers,
-            specs,
-            routes,
-        })))
+        .await;
+        match discovered {
+            Ok(discovered) => Ok((
+                Server {
+                    name,
+                    client: RwLock::new(Some(client)),
+                },
+                discovered,
+            )),
+            Err(error) => {
+                let _ = client.close_with_timeout(Duration::from_secs(3)).await;
+                Err(error)
+            }
+        }
     }
 
     /// Close every child process before the client runtime exits.
@@ -287,6 +340,18 @@ fn tool_error(message: String) -> CodingToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn malformed_mcp_config_does_not_block_coding_startup() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        fs::write(root.join("mcp.json"), b"{invalid").unwrap();
+        let startup = McpTools::connect(&McpConfig::new(&root), &root).await;
+        assert!(startup.tools.is_none());
+        assert_eq!(startup.diagnostics.len(), 1);
+        assert!(startup.diagnostics[0].contains("invalid MCP config"));
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn mcp_image_result_is_typed_and_mime_mismatch_is_a_visible_error() {

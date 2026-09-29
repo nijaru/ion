@@ -399,7 +399,10 @@ replacing only that built-in. External model-callable tools use named MCP
 servers over stdio rather than a second private executable protocol. Server
 startup is explicit, never triggered merely by opening a repository. A
 server crash or cancellation produces an honest tool error; it cannot alter
-committed Session facts outside ordinary tool results. External extensions
+committed Session facts outside ordinary tool results. Failed server discovery
+produces a startup diagnostic without blocking the coding client or tools from
+healthy servers. Only discovered tools enter the model request, and a partly
+initialized server is closed before its failure is reported. External extensions
 beyond text tools may return MCP image blocks; the host validates declared
 MIME, decodes and normalizes them through the same image owner as local read,
 and hands the bounded typed result to the coding Turn. Unsupported media

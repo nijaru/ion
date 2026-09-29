@@ -23,7 +23,7 @@ use ion_core::{
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
-pub use mcp::{McpConfig, McpServer, McpTools};
+pub use mcp::{McpConfig, McpServer, McpStartup, McpTools};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
@@ -85,7 +85,7 @@ impl Host {
         McpConfig::new(&self.config_root)
     }
 
-    pub async fn external_tools(&self, cwd: &Path) -> Result<Option<Arc<McpTools>>> {
+    pub async fn external_tools(&self, cwd: &Path) -> McpStartup {
         McpTools::connect(&self.mcp_config(), cwd).await
     }
 
