@@ -8,7 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use clap::{Parser, Subcommand};
-use ion_ai::{Content, Message, ModelRef, Role};
+use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
     CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint,
 };
@@ -579,13 +579,7 @@ async fn headless(
         }
     });
     let mut output_error = None;
-    let input = Message {
-        role: Role::User,
-        content: std::iter::once(Content::Text(prompt))
-            .chain(images.into_iter().flat_map(LoadedImage::into_parts))
-            .collect(),
-        provider_replay: None,
-    };
+    let input = Message::user_input(prompt, images);
     let result = agent
         .submit_message(&session, model, input, instructions, stop, |event| {
             if json_output {

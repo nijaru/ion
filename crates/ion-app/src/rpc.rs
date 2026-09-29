@@ -2,7 +2,7 @@
 use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
-use ion_ai::{Content, Message, Role};
+use ion_ai::Message;
 use ion_core::{CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox};
 use ion_host::{Host, Resources, Selection, SessionCatalog};
 use serde_json::{Value, json};
@@ -196,7 +196,7 @@ impl Control {
                     let prompt = expand_input(&self.resources, message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    active.steering.push_message(input_with_images(prompt, images))?;
+                    active.steering.push_message(Message::user_input(prompt, images))?;
                     Ok(json!({"disposition":"queued"}))
                 }
                 "follow_up" => {
@@ -205,7 +205,7 @@ impl Control {
                     let prompt = expand_input(&self.resources, message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    let input = input_with_images(prompt, images);
+                    let input = Message::user_input(prompt, images);
                     let encoded_bytes = serde_json::to_vec(&(&id, &input))?.len();
                     ensure!(
                         self.queued_bytes.checked_add(encoded_bytes).is_some_and(|total| total <= MAX_QUEUED_BYTES),
@@ -334,7 +334,7 @@ impl Control {
             !prompt.trim().is_empty() || !images.is_empty(),
             "message is empty"
         );
-        self.start_message(input_with_images(prompt, images), id, false)
+        self.start_message(Message::user_input(prompt, images), id, false)
     }
 
     fn start_next_follow_up(&mut self) -> Result<()> {
@@ -456,20 +456,6 @@ impl Control {
             let _ = output.send(Output::Done).await;
         });
         Ok(())
-    }
-}
-
-fn input_with_images(prompt: String, images: Vec<ion_host::image_input::LoadedImage>) -> Message {
-    Message {
-        role: Role::User,
-        content: std::iter::once(Content::Text(prompt))
-            .chain(
-                images
-                    .into_iter()
-                    .flat_map(ion_host::image_input::LoadedImage::into_parts),
-            )
-            .collect(),
-        provider_replay: None,
     }
 }
 

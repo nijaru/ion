@@ -86,16 +86,6 @@ impl PendingInput {
     }
 }
 
-fn user_input(prompt: String, images: impl IntoIterator<Item = LoadedImage>) -> Message {
-    Message {
-        role: Role::User,
-        content: std::iter::once(Content::Text(prompt))
-            .chain(images.into_iter().flat_map(LoadedImage::into_parts))
-            .collect(),
-        provider_replay: None,
-    }
-}
-
 enum PreparedPaste {
     Files(Vec<PathBuf>),
     Image(LoadedImage),
@@ -1136,7 +1126,8 @@ fn busy_key(
     match action {
         Action::Submit(prompt) => {
             if let Some(steering) = steering {
-                match steering.push_message(user_input(prompt.clone(), ui.images.clone())) {
+                match steering.push_message(Message::user_input(prompt.clone(), ui.images.clone()))
+                {
                     Ok(()) => {
                         ui.images.clear();
                         ui.status = "Steering sent for the next model step".into();
@@ -1359,7 +1350,7 @@ async fn run_turn(
             return Err(error.into());
         }
     };
-    let user_message = user_input(prompt.clone(), attached.iter().cloned());
+    let user_message = Message::user_input(prompt.clone(), attached.iter().cloned());
     let progress = Arc::new(Mutex::new(Progress::default()));
     let observer = progress.clone();
     let stop = CancellationToken::new();

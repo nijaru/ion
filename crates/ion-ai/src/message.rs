@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Content;
+use crate::{Content, LoadedImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -20,6 +20,20 @@ pub struct Message {
     /// it is valid; it is not silently portable across providers. Dropping or
     /// reconstructing it is an explicit adapter decision, not a default.
     pub provider_replay: Option<ProviderReplay>,
+}
+
+impl Message {
+    /// Build the user message shared by terminal, headless and RPC clients.
+    #[must_use]
+    pub fn user_input(prompt: String, images: impl IntoIterator<Item = LoadedImage>) -> Self {
+        Self {
+            role: Role::User,
+            content: std::iter::once(Content::Text(prompt))
+                .chain(images.into_iter().flat_map(LoadedImage::into_parts))
+                .collect(),
+            provider_replay: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
