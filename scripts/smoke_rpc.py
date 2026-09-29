@@ -97,6 +97,8 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
         subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-alt", "alt-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-smoke", "rpc-model"], env=env, check=True, capture_output=True)
         child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         ready = read(child)
         assert ready["type"] == "ready" and ready["cwd"] == str(workspace.resolve()), ready
@@ -197,14 +199,29 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert any(r.get("id") == "abort" and r["success"] for r in records)
         assert records[-1]["status"] == "cancelled", records
 
+        send(child, {"id": "model-alt", "type": "set_model", "provider": "rpc-alt", "model": "alt-model"})
+        changed = read(child)
+        assert changed["success"] and changed["data"]["model"]["provider"] == "rpc-alt", changed
+        send(child, {"id": "model-inspect", "type": "inspect"})
+        inspected = read(child)
+        assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
         send(child, {"id": "new", "type": "new_session"})
         fresh = read(child)
-        assert fresh["success"] and fresh["data"]["session"] != session
+        assert fresh["success"] and fresh["data"]["session"] != session, fresh
+        assert fresh["data"]["model"]["provider"] == "rpc-smoke", fresh
         send(child, {"id": "switch", "type": "switch_session", "session": session})
         switched = read(child)
-        assert switched["success"] and switched["data"]["session"] == session
+        assert switched["success"] and switched["data"]["session"] == session, switched
+        assert switched["data"]["model"]["provider"] == "rpc-alt", switched
         child.stdin.close()
         assert child.wait(timeout=8) == 0, child.stderr.read()
+        reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        assert read(reopened)["type"] == "ready"
+        send(reopened, {"id": "reopened-model", "type": "get_state"})
+        selected = read(reopened)
+        assert selected["success"] and selected["data"]["model"]["provider"] == "rpc-alt", selected
+        reopened.stdin.close()
+        assert reopened.wait(timeout=8) == 0, reopened.stderr.read()
         closing = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         assert read(closing)["type"] == "ready"
         send(closing, {"id": "closing", "type": "prompt", "message": "SLOW"})

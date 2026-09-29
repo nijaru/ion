@@ -232,6 +232,10 @@ missing route clearly; a global default applies to new Sessions. A custom
 route stays resolvable after another model becomes the default. Explicit
 per-invocation selection overrides the resumed choice for that invocation.
 Model and provider transport remain stable while a Turn runs.
+An idle model switch is recorded in its Session so explicit reopen restores
+it. Creating a fresh Session from the TUI or sustained-control client resolves
+the current global default again; switching to an existing Session restores
+that Session's selection.
 Provider adapters accept valid terminal responses and reject incomplete ones,
 including stream truncation. Classify context overflow from a provider signal
 or a narrow documented response pattern; a generic HTTP status is not enough

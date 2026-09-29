@@ -250,14 +250,20 @@ impl Control {
                     let model = required_string(&value, "model")?;
                     let selected = self.host.models().choose(Some(provider.to_owned()), Some(model.to_owned()), None, self.host.credentials())?;
                     selected.require_access(self.host.credentials())?;
+                    self.session.select_model(selected.identity())?;
                     self.selected = selected;
                     Ok(json!({"model":self.selected.identity()}))
                 }
                 "new_session" => {
                     self.idle()?;
+                    let selected = self.host.models().choose(None, None, None, self.host.credentials())?;
+                    selected.require_access(self.host.credentials())?;
                     let path = self.catalog.new_path()?;
-                    self.session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
-                    Ok(json!({"session":self.session_id()}))
+                    let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
+                    session.select_model(selected.identity())?;
+                    self.session = session;
+                    self.selected = selected;
+                    Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
                 }
                 "fork" => {
                     self.idle()?;

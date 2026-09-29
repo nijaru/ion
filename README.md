@@ -115,7 +115,9 @@ follow-ups queued. Queued input is process-local and bounded to 32 MiB of
 encoded messages. Closing stdin cancels active work and returns pending
 follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
 image payloads, so clients should handle them as their own input data.
-Session, resource and model changes require an idle Turn.
+Session, resource and model changes require an idle Turn. `set_model` saves the
+idle selection for that Session; `new_session` selects the current global
+default, and `switch_session` restores the selected Session's model.
 Malformed commands receive a failed response, and commands over 8 MiB are
 rejected. Stdout is reserved for protocol records, stderr for diagnostics.
 Uncommitted steering is returned as a typed `input` message if a Turn ends
