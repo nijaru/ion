@@ -7,10 +7,9 @@ use image::{
 };
 use thiserror::Error;
 
-use crate::{Content, ImageContent, ImageContentError};
+use crate::{Content, ImageContent, ImageContentError, content::MAX_INLINE_BYTES};
 
 pub const MAX_SOURCE_BYTES: usize = 32 * 1024 * 1024;
-const MAX_INLINE_BYTES: usize = 5 * 1024 * 1024;
 const MAX_EDGE: u32 = 2_000;
 
 #[derive(Debug, Error)]

@@ -291,6 +291,8 @@ model. The request byte bound still includes encoded image data; context-token
 estimation treats image payloads separately from text and yields to observed
 provider usage when available. Inspection and terminal history show an image
 marker rather than the stored base64.
+Deserializing typed image content must recheck the declared MIME, source bytes
+and decode/resource bounds before that content can enter a Session.
 The terminal clipboard adapter reads file lists before images to avoid
 mistaking a copied file's icon for image input. Raw clipboard pixels enter
 through the same host normalization boundary as files. A queued prompt owns

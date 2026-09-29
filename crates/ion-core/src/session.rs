@@ -1332,7 +1332,7 @@ mod tests {
     }
 
     #[test]
-    fn image_input_survives_reopen_and_invalid_content_never_commits() {
+    fn image_input_survives_reopen_and_malformed_image_cannot_be_constructed() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         let image: ion_ai::ImageContent = serde_json::from_value(serde_json::json!({
@@ -1356,20 +1356,13 @@ mod tests {
             .begin_turn_message(input.clone(), model.clone())
             .unwrap();
         session.end_turn(turn, TurnEndReason::Cancelled).unwrap();
-        let invalid = Message {
-            content: vec![Content::Image(
-                serde_json::from_value(serde_json::json!({
-                    "mime_type":"image/png", "data":"broken"
-                }))
-                .unwrap(),
-            )],
-            ..input.clone()
-        };
         let before = session.entry_count().unwrap();
-        assert!(matches!(
-            session.begin_turn_message(invalid, model),
-            Err(SessionError::InvalidUserInput)
-        ));
+        assert!(
+            serde_json::from_value::<ion_ai::ImageContent>(serde_json::json!({
+                "mime_type":"image/png", "data":"broken"
+            }))
+            .is_err()
+        );
         assert_eq!(session.entry_count().unwrap(), before);
         drop(session);
         let reopened = Session::open(&path).unwrap();

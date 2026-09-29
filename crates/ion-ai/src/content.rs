@@ -1,6 +1,6 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
 use image::{DynamicImage, ImageDecoder, ImageFormat, ImageReader, Limits, metadata::Orientation};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de::Error as _};
 use serde_json::Value;
 use std::io::Cursor;
 use thiserror::Error;
@@ -29,10 +29,33 @@ pub struct ToolResult {
 }
 
 /// Validated image bytes encoded as base64 for durable, provider-neutral replay.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ImageContent {
     mime_type: ImageMime,
     data: String,
+}
+
+pub(crate) const MAX_INLINE_BYTES: usize = 5 * 1024 * 1024;
+
+impl<'de> Deserialize<'de> for ImageContent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        #[derive(Deserialize)]
+        struct EncodedImage {
+            mime_type: ImageMime,
+            data: String,
+        }
+
+        let encoded = EncodedImage::deserialize(deserializer)?;
+        if encoded.data.len() > MAX_INLINE_BYTES.div_ceil(3) * 4 {
+            return Err(D::Error::custom(ImageContentError::InlineTooLarge));
+        }
+        let bytes = STANDARD.decode(encoded.data).map_err(D::Error::custom)?;
+        let image = Self::from_bytes(&bytes).map_err(D::Error::custom)?;
+        if image.mime_type != encoded.mime_type {
+            return Err(D::Error::custom(ImageContentError::MimeMismatch));
+        }
+        Ok(image)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -94,6 +117,8 @@ impl ImageMime {
 
 #[derive(Debug, Error)]
 pub enum ImageContentError {
+    #[error("inline image exceeds 5 MiB")]
+    InlineTooLarge,
     #[error("unsupported image; use JPEG, PNG, GIF or WebP")]
     Unsupported,
     #[error("invalid base64 image data")]
@@ -108,6 +133,9 @@ pub enum ImageContentError {
 
 impl ImageContent {
     pub fn from_bytes(bytes: &[u8]) -> Result<Self, ImageContentError> {
+        if bytes.len() > MAX_INLINE_BYTES {
+            return Err(ImageContentError::InlineTooLarge);
+        }
         let mime_type = ImageMime::detect(bytes).ok_or(ImageContentError::Unsupported)?;
         Self::decode_source(bytes)?;
         Ok(Self {
@@ -146,7 +174,13 @@ impl ImageContent {
     }
 
     pub fn validate(&self) -> Result<usize, ImageContentError> {
+        if self.data.len() > MAX_INLINE_BYTES.div_ceil(3) * 4 {
+            return Err(ImageContentError::InlineTooLarge);
+        }
         let bytes = STANDARD.decode(&self.data)?;
+        if bytes.len() > MAX_INLINE_BYTES {
+            return Err(ImageContentError::InlineTooLarge);
+        }
         if ImageMime::detect(&bytes) != Some(self.mime_type) {
             return Err(ImageContentError::MimeMismatch);
         }
@@ -173,16 +207,24 @@ mod tests {
         let image = ImageContent::from_bytes(&bytes).unwrap();
         assert_eq!(image.mime_type(), ImageMime::Png);
         assert_eq!(image.validate().unwrap(), bytes.len());
+        assert_eq!(
+            serde_json::from_value::<ImageContent>(serde_json::to_value(&image).unwrap()).unwrap(),
+            image
+        );
         let mut corrupt = bytes;
         corrupt[45] ^= 0xff;
         assert!(ImageContent::from_bytes(&corrupt).is_err());
-        let mismatch: ImageContent = serde_json::from_value(serde_json::json!({
+        let mismatch = serde_json::from_value::<ImageContent>(serde_json::json!({
             "mime_type":"image/jpeg", "data": data
-        }))
-        .unwrap();
+        }));
+        assert!(mismatch.is_err());
+        let malformed = serde_json::from_value::<ImageContent>(serde_json::json!({
+            "mime_type":"image/png", "data": STANDARD.encode(b"\x89PNG\r\n\x1a\ninvalid")
+        }));
+        assert!(malformed.is_err());
         assert!(matches!(
-            mismatch.validate(),
-            Err(ImageContentError::MimeMismatch)
+            ImageContent::from_bytes(&vec![0; MAX_INLINE_BYTES + 1]),
+            Err(ImageContentError::InlineTooLarge)
         ));
     }
 }

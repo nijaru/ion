@@ -143,9 +143,10 @@ mod tests {
 
     #[test]
     fn export_marks_images_without_emitting_payloads() {
-        let image = serde_json::from_value(
-            serde_json::json!({"mime_type":"image/png","data":"SECRET_IMAGE_BYTES"}),
-        )
+        let image = serde_json::from_value(serde_json::json!({
+            "mime_type":"image/png",
+            "data":"iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=="
+        }))
         .unwrap();
         let view = SessionView {
             cwd: PathBuf::from("/tmp/project"),
@@ -180,7 +181,7 @@ mod tests {
         };
         let rendered = render(&view);
         assert!(rendered.contains("[image: image/png]"));
-        assert!(!rendered.contains("SECRET_IMAGE_BYTES"));
+        assert!(!rendered.contains("iVBORw0KGgo"));
         assert!(!rendered.contains('\u{1b}'));
         assert!(rendered.contains("Cancelled"));
     }
