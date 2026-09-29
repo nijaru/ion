@@ -67,6 +67,38 @@ impl HttpModelService {
         parse_endpoint(endpoint).map(|_| ())
     }
 
+    /// Resolve a compatible API base URL to the request path for its wire.
+    /// An already complete standard request URL is kept as-is.
+    pub fn resolve_endpoint(
+        base_or_endpoint: &str,
+        wire: HttpWire,
+    ) -> Result<String, ProviderError> {
+        let mut url = parse_endpoint(base_or_endpoint)?;
+        let path = url.path().trim_end_matches('/');
+        let complete = if wire.is_chat() {
+            path.ends_with("/chat/completions")
+        } else {
+            path.ends_with("/v1/messages")
+        };
+        let has_anthropic_version = path.ends_with("/v1");
+        let mut segments = url
+            .path_segments_mut()
+            .map_err(|_| invalid("provider endpoint cannot contain path segments"))?;
+        segments.pop_if_empty();
+        if !complete {
+            if wire.is_chat() {
+                segments.push("chat").push("completions");
+            } else {
+                if !has_anthropic_version {
+                    segments.push("v1");
+                }
+                segments.push("messages");
+            }
+        }
+        drop(segments);
+        Ok(url.to_string())
+    }
+
     pub fn new(
         endpoint: &str,
         wire: HttpWire,
@@ -1389,6 +1421,54 @@ mod tests {
             HttpModelService::validate_endpoint("http://desktop:8080/v1/chat/completions").is_ok()
         );
         assert!(HttpModelService::validate_endpoint("file:///tmp/model").is_err());
+    }
+
+    #[test]
+    fn compatible_base_url_resolves_one_standard_request_path() {
+        for (input, wire, expected) in [
+            (
+                "http://desktop:8080/v1",
+                HttpWire::ChatCompletions,
+                "http://desktop:8080/v1/chat/completions",
+            ),
+            (
+                "http://desktop:8080/v1/chat/completions",
+                HttpWire::ChatCompletions,
+                "http://desktop:8080/v1/chat/completions",
+            ),
+            (
+                "https://proxy.example/api/v1/",
+                HttpWire::OpenRouterChat,
+                "https://proxy.example/api/v1/chat/completions",
+            ),
+            (
+                "https://api.anthropic.com",
+                HttpWire::AnthropicMessages,
+                "https://api.anthropic.com/v1/messages",
+            ),
+            (
+                "https://proxy.example/anthropic/v1/",
+                HttpWire::AnthropicMessages,
+                "https://proxy.example/anthropic/v1/messages",
+            ),
+            (
+                "https://proxy.example/anthropic/v1/messages",
+                HttpWire::AnthropicMessages,
+                "https://proxy.example/anthropic/v1/messages",
+            ),
+        ] {
+            assert_eq!(
+                HttpModelService::resolve_endpoint(input, wire).unwrap(),
+                expected
+            );
+        }
+        assert!(
+            HttpModelService::resolve_endpoint(
+                "http://desktop:8080/v1?key=hidden",
+                HttpWire::ChatCompletions,
+            )
+            .is_err()
+        );
     }
 
     #[test]

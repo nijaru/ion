@@ -267,18 +267,20 @@ impl ModelStore {
             .as_deref()
             .context("unknown model; supply --endpoint and --wire to configure a custom route")?;
         let wire = saved.wire.context("custom route requires --wire")?;
-        HttpModelService::validate_endpoint(endpoint).context("invalid custom endpoint")?;
+        let wire = match wire {
+            Wire::ChatCompletions => HttpWire::ChatCompletions,
+            Wire::OpenRouterChat => HttpWire::OpenRouterChat,
+            Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
+            Wire::AnthropicMessages => HttpWire::AnthropicMessages,
+        };
+        let endpoint = HttpModelService::resolve_endpoint(endpoint, wire)
+            .context("invalid custom endpoint")?;
         ensure!(!saved.model.is_empty(), "model ID is empty");
         Ok(Selection {
             provider: saved.provider.clone(),
             model: saved.model.clone(),
-            endpoint: endpoint.into(),
-            wire: match wire {
-                Wire::ChatCompletions => HttpWire::ChatCompletions,
-                Wire::OpenRouterChat => HttpWire::OpenRouterChat,
-                Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
-                Wire::AnthropicMessages => HttpWire::AnthropicMessages,
-            },
+            endpoint,
+            wire,
             api_key_env: saved
                 .api_key_env
                 .clone()

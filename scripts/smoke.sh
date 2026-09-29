@@ -35,7 +35,7 @@ for _ in {1..100}; do [[ -s "$WORK/port" ]] && break; sleep 0.05; done
 [[ -s "$WORK/port" ]] || { cat "$WORK/server.err" >&2; echo 'mock provider did not start' >&2; exit 1; }
 port="$(cat "$WORK/port")"
 
-"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$port/v1/chat/completions" --wire chat-completions > "$WORK/use.out"
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$port/v1" --wire chat-completions > "$WORK/use.out"
 "$BIN" --cwd "$WORK/workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/first.out" 2> "$WORK/first.err"
 [[ "$(cat "$WORK/workspace/data.txt")" == 'sample data updated' ]]
 [[ "$(cat "$WORK/workspace/created.txt")" == 'created by ion' ]]

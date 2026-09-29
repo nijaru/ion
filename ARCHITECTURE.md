@@ -236,8 +236,10 @@ is an implementation recommendation to verify, not a product requirement.
 The host resolves a model identity to its endpoint, wire behavior and
 credential source. Each Turn records the selected nonsecret identity. A
 custom route is validated by the transport's URL rule when selected; model
-setup must not maintain a second URL policy. Explicit HTTP and HTTPS custom
-endpoints may be anonymous or use a configured credential. Catalog routes
+setup must not maintain a second URL policy. A compatible API base URL resolves
+to the wire's standard request path once; an already complete standard request
+URL stays complete. Explicit HTTP and HTTPS custom endpoints may be anonymous
+or use a configured credential. Catalog routes
 require their matching provider credential. A custom HTTP route sends any
 configured credential over that cleartext connection. A
 resumed Session restores that model when its route is available and reports a

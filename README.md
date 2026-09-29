@@ -158,8 +158,9 @@ Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
 copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
-`URL` is the full request endpoint, such as
-`http://desktop:8080/v1/chat/completions`, rather than only the `/v1` base.
+`URL` may be a compatible API base such as `http://desktop:8080/v1` or the
+complete `http://desktop:8080/v1/chat/completions` request URL. Ion appends
+the standard wire path only when the URL is a base.
 For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a
