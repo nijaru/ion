@@ -1,7 +1,9 @@
 //! Explicit MCP tool connections. Session facts remain in ion-core.
 use std::{
     collections::{BTreeMap, HashSet},
-    fs,
+    fs::{self, OpenOptions},
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::{
         Arc, RwLock as SyncRwLock,
@@ -543,16 +545,67 @@ fn convert_tool_result(name: &str, result: CallToolResult) -> CodingToolOutput {
             }
         }
     }
+    let is_error = result.is_error.unwrap_or(false);
     let value =
         json!({"content":content.join("\n"),"structured_content":result.structured_content});
-    if !serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
-        return tool_error(format!("MCP tool {name} result exceeds 64 KiB text bound"));
-    }
+    let encoded = match serde_json::to_string(&value) {
+        Ok(encoded) => encoded,
+        Err(error) => {
+            return tool_error(format!("MCP tool {name} result cannot be encoded: {error}"));
+        }
+    };
+    let value = if encoded.len() <= 64 * 1024 {
+        value
+    } else {
+        let (full_output_path, full_output_error) = match save_full_mcp_output(encoded.as_bytes()) {
+            Ok(path) => (Some(path), None),
+            Err(error) => (None, Some(error.to_string())),
+        };
+        let prefix_end = floor_char_boundary(&encoded, 10 * 1024);
+        let suffix_start = floor_char_boundary(&encoded, encoded.len() - 10 * 1024);
+        json!({
+            "content": format!(
+                "MCP result truncated from {} bytes. Read full_output_path with read or exec when available.\n{}\n[... omitted middle ...]\n{}",
+                encoded.len(), &encoded[..prefix_end], &encoded[suffix_start..]
+            ),
+            "truncated": true,
+            "full_output_path": full_output_path,
+            "full_output_error": full_output_error,
+        })
+    };
     CodingToolOutput {
         value,
         images,
-        is_error: result.is_error.unwrap_or(false),
+        is_error,
     }
+}
+
+fn floor_char_boundary(text: &str, mut offset: usize) -> usize {
+    while !text.is_char_boundary(offset) {
+        offset -= 1;
+    }
+    offset
+}
+
+fn save_full_mcp_output(bytes: &[u8]) -> Result<PathBuf> {
+    let mut nonce = [0u8; 16];
+    getrandom::fill(&mut nonce)
+        .map_err(|error| anyhow::anyhow!("cannot name MCP output: {error}"))?;
+    let path = std::env::temp_dir().join(format!(
+        "ion-mcp-output-{}-{:032x}.json",
+        std::process::id(),
+        u128::from_ne_bytes(nonce)
+    ));
+    let mut file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&path)?;
+    if let Err(error) = file.write_all(bytes) {
+        let _ = fs::remove_file(path);
+        return Err(error.into());
+    }
+    Ok(path)
 }
 
 fn validate_name(name: &str) -> Result<()> {
@@ -577,6 +630,7 @@ fn tool_error(message: String) -> CodingToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn model_facing_mcp_names_preserve_distinct_originals() {
@@ -713,5 +767,26 @@ mod tests {
                 .unwrap()
                 .contains("MIME type")
         );
+    }
+
+    #[test]
+    fn large_mcp_result_remains_readable_without_entering_model_context() {
+        let full_text = "important start\n".to_owned() + &"x".repeat(70 * 1024) + "\nimportant end";
+        let output = convert_tool_result(
+            "report",
+            CallToolResult::success(vec![ContentBlock::text(full_text.clone())]),
+        );
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["truncated"], true);
+        assert!(output.value["content"].as_str().unwrap().len() < 64 * 1024);
+        let path = output.value["full_output_path"].as_str().unwrap();
+        let saved: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+        assert_eq!(saved["content"], full_text);
+        #[cfg(unix)]
+        assert_eq!(
+            fs::metadata(path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(path).unwrap();
     }
 }

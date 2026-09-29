@@ -424,7 +424,11 @@ or an unresolved alias collision invalidate that server's tool snapshot. MCP
 tools may return image blocks; the host validates declared
 MIME, decodes and normalizes them through the same image owner as local read,
 and hands the bounded typed result to the coding Turn. Unsupported media
-receive an explicit tool error.
+receive an explicit tool error. A large text or structured result gives the
+model a bounded preview and a private file containing the complete result, so
+the model can read relevant ranges without losing the tool's observed output.
+If that file cannot be saved, report the loss in the result. Preserve the
+server's `isError` state in either case.
 Remote server credentials come from an explicitly named environment value or
 private OAuth login, separate from Session history. Transport recovery must
 not transparently replay a possibly effectful tool call. A changed server

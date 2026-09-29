@@ -115,6 +115,24 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_HTTP_REFRESH_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
+        elif len(requests) == 16:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__demo__large_report" in names, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-large", "type": "function", "function": {"name": "mcp__demo__large_report", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 17:
+            result = json.loads(body["messages"][-1]["content"])
+            assert result["truncated"] is True and len(result["content"]) < 64 * 1024, result
+            path = Path(result["full_output_path"])
+            full = json.loads(path.read_text())
+            assert full["content"].startswith("START_MARKER\n") and full["content"].endswith("\nEND_MARKER"), full
+            path.unlink()
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_LARGE_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
             changes = [
@@ -203,6 +221,7 @@ for line in sys.stdin.buffer:
             {'name': 'greet_user', 'description': 'A similarly named tool', 'inputSchema': {'type': 'object'}},
             {'name': 'query' * 22, 'description': 'A long tool name', 'inputSchema': {'type': 'object'}},
             {'name': 'picture', 'description': 'Return a picture', 'inputSchema': {'type': 'object', 'properties': {}}},
+            {'name': 'large_report', 'description': 'Return a large text report', 'inputSchema': {'type': 'object'}},
         ]}
     elif method == 'tools/call':
         if request['params']['name'] == 'greet.user':
@@ -212,6 +231,8 @@ for line in sys.stdin.buffer:
         elif request['params']['name'] == 'picture':
             with log.open('a') as output: output.write('called:picture\\n')
             result = {'content': [{'type': 'text', 'text': 'A tiny picture'}, {'type': 'image', 'mimeType': 'image/png', 'data': 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='}], 'isError': False}
+        elif request['params']['name'] == 'large_report':
+            result = {'content': [{'type': 'text', 'text': 'START_MARKER\\n' + 'x' * (70 * 1024) + '\\nEND_MARKER'}], 'isError': False}
         else:
             raise AssertionError(request['params']['name'])
     elif method == 'ping':
@@ -364,6 +385,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         http_changed = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote changing tools."], env=env, check=True, capture_output=True, text=True)
         assert http_changed.stdout.strip() == "MCP_HTTP_REFRESH_OK", http_changed
         assert len(remote_calls) == 4 and remote_calls[-1]["params"]["name"] == "lowercase", remote_calls
+        large = subprocess.run([binary, "--cwd", workspace, "run", "Read the large MCP report."], env=env, check=True, capture_output=True, text=True)
+        assert large.stdout.strip() == "MCP_LARGE_OK", large
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
