@@ -623,6 +623,43 @@ impl Session {
         }
         let through =
             through.or_else(|| store.settled.range((previous + 1)..).next_back().copied());
+        // A large final tool result can make the empty suffix after it look
+        // like the only fitting tail. Prefer retaining that call/result batch
+        // exactly when older settled history is available to summarize.
+        let through = if keep_bytes > 0 {
+            let recent_entry = entries.iter().rposition(|entry| match entry {
+                SessionEntry::UserShell {
+                    exclude_from_context,
+                    ..
+                } => !exclude_from_context,
+                SessionEntry::TurnStarted { .. }
+                | SessionEntry::Steering { .. }
+                | SessionEntry::Assistant { .. }
+                | SessionEntry::ToolResult { .. } => true,
+                SessionEntry::ModelSelected { .. }
+                | SessionEntry::Compacted { .. }
+                | SessionEntry::TurnEnded { .. } => false,
+            });
+            let earlier_cut = recent_entry
+                .filter(|&index| matches!(entries[index], SessionEntry::ToolResult { .. }))
+                .and_then(|index| {
+                    entries[..index].iter().rposition(|entry| {
+                        matches!(entry, SessionEntry::Assistant { message, .. }
+                            if message.content.iter().any(|part| matches!(part, Content::ToolCall(_))))
+                    })
+                })
+                .and_then(|index| {
+                    store
+                        .settled
+                        .range((previous + 1)..=index as u64)
+                        .next_back()
+                        .copied()
+                        .filter(|&cut| through.is_some_and(|current| current > cut))
+                });
+            earlier_cut.or(through)
+        } else {
+            through
+        };
         let Some((suffix_target, prefix_fit)) = through.zip(prefix_fit) else {
             return Ok(None);
         };
@@ -1719,7 +1756,7 @@ mod tests {
                 ToolResult {
                     call_id: "two".into(),
                     name: "read".into(),
-                    result: serde_json::json!({"content":"b"}),
+                    result: serde_json::json!({"content":"b".repeat(8000)}),
                     images: Vec::new(),
                     is_error: false,
                 },
@@ -1733,7 +1770,85 @@ mod tests {
                 .through_entry,
             4
         );
+        assert_eq!(
+            session
+                .compaction_plan(1000, usize::MAX)
+                .unwrap()
+                .unwrap()
+                .through_entry,
+            4
+        );
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn compaction_keeps_oversized_recent_tool_batch_when_older_cut_exists() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (old_turn, _) = session
+            .begin_turn("old task".into(), model.clone())
+            .unwrap();
+        session
+            .record_assistant(
+                old_turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("old answer".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let (current_turn, _) = session.begin_turn("read big file".into(), model).unwrap();
+        session
+            .record_assistant(
+                current_turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call-1".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"big.txt"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_tool_result(
+                current_turn,
+                ToolResult {
+                    call_id: "call-1".into(),
+                    name: "read".into(),
+                    result: serde_json::json!({"content":"x".repeat(8000)}),
+                    images: Vec::new(),
+                    is_error: false,
+                },
+            )
+            .unwrap();
+        let plan = session.compaction_plan(1000, usize::MAX).unwrap().unwrap();
+        assert_eq!(plan.through_entry, 3);
+        assert_eq!(plan.messages.len(), 2);
+        session
+            .record_compaction(plan.through_entry, "old task done".into(), Usage::unknown())
+            .unwrap();
+        let context = session.context_messages().unwrap();
+        assert_eq!(context.len(), 4);
+        assert!(matches!(context[2].content[0], Content::ToolCall(_)));
+        assert!(matches!(context[3].content[0], Content::ToolResult(_)));
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.context_messages().unwrap(), context);
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 

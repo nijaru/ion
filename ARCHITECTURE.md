@@ -150,6 +150,11 @@ representative tasks. If the saved prefix is too large for one summary
 request, summarize bounded settled prefixes in sequence; do not require a
 larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
+If a recent call/result batch exceeds the preferred tail size, first use an older
+settled cut when available so its assistant call and results remain exact in
+the next request. Summarize that batch only when there is no earlier safe cut;
+never divide a call from its results. The request-capacity check still applies
+to the retained context.
 If compaction is cancelled before its Session write, discard the generated
 summary and leave the previous context projection in place.
 Use the selected model's output ceiling for coding requests, clamped to the
