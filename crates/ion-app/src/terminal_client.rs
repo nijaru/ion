@@ -148,7 +148,7 @@ struct ChatRuntime {
 impl ChatRuntime {
     fn switch_session(&mut self, path: PathBuf) -> Result<()> {
         if fs::canonicalize(self.session.path())? == fs::canonicalize(&path)? {
-            return Ok(());
+            return self.reload_resources();
         }
         let session = Arc::new(CodingSession::open(&path)?);
         anyhow::ensure!(
@@ -162,15 +162,17 @@ impl ChatRuntime {
             self.host.credentials(),
         )?;
         selected.require_access(self.host.credentials())?;
+        let resources = self.host.resources(session.cwd())?;
         let agent = self.host.agent_with_optional_tools(
             &session,
             &selected,
             self.external_tools.clone(),
         )?;
-        let instructions = self.resources.instructions().to_owned();
+        let instructions = resources.instructions().to_owned();
         self.session = session;
         self.selected = selected;
         self.agent = agent;
+        self.resources = resources;
         self.instructions = instructions;
         Ok(())
     }
@@ -181,23 +183,26 @@ impl ChatRuntime {
             .models()
             .choose(None, None, None, self.host.credentials())?;
         selected.require_access(self.host.credentials())?;
-        let instructions = self.resources.instructions().to_owned();
-        let path = self.sessions.new_path()?;
-        let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
+        let resources = self.host.resources(self.session.cwd())?;
         let agent = self.host.agent_with_optional_tools(
-            &session,
+            &self.session,
             &selected,
             self.external_tools.clone(),
         )?;
+        let path = self.sessions.new_path()?;
+        let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
         session.select_model(selected.identity())?;
+        let instructions = resources.instructions().to_owned();
         self.session = session;
         self.selected = selected;
         self.agent = agent;
+        self.resources = resources;
         self.instructions = instructions;
         Ok(())
     }
 
     fn clone_session(&mut self) -> Result<String> {
+        let resources = self.host.resources(self.session.cwd())?;
         let path = self.sessions.new_path()?;
         let session = Arc::new(self.session.clone_to(&path)?);
         let id = path
@@ -206,6 +211,8 @@ impl ChatRuntime {
             .to_string_lossy()
             .into_owned();
         self.session = session;
+        self.instructions = resources.instructions().to_owned();
+        self.resources = resources;
         Ok(id)
     }
 
@@ -223,13 +230,14 @@ impl ChatRuntime {
             .model;
         let selected = self.host.models().resolve_identity(&selected_model)?;
         selected.require_access(self.host.credentials())?;
-        let path = self.sessions.new_path()?;
-        let session = Arc::new(self.session.fork_to(&path, point)?);
+        let resources = self.host.resources(self.session.cwd())?;
         let agent = self.host.agent_with_optional_tools(
-            &session,
+            &self.session,
             &selected,
             self.external_tools.clone(),
         )?;
+        let path = self.sessions.new_path()?;
+        let session = Arc::new(self.session.fork_to(&path, point)?);
         let id = path
             .file_stem()
             .context("forked session has no ID")?
@@ -238,6 +246,8 @@ impl ChatRuntime {
         self.session = session;
         self.selected = selected;
         self.agent = agent;
+        self.instructions = resources.instructions().to_owned();
+        self.resources = resources;
         Ok(id)
     }
 

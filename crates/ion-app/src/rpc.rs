@@ -1,9 +1,11 @@
 //! Long-lived JSONL client of the shared host and coding loop.
-use std::{collections::VecDeque, path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, fs, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::Message;
-use ion_core::{CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox};
+use ion_core::{
+    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox,
+};
 use ion_host::{Host, Resources, Selection, SessionCatalog};
 use serde_json::{Value, json};
 use tokio::{
@@ -46,6 +48,7 @@ struct Control {
     catalog: SessionCatalog,
     session: Arc<CodingSession>,
     selected: Selection,
+    agent: Arc<CodingAgent>,
     resources: Resources,
     active: Option<Active>,
     follow_ups: VecDeque<QueuedFollowUp>,
@@ -57,6 +60,7 @@ struct Control {
 pub async fn run(
     session: Arc<CodingSession>,
     selected: Selection,
+    agent: Arc<CodingAgent>,
     resources: Resources,
     catalog: SessionCatalog,
     host: Arc<Host>,
@@ -68,6 +72,7 @@ pub async fn run(
         catalog,
         session,
         selected,
+        agent,
         resources,
         active: None,
         follow_ups: VecDeque::new(),
@@ -164,6 +169,11 @@ impl Control {
         Ok(())
     }
 
+    fn prepare_agent(&self, selected: &Selection) -> Result<Arc<CodingAgent>> {
+        self.host
+            .agent_with_optional_tools(&self.session, selected, self.external_tools.clone())
+    }
+
     fn command(&mut self, line: &[u8]) -> Result<()> {
         let value: Value = match serde_json::from_slice(line) {
             Ok(value) => value,
@@ -250,19 +260,25 @@ impl Control {
                     let model = required_string(&value, "model")?;
                     let selected = self.host.models().choose(Some(provider.to_owned()), Some(model.to_owned()), None, self.host.credentials())?;
                     selected.require_access(self.host.credentials())?;
+                    let agent = self.prepare_agent(&selected)?;
                     self.session.select_model(selected.identity())?;
                     self.selected = selected;
+                    self.agent = agent;
                     Ok(json!({"model":self.selected.identity()}))
                 }
                 "new_session" => {
                     self.idle()?;
                     let selected = self.host.models().choose(None, None, None, self.host.credentials())?;
                     selected.require_access(self.host.credentials())?;
+                    let resources = self.host.resources(self.session.cwd())?;
+                    let agent = self.prepare_agent(&selected)?;
                     let path = self.catalog.new_path()?;
                     let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
                     session.select_model(selected.identity())?;
                     self.session = session;
                     self.selected = selected;
+                    self.agent = agent;
+                    self.resources = resources;
                     Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
                 }
                 "fork" => {
@@ -272,10 +288,14 @@ impl Control {
                     let model = self.session.view()?.turns().into_iter().find(|item| item.turn == turn).map(|item| item.model).context("selected Turn does not exist")?;
                     let selected = self.host.models().choose(None, None, Some(model), self.host.credentials())?;
                     selected.require_access(self.host.credentials())?;
+                    let resources = self.host.resources(self.session.cwd())?;
+                    let agent = self.prepare_agent(&selected)?;
                     let path = self.catalog.new_path()?;
                     let fork = self.session.fork_to(&path, if after { ForkPoint::AfterTurn(turn) } else { ForkPoint::BeforeTurn(turn) })?;
                     self.session = Arc::new(fork);
                     self.selected = selected;
+                    self.agent = agent;
+                    self.resources = resources;
                     Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
                 }
                 "switch_session" => {
@@ -283,11 +303,19 @@ impl Control {
                     let path = self.catalog.resolve_explicit(PathBuf::from(required_string(&value, "session")?))?;
                     let view = CodingSession::inspect(&path)?;
                     ensure!(view.cwd == self.session.cwd(), "session belongs to another working directory");
-                    let selected = self.host.models().choose(None, None, view.last_model, self.host.credentials())?;
-                    selected.require_access(self.host.credentials())?;
-                    self.session = Arc::new(CodingSession::open(path)?);
-                    self.selected = selected;
-                    self.resources = self.host.resources(self.session.cwd())?;
+                    let resources = self.host.resources(&view.cwd)?;
+                    if fs::canonicalize(&path)? == fs::canonicalize(self.session.path())? {
+                        self.resources = resources;
+                    } else {
+                        let selected = self.host.models().choose(None, None, view.last_model, self.host.credentials())?;
+                        selected.require_access(self.host.credentials())?;
+                        let agent = self.prepare_agent(&selected)?;
+                        let session = Arc::new(CodingSession::open(path)?);
+                        self.session = session;
+                        self.selected = selected;
+                        self.agent = agent;
+                        self.resources = resources;
+                    }
                     Ok(json!({"session":self.session_id(),"model":self.selected.identity()}))
                 }
                 "set_name" => {
@@ -370,11 +398,7 @@ impl Control {
 
     fn start_message(&mut self, input: Message, id: Option<Value>, queued: bool) -> Result<()> {
         self.idle()?;
-        let agent = self.host.agent_with_optional_tools(
-            &self.session,
-            &self.selected,
-            self.external_tools.clone(),
-        )?;
+        let agent = self.agent.clone();
         let instructions = self.resources.instructions().to_owned();
         let model = self.selected.identity();
         let session = self.session.clone();

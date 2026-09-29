@@ -476,7 +476,16 @@ async fn run_cli(cli: Cli) -> Result<()> {
                         unreachable!("session action handled before model selection")
                     }
                     Some(Action::Rpc) => {
-                        rpc::run(session, selected, resources, catalog, host, external_tools).await
+                        rpc::run(
+                            session,
+                            selected,
+                            agent,
+                            resources,
+                            catalog,
+                            host,
+                            external_tools,
+                        )
+                        .await
                     }
                     Some(Action::Chat) | None if cli.print.is_none() => {
                         terminal_client::chat(terminal_client::ChatInit {

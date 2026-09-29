@@ -205,14 +205,39 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "model-inspect", "type": "inspect"})
         inspected = read(child)
         assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
+        (prompts / "late.md").write_text("A later prompt.\n")
         send(child, {"id": "new", "type": "new_session"})
         fresh = read(child)
         assert fresh["success"] and fresh["data"]["session"] != session, fresh
         assert fresh["data"]["model"]["provider"] == "rpc-smoke", fresh
+        send(child, {"id": "new-resources", "type": "list_resources"})
+        updated = read(child)
+        assert updated["success"] and {prompt["name"] for prompt in updated["data"]["prompts"]} == {"check", "late"}, updated
+        send(child, {"id": "fresh-prompt", "type": "prompt", "message": "Fresh session"})
+        assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
+        assert requests[-1]["model"] == "rpc-model", requests[-1]
+        moved = work / "workspace-moved"
+        workspace.rename(moved)
+        try:
+            send(child, {"id": "switch-unavailable", "type": "switch_session", "session": session})
+            failed = read(child)
+            assert failed["id"] == "switch-unavailable" and failed["success"] is False, failed
+            send(child, {"id": "state-after-failed-switch", "type": "get_state"})
+            unchanged = read(child)
+            assert unchanged["success"] and unchanged["data"]["session"] == fresh["data"]["session"], unchanged
+            assert unchanged["data"]["model"]["provider"] == "rpc-smoke", unchanged
+        finally:
+            moved.rename(workspace)
         send(child, {"id": "switch", "type": "switch_session", "session": session})
         switched = read(child)
         assert switched["success"] and switched["data"]["session"] == session, switched
         assert switched["data"]["model"]["provider"] == "rpc-alt", switched
+        send(child, {"id": "switch-same", "type": "switch_session", "session": session})
+        same = read(child)
+        assert same["success"] and same["data"]["session"] == session, same
+        send(child, {"id": "switched-prompt", "type": "prompt", "message": "Switched session"})
+        assert until(child, lambda r: r["type"] == "turn_end")[-1]["status"] == "completed"
+        assert requests[-1]["model"] == "alt-model", requests[-1]
         child.stdin.close()
         assert child.wait(timeout=8) == 0, child.stderr.read()
         reopened = subprocess.Popen([binary, "--cwd", workspace, "--session", session, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)

@@ -117,7 +117,9 @@ follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
 image payloads, so clients should handle them as their own input data.
 Session, resource and model changes require an idle Turn. `set_model` saves the
 idle selection for that Session; `new_session` selects the current global
-default, and `switch_session` restores the selected Session's model.
+default, and `switch_session` restores the selected Session's model. Starting,
+forking or switching Sessions refreshes project resources; use
+`reload_resources` to refresh them within the current Session.
 Malformed commands receive a failed response, and commands over 8 MiB are
 rejected. Stdout is reserved for protocol records, stderr for diagnostics.
 Uncommitted steering is returned as a typed `input` message if a Turn ends
@@ -189,11 +191,13 @@ load it explicitly. Prompt templates are direct `.md` files in
 expands one before submitting it. Templates support `$1`, `$@`,
 `${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
 spaces. `ion resources` lists both, and the TUI has
-`/skills`, `/prompts` and `/reload`. Personal resources take precedence over
-same-named project resources; nearer project directories take precedence over
-ancestors. Invalid resources are skipped with a diagnostic. Project resources
-are treated as lower-trust repository text under the same live-directory tool
-permissions as `AGENTS.md`; review unfamiliar resources before using them.
+`/skills`, `/prompts` and `/reload`. Starting, cloning, forking or switching a
+Session refreshes resources; `/reload` refreshes the current Session. Personal
+resources take precedence over same-named project resources; nearer project
+directories take precedence over ancestors. Invalid resources are skipped with
+a diagnostic. Project resources are treated as lower-trust repository text
+under the same live-directory tool permissions as `AGENTS.md`; review
+unfamiliar resources before using them.
 
 Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`;
 `ion mcp list` and `ion mcp remove NAME` manage the saved user configuration.

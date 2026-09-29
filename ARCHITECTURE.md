@@ -26,9 +26,9 @@ Pi is a direct source reference for the small interactions and failure cases
 that make a coding agent usable: editing and steering prompts, inspecting
 tools, finding sessions, switching models and managing context. Ion adopts
 those user outcomes through its own Session and client design rather than
-copying every Pi command or its TypeScript plugin runtime. The same coding loop must be
-usable from terminal, headless and library clients; client-specific rendering
-or input cannot own model/tool semantics.
+copying every Pi command or its TypeScript plugin runtime. The same coding
+loop must be usable from terminal, headless and library clients;
+client-specific rendering or input cannot own model/tool semantics.
 
 Workers, personal memory, gateways, schedules and general workflow authoring
 are outside this initial scope.
@@ -47,8 +47,7 @@ owns one committed Session log and the coding Turn loop: ordered conversation,
 continuation, recovery and bounded model context. A public host composition
 layer selects models, credentials, project resources, tools and Sessions;
 terminal, one-shot headless and sustained-control clients use that layer.
-Terminal
-rendering and input never become a second agent loop.
+Terminal rendering and input never become a second agent loop.
 
 ```text
 user input -> model stream -> final answer
@@ -236,6 +235,12 @@ An idle model switch is recorded in its Session so explicit reopen restores
 it. Creating a fresh Session from the TUI or sustained-control client resolves
 the current global default again; switching to an existing Session restores
 that Session's selection.
+Session replacement in an interactive or sustained client prepares the selected
+model, access, project resources and agent before publishing the new client
+binding. A failed switch leaves the previous Session and selection active.
+Starting, cloning, forking or switching Sessions reloads applicable project
+resources at that boundary; explicit reload remains available without a
+Session change. A running Turn keeps its captured binding until settlement.
 Provider adapters accept valid terminal responses and reject incomplete ones,
 including stream truncation. Classify context overflow from a provider signal
 or a narrow documented response pattern; a generic HTTP status is not enough

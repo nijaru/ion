@@ -88,6 +88,8 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         os.close(slave)
         output = bytearray()
         sent = False
+        sent_new = False
+        sent_prompts = False
         quit_sent = False
         deadline = time.monotonic() + 10
         try:
@@ -101,14 +103,21 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                 if b"\x1b[?1049h" in output and not sent:
                     os.write(master, b"/check TUI\r")
                     sent = True
-                if sent and b"RESOURCE_OK" in output and not quit_sent:
+                if sent and b"RESOURCE_OK" in output and not sent_new:
+                    (prompts / "late.md").write_text("A later prompt.\n")
+                    os.write(master, b"/new\r")
+                    sent_new = True
+                if sent_new and b"Started a new session" in output and not sent_prompts:
+                    os.write(master, b"/prompts\r")
+                    sent_prompts = True
+                if sent_prompts and b"/late" in output and not quit_sent:
                     os.write(master, b"\x03")
                     quit_sent = True
                 if quit_sent and b"\x1b[?1049l" in output:
                     break
             child.wait(timeout=5)
             assert child.returncode == 0, output[-1000:]
-            assert sent and b"RESOURCE_OK" in output and b"\x1b[?1049l" in output
+            assert sent and sent_new and sent_prompts and b"/late" in output and b"\x1b[?1049l" in output
             assert len(requests) == 3, requests
             assert requests[2]["messages"][-1]["content"].strip() == "Check TUI; scope all."
         finally:
