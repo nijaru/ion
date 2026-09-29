@@ -1,7 +1,11 @@
 //! One active Session/model/resource binding shared by interactive clients.
 //! Conversation facts and Turn execution remain in `ion-core`.
 
-use std::{fs, path::PathBuf, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 
 use anyhow::{Context, Result, ensure};
 use ion_ai::ModelRef;
@@ -27,9 +31,9 @@ impl SessionBinding {
         external_tools: Option<Arc<dyn CodingToolHost>>,
     ) -> Result<Self> {
         let catalog = host.sessions(session.cwd().to_path_buf());
-        selected.require_access(host.credentials())?;
         let resources = host.resources(session.cwd())?;
-        let agent = host.agent_with_optional_tools(&session, &selected, external_tools.clone())?;
+        let agent =
+            host.agent_with_optional_tools(session.cwd(), &selected, external_tools.clone())?;
         Ok(Self {
             host,
             catalog,
@@ -78,16 +82,11 @@ impl SessionBinding {
             .into_owned()
     }
 
-    fn prepare(
-        &self,
-        session: &CodingSession,
-        selected: &Selection,
-    ) -> Result<(Resources, Arc<CodingAgent>)> {
-        selected.require_access(self.host.credentials())?;
-        let resources = self.host.resources(session.cwd())?;
+    fn prepare(&self, cwd: &Path, selected: &Selection) -> Result<(Resources, Arc<CodingAgent>)> {
+        let resources = self.host.resources(cwd)?;
         let agent =
             self.host
-                .agent_with_optional_tools(session, selected, self.external_tools.clone())?;
+                .agent_with_optional_tools(cwd, selected, self.external_tools.clone())?;
         Ok((resources, agent))
     }
 
@@ -98,9 +97,8 @@ impl SessionBinding {
 
     pub fn select_model(&mut self, model: ModelRef) -> Result<()> {
         let selected = self.host.models().resolve_identity(&model)?;
-        selected.require_access(self.host.credentials())?;
         let agent = self.host.agent_with_optional_tools(
-            &self.session,
+            self.session.cwd(),
             &selected,
             self.external_tools.clone(),
         )?;
@@ -115,7 +113,7 @@ impl SessionBinding {
             .host
             .models()
             .choose(None, None, None, self.host.credentials())?;
-        let (resources, agent) = self.prepare(&self.session, &selected)?;
+        let (resources, agent) = self.prepare(self.session.cwd(), &selected)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(CodingSession::create(&path, self.session.cwd())?);
         session.select_model(selected.identity())?;
@@ -124,7 +122,7 @@ impl SessionBinding {
     }
 
     pub fn clone_session(&mut self) -> Result<String> {
-        let (resources, agent) = self.prepare(&self.session, &self.selected)?;
+        let (resources, agent) = self.prepare(self.session.cwd(), &self.selected)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(self.session.clone_to(&path)?);
         let id = path
@@ -152,7 +150,7 @@ impl SessionBinding {
             self.host
                 .models()
                 .choose(None, None, Some(model), self.host.credentials())?;
-        let (resources, agent) = self.prepare(&self.session, &selected)?;
+        let (resources, agent) = self.prepare(self.session.cwd(), &selected)?;
         let path = self.catalog.new_path()?;
         let session = Arc::new(self.session.fork_to(&path, point)?);
         let id = path
@@ -179,7 +177,7 @@ impl SessionBinding {
             self.host
                 .models()
                 .choose(None, None, view.last_model, self.host.credentials())?;
-        let (resources, agent) = self.prepare(&session, &selected)?;
+        let (resources, agent) = self.prepare(session.cwd(), &selected)?;
         self.publish(session, selected, agent, resources);
         Ok(())
     }

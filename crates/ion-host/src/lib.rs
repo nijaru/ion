@@ -17,9 +17,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{
-    AgentLimits, CodingAgent, CodingSession, CodingToolHost, HttpModelService, LocalTools, ToolSet,
-};
+use ion_core::{AgentLimits, CodingAgent, CodingToolHost, HttpModelService, LocalTools, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
@@ -89,20 +87,20 @@ impl Host {
         McpTools::connect(&self.mcp_config(), cwd).await
     }
 
-    pub fn agent(&self, session: &CodingSession, selected: &Selection) -> Result<Arc<CodingAgent>> {
-        let tools = Arc::new(LocalTools::new(session.cwd())?);
+    pub fn agent(&self, cwd: &Path, selected: &Selection) -> Result<Arc<CodingAgent>> {
+        let tools = Arc::new(LocalTools::new(cwd)?);
         self.agent_with_tool_host(selected, tools)
     }
 
-    pub fn agent_with_optional_tools(
+    pub(crate) fn agent_with_optional_tools(
         &self,
-        session: &CodingSession,
+        cwd: &Path,
         selected: &Selection,
         custom: Option<Arc<dyn CodingToolHost>>,
     ) -> Result<Arc<CodingAgent>> {
         match custom {
-            Some(custom) => self.agent_with_tools(session, selected, custom),
-            None => self.agent(session, selected),
+            Some(custom) => self.agent_with_tools(cwd, selected, custom),
+            None => self.agent(cwd, selected),
         }
     }
 
@@ -110,11 +108,11 @@ impl Host {
     /// deliberately replaces that tool while all other built-ins remain.
     pub fn agent_with_tools(
         &self,
-        session: &CodingSession,
+        cwd: &Path,
         selected: &Selection,
         custom: Arc<dyn CodingToolHost>,
     ) -> Result<Arc<CodingAgent>> {
-        let builtins: Arc<dyn CodingToolHost> = Arc::new(LocalTools::new(session.cwd())?);
+        let builtins: Arc<dyn CodingToolHost> = Arc::new(LocalTools::new(cwd)?);
         self.agent_with_tool_host(selected, Arc::new(ToolSet::new([builtins, custom])))
     }
 

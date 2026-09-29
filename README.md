@@ -239,9 +239,9 @@ embedded resource content report an explicit unsupported-content error.
 When a server announces a changed tool list, Ion refreshes that server before
 the next model request. A failed refresh reports a warning and keeps its last
 known list. Remote MCP OAuth login is not yet supported.
-For Rust embedders, `Host::agent_with_tools`
-composes a custom `CodingToolHost` with built-ins; a same-name custom tool
-replaces that one built-in.
+For Rust embedders, `Host::agent_with_tools` takes the working directory,
+selected route and a custom `CodingToolHost`; it composes that host with the
+built-ins, and a same-name custom tool replaces that one built-in.
 
 Tools act directly in the working directory with the host user's permissions.
 There is no implicit sandbox. If a process stops during a tool call, Ion
