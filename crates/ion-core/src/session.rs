@@ -42,6 +42,12 @@ pub enum SessionEntry {
     ModelSelected {
         model: ModelRef,
     },
+    UserShell {
+        command: String,
+        output: serde_json::Value,
+        is_error: bool,
+        exclude_from_context: bool,
+    },
     Steering {
         turn: u64,
         prompt: String,
@@ -112,6 +118,22 @@ pub struct TurnSummary {
 }
 
 impl SessionView {
+    /// Conversation display, including user commands kept out of model context.
+    pub fn display_messages(&self) -> Vec<Message> {
+        self.entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::UserShell {
+                    command,
+                    output,
+                    exclude_from_context,
+                    ..
+                } => Some(shell_message(command, output, *exclude_from_context)),
+                other => message_from_entry(other),
+            })
+            .collect()
+    }
+
     pub fn turns(&self) -> Vec<TurnSummary> {
         let mut turns: Vec<TurnSummary> = Vec::new();
         for entry in &self.entries {
@@ -168,6 +190,20 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.last_model = Some(model.clone());
+            }
+            SessionEntry::UserShell {
+                command,
+                output,
+                exclude_from_context,
+                ..
+            } => {
+                if self.active.is_some() || command.trim().is_empty() || command.contains('\0') {
+                    return Err(SessionError::InvalidHistory);
+                }
+                if !exclude_from_context {
+                    messages.push(shell_message(command, output, false));
+                }
+                new_settled.push(self.sequence + 1);
             }
             SessionEntry::Compacted {
                 through_entry,
@@ -471,6 +507,27 @@ impl Session {
             .map_err(|_| SessionError::Poisoned)?
             .messages
             .clone())
+    }
+
+    /// Record a user-run command after its observed result is available.
+    /// It is never appended while a model Turn owns the Session.
+    pub fn record_user_shell(
+        &self,
+        command: String,
+        output: serde_json::Value,
+        is_error: bool,
+        exclude_from_context: bool,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(
+            &mut store,
+            &[SessionEntry::UserShell {
+                command,
+                output,
+                is_error,
+                exclude_from_context,
+            }],
+        )
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
@@ -846,6 +903,12 @@ fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
 
 fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
     match entry {
+        SessionEntry::UserShell {
+            command,
+            output,
+            exclude_from_context: false,
+            ..
+        } => Some(shell_message(command, output, false)),
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { prompt, .. } => Some(Message {
             role: Role::User,
@@ -858,9 +921,66 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
             content: vec![Content::ToolResult(result.clone())],
             provider_replay: None,
         }),
-        SessionEntry::ModelSelected { .. }
+        SessionEntry::UserShell { .. }
+        | SessionEntry::ModelSelected { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
+    }
+}
+
+fn shell_message(command: &str, output: &serde_json::Value, excluded: bool) -> Message {
+    let mut body = format!(
+        "User ran shell command{}:\n$ {command}",
+        if excluded {
+            " (not shared with model)"
+        } else {
+            ""
+        }
+    );
+    if let Some(stdout) = output.get("stdout").and_then(serde_json::Value::as_str) {
+        body.push_str("\nstdout:\n");
+        body.push_str(stdout);
+        if output
+            .get("stdout_truncated")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            body.push_str("\n[stdout truncated]");
+        }
+    }
+    if let Some(stderr) = output.get("stderr").and_then(serde_json::Value::as_str)
+        && !stderr.is_empty()
+    {
+        body.push_str("\nstderr:\n");
+        body.push_str(stderr);
+        if output
+            .get("stderr_truncated")
+            .and_then(serde_json::Value::as_bool)
+            == Some(true)
+        {
+            body.push_str("\n[stderr truncated]");
+        }
+    }
+    if let Some(code) = output.get("exit_code").filter(|value| !value.is_null()) {
+        body.push_str(&format!("\nexit code: {code}"));
+    }
+    if let Some(signal) = output.get("signal").filter(|value| !value.is_null()) {
+        body.push_str(&format!("\nsignal: {signal}"));
+    }
+    if output.get("cancelled").and_then(serde_json::Value::as_bool) == Some(true) {
+        body.push_str("\ncommand cancelled");
+    }
+    if output.get("timed_out").and_then(serde_json::Value::as_bool) == Some(true) {
+        body.push_str("\ncommand timed out");
+    }
+    if let Some(error) = output.get("error").and_then(serde_json::Value::as_str) {
+        body.push_str("\nerror: ");
+        body.push_str(error);
+    }
+    Message {
+        role: Role::User,
+        content: vec![Content::Text(body)],
+        provider_replay: None,
     }
 }
 
@@ -998,6 +1118,70 @@ pub enum SessionError {
 mod tests {
     use super::*;
     use ion_ai::ToolCall;
+
+    #[test]
+    fn user_shell_context_choice_survives_reopen_and_compaction() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        session
+            .record_user_shell(
+                "pwd".into(),
+                serde_json::json!({"stdout":"visible"}),
+                false,
+                false,
+            )
+            .unwrap();
+        session
+            .record_user_shell(
+                "secret".into(),
+                serde_json::json!({"stdout":"private"}),
+                false,
+                true,
+            )
+            .unwrap();
+        let view = session.view().unwrap();
+        assert_eq!(view.display_messages().len(), 2);
+        assert_eq!(view.messages.len(), 1);
+        assert!(
+            serde_json::to_string(&session.context_messages().unwrap())
+                .unwrap()
+                .contains("visible")
+        );
+        assert!(
+            !serde_json::to_string(&session.context_messages().unwrap())
+                .unwrap()
+                .contains("private")
+        );
+        assert!(matches!(
+            session.record_user_shell("\0".into(), serde_json::Value::Null, true, false),
+            Err(SessionError::InvalidHistory)
+        ));
+        assert_eq!(session.view().unwrap().entries.len(), 2);
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        let view = reopened.view().unwrap();
+        assert_eq!(view.display_messages().len(), 2);
+        assert_eq!(view.messages.len(), 1);
+        assert!(
+            !serde_json::to_string(&reopened.context_messages().unwrap())
+                .unwrap()
+                .contains("private")
+        );
+        reopened
+            .record_compaction(
+                reopened.entry_count().unwrap(),
+                "visible command was run".into(),
+                Usage::unknown(),
+            )
+            .unwrap();
+        assert!(
+            !serde_json::to_string(&reopened.context_messages().unwrap())
+                .unwrap()
+                .contains("private")
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn selected_point_forks_preserve_valid_prefix_and_source_history() {

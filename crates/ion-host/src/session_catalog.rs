@@ -118,6 +118,16 @@ impl SessionCatalog {
                     .map(|ch| if ch.is_control() { ' ' } else { ch })
                     .collect(),
             ),
+            SessionEntry::UserShell { command, .. } => Some(format!(
+                "!{}",
+                command
+                    .lines()
+                    .next()
+                    .unwrap_or("")
+                    .chars()
+                    .take(120)
+                    .collect::<String>()
+            )),
             _ => None,
         });
         let turns = view
@@ -125,7 +135,12 @@ impl SessionCatalog {
             .iter()
             .filter(|entry| matches!(entry, SessionEntry::TurnStarted { .. }))
             .count();
-        if turns == 0 {
+        if turns == 0
+            && !view
+                .entries
+                .iter()
+                .any(|entry| matches!(entry, SessionEntry::UserShell { .. }))
+        {
             return None;
         }
         let id = path.file_stem()?.to_string_lossy().into_owned();

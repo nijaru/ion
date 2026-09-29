@@ -10,7 +10,8 @@ use anyhow::{Context, Result};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{
-    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, SteeringInbox,
+    CodingAgent, CodingAgentEvent, CodingSession, CodingToolHost, ForkPoint, LocalTools,
+    SessionEntry, SessionView, SteeringInbox,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Host, Resources, Selection, SessionCatalog};
@@ -400,6 +401,25 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     )
                     .await?;
                 }
+                Action::Shell(command, exclude_from_context) => {
+                    if let Err(error) = run_user_shell(
+                        &mut terminal,
+                        &mut screen,
+                        &mut input,
+                        &mut ui,
+                        &runtime.session,
+                        &runtime.selected.identity(),
+                        command.clone(),
+                        exclude_from_context,
+                    )
+                    .await
+                    {
+                        ui.note(format!("Shell command: {command}"));
+                        ui.status = format!(
+                            "Shell result uncertain: {error:#}; inspect the working directory before retrying"
+                        );
+                    }
+                }
                 Action::Command(command) => {
                     if let Some(provider) = command.strip_prefix("/login ") {
                         match login_in_terminal(
@@ -588,7 +608,7 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\n!COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
@@ -852,6 +872,15 @@ fn busy_key(
             ui.draft = command;
             ui.cursor = ui.draft.len();
         }
+        Action::Shell(command, exclude_from_context) => {
+            ui.draft = format!(
+                "{}{}",
+                if exclude_from_context { "!!" } else { "!" },
+                command
+            );
+            ui.cursor = ui.draft.len();
+            ui.status = "Shell commands are available after this operation".into();
+        }
         Action::Quit => stop.cancel(),
         Action::Pick(PickerValue::File { path, start, end }) => {
             ui.insert_file(path, start, end);
@@ -905,6 +934,69 @@ fn context_label(view: &ion_core::SessionView, window: Option<u32>) -> String {
         label.push_str(&format!(" · summary through {through}"));
     }
     label
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn run_user_shell(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    input: &mut InputStream,
+    ui: &mut Frontend,
+    session: &CodingSession,
+    model: &ModelRef,
+    command: String,
+    exclude_from_context: bool,
+) -> Result<()> {
+    let tools = LocalTools::new(session.cwd())?;
+    let stop = CancellationToken::new();
+    let mut tick = interval(Duration::from_millis(50));
+    let mut input_ended = false;
+    ui.status = "Running shell · Ctrl-C cancels".into();
+    let output = {
+        let running = tools.run_user_shell(&command, stop.clone());
+        tokio::pin!(running);
+        loop {
+            tokio::select! {
+                result = &mut running => break result,
+                event = input.next(), if !input_ended => match event {
+                    Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => {
+                        stop.cancel();
+                        ui.status = "Cancelling shell…".into();
+                    }
+                    Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
+                    Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
+                    Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
+                    Some(Ok(InputEvent::Mouse(mouse))) => match mouse.kind() {
+                        MouseKind::ScrollUp => ui.scroll = ui.scroll.saturating_add(3),
+                        MouseKind::ScrollDown => ui.scroll = ui.scroll.saturating_sub(3),
+                        _ => {},
+                    },
+                    Some(Err(error)) => {
+                        stop.cancel();
+                        input_ended = true;
+                        ui.status = format!("Input failed: {error}. Cancelling shell…");
+                    }
+                    None => { stop.cancel(); input_ended = true; },
+                },
+                _ = tick.tick() => draw(terminal, screen, ui, None, model, true)?,
+            }
+        }
+    };
+    session.record_user_shell(command, output.value, output.is_error, exclude_from_context)?;
+    let view = session.view()?;
+    ui.context_label = context_label(&view, ui.context_window_tokens);
+    ui.load_history(&view);
+    ui.scroll = 0;
+    ui.status = if output.is_error {
+        "Shell finished with an error"
+    } else {
+        "Shell finished"
+    }
+    .into();
+    if input_ended {
+        ui.status = "Terminal input ended after the shell result was saved".into();
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -995,7 +1087,7 @@ async fn run_turn(
         ui.cursor = ui.draft.len();
     }
     ui.context_label = context_label(&view, ui.context_window_tokens);
-    ui.load_history(view.messages);
+    ui.load_history(&view);
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
@@ -1010,6 +1102,7 @@ async fn run_turn(
 enum Action {
     None,
     Submit(String),
+    Shell(String, bool),
     Queue(String),
     Command(String),
     Pick(PickerValue),
@@ -1020,7 +1113,7 @@ impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         let view = session.view()?;
         self.context_label = context_label(&view, self.context_window_tokens);
-        self.load_history(view.messages);
+        self.load_history(&view);
         self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
@@ -1042,15 +1135,19 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(&mut self, messages: Vec<Message>) {
-        self.history = messages;
-        self.prompt_history = self
-            .history
+    fn load_history(&mut self, view: &SessionView) {
+        self.history = view.display_messages();
+        self.prompt_history = view
+            .entries
             .iter()
-            .filter(|message| message.role == Role::User)
-            .flat_map(|message| message.content.iter())
-            .filter_map(|content| match content {
-                Content::Text(text) => Some(text.clone()),
+            .filter_map(|entry| match entry {
+                SessionEntry::TurnStarted { input, .. } => {
+                    input.content.iter().find_map(|part| match part {
+                        Content::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                }
+                SessionEntry::Steering { prompt, .. } => Some(prompt.clone()),
                 _ => None,
             })
             .collect();
@@ -1165,6 +1262,18 @@ impl Frontend {
                     Action::Quit
                 } else if prompt.starts_with('/') {
                     Action::Command(prompt)
+                } else if let Some(command) = prompt.strip_prefix("!!") {
+                    if command.trim().is_empty() {
+                        Action::None
+                    } else {
+                        Action::Shell(command.trim().to_owned(), true)
+                    }
+                } else if let Some(command) = prompt.strip_prefix('!') {
+                    if command.trim().is_empty() {
+                        Action::None
+                    } else {
+                        Action::Shell(command.trim().to_owned(), false)
+                    }
                 } else {
                     Action::Submit(prompt)
                 }

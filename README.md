@@ -120,6 +120,11 @@ Ctrl-O opens the latest complete tool result; `/tools` lists results and
 `/tool N` opens a selected one. Esc or Ctrl-O closes the result view. Input
 that has not reached the model returns to the editor if the turn fails or is
 cancelled.
+In the terminal, `!command` runs a shell command in the live working
+directory and includes its observed result in later model context.
+`!!command` runs it without sharing the result with the model. Both commands
+remain visible in the saved Session. Ctrl-C requests cancellation of a
+running command; a command that started can still have external effects.
 
 Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's

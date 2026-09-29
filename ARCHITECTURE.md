@@ -13,7 +13,7 @@ session after relaunch. The same behavior is available headlessly and through
 a library host. The first tool set is read, edit, write and shell. Shell can
 handle search and listing until a dedicated tool shows a benefit.
 
-A usable coding core includes project instructions, model discovery and
+A usable coding agent includes project instructions, model discovery and
 selection, automatic environment API keys, optional masked key entry, and
 honest resume. The broader product target includes the common workflows of a
 Pi-level coding agent: image input, reusable skills and prompt templates,
@@ -93,6 +93,12 @@ commit together. A failed write leaves the uncommitted prompt available to
 the host for restoration.
 Recorded assistant attempts retain their provider termination reason, so a
 truncated call that was rejected is distinguishable from a complete call.
+User-run shell commands are separate Session facts recorded after their
+observed result. A command may be visible only in the transcript or also
+projected as a user message for later model requests; the latter choice is
+persisted and respected after reopen and compaction. Direct user shell work
+uses the same live-directory executor as the model's shell tool and cannot
+interleave with an active coding Turn.
 
 An unmatched call after process loss has an unknown effect, including when
 dispatch may not have begun. An accepted Turn without an end entry is
