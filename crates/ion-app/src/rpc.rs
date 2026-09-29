@@ -480,6 +480,12 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
         CodingAgentEvent::ContextCompacted { through_entry } => {
             json!({"type":"context_compacted","through_entry":through_entry})
         }
+        CodingAgentEvent::ProviderReplayRebased => json!({"type":"provider_replay_rebased"}),
+        CodingAgentEvent::ProviderReplayNotice {
+            action,
+            reason,
+            count,
+        } => json!({"type":"provider_replay_notice","action":action,"reason":reason,"count":count}),
         CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
         CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
     }

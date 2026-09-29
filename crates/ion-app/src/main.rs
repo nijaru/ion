@@ -608,6 +608,14 @@ async fn headless(
                 CodingAgentEvent::ContextCompacted { through_entry } => {
                     eprintln!("[context summarized through entry {through_entry}]")
                 }
+                CodingAgentEvent::ProviderReplayRebased => {
+                    eprintln!("[provider reasoning context reset]")
+                }
+                CodingAgentEvent::ProviderReplayNotice {
+                    action,
+                    reason,
+                    count,
+                } => eprintln!("[provider reasoning {action}: {count} block(s), {reason}]"),
                 CodingAgentEvent::ResponseRestarted => {
                     eprintln!("[incomplete response discarded; retrying]");
                 }

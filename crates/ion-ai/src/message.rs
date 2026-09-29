@@ -44,6 +44,10 @@ pub struct ProviderReplay {
     /// Adapter-defined discriminator, for example `reasoning` or `thinking`.
     pub kind: String,
     pub data: Value,
+    /// A tool continuation must keep the producing request prefix stable
+    /// while this assistant response and its tool results are in flight.
+    #[serde(default)]
+    pub prefix_bound: bool,
 }
 
 impl ProviderReplay {
@@ -53,7 +57,14 @@ impl ProviderReplay {
             provider: provider.into(),
             kind: kind.into(),
             data,
+            prefix_bound: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_prefix_binding(mut self, enabled: bool) -> Self {
+        self.prefix_bound = enabled;
+        self
     }
 
     #[must_use]

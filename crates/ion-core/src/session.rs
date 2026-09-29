@@ -44,6 +44,11 @@ pub enum SessionEntry {
     ModelSelected {
         model: ModelRef,
     },
+    /// The selected provider could not safely reuse older opaque continuation
+    /// after a changed request context. Raw assistant facts remain intact.
+    ProviderReplayRebased {
+        turn: u64,
+    },
     UserShell {
         command: String,
         output: serde_json::Value,
@@ -169,6 +174,7 @@ pub(crate) struct CompactionPlan {
 #[derive(Default, Clone)]
 struct State {
     active: Option<u64>,
+    assistant_seen_in_turn: bool,
     pending: Vec<(String, String)>,
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
@@ -201,6 +207,15 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.select_model(model);
+            }
+            SessionEntry::ProviderReplayRebased { turn } => {
+                if self.active != Some(*turn)
+                    || self.assistant_seen_in_turn
+                    || !self.pending.is_empty()
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.replay_epoch_start = self.sequence + 1;
             }
             SessionEntry::UserShell {
                 command,
@@ -241,6 +256,7 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.active = Some(*turn);
+                self.assistant_seen_in_turn = false;
                 self.last_id = *turn;
                 self.select_model(model);
                 messages.push(input.clone());
@@ -292,6 +308,7 @@ impl State {
                     }
                 }
                 messages.push(message.clone());
+                self.assistant_seen_in_turn = true;
                 self.last_usage = Some(*usage);
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
@@ -320,6 +337,7 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.active = None;
+                self.assistant_seen_in_turn = false;
                 self.last_end = Some((*turn, reason.clone()));
                 new_settled.push(self.sequence + 1);
             }
@@ -588,6 +606,13 @@ impl Session {
         context_projection(&store, Some(model))
     }
 
+    /// Permanently omit prior opaque replay from future model requests after
+    /// an adapter detects a changed signed context before dispatch.
+    pub(crate) fn rebase_provider_replay(&self, turn: u64) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &[SessionEntry::ProviderReplayRebased { turn }])
+    }
+
     /// Find the earliest settled cut that fits a useful recent suffix.
     /// The returned prefix includes the previous summary, if any.
     pub(crate) fn compaction_plan(
@@ -648,6 +673,7 @@ impl Session {
                 | SessionEntry::Assistant { .. }
                 | SessionEntry::ToolResult { .. } => true,
                 SessionEntry::ModelSelected { .. }
+                | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::TurnEnded { .. } => false,
             });
@@ -1042,6 +1068,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         }),
         SessionEntry::UserShell { .. }
         | SessionEntry::ModelSelected { .. }
+        | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
     }
@@ -1870,6 +1897,84 @@ mod tests {
                 .count(),
             3
         );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn provider_rebase_is_durable_and_keeps_raw_assistant_history() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "anthropic".into(),
+            model: "claude-test".into(),
+        };
+        let (first, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first answer".into())],
+                    provider_replay: Some(
+                        ProviderReplay::new(
+                            "anthropic",
+                            "anthropic_content_blocks",
+                            serde_json::json!({"blocks":[{"type":"thinking",
+                                "thinking":"","signature":"signed"},{"type":"text",
+                                "text":"first answer"}],"prefix_sha256":"a".repeat(64)}),
+                        )
+                        .with_prefix_binding(true),
+                    ),
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let (second, _) = session.begin_turn("second".into(), model.clone()).unwrap();
+        assert!(
+            session.context_messages_for(&model).unwrap()[1]
+                .provider_replay
+                .is_some()
+        );
+        session.rebase_provider_replay(second).unwrap();
+        assert!(
+            session.context_messages_for(&model).unwrap()[1]
+                .provider_replay
+                .is_none()
+        );
+        assert_eq!(
+            session.messages().unwrap()[1]
+                .provider_replay
+                .as_ref()
+                .unwrap()
+                .kind,
+            "anthropic_content_blocks"
+        );
+        session
+            .record_assistant(
+                second,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("second answer".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        assert!(matches!(
+            session.rebase_provider_replay(second),
+            Err(SessionError::InvalidHistory)
+        ));
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert!(
+            reopened.context_messages_for(&model).unwrap()[1]
+                .provider_replay
+                .is_none()
+        );
+        assert!(reopened.messages().unwrap()[1].provider_replay.is_some());
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }

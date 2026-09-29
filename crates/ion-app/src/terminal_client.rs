@@ -185,6 +185,16 @@ impl Progress {
                 self.events
                     .push(format!("Context summarized through entry {through_entry}"));
             }
+            CodingAgentEvent::ProviderReplayRebased => {
+                self.events.push("Provider reasoning context reset".into());
+            }
+            CodingAgentEvent::ProviderReplayNotice {
+                action,
+                reason,
+                count,
+            } => self.events.push(format!(
+                "Provider reasoning {action}: {count} block(s), {reason}"
+            )),
             CodingAgentEvent::ResponseRestarted => {
                 self.text.clear();
                 self.events

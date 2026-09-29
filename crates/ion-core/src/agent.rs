@@ -392,6 +392,9 @@ impl Agent {
         let stream = tokio::select! {
             result = self.model.stream(request) => match result {
                 Ok(stream) => stream,
+                Err(error) if error.kind == ProviderErrorKind::ReplayContextChanged => {
+                    return (Err(AgentError::ReplayContextChanged), false);
+                }
                 Err(error) => return (Err(AgentError::Provider(error)), false),
             },
             () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
@@ -410,6 +413,18 @@ impl Agent {
                 }
                 Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {
                     observed = true;
+                }
+                Some(Ok(ModelStreamEvent::ProviderReplayNotice {
+                    action,
+                    reason,
+                    count,
+                })) => {
+                    observed = true;
+                    observe(AgentEvent::ProviderReplayNotice {
+                        action,
+                        reason,
+                        count,
+                    });
                 }
                 Some(Ok(ModelStreamEvent::Completed(response))) => return (Ok(response), observed),
                 Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
@@ -618,6 +633,9 @@ impl Agent {
         F: FnMut(AgentEvent) + Send,
     {
         let mut length_recovery_attempted = false;
+        let mut assistant_seen_in_turn = false;
+        let mut prefix_bound_continuation = false;
+        let mut replay_rebased = false;
         loop {
             // Keep a fast in-process model from starving terminal input and
             // cancellation during a long tool sequence.
@@ -658,6 +676,9 @@ impl Agent {
                     estimated_input,
                     self.limits.max_output_tokens,
                 ) else {
+                    if prefix_bound_continuation {
+                        return Err(AgentError::ContextTooLarge);
+                    }
                     if self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
                         .await?
@@ -677,6 +698,15 @@ impl Agent {
                         observe(event);
                     })
                     .await;
+                if !assistant_seen_in_turn
+                    && !replay_rebased
+                    && matches!(&generated, Err(AgentError::ReplayContextChanged))
+                {
+                    session.rebase_provider_replay(turn)?;
+                    observe(AgentEvent::ProviderReplayRebased);
+                    replay_rebased = true;
+                    continue;
+                }
                 let overflow = matches!(
                     &generated,
                     Err(AgentError::Provider(ProviderError {
@@ -722,6 +752,7 @@ impl Agent {
                         }) if *output < u64::from(self.limits.max_output_tokens)
                     );
                 if ((overflow && !emitted_text) || recoverable_length)
+                    && !prefix_bound_continuation
                     && !recovered_overflow
                     && self
                         .compact_inner(session, &model, stop, self.keep_bytes(), observe)
@@ -769,7 +800,13 @@ impl Agent {
                     calls.push(call.clone());
                 }
             }
+            prefix_bound_continuation |= response
+                .message
+                .provider_replay
+                .as_ref()
+                .is_some_and(|replay| replay.prefix_bound);
             if truncated_calls {
+                assistant_seen_in_turn = true;
                 let results =
                     session.record_truncated_assistant(turn, response.message, response.usage)?;
                 for result in results {
@@ -819,6 +856,7 @@ impl Agent {
             } else {
                 session.record_assistant(turn, response.message, response.usage, false)?
             };
+            assistant_seen_in_turn = true;
             if complete {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
@@ -903,6 +941,12 @@ pub enum AgentEvent {
     ContextCompacted {
         through_entry: u64,
     },
+    ProviderReplayRebased,
+    ProviderReplayNotice {
+        action: String,
+        reason: String,
+        count: usize,
+    },
     ResponseRestarted,
     ToolStarted {
         call_id: String,
@@ -961,6 +1005,8 @@ pub enum AgentError {
     IncompleteModelResponse,
     #[error("model returned continuation material for another provider")]
     InvalidProviderReplay,
+    #[error("provider reasoning prefix changed after replay reset or during tool continuation")]
+    ReplayContextChanged,
     #[error("model returned an invalid or duplicate tool call")]
     InvalidToolCall,
     #[error(transparent)]
@@ -982,6 +1028,7 @@ impl AgentError {
                 TurnEndReason::Failed("incomplete_model_response".into())
             }
             Self::InvalidProviderReplay => TurnEndReason::Failed("invalid_provider_replay".into()),
+            Self::ReplayContextChanged => TurnEndReason::Failed("replay_context_changed".into()),
             Self::InvalidToolCall => TurnEndReason::Failed("invalid_tool_call".into()),
             Self::EmptyPrompt
             | Self::InvalidUserInput
@@ -1166,6 +1213,130 @@ mod tests {
             .unwrap_err();
         assert!(matches!(error, AgentError::Provider(_)));
         assert_eq!(service.requests().len(), 1);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn changed_signed_context_rebases_once_before_dispatch() {
+        let root = std::env::temp_dir().join(format!("ion-rebase-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let (prior, _) = session.begin_turn("first".into(), model()).unwrap();
+        session
+            .record_assistant(
+                prior,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("prior".into())],
+                    provider_replay: Some(
+                        ion_ai::ProviderReplay::new("test", "opaque", serde_json::json!("signed"))
+                            .with_prefix_binding(true),
+                    ),
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let service = Arc::new(ScriptedModelService::new([
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::ReplayContextChanged,
+                message: "changed".into(),
+                retry_after_ms: None,
+            }),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let mut rebases = 0;
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "second".into(),
+                    "instructions".into(),
+                    CancellationToken::new(),
+                    |event| {
+                        if matches!(event, AgentEvent::ProviderReplayRebased) {
+                            rebases += 1;
+                        }
+                    },
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+        assert_eq!(rebases, 1);
+        let requests = service.requests();
+        assert!(requests[0].messages[1].provider_replay.is_some());
+        assert!(requests[1].messages[1].provider_replay.is_none());
+        assert!(session.messages().unwrap()[1].provider_replay.is_some());
+        assert!(
+            session.context_messages().unwrap()[1]
+                .provider_replay
+                .is_none()
+        );
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn signed_tool_continuation_does_not_rebase_or_repeat_tool() {
+        let root = std::env::temp_dir().join(format!("ion-tool-prefix-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::write(root.join("file.txt"), "content").unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let service = Arc::new(ScriptedModelService::new([
+            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "call_1".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"file.txt"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: Some(
+                        ion_ai::ProviderReplay::new("test", "opaque", serde_json::json!("signed"))
+                            .with_prefix_binding(true),
+                    ),
+                },
+                usage: Usage::unknown(),
+                termination: ResponseTermination::Completed,
+                returned_model: Some("test".into()),
+            })]),
+            Script::OpenError(ProviderError {
+                kind: ProviderErrorKind::ReplayContextChanged,
+                message: "changed".into(),
+                retry_after_ms: None,
+            }),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let error = agent
+            .submit(
+                &session,
+                model(),
+                "read file".into(),
+                "instructions".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::ReplayContextChanged));
+        assert_eq!(service.requests().len(), 2);
+        let view = session.view().unwrap();
+        assert_eq!(
+            view.entries
+                .iter()
+                .filter(|entry| matches!(entry, crate::session::SessionEntry::ToolResult { .. }))
+                .count(),
+            1
+        );
+        assert!(!view.entries.iter().any(|entry| matches!(
+            entry,
+            crate::session::SessionEntry::ProviderReplayRebased { .. }
+        )));
+        drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
 

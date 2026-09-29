@@ -42,5 +42,12 @@ pub enum ModelStreamEvent {
     TextDelta(String),
     ToolCall(ToolCall),
     Usage(Usage),
+    /// A provider reported that saved opaque reasoning was dropped or that a
+    /// prefix mismatch was allowed for this response.
+    ProviderReplayNotice {
+        action: String,
+        reason: String,
+        count: usize,
+    },
     Completed(ModelResponse),
 }

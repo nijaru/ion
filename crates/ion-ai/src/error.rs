@@ -6,6 +6,9 @@ pub enum ProviderErrorKind {
     Authentication,
     Permission,
     InvalidRequest,
+    /// The adapter rejected saved opaque replay before dispatch because its
+    /// producing context no longer matches this request.
+    ReplayContextChanged,
     ContextLength,
     RateLimited,
     Quota,

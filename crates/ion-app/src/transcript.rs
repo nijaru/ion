@@ -68,6 +68,9 @@ pub fn render(view: &SessionView) -> String {
             SessionEntry::Compacted { through_entry, .. } => {
                 let _ = writeln!(text, "\nContext summarized through entry {through_entry}");
             }
+            SessionEntry::ProviderReplayRebased { .. } => {
+                let _ = writeln!(text, "\nProvider reasoning context reset");
+            }
             SessionEntry::ModelSelected { .. } => {}
         }
     }

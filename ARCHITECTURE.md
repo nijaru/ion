@@ -280,14 +280,25 @@ string. This route is available to cataloged and custom OpenRouter models;
 a custom model is qualified by a live tool turn, not merely by accepting the
 wire setting. Preserve provider tool-call IDs in the encoded history: signed
 tool continuations can bind the signature to the original call. Anthropic
-signed thinking blocks likewise need ordered, unmodified block replay before
-thinking is enabled on that route. For models that bind signed blocks to their
+Messages stores the provider's complete ordered assistant content array as
+opaque replay beside neutral answer/tool content. The adapter checks that
+visible replay blocks still agree with the committed answer and tool calls,
+then sends the original array, including empty signed and redacted thinking
+blocks. For models that bind signed blocks to their
 request prefix, the adapter must preserve the provider-facing system, tools and
 earlier messages that produced each retained block. Client-side compaction
 and resource changes can change that prefix. When the prefix cannot be
-preserved, an explicit context change must remove the
-affected reasoning blocks before dispatch; a successful response on an older
-account does not establish that replay is valid for every account.
+preserved at a new Turn, the agent commits a replay epoch change before
+dispatch and rebuilds context without prior opaque replay. Raw Session
+history remains intact and the reset survives reopen. Do not rebase inside a
+signed assistant tool continuation: preserve its prefix, or report that the
+continuation cannot fit. A successful response on an older account does not
+establish that replay is valid for every account.
+For current native Claude models, request adaptive thinking with the documented
+prefix check set to `error` and report known provider
+`input_transformations` for dropped or mismatch-allowed reasoning. Keep
+provider beta controls off custom Messages-compatible endpoints unless their
+contract is qualified.
 Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
 Coalesce streamed tool calls by their call index: later repeated or changed

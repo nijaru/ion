@@ -90,6 +90,10 @@ then a `run_end` record with `completed`, `cancelled` or `failed` status.
 a call that was never dispatched because the model response was truncated.
 `response_restarted` means earlier text deltas from that incomplete attempt
 were replaced after context compaction; consumers should discard those deltas.
+`provider_replay_rebased` means a changed request prefix caused Ion to omit
+older opaque reasoning before dispatch while retaining the raw Session facts.
+`provider_replay_notice` reports a provider's count and reason for dropped or
+allowed-mismatch reasoning blocks.
 Diagnostics stay on stderr, and failure also sets a nonzero exit status. The `final` record is
 the committed assistant answer; earlier text deltas are for live display.
 
@@ -161,6 +165,13 @@ new model with a tool-using turn before relying on it for coding.
 When switching models between Turns, Ion keeps the saved transcript and tool
 results but omits opaque reasoning from earlier model epochs in later model
 requests. Switching back does not revive those older blocks.
+The catalog includes current Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 on the
+native Anthropic Messages route. Its signed thinking is retained across tool
+and later Turn continuation. When project instructions, tools or summarized
+history change the signed prefix, Ion records a one-time reasoning reset
+before the next Turn's request. Ion avoids compaction during a signed tool
+continuation; if its prefix changes or cannot fit, the Turn fails without
+repeating a tool effect.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
 endpoints require HTTPS and a key supplied through
@@ -274,8 +285,11 @@ direct OpenAI have not been live-qualified.
 Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
 reasoning needed for tool-call continuation across saved Turns. The Gemini
 route completed a signed tool continuation and another Turn after cross-process
-resume. Native Anthropic signed thinking and thinking on custom llama.cpp
-routes remain unsupported. Context pressure uses an approximate
+resume. An offline headless Anthropic Messages check completed signed tool
+continuation, cross-process resume and durable reasoning resets after
+compaction and project instructions changed. The native route still needs a
+live Anthropic credential and account qualification; thinking on custom
+llama.cpp routes remains unsupported. Context pressure uses an approximate
 token estimate; custom routes without a known context window use only the
 encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
 contract and [AGENTS.md](AGENTS.md) for repository checks.
