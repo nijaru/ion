@@ -271,7 +271,8 @@ Provider adapters accept valid terminal responses and reject incomplete ones,
 including stream truncation. Classify context overflow from a provider signal
 or a narrow documented response pattern; a generic HTTP status is not enough
 to rewrite model context. Preserve a bounded provider error reason when an
-Anthropic SSE error arrives after HTTP success; unknown future Anthropic
+Anthropic or Chat Completions SSE error arrives after HTTP success. An error
+chunk never completes a partial assistant response; unknown future Anthropic
 event types do not invalidate an otherwise complete message. Stream framing
 accepts SSE line endings across arbitrary transport chunk boundaries.
 When a route emits reasoning that must accompany assistant history during tool

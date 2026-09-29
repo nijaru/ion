@@ -18,6 +18,7 @@ steps = [
 count = 0
 require_steering = os.environ.get("ION_SMOKE_STEERING") == "1"
 partial_failure = os.environ.get("ION_SMOKE_PARTIAL_FAILURE") == "1"
+stream_error = os.environ.get("ION_SMOKE_STREAM_ERROR") == "1"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -34,6 +35,20 @@ class Handler(BaseHTTPRequestHandler):
                 assert count == 0
                 count += 1
                 payload = b'data: {"id":"smoke","model":"smoke-model","choices":[{"index":0,"delta":{"content":"PROVISIONAL_ANSWER"},"finish_reason":null}]}\n\n'
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if stream_error:
+                assert count == 0
+                count += 1
+                events = [
+                    {"choices": [{"index": 0, "delta": {"content": "PROVISIONAL_ANSWER"}, "finish_reason": None}]},
+                    {"error": {"code": "server_error", "message": "upstream disconnected"}, "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}]},
+                ]
+                payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events)
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream")
                 self.send_header("Content-Length", str(len(payload)))

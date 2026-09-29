@@ -142,4 +142,17 @@ if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/partial.
 fi
 [[ ! -s "$WORK/partial.out" ]] || { echo 'headless text mode published an uncommitted answer' >&2; exit 1; }
 grep -q 'finish_reason' "$WORK/partial.err"
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+ION_SMOKE_STREAM_ERROR=1 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/stream-error-port" "$WORK/stream-error-requests" > "$WORK/stream-error-server.out" 2> "$WORK/stream-error-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/stream-error-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/stream-error-port" ]] || { cat "$WORK/stream-error-server.err" >&2; echo 'stream-error mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/stream-error-port")/v1/chat/completions" --wire chat-completions > "$WORK/stream-error-use.out"
+if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/stream-error.out" 2> "$WORK/stream-error.err"; then
+    echo 'headless text mode accepted a provider stream error' >&2; exit 1
+fi
+[[ ! -s "$WORK/stream-error.out" ]] || { echo 'headless text mode published an uncommitted stream answer' >&2; exit 1; }
+grep -q 'upstream disconnected' "$WORK/stream-error.err"
 echo 'Ion offline headless coding and session reopen: OK'

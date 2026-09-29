@@ -419,6 +419,30 @@ fn provider_error_detail_value(value: &Value) -> Option<String> {
     (!detail.is_empty()).then_some(detail)
 }
 
+fn chat_stream_error(value: &Value) -> ProviderError {
+    let code = &value["error"]["code"];
+    let kind = if let Some(status) = code.as_u64().and_then(|code| u16::try_from(code).ok()) {
+        classify_http_error(status, &[])
+    } else {
+        match code.as_str() {
+            Some("server_error") => ProviderErrorKind::Server,
+            Some("rate_limit_exceeded" | "rate_limited") => ProviderErrorKind::RateLimited,
+            Some("insufficient_quota") => ProviderErrorKind::Quota,
+            Some("context_length_exceeded") => ProviderErrorKind::ContextLength,
+            _ => ProviderErrorKind::Transport,
+        }
+    };
+    let message = provider_error_detail_value(value).map_or_else(
+        || "provider sent a stream error".to_owned(),
+        |detail| format!("provider stream error: {detail}"),
+    );
+    ProviderError {
+        kind,
+        message,
+        retry_after_ms: None,
+    }
+}
+
 fn error(kind: ProviderErrorKind, message: &str) -> ProviderError {
     ProviderError {
         kind,
@@ -952,7 +976,7 @@ impl Default for ChatState {
 impl ChatState {
     fn accept(&mut self, value: &Value) -> Result<Vec<ModelStreamEvent>, ProviderError> {
         if value.get("error").is_some_and(|v| !v.is_null()) {
-            return Err(transport("provider sent a stream error"));
+            return Err(chat_stream_error(value));
         }
         if let Some(model) = value.get("model").and_then(Value::as_str) {
             if self.model.as_deref().is_some_and(|old| old != model) {
@@ -2298,6 +2322,41 @@ mod tests {
             stream.next().await.unwrap().unwrap(),
             ModelStreamEvent::Completed(_)
         ));
+    }
+
+    #[tokio::test]
+    async fn chat_stream_error_preserves_bounded_reason_and_never_completes() {
+        let body = concat!(
+            "data: {\"choices\":[{\"index\":0,\"delta\":{\"content\":\"partial\"}}]}\n\n",
+            "data: {\"error\":{\"code\":\"server_error\",\"message\":\"upstream disconnected\\nwhile generating\"},\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n\n",
+            "data: [DONE]\n\n"
+        );
+        let endpoint = serve(body.into(), "200 OK").await;
+        let model =
+            HttpModelService::new(&endpoint, HttpWire::OpenRouterChat, Arc::new(|| None)).unwrap();
+        let mut stream = model.stream(request()).await.unwrap();
+        assert!(matches!(
+            stream.next().await.unwrap().unwrap(),
+            ModelStreamEvent::TextDelta(_)
+        ));
+        let error = stream.next().await.unwrap().unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::Server);
+        assert!(
+            error
+                .message
+                .contains("upstream disconnectedwhile generating")
+        );
+        assert!(!error.message.contains('\n'));
+
+        let rate_limit = json!({"error":{"code":429,"message":"slow down"},"choices":[{"finish_reason":"error"}]});
+        let mut state = ChatState::default();
+        let error = state.accept(&rate_limit).unwrap_err();
+        assert_eq!(error.kind, ProviderErrorKind::RateLimited);
+        assert!(error.message.contains("slow down"));
+
+        let long = json!({"error":{"message":"x".repeat(1000)}});
+        let error = state.accept(&long).unwrap_err();
+        assert_eq!(error.message.len(), "provider stream error: ".len() + 500);
     }
 
     #[tokio::test]
