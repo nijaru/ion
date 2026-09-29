@@ -408,7 +408,9 @@ startup is explicit, never triggered merely by opening a repository. A
 server crash or cancellation produces an honest tool error; it cannot alter
 committed Session facts outside ordinary tool results. Failed server discovery
 produces a startup diagnostic without blocking the coding client or tools from
-healthy servers. Only discovered tools enter the model request, and a partly
+healthy servers. A malformed entry in a parseable config is skipped without
+hiding valid servers; config edits do not discard that user content. Only
+discovered tools enter the model request, and a partly
 initialized server is closed before its failure is reported. External extensions
 beyond text tools may return MCP image blocks; the host validates declared
 MIME, decodes and normalizes them through the same image owner as local read,

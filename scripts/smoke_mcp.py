@@ -128,8 +128,16 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "bad-listing", sys.executable, str(bad_script)], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and str(server_script) in listing.stdout
+        config_path = Path(env["XDG_CONFIG_HOME"]) / "ion" / "mcp.json"
+        config = json.loads(config_path.read_text())
+        config["servers"]["malformed"] = {"command": 7}
+        config_path.write_text(json.dumps(config))
+        invalid_edit = subprocess.run([binary, "mcp", "remove", "demo"], env=env, capture_output=True, text=True)
+        assert invalid_edit.returncode != 0 and "malformed" in invalid_edit.stderr, invalid_edit
+        assert "demo" in config_path.read_text()
         response = subprocess.run([binary, "--cwd", workspace, "run", "Use the greet tool to greet Ion."], env=env, check=True, capture_output=True, text=True)
         assert response.stdout.strip() == "MCP_OK", response
+        assert "malformed" in response.stderr and "invalid MCP server" in response.stderr, response
         assert "broken" in response.stderr and "cannot start MCP server" in response.stderr, response
         assert "bad-listing" in response.stderr and "tool listing failed" in response.stderr, response
         assert "eof" in (workspace / "bad-mcp-events.txt").read_text()
@@ -143,6 +151,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         assert "called:picture" in events and "eof" in events, events
         inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
         assert "base64 image data omitted" in inspected and "iVBORw0KGgo" not in inspected
+        config["servers"].pop("malformed")
+        config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "broken"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "bad-listing"], env=env, check=True, capture_output=True)

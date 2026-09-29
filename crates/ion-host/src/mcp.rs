@@ -26,16 +26,23 @@ use tokio_util::sync::CancellationToken;
 use crate::model_setup::write_json;
 
 #[derive(Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct McpServer {
     pub command: String,
     #[serde(default)]
     pub args: Vec<String>,
 }
 
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Serialize)]
 #[serde(deny_unknown_fields)]
 struct SavedServers {
     servers: BTreeMap<String, McpServer>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawServers {
+    servers: BTreeMap<String, Value>,
 }
 
 pub struct McpConfig {
@@ -50,8 +57,29 @@ impl McpConfig {
     }
 
     pub fn list(&self) -> Result<BTreeMap<String, McpServer>> {
+        self.read_raw()?
+            .into_iter()
+            .map(|(name, value)| parse_server(&name, value).map(|server| (name, server)))
+            .collect()
+    }
+
+    fn load_startup(&self) -> Result<(BTreeMap<String, McpServer>, Vec<String>)> {
+        let mut servers = BTreeMap::new();
+        let mut diagnostics = Vec::new();
+        for (name, value) in self.read_raw()? {
+            match parse_server(&name, value) {
+                Ok(server) => {
+                    servers.insert(name, server);
+                }
+                Err(error) => diagnostics.push(format!("{error:#}")),
+            }
+        }
+        Ok((servers, diagnostics))
+    }
+
+    fn read_raw(&self) -> Result<BTreeMap<String, Value>> {
         match fs::read(&self.path) {
-            Ok(bytes) => Ok(serde_json::from_slice::<SavedServers>(&bytes)
+            Ok(bytes) => Ok(serde_json::from_slice::<RawServers>(&bytes)
                 .with_context(|| format!("invalid MCP config {}", self.path.display()))?
                 .servers),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(BTreeMap::new()),
@@ -81,6 +109,16 @@ impl McpConfig {
     }
 }
 
+fn parse_server(name: &str, value: Value) -> Result<McpServer> {
+    (|| {
+        validate_name(name)?;
+        let server: McpServer = serde_json::from_value(value)?;
+        ensure!(!server.command.trim().is_empty(), "MCP command is empty");
+        Ok(server)
+    })()
+    .with_context(|| format!("invalid MCP server {name:?}"))
+}
+
 type Client = RunningService<RoleClient, ()>;
 
 struct Server {
@@ -102,7 +140,7 @@ pub struct McpStartup {
 
 impl McpTools {
     pub async fn connect(config: &McpConfig, cwd: &Path) -> McpStartup {
-        let saved = match config.list() {
+        let (saved, mut diagnostics) = match config.load_startup() {
             Ok(saved) => saved,
             Err(error) => {
                 return McpStartup {
@@ -114,7 +152,6 @@ impl McpTools {
         let mut servers = Vec::new();
         let mut specs = Vec::new();
         let mut routes = HashMap::new();
-        let mut diagnostics = Vec::new();
         for (name, definition) in saved {
             match Self::connect_server(name, definition, cwd).await {
                 Ok((server, discovered)) => {
@@ -340,6 +377,43 @@ fn tool_error(message: String) -> CodingToolOutput {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn invalid_server_entry_does_not_hide_valid_startup_servers_or_get_discarded() {
+        let root = std::env::temp_dir().join(format!("ion-mcp-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let config = McpConfig::new(&root);
+        fs::write(
+            &config.path,
+            br#"{"servers":{"good":{"command":"echo","args":["ready"]},"bad":{"command":7}}}"#,
+        )
+        .unwrap();
+
+        let (servers, diagnostics) = config.load_startup().unwrap();
+        assert_eq!(servers.len(), 1);
+        assert_eq!(servers["good"].command, "echo");
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].contains("invalid MCP server \"bad\""));
+        assert!(config.list().is_err());
+        assert!(config.remove("good").is_err());
+        assert!(
+            config
+                .add(
+                    "new",
+                    McpServer {
+                        command: "echo".into(),
+                        args: Vec::new()
+                    }
+                )
+                .is_err()
+        );
+        assert!(
+            fs::read_to_string(&config.path)
+                .unwrap()
+                .contains("\"bad\"")
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn malformed_mcp_config_does_not_block_coding_startup() {
