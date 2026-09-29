@@ -254,7 +254,8 @@ short-task samples, not broad model or platform parity.
 
 An OpenRouter DeepSeek V4.1 Flash task also read a workspace PNG through the
 model's `read` tool, identified its left-half color, wrote `red\n` to a file
-and read the file back. This qualifies one live tool-image path.
+and read the file back. A separate image-only PNG prompt completed on the
+same route. These qualify two live image input paths, not broad vision parity.
 
 The TUI clips tool output in its default view; the full stored result is
 available through Ctrl-O or `/tool`. Context pressure currently
