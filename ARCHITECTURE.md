@@ -252,7 +252,13 @@ observed structured detail is unsigned `reasoning.text` and matches the
 stream's plain reasoning. Signed, encrypted or summarized details are a
 different replay contract and fail explicitly. Anthropic signed thinking
 blocks likewise need ordered, unmodified block replay before thinking is
-enabled on that route.
+enabled on that route. For models that bind signed blocks to their request
+prefix, the adapter must preserve the provider-facing system, tools and
+earlier messages that produced each retained block. Client-side compaction,
+resource changes and tool-ID rewriting can change that prefix. When the
+prefix cannot be preserved, an explicit context change must remove the
+affected reasoning blocks before dispatch; a successful response on an older
+account does not establish that replay is valid for every account.
 Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
 Coalesce streamed tool calls by their call index: later repeated or changed

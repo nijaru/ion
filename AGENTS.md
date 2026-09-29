@@ -4,13 +4,12 @@
 
 - `ARCHITECTURE.md` holds the current coding-agent design target;
   `README.md` describes implemented and validated behavior.
-- Build one Pi-like local coding loop for TUI, headless and library hosts.
-  The core has read, edit, write, native shell, project instructions, model
-  catalog, environment keys and resumable sessions. The common-workflow
-  target also includes image input, skills/templates, custom tools/extensions,
-  earlier-point exploration and long-lived programmatic control. OAuth is
-  not a first-use gate. See `ARCHITECTURE.md` for the design target and
-  `README.md` for currently implemented behavior.
+- Build one Pi-like local coding loop for TUI, headless and library hosts:
+  read, edit, write, native shell, project instructions, model catalog,
+  automatic environment keys, optional masked API-key entry and resumable
+  sessions. The core is Ion's cohesive Rust agent architecture, informed by
+  Pico and other current harnesses; these initial capabilities are its first
+  workflows, not its architectural boundary. OAuth is not a first-use gate.
 - Ion is unreleased v0. Replace obsolete R1 representations directly. Do
   not keep a generic task graph, second runtime, private importer/registry,
   attempt ledger or compatibility facade simply because it existed before.
