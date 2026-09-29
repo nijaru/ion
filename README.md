@@ -212,8 +212,12 @@ There is no implicit sandbox. If a process stops during a tool call, Ion
 records its effect as unknown when the next prompt begins; it does not rerun
 the call automatically. `ion --continue inspect` reads the existing log
 without making that repair. `exec` retains the final 64 KiB observed from each
-output stream. It reports omitted bytes when capture completes and marks a
-capture incomplete if an inherited pipe remains open after output goes idle.
+output stream. A complete truncated stream also has a private temporary file
+at `stdout_full_path` or `stderr_full_path` so earlier output can be inspected
+without rerunning the command. These files may expire across launches. Ion
+reports omitted bytes when capture completes and marks a capture incomplete
+if an inherited pipe remains open after output goes idle; an incomplete
+capture has no full-output path.
 Commands use Bash when available, then fall back to POSIX sh. Commands have
 no default timeout; pass
 `timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a

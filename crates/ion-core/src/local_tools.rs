@@ -3,7 +3,7 @@ use std::{
     collections::VecDeque,
     fs::{self, File, OpenOptions},
     io::{Read, Seek, SeekFrom, Write},
-    os::unix::{fs::PermissionsExt, process::ExitStatusExt},
+    os::unix::{fs::OpenOptionsExt, fs::PermissionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
     sync::{Arc, Mutex},
@@ -15,7 +15,11 @@ use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use tokio::{io::AsyncReadExt, process::Command, sync::watch};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    process::Command,
+    sync::watch,
+};
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{ToolHost, ToolOutput};
@@ -360,18 +364,22 @@ impl LocalTools {
         if stderr_cancelled && let Some(pid) = pid {
             let _ = kill_process_group(pid, Signal::TERM);
         }
-        match status {
-            Ok(status) => {
-                let result = json!({"exit_code": status.code(), "signal": status.signal(), "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "cancelled": cancelled, "timed_out": timed_out});
-                ToolOutput {
-                    value: result,
-                    images: Vec::new(),
-                    is_error: !status.success() || cancelled || timed_out,
-                }
-            }
-            Err(e) => error(format!(
-                "command started, but direct-child exit is unknown: {e}"
-            )),
+        let (exit_code, signal, wait_error, succeeded) = match status {
+            Ok(status) => (status.code(), status.signal(), None, status.success()),
+            Err(error) => (
+                None,
+                None,
+                Some(format!(
+                    "command started, but direct-child exit is unknown: {error}"
+                )),
+                false,
+            ),
+        };
+        let result = json!({"exit_code": exit_code, "signal": signal, "wait_error": wait_error, "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "stdout_full_path": stdout.full_path, "stderr_full_path": stderr.full_path, "stdout_full_error": stdout.full_error, "stderr_full_error": stderr.full_error, "cancelled": cancelled, "timed_out": timed_out});
+        ToolOutput {
+            value: result,
+            images: Vec::new(),
+            is_error: !succeeded || cancelled || timed_out,
         }
     }
 }
@@ -545,13 +553,55 @@ struct Captured {
     bytes: Vec<u8>,
     complete: bool,
     omitted_bytes: Option<u64>,
+    full_path: Option<PathBuf>,
+    full_error: Option<String>,
 }
 #[derive(Default)]
 struct CaptureState {
     bytes: VecDeque<u8>,
     total: u64,
     complete: bool,
+    full_path: Option<PathBuf>,
+    full_error: Option<String>,
 }
+
+struct OutputSpool {
+    path: Option<PathBuf>,
+    file: tokio::fs::File,
+}
+
+impl OutputSpool {
+    fn open() -> std::io::Result<Self> {
+        let path = std::env::temp_dir().join(format!("ion-output-{}.log", uuid::Uuid::now_v7()));
+        let file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&path)?;
+        Ok(Self {
+            path: Some(path),
+            file: tokio::fs::File::from_std(file),
+        })
+    }
+
+    async fn write(&mut self, bytes: &[u8]) -> std::io::Result<()> {
+        self.file.write_all(bytes).await
+    }
+
+    async fn finish(mut self) -> std::io::Result<PathBuf> {
+        self.file.flush().await?;
+        Ok(self.path.take().expect("open spool has a path"))
+    }
+}
+
+impl Drop for OutputSpool {
+    fn drop(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
+}
+
 struct OutputCapture {
     task: tokio::task::JoinHandle<()>,
     state: Arc<Mutex<CaptureState>>,
@@ -567,31 +617,77 @@ impl OutputCapture {
         let (progress_tx, progress) = watch::channel(0u64);
         let task = tokio::spawn(async move {
             let mut chunk = [0u8; 8192];
+            let mut spool: Option<OutputSpool> = None;
+            let mut spool_failed = false;
             loop {
                 match pipe.read(&mut chunk).await {
                     Ok(0) => {
-                        capture_state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner)
-                            .complete = true;
-                        break;
-                    }
-                    Ok(n) => {
+                        let spool_result = if let Some(spool) = spool.take() {
+                            Some(spool.finish().await)
+                        } else {
+                            None
+                        };
                         let mut state = capture_state
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        state.total = state.total.saturating_add(n as u64);
-                        let overflow = state
-                            .bytes
-                            .len()
-                            .saturating_add(n)
-                            .saturating_sub(MAX_OUTPUT_BYTES);
-                        let remove_existing = overflow.min(state.bytes.len());
-                        state.bytes.drain(..remove_existing);
-                        state.bytes.extend(&chunk[overflow - remove_existing..n]);
-                        let total = state.total;
-                        drop(state);
+                        if let Some(result) = spool_result {
+                            match result {
+                                Ok(path) => state.full_path = Some(path),
+                                Err(error) => state.full_error = Some(error.to_string()),
+                            }
+                        }
+                        state.complete = true;
+                        break;
+                    }
+                    Ok(n) => {
+                        let (prefix, total) = {
+                            let mut state = capture_state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            let prefix = (!spool_failed
+                                && spool.is_none()
+                                && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
+                                .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
+                            state.total = state.total.saturating_add(n as u64);
+                            let overflow = state
+                                .bytes
+                                .len()
+                                .saturating_add(n)
+                                .saturating_sub(MAX_OUTPUT_BYTES);
+                            let remove_existing = overflow.min(state.bytes.len());
+                            state.bytes.drain(..remove_existing);
+                            state.bytes.extend(&chunk[overflow - remove_existing..n]);
+                            (prefix, state.total)
+                        };
                         let _ = progress_tx.send(total);
+                        if let Some(prefix) = prefix {
+                            match async {
+                                let mut file = OutputSpool::open()?;
+                                file.write(&prefix).await?;
+                                file.write(&chunk[..n]).await?;
+                                Ok::<_, std::io::Error>(file)
+                            }
+                            .await
+                            {
+                                Ok(file) => spool = Some(file),
+                                Err(error) => {
+                                    spool_failed = true;
+                                    capture_state
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                        .full_error = Some(error.to_string());
+                                }
+                            }
+                        } else if let Some(file) = &mut spool
+                            && let Err(error) = file.write(&chunk[..n]).await
+                        {
+                            spool_failed = true;
+                            spool = None;
+                            capture_state
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                                .full_error = Some(error.to_string());
+                        }
                     }
                     Err(_) => break,
                 }
@@ -648,6 +744,8 @@ impl OutputCapture {
                 bytes,
                 complete,
                 omitted_bytes,
+                full_path: state.full_path.take(),
+                full_error: state.full_error.take(),
             },
             cancelled,
         )
@@ -676,7 +774,7 @@ fn specs() -> Vec<ToolSpec> {
         ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
         ToolSpec { name: "edit".into(), description: "Replace one exact occurrence of old_text in a UTF-8 file; optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","old_text","new_text"],"properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
-        ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
+        ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
 }
 
@@ -840,7 +938,7 @@ mod tests {
                 &ToolCall {
                     id: "tail".into(),
                     name: "exec".into(),
-                    arguments: json!({"command":"yes x | head -c 70000; printf 'END_MARKER\\n'"}),
+                    arguments: json!({"command":"yes x | head -c 70000; printf 'END_MARKER\\n'; yes e | head -c 70000 >&2; printf 'ERROR_MARKER\\n' >&2"}),
                     raw_arguments: None,
                 },
                 CancellationToken::new(),
@@ -855,6 +953,28 @@ mod tests {
                 .unwrap()
                 .ends_with("END_MARKER\n")
         );
+        let stdout_path = PathBuf::from(output.value["stdout_full_path"].as_str().unwrap());
+        let stderr_path = PathBuf::from(output.value["stderr_full_path"].as_str().unwrap());
+        let stdout = fs::read(&stdout_path).unwrap();
+        let stderr = fs::read(&stderr_path).unwrap();
+        assert_eq!(
+            stdout,
+            [b"x\n".repeat(35_000), b"END_MARKER\n".to_vec()].concat()
+        );
+        assert_eq!(
+            stderr,
+            [b"e\n".repeat(35_000), b"ERROR_MARKER\n".to_vec()].concat()
+        );
+        assert_eq!(
+            fs::metadata(&stdout_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert_eq!(
+            fs::metadata(&stderr_path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_file(stdout_path).unwrap();
+        fs::remove_file(stderr_path).unwrap();
     }
 
     #[tokio::test]
@@ -876,6 +996,26 @@ mod tests {
         assert_eq!(output.value["stdout"], "DIRECT_EXIT_MARKER\n");
         assert_eq!(output.value["stdout_truncated"], true);
         assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
+    }
+
+    #[tokio::test]
+    async fn incomplete_long_capture_does_not_claim_a_full_output_file() {
+        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
+        let output = tools
+            .execute(
+                &ToolCall {
+                    id: "incomplete-spool".into(),
+                    name: "exec".into(),
+                    arguments: json!({"command":"sleep 2 & yes x | head -c 70000"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
+        assert_eq!(output.value["stdout_full_path"], Value::Null);
     }
 
     #[tokio::test]

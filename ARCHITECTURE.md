@@ -171,7 +171,11 @@ workspace registry. Shell commands use Bash where available, then POSIX sh.
 File edits reject ambiguous matches. Writes report
 creation or replacement; commands report exit status, launch/transport
 failure and truncation. When command output is bounded, retain the diagnostic
-tail and state what was omitted. If a descendant keeps an output pipe open
+tail and state what was omitted. For a complete capture whose displayed tail
+is truncated, retain the observed full stream in a private temporary file and
+return its path so the agent can inspect earlier output without rerunning the
+command. The file is a host artifact, not a Session authority or a durable
+resume promise. If a descendant keeps an output pipe open
 after the direct command exits, retain bytes already observed and finish
 after output becomes idle. Cancellation bounds this drain even if output
 remains active; mark an unfinished capture rather than reporting it as
