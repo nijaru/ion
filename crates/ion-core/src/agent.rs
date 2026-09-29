@@ -333,6 +333,9 @@ impl Agent {
         if summary.trim().is_empty() {
             return Err(AgentError::InvalidSummary);
         }
+        if stop.is_cancelled() {
+            return Err(AgentError::Cancelled);
+        }
         session.record_compaction(through_entry, summary, response.usage)?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))
@@ -2251,6 +2254,69 @@ mod tests {
         );
         assert_eq!(session.context_messages().unwrap(), before);
         assert_eq!(session.view().unwrap().compacted_through, None);
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn cancelled_summary_does_not_change_the_context_projection() {
+        struct CancelOnCompletion(CancellationToken);
+
+        impl ModelService for CancelOnCompletion {
+            fn stream<'a>(
+                &'a self,
+                _request: ModelRequest,
+            ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+                let stop = self.0.clone();
+                Box::pin(async move {
+                    let events = futures_util::stream::once(async move {
+                        stop.cancel();
+                        Ok(ModelStreamEvent::Completed(ModelResponse {
+                            message: Message {
+                                role: Role::Assistant,
+                                content: vec![Content::Text("valid summary".into())],
+                                provider_replay: None,
+                            },
+                            usage: Usage::unknown(),
+                            termination: ResponseTermination::Completed,
+                            returned_model: Some("test".into()),
+                        }))
+                    });
+                    Ok(Box::pin(events) as ion_ai::ModelStream)
+                })
+            }
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("ion-summary-cancel-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let (turn, _) = session.begin_turn("task".into(), model()).unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let before = session.view().unwrap();
+        let stop = CancellationToken::new();
+        let agent = Agent::new(
+            Arc::new(CancelOnCompletion(stop.clone())),
+            Arc::new(LocalTools::new(&root).unwrap()),
+        );
+        assert!(matches!(
+            agent.compact(&session, model(), stop, |_| {}).await,
+            Err(AgentError::Cancelled)
+        ));
+        let after = session.view().unwrap();
+        assert_eq!(after.entries, before.entries);
+        assert_eq!(after.compacted_through, None);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }

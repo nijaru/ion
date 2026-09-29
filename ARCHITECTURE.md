@@ -145,6 +145,8 @@ representative tasks. If the saved prefix is too large for one summary
 request, summarize bounded settled prefixes in sequence; do not require a
 larger model merely to reopen long work. No particular checkpoint or tail
 algorithm is fixed.
+If compaction is cancelled before its Session write, discard the generated
+summary and leave the previous context projection in place.
 Use the selected model's output ceiling for coding requests, clamped to the
 estimated remaining context on each request. Do not impose a smaller fixed
 app-wide generation cap.
