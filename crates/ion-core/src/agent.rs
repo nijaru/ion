@@ -633,7 +633,7 @@ impl Agent {
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
-                    messages: session.context_messages()?,
+                    messages: session.context_messages_for(&model)?,
                     tools: self.tools.specs(),
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,

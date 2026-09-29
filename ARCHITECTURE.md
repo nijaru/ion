@@ -236,6 +236,11 @@ missing route clearly; a global default applies to new Sessions. A custom
 route stays resolvable after another model becomes the default. Explicit
 per-invocation selection overrides the resumed choice for that invocation.
 Model and provider transport remain stable while a Turn runs.
+An explicit model switch starts a new model-facing replay epoch. Preserve raw
+assistant history, but omit opaque replay from earlier model epochs in later
+requests, including after switching back. Do not turn private reasoning into
+assistant text or alter tool-call/result pairs. Same-model tool continuation
+retains its replay. Anthropic signed thinking needs its own adapter policy.
 An idle model switch is recorded in its Session so explicit reopen restores
 it. Creating a fresh Session from the TUI or sustained-control client resolves
 the current global default again; switching to an existing Session restores
@@ -258,9 +263,10 @@ use, its adapter retains that continuation as provider-scoped opaque replay in
 the committed assistant message and re-encodes it only for a compatible route.
 DeepSeek and MiMo Chat Completions carry their exact streamed
 `reasoning_content` string on every later assistant message when tools are
-offered. This material is not answer text or a tool argument. A route that
-cannot replay a recorded form reports incompatibility before sending the next
-request; it must not silently strip it. The OpenRouter Chat Completions route
+offered. This material is not answer text or a tool argument. Within one
+model-facing replay epoch, a route that cannot replay a recorded form reports
+incompatibility before sending the next request; it must not silently strip
+it. The OpenRouter Chat Completions route
 retains ordered `reasoning_details` when returned, reconstructs streamed text
 and summary fragments, and replays the structured blocks rather than a plain
 reasoning alias. If a response supplies only plain `reasoning`, replay that

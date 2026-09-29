@@ -173,12 +173,21 @@ struct State {
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
+    // Derived from model-selection entries; older opaque replay stays in raw history.
+    replay_epoch_start: u64,
     sequence: u64,
     compaction: Option<(u64, String)>,
     last_usage: Option<Usage>,
 }
 
 impl State {
+    fn select_model(&mut self, model: &ModelRef) {
+        if self.last_model.as_ref().is_some_and(|prior| prior != model) {
+            self.replay_epoch_start = self.sequence + 1;
+        }
+        self.last_model = Some(model.clone());
+    }
+
     fn apply(
         &mut self,
         entry: &SessionEntry,
@@ -191,7 +200,7 @@ impl State {
                 if self.active.is_some() {
                     return Err(SessionError::InvalidHistory);
                 }
-                self.last_model = Some(model.clone());
+                self.select_model(model);
             }
             SessionEntry::UserShell {
                 command,
@@ -233,7 +242,7 @@ impl State {
                 }
                 self.active = Some(*turn);
                 self.last_id = *turn;
-                self.last_model = Some(model.clone());
+                self.select_model(model);
                 messages.push(input.clone());
             }
             SessionEntry::Steering { turn, input } => {
@@ -566,15 +575,17 @@ impl Session {
     /// The model-facing projection. Inspect and export still use raw history.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        match &store.state.compaction {
-            Some((through, summary)) => {
-                let entries = read_entries_after(&store.connection, *through)?;
-                let mut messages = vec![summary_message(summary)];
-                messages.extend(messages_from_entries(&entries));
-                Ok(messages)
-            }
-            None => Ok(store.messages.clone()),
-        }
+        context_projection(&store, store.state.last_model.as_ref())
+    }
+
+    /// Project a request for one model without reviving opaque replay from a
+    /// previous model epoch. The raw Session keeps every original message.
+    pub(crate) fn context_messages_for(
+        &self,
+        model: &ModelRef,
+    ) -> Result<Vec<Message>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        context_projection(&store, Some(model))
     }
 
     /// Find the earliest settled cut that fits a useful recent suffix.
@@ -960,6 +971,55 @@ fn summary_message(summary: &str) -> Message {
     }
 }
 
+fn context_projection(
+    store: &Store,
+    model: Option<&ModelRef>,
+) -> Result<Vec<Message>, SessionError> {
+    let through = store
+        .state
+        .compaction
+        .as_ref()
+        .map_or(0, |(through, _)| *through);
+    if store.state.replay_epoch_start <= through && model == store.state.last_model.as_ref() {
+        return match &store.state.compaction {
+            Some((through, summary)) => {
+                let entries = read_entries_after(&store.connection, *through)?;
+                let mut messages = vec![summary_message(summary)];
+                messages.extend(messages_from_entries(&entries));
+                Ok(messages)
+            }
+            None => Ok(store.messages.clone()),
+        };
+    }
+    let mut messages = store
+        .state
+        .compaction
+        .as_ref()
+        .map(|(_, summary)| vec![summary_message(summary)])
+        .unwrap_or_default();
+    let clear_all = model != store.state.last_model.as_ref();
+    for (index, entry) in read_entries_after(&store.connection, through)?
+        .iter()
+        .enumerate()
+    {
+        if let Some(mut message) = message_from_entry(entry) {
+            let sequence = through
+                .checked_add(
+                    u64::try_from(index)
+                        .map_err(|_| SessionError::InvalidHistory)?
+                        .checked_add(1)
+                        .ok_or(SessionError::InvalidHistory)?,
+                )
+                .ok_or(SessionError::InvalidHistory)?;
+            if clear_all || sequence < store.state.replay_epoch_start {
+                message.provider_replay = None;
+            }
+            messages.push(message);
+        }
+    }
+    Ok(messages)
+}
+
 fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
     entries.iter().filter_map(message_from_entry).collect()
 }
@@ -1178,7 +1238,7 @@ pub enum SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_ai::ToolCall;
+    use ion_ai::{ProviderReplay, ToolCall};
 
     #[tokio::test]
     async fn user_shell_waits_for_turn_gate_before_effect_and_commit() {
@@ -1702,6 +1762,114 @@ mod tests {
         let reopened = Session::open(&path).unwrap();
         assert_eq!(reopened.context_messages().unwrap().len(), 3);
         assert_eq!(reopened.view().unwrap().compacted_through, Some(3));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn model_switch_does_not_revive_earlier_opaque_replay() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let gemini = ModelRef {
+            provider: "openrouter".into(),
+            model: "google/gemini".into(),
+        };
+        let other = ModelRef {
+            provider: "openrouter".into(),
+            model: "other-model".into(),
+        };
+        let (first, _) = session.begin_turn("first".into(), gemini.clone()).unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "openrouter",
+                        "openrouter_reasoning_details",
+                        serde_json::json!([{"type":"reasoning.encrypted","data":"opaque"}]),
+                    )),
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session.select_model(other.clone()).unwrap();
+        let (second, _) = session.begin_turn("second".into(), other.clone()).unwrap();
+        let second_context = session.context_messages_for(&other).unwrap();
+        assert!(second_context[1].provider_replay.is_none());
+        assert_eq!(session.context_messages().unwrap(), second_context);
+        assert_eq!(
+            second_context[1].content,
+            session.messages().unwrap()[1].content
+        );
+        session
+            .record_assistant(
+                second,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("second answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "openrouter",
+                        "openrouter_plain_reasoning",
+                        serde_json::json!("reasoning"),
+                    )),
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        session
+            .record_compaction(3, "first turn done".into(), Usage::unknown())
+            .unwrap();
+        let (third, _) = session.begin_turn("third".into(), gemini.clone()).unwrap();
+        let third_context = session.context_messages_for(&gemini).unwrap();
+        assert!(
+            third_context
+                .iter()
+                .all(|message| message.provider_replay.is_none())
+        );
+        session
+            .record_assistant(
+                third,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "latest".into(),
+                        name: "read".into(),
+                        arguments: serde_json::json!({"path":"file.txt"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: Some(ProviderReplay::new(
+                        "openrouter",
+                        "openrouter_reasoning_details",
+                        serde_json::json!([{"type":"reasoning.text","text":"now"}]),
+                    )),
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        let current = session.context_messages_for(&gemini).unwrap();
+        assert!(
+            current[..current.len() - 1]
+                .iter()
+                .all(|message| message.provider_replay.is_none())
+        );
+        assert!(current.last().unwrap().provider_replay.is_some());
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.context_messages_for(&gemini).unwrap(), current);
+        assert_eq!(
+            reopened
+                .messages()
+                .unwrap()
+                .iter()
+                .filter(|message| message.provider_replay.is_some())
+                .count(),
+            3
+        );
         drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }

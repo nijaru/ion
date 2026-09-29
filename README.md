@@ -158,6 +158,9 @@ For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
 plain reasoning or ordered structured `reasoning_details` across tool calls;
 the generic `chat-completions` route does not assume that contract. Qualify a
 new model with a tool-using turn before relying on it for coding.
+When switching models between Turns, Ion keeps the saved transcript and tool
+results but omits opaque reasoning from earlier model epochs in later model
+requests. Switching back does not revive those older blocks.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
 endpoints require HTTPS and a key supplied through
