@@ -22,7 +22,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     work = Path(temporary)
     workspace = work / "workspace"
     workspace.mkdir()
-    (workspace / "data.txt").write_text("sample data\n")
+    (workspace / "data.txt").write_text("sample data\nsecond token\n")
     copy_bin = work / "copy-bin"
     copy_bin.mkdir()
     copy_file = work / "copied.txt"
@@ -70,7 +70,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     os.write(master, b", edit it, create created.txt, then verify both files with shell.\r")
                     sent_first = True
                 if sent_first and trace.exists() and not sent_steering:
-                    os.write(master, b"Also check that the updated file has one line.\r")
+                    os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:
                     time.sleep(0.1)
@@ -136,7 +136,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
             assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
-            assert (workspace / "data.txt").read_text() == "sample data updated\n"
+            assert (workspace / "data.txt").read_text() == "sample data updated\nsecond token updated\n"
             assert (workspace / "created.txt").read_text() == "created by ion\n"
             listing = subprocess.run([binary, "--cwd", workspace, "sessions"], env=env, check=True, capture_output=True, text=True).stdout
             named = [line for line in listing.splitlines() if "Smoke repair" in line]

@@ -23,7 +23,7 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$WORK/workspace" "$WORK/config" "$WORK/state"
-printf 'sample data\n' > "$WORK/workspace/data.txt"
+printf 'sample data\nsecond token\n' > "$WORK/workspace/data.txt"
 export XDG_CONFIG_HOME="$WORK/config" XDG_STATE_HOME="$WORK/state"
 if "$BIN" --cwd "$WORK/workspace" inspect > "$WORK/missing.out" 2> "$WORK/missing.err"; then
     echo 'inspect accepted a nonexistent session' >&2; exit 1
@@ -37,7 +37,7 @@ port="$(cat "$WORK/port")"
 
 "$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$port/v1" --wire chat-completions > "$WORK/use.out"
 ION_CUSTOM_API_KEY=unrelated-key "$BIN" --cwd "$WORK/workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/first.out" 2> "$WORK/first.err"
-[[ "$(cat "$WORK/workspace/data.txt")" == 'sample data updated' ]]
+[[ "$(cat "$WORK/workspace/data.txt")" == $'sample data updated\nsecond token updated' ]]
 [[ "$(cat "$WORK/workspace/created.txt")" == 'created by ion' ]]
 grep -q 'TASK_COMPLETE' "$WORK/first.out"
 "$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/first.json"
@@ -95,7 +95,7 @@ server_pid=$!
 for _ in {1..100}; do [[ -s "$WORK/json-port" ]] && break; sleep 0.05; done
 [[ -s "$WORK/json-port" ]] || { cat "$WORK/json-server.err" >&2; echo 'JSON mock provider did not start' >&2; exit 1; }
 "$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/json-port")/v1/chat/completions" --wire chat-completions > "$WORK/json-use.out"
-printf 'sample data\n' > "$WORK/other-workspace/data.txt"
+printf 'sample data\nsecond token\n' > "$WORK/other-workspace/data.txt"
 "$BIN" --json --cwd "$WORK/other-workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/events.jsonl" 2> "$WORK/events.err"
 python3 - "$WORK/events.jsonl" "$WORK/other-workspace" <<'PY'
 import json, pathlib, sys
@@ -106,7 +106,7 @@ started = [event['call_id'] for event in events if event['type'] == 'tool_starte
 finished = [event['call_id'] for event in events if event['type'] == 'tool_finished']
 assert len(started) == 4 and started == finished
 assert next(event['text'] for event in events if event['type'] == 'final') == 'TASK_COMPLETE'
-assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\n'
+assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\nsecond token updated\n'
 assert pathlib.Path(sys.argv[2], 'created.txt').read_text() == 'created by ion\n'
 PY
 printf 'PIPED_CONTEXT_MARKER\n' | "$BIN" --json --cwd "$WORK/other-workspace" --continue run 'What did we finish previously?' > "$WORK/piped-events.jsonl" 2> "$WORK/piped-events.err"

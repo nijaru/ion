@@ -94,9 +94,14 @@ struct ReadInput {
 #[serde(deny_unknown_fields)]
 struct EditInput {
     path: String,
+    edits: Vec<TextEdit>,
+    base_digest: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextEdit {
     old_text: String,
     new_text: String,
-    base_digest: Option<String>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -235,8 +240,8 @@ impl LocalTools {
             Ok(value) => value,
             Err(e) => return error(format!("invalid edit arguments: {e}")),
         };
-        if input.old_text.is_empty() {
-            return error("old_text must not be empty");
+        if input.edits.is_empty() {
+            return error("edits must contain at least one replacement");
         }
         let path = match self.path(&input.path) {
             Ok(path) => path,
@@ -261,11 +266,10 @@ impl LocalTools {
             Ok(text) => text,
             Err(_) => return error("edit target is not UTF-8"),
         };
-        let replacement =
-            match replace_text_preserving_format(&text, &input.old_text, &input.new_text) {
-                Ok(replacement) => replacement,
-                Err(message) => return error(message),
-            };
+        let replacement = match replace_text_preserving_format(&text, &input.edits) {
+            Ok(replacement) => replacement,
+            Err(message) => return error(message),
+        };
         if replacement.len() > MAX_FILE_BYTES {
             return error("edited file exceeds 8 MiB");
         }
@@ -275,7 +279,7 @@ impl LocalTools {
         };
         match replace_file(&path, replacement.as_bytes(), Some(permissions)) {
             Ok(()) => success(
-                json!({"path": input.path, "replacements": 1, "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes())}),
+                json!({"path": input.path, "replacements": input.edits.len(), "base_digest": actual, "new_digest": hex_digest(replacement.as_bytes())}),
             ),
             Err(e) => error(format!("edit write failed: {e}")),
         }
@@ -444,19 +448,15 @@ fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").replace('\r', "\n")
 }
 
-fn raw_offset_for_normalized(text: &str, normalized_offset: usize) -> usize {
-    let bytes = text.as_bytes();
-    let mut raw = 0;
-    let mut normalized = 0;
-    while normalized < normalized_offset {
-        if bytes[raw] == b'\r' && bytes.get(raw + 1) == Some(&b'\n') {
-            raw += 2;
+fn advance_raw_offset(bytes: &[u8], raw: &mut usize, normalized: &mut usize, target: usize) {
+    while *normalized < target {
+        if bytes[*raw] == b'\r' && bytes.get(*raw + 1) == Some(&b'\n') {
+            *raw += 2;
         } else {
-            raw += 1;
+            *raw += 1;
         }
-        normalized += 1;
+        *normalized += 1;
     }
-    raw
 }
 
 fn line_ending(text: &str) -> &'static str {
@@ -476,35 +476,79 @@ fn line_ending(text: &str) -> &'static str {
     "\n"
 }
 
-fn replace_text_preserving_format(
-    source: &str,
-    old_text: &str,
-    new_text: &str,
-) -> Result<String, &'static str> {
+fn replace_text_preserving_format(source: &str, edits: &[TextEdit]) -> Result<String, String> {
+    struct Matched<'a> {
+        start: usize,
+        end: usize,
+        replacement: &'a str,
+        index: usize,
+    }
     let bom_bytes = if source.starts_with('\u{feff}') { 3 } else { 0 };
     let body = &source[bom_bytes..];
     let normalized = normalize_newlines(body);
-    let old = normalize_newlines(old_text);
-    let mut matches = normalized.match_indices(&old);
-    let Some((start, _)) = matches.next() else {
-        return Err("old_text must occur exactly once");
-    };
-    if matches.next().is_some() {
-        return Err("old_text must occur exactly once");
+    let mut matched = Vec::with_capacity(edits.len());
+    for (index, edit) in edits.iter().enumerate() {
+        let old = normalize_newlines(&edit.old_text);
+        if old.is_empty() {
+            return Err(format!("edits[{index}].old_text must not be empty"));
+        }
+        let Some(start) = normalized.find(&old) else {
+            return Err(format!("edits[{index}].old_text was not found"));
+        };
+        // Search after the first character, not after the whole match, so
+        // overlapping occurrences are ambiguous too ("aa" in "aaa").
+        let next = start
+            + normalized[start..]
+                .chars()
+                .next()
+                .expect("match is nonempty")
+                .len_utf8();
+        if normalized[next..].contains(&old) {
+            return Err(format!("edits[{index}].old_text is ambiguous"));
+        }
+        matched.push(Matched {
+            start,
+            end: start + old.len(),
+            replacement: &edit.new_text,
+            index,
+        });
     }
-    let raw_start = bom_bytes + raw_offset_for_normalized(body, start);
-    let raw_end = bom_bytes + raw_offset_for_normalized(body, start + old.len());
-    let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
-        line_ending(&source[raw_start..raw_end])
-    } else {
-        line_ending(body)
-    };
-    let replacement = normalize_newlines(new_text).replace('\n', style);
-    let mut result =
-        String::with_capacity(source.len() - (raw_end - raw_start) + replacement.len());
-    result.push_str(&source[..raw_start]);
-    result.push_str(&replacement);
-    result.push_str(&source[raw_end..]);
+    matched.sort_unstable_by_key(|item| item.start);
+    for pair in matched.windows(2) {
+        if pair[0].end > pair[1].start {
+            return Err(format!(
+                "edits[{}] and edits[{}] overlap; merge them into one replacement",
+                pair[0].index, pair[1].index
+            ));
+        }
+    }
+    let mut result = String::with_capacity(source.len());
+    let mut raw = 0;
+    let mut normalized_offset = 0;
+    let mut copied_through = 0;
+    for item in matched {
+        advance_raw_offset(
+            body.as_bytes(),
+            &mut raw,
+            &mut normalized_offset,
+            item.start,
+        );
+        let raw_start = bom_bytes + raw;
+        advance_raw_offset(body.as_bytes(), &mut raw, &mut normalized_offset, item.end);
+        let raw_end = bom_bytes + raw;
+        result.push_str(&source[copied_through..raw_start]);
+        let style = if source[raw_start..raw_end].contains(['\r', '\n']) {
+            line_ending(&source[raw_start..raw_end])
+        } else {
+            line_ending(body)
+        };
+        result.push_str(&normalize_newlines(item.replacement).replace('\n', style));
+        copied_through = raw_end;
+    }
+    result.push_str(&source[copied_through..]);
+    if result == source {
+        return Err("edit made no changes".into());
+    }
     Ok(result)
 }
 fn read_file(path: &Path) -> std::io::Result<Vec<u8>> {
@@ -789,7 +833,7 @@ async fn stop_child(
 fn specs() -> Vec<ToolSpec> {
     vec![
         ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
-        ToolSpec { name: "edit".into(), description: "Replace one exact occurrence of old_text in a UTF-8 file; optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","old_text","new_text"],"properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"base_digest":{"type":"string"}}}) },
+        ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
     ]
@@ -827,7 +871,8 @@ mod tests {
         fs::write(&path, "old").unwrap();
         fs::set_permissions(&path, fs::Permissions::from_mode(0o444)).unwrap();
         let tools = LocalTools::new(&root).unwrap();
-        let edit = tools.edit(&json!({"path":"file.txt","old_text":"old","new_text":"new"}));
+        let edit =
+            tools.edit(&json!({"path":"file.txt","edits":[{"old_text":"old","new_text":"new"}]}));
         assert!(edit.is_error, "{}", edit.value);
         let write = tools.write(&json!({"path":"file.txt","content":"new"}));
         assert!(write.is_error, "{}", write.value);
@@ -846,8 +891,7 @@ mod tests {
         let tools = LocalTools::new(&root).unwrap();
         let output = tools.edit(&json!({
             "path":"file.txt",
-            "old_text":"two\nthree",
-            "new_text":"TWO\nthree",
+            "edits":[{"old_text":"two\nthree","new_text":"TWO\nthree"}],
             "base_digest": hex_digest(original.as_bytes()),
         }));
         assert!(!output.is_error, "{}", output.value);
@@ -871,8 +915,7 @@ mod tests {
         assert_eq!(digest, hex_digest(&fs::read(&path).unwrap()));
         let edit = tools.edit(&json!({
             "path":"file.txt",
-            "old_text":"beta",
-            "new_text":"BETA",
+            "edits":[{"old_text":"beta","new_text":"BETA"}],
             "base_digest":digest,
         }));
         assert!(!edit.is_error, "{}", edit.value);
@@ -883,12 +926,65 @@ mod tests {
     fn edit_preserves_unmatched_mixed_line_endings_and_rejects_ambiguity() {
         let result = replace_text_preserving_format(
             "first\r\nsecond\nthird\r\n",
-            "second\nthird",
-            "SECOND\nthird",
+            &[TextEdit {
+                old_text: "second\nthird".into(),
+                new_text: "SECOND\nthird".into(),
+            }],
         )
         .unwrap();
         assert_eq!(result, "first\r\nSECOND\nthird\r\n");
-        assert!(replace_text_preserving_format("same\r\nsame\n", "same", "new").is_err());
+        assert!(
+            replace_text_preserving_format(
+                "same\r\nsame\n",
+                &[TextEdit {
+                    old_text: "same".into(),
+                    new_text: "new".into()
+                }]
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn multi_edit_matches_one_original_snapshot_and_rejects_partial_changes() {
+        let root = std::env::temp_dir().join(format!("ion-multi-edit-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let path = root.join("file.txt");
+        let tools = LocalTools::new(&root).unwrap();
+        let original = "\u{feff}α\r\nfirst\nsecond\r\n";
+        fs::write(&path, original).unwrap();
+        let output = tools.edit(&json!({
+            "path":"file.txt",
+            "edits":[
+                {"old_text":"second","new_text":"SECOND"},
+                {"old_text":"α","new_text":"β"}
+            ],
+            "base_digest":hex_digest(original.as_bytes()),
+        }));
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.value["replacements"], 2);
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "\u{feff}β\r\nfirst\nSECOND\r\n"
+        );
+
+        for (source, edits) in [
+            (
+                "abcdef",
+                json!([{"old_text":"bcd","new_text":"B"},{"old_text":"cde","new_text":"C"}]),
+            ),
+            ("aaa", json!([{"old_text":"aa","new_text":"A"}])),
+            (
+                "abcdef",
+                json!([{"old_text":"abc","new_text":"ABC"},{"old_text":"missing","new_text":"M"}]),
+            ),
+        ] {
+            fs::write(&path, source).unwrap();
+            let output = tools.edit(&json!({"path":"file.txt","edits":edits}));
+            assert!(output.is_error, "{}", output.value);
+            assert_eq!(fs::read_to_string(&path).unwrap(), source);
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

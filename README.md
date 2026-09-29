@@ -259,8 +259,10 @@ no default timeout; pass
 `timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a
 UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
 `read.base_digest` covers the full file and can guard a later `edit`;
-`edit` accepts ordinary LF or CRLF text and preserves
-the file's BOM and unaffected line endings. A damaged Session file is skipped
+`edit` takes an `edits` array of `{old_text, new_text}` replacements against one
+original file snapshot. It rejects ambiguous or overlapping matches before
+writing, accepts ordinary LF or CRLF text, and preserves the file's BOM and
+unaffected line endings. A damaged Session file is skipped
 by `sessions` and `--continue`, while opening its exact path reports the
 error. Ion summarizes settled history when its request
 nears a known model's context window or exceeds its transport bound, and can
@@ -291,7 +293,9 @@ OpenRouter DeepSeek Flash, custom OpenRouter routes for
 route. OpenRouter and local llama.cpp tasks also passed on Linux. The cataloged
 OpenRouter DeepSeek route passed user-image and workspace-image tasks,
 resource use, MCP tool use and Session continuation. These checks cover
-selected tasks and routes. Anthropic and
+selected tasks and routes. A separate OpenRouter DeepSeek Flash task used one
+two-replacement `edit` call with a `read.base_digest` guard and verified the
+result with shell. Anthropic and
 direct OpenAI have not been live-qualified.
 
 Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the

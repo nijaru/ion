@@ -11,7 +11,10 @@ from pathlib import Path
 port_file, requests_file = map(Path, sys.argv[1:3])
 steps = [
     ("read", {"path": "data.txt"}),
-    ("edit", {"path": "data.txt", "old_text": "sample data", "new_text": "sample data updated"}),
+    ("edit", {"path": "data.txt", "edits": [
+        {"old_text": "second token", "new_text": "second token updated"},
+        {"old_text": "sample data", "new_text": "sample data updated"},
+    ]}),
     ("write", {"path": "created.txt", "content": "created by ion\n"}),
     ("exec", {"command": "cat data.txt created.txt"}),
 ]

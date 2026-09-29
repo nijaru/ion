@@ -188,7 +188,9 @@ output-limit stop does not trigger this recovery.
 Default file and shell tools act on the live working directory with the host
 user's permissions. There is no implicit sandbox, VM, importer or private
 workspace registry. Shell commands use Bash where available, then POSIX sh.
-File edits reject ambiguous matches. Writes report
+An edit may contain several targeted replacements in one file. Match every
+old text against the same original snapshot, reject missing, ambiguous or
+overlapping matches before writing, then commit one replacement. Writes report
 creation or replacement; commands report exit status, launch/transport
 failure and truncation. When command output is bounded, retain the diagnostic
 tail and state what was omitted. For a complete capture whose displayed tail
@@ -199,8 +201,8 @@ resume promise. If a descendant keeps an output pipe open
 after the direct command exits, retain bytes already observed and finish
 after output becomes idle. Cancellation bounds this drain even if output
 remains active; mark an unfinished capture rather than reporting it as
-complete. Exact text edits must handle ordinary BOM and
-line-ending conventions without silently changing unrelated text. An atomic
+complete. Edits preserve unmatched bytes and ordinary BOM and line-ending
+conventions without silently changing unrelated text. An atomic
 replacement of an existing file must still respect its effective write
 permission; directory rename access alone does not make it an editable target.
 For bounded text files, `read.base_digest` hashes the same full-file bytes

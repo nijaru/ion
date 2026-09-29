@@ -2514,7 +2514,9 @@ mod tests {
         ]));
         let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
             .with_limits(AgentLimits {
-                max_request_bytes: 2_500,
+                // Leave room for the built-in tool schemas; the second Turn
+                // still has to compact the first Turn's long answer.
+                max_request_bytes: 3_200,
                 ..AgentLimits::default()
             });
         for prompt in ["first", "second"] {
