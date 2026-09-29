@@ -244,6 +244,10 @@ llama.cpp Qwen endpoint completed a read/edit/shell repair and cross-process
 resume. The code and session results were checked independently; these are
 short-task samples, not broad model or platform parity.
 
+An OpenRouter DeepSeek V4.1 Flash task also read a workspace PNG through the
+model's `read` tool, identified its left-half color, wrote `red\n` to a file
+and read the file back. This qualifies one live tool-image path.
+
 The TUI clips tool output in its default view; the full stored result is
 available through Ctrl-O or `/tool`. Context pressure currently
 uses a rough request-size token estimate; custom routes without a known
@@ -269,8 +273,10 @@ For Rust embedding, `ion-host::Host` composes the same model catalog,
 credentials, project instructions and Session discovery used by the CLI.
 `ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
 conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
-Ion does not yet provide long-lived subprocess control or resource loading
-through this host API.
+`Host::resources` loads project skills and prompt templates. A separate
+minimal Rust client was compiled outside the workspace and completed an
+offline Turn through `Host`, then reopened its Session. `ion rpc`
+provides long-lived subprocess control.
 
 ## License
 
