@@ -7,8 +7,8 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use image::{
-    DynamicImage, GenericImageView, ImageFormat, codecs::jpeg::JpegEncoder, imageops::FilterType,
-    metadata::Orientation,
+    DynamicImage, GenericImageView, ImageFormat, RgbaImage, codecs::jpeg::JpegEncoder,
+    imageops::FilterType, metadata::Orientation,
 };
 use ion_ai::{Content, ImageContent};
 
@@ -40,12 +40,7 @@ impl LoadedImage {
 }
 
 pub fn load_image(selected: &Selection, path: &Path) -> Result<LoadedImage> {
-    ensure!(
-        selected.image_input,
-        "{}/{} does not declare image input; choose an image-capable model or configure the custom route with --images",
-        selected.provider,
-        selected.model
-    );
+    require_image_input(selected)?;
     let metadata =
         fs::metadata(path).with_context(|| format!("cannot inspect {}", path.display()))?;
     ensure!(
@@ -72,15 +67,75 @@ pub fn load_image(selected: &Selection, path: &Path) -> Result<LoadedImage> {
     normalize(&bytes).with_context(|| format!("invalid image {}", path.display()))
 }
 
+/// Normalize an RGBA image obtained from the local clipboard without a
+/// temporary file. The same capability and inline bounds apply as file input.
+pub fn load_rgba(
+    selected: &Selection,
+    width: usize,
+    height: usize,
+    rgba: Vec<u8>,
+) -> Result<LoadedImage> {
+    require_image_input(selected)?;
+    normalize_rgba(width, height, rgba)
+}
+
+fn require_image_input(selected: &Selection) -> Result<()> {
+    ensure!(
+        selected.image_input,
+        "{}/{} does not declare image input; choose an image-capable model or configure the custom route with --images",
+        selected.provider,
+        selected.model
+    );
+    Ok(())
+}
+
+fn normalize_rgba(width: usize, height: usize, rgba: Vec<u8>) -> Result<LoadedImage> {
+    ensure!(
+        width > 0 && height > 0,
+        "clipboard image has empty dimensions"
+    );
+    ensure!(
+        width <= 8_000 && height <= 8_000,
+        "clipboard image dimensions exceed 8000 pixels"
+    );
+    let expected = width
+        .checked_mul(height)
+        .and_then(|pixels| pixels.checked_mul(4))
+        .context("clipboard image dimensions overflow")?;
+    ensure!(
+        expected <= 128 * 1024 * 1024,
+        "clipboard image exceeds 128 MiB decoded bound"
+    );
+    ensure!(
+        rgba.len() == expected,
+        "clipboard image has invalid RGBA data length"
+    );
+    let image = RgbaImage::from_raw(width as u32, height as u32, rgba)
+        .context("clipboard image has invalid RGBA data")?;
+    normalize_decoded(
+        DynamicImage::ImageRgba8(image),
+        Orientation::NoTransforms,
+        None,
+    )
+}
+
 fn normalize(bytes: &[u8]) -> Result<LoadedImage> {
-    let (mut image, orientation) = ImageContent::decode_source(bytes)?;
+    let (image, orientation) = ImageContent::decode_source(bytes)?;
+    normalize_decoded(image, orientation, Some(bytes))
+}
+
+fn normalize_decoded(
+    mut image: DynamicImage,
+    orientation: Orientation,
+    original_bytes: Option<&[u8]>,
+) -> Result<LoadedImage> {
     let (original_width, original_height) = image.dimensions();
     image.apply_orientation(orientation);
     let (display_width, display_height) = image.dimensions();
     if orientation == Orientation::NoTransforms
         && display_width <= MAX_EDGE
         && display_height <= MAX_EDGE
-        && bytes.len() <= MAX_INLINE_BYTES
+        && let Some(bytes) = original_bytes.filter(|bytes| bytes.len() <= MAX_INLINE_BYTES)
         && let Ok(content) = ImageContent::from_bytes(bytes)
     {
         return Ok(LoadedImage {
@@ -175,5 +230,14 @@ mod tests {
         let (width, height) = image::load_from_memory(&bytes).unwrap().dimensions();
         assert_eq!(width, height);
         assert!(width <= MAX_EDGE);
+    }
+
+    #[test]
+    fn clipboard_rgba_is_bounded_and_replayable() {
+        let loaded = normalize_rgba(2, 1, vec![255, 0, 0, 255, 0, 0, 255, 255]).unwrap();
+        assert_eq!(loaded.content.mime_type().as_str(), "image/png");
+        assert!(loaded.content.validate().is_ok());
+        assert!(normalize_rgba(2, 1, vec![0; 4]).is_err());
+        assert!(normalize_rgba(8_001, 1, vec![]).is_err());
     }
 }

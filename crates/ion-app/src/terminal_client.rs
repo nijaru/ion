@@ -6,7 +6,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, Role};
 use ion_core::{
@@ -43,11 +43,12 @@ struct Frontend {
     cwd_label: String,
     context_label: String,
     context_window_tokens: Option<u32>,
-    pending: VecDeque<String>,
+    pending: VecDeque<PendingInput>,
     prompt_history: Vec<String>,
     history_cursor: Option<usize>,
     saved_draft: String,
     tool_view: Option<ToolView>,
+    clipboard_job: Option<tokio::task::JoinHandle<Result<PreparedPaste>>>,
     cwd: PathBuf,
 }
 
@@ -55,6 +56,50 @@ struct ToolView {
     label: String,
     output: String,
     scroll: usize,
+}
+
+struct PendingInput {
+    prompt: String,
+    images: Vec<LoadedImage>,
+}
+
+impl PendingInput {
+    fn from_message(input: Message) -> Self {
+        let mut prompt = String::new();
+        let mut images = Vec::new();
+        for part in input.content {
+            match part {
+                Content::Text(text) => {
+                    if !prompt.is_empty() {
+                        prompt.push('\n');
+                    }
+                    prompt.push_str(&text);
+                }
+                Content::Image(content) => images.push(LoadedImage {
+                    content,
+                    note: None,
+                }),
+                Content::ToolCall(_) | Content::ToolResult(_) => {}
+            }
+        }
+        Self { prompt, images }
+    }
+}
+
+fn user_input(prompt: String, images: impl IntoIterator<Item = LoadedImage>) -> Message {
+    Message {
+        role: Role::User,
+        content: std::iter::once(Content::Text(prompt))
+            .chain(images.into_iter().flat_map(LoadedImage::into_parts))
+            .collect(),
+        provider_replay: None,
+    }
+}
+
+enum PreparedPaste {
+    Files(Vec<PathBuf>),
+    Image(LoadedImage),
+    Text(String),
 }
 
 enum PickerValue {
@@ -338,10 +383,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     loop {
         ui.context_window_tokens = runtime.selected.context_window_tokens;
         ui.update_context(&runtime.session)?;
-        if let Some(prompt) = ui.pending.pop_front() {
+        if let Some(PendingInput { prompt, images }) = ui.pending.pop_front() {
             let prompt = match expand_resource_input(&runtime.resources, prompt) {
                 Ok(prompt) => prompt,
                 Err((original, error)) => {
+                    ui.images.splice(0..0, images);
                     ui.draft = if ui.draft.is_empty() {
                         original
                     } else {
@@ -361,10 +407,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 &mut ui,
                 &runtime.session,
                 &runtime.agent,
-                runtime.selected.identity(),
+                &runtime.selected,
                 &runtime.instructions,
                 &runtime.resources,
                 prompt,
+                images,
             )
             .await?;
             continue;
@@ -387,6 +434,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                 Action::Submit(prompt) => {
                     ui.status = "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels".into();
                     ui.scroll = 0;
+                    let images = std::mem::take(&mut ui.images);
                     run_turn(
                         &mut terminal,
                         &mut screen,
@@ -394,10 +442,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut ui,
                         &runtime.session,
                         &runtime.agent,
-                        runtime.selected.identity(),
+                        &runtime.selected,
                         &runtime.instructions,
                         &runtime.resources,
                         prompt,
+                        images,
                     )
                     .await?;
                 }
@@ -408,7 +457,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         &runtime.session,
-                        &runtime.selected.identity(),
+                        &runtime.selected,
                         command.clone(),
                         exclude_from_context,
                     )
@@ -440,7 +489,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                             &mut ui,
                             &runtime.session,
                             &runtime.agent,
-                            runtime.selected.identity(),
+                            &runtime.selected,
                         )
                         .await?;
                     } else if command == "/copy" {
@@ -475,6 +524,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     "Working · Enter steers · Alt-Enter queues · Ctrl-C cancels"
                                         .into();
                                 ui.scroll = 0;
+                                let images = std::mem::take(&mut ui.images);
                                 run_turn(
                                     &mut terminal,
                                     &mut screen,
@@ -482,10 +532,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                                     &mut ui,
                                     &runtime.session,
                                     &runtime.agent,
-                                    runtime.selected.identity(),
+                                    &runtime.selected,
                                     &runtime.instructions,
                                     &runtime.resources,
                                     prompt,
+                                    images,
                                 )
                                 .await?;
                             }
@@ -494,7 +545,15 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         }
                     }
                 }
-                Action::Queue(prompt) => ui.pending.push_back(prompt),
+                Action::Queue(prompt) => ui.pending.push_back(PendingInput {
+                    prompt,
+                    images: std::mem::take(&mut ui.images),
+                }),
+                Action::PasteClipboard => {
+                    if let Err(error) = paste_clipboard(&mut ui, &runtime.selected).await {
+                        ui.status = format!("Paste failed: {error:#}");
+                    }
+                }
                 Action::Pick(value) => {
                     if let PickerValue::File { path, start, end } = value {
                         ui.insert_file(path, start, end);
@@ -539,6 +598,111 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     input.suspend()?;
     terminal.restore()?;
     Ok(())
+}
+
+async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
+    start_clipboard_paste(ui, selected);
+    finish_clipboard_paste(ui).await
+}
+
+fn start_clipboard_paste(ui: &mut Frontend, selected: &Selection) {
+    if ui.clipboard_job.is_some() {
+        ui.status = "Clipboard paste is already in progress".into();
+        return;
+    }
+    let selected = selected.clone();
+    ui.clipboard_job = Some(tokio::spawn(async move {
+        let content = tokio::time::timeout(Duration::from_secs(3), crate::clipboard::read())
+            .await
+            .context("clipboard read timed out")??;
+        tokio::task::spawn_blocking(move || prepare_clipboard(&selected, content))
+            .await
+            .context("clipboard image preparation stopped")?
+    }));
+    ui.status = "Reading clipboard…".into();
+}
+
+async fn finish_clipboard_paste(ui: &mut Frontend) -> Result<()> {
+    let job = ui
+        .clipboard_job
+        .take()
+        .context("no clipboard paste is pending")?;
+    let content = job.await.context("clipboard reader stopped")??;
+    apply_clipboard(ui, content)
+}
+
+async fn finish_ready_clipboard_paste(ui: &mut Frontend) {
+    if ui
+        .clipboard_job
+        .as_ref()
+        .is_some_and(tokio::task::JoinHandle::is_finished)
+    {
+        finish_pending_clipboard_paste(ui).await;
+    }
+}
+
+async fn finish_pending_clipboard_paste(ui: &mut Frontend) {
+    if ui.clipboard_job.is_some()
+        && let Err(error) = finish_clipboard_paste(ui).await
+    {
+        ui.status = format!("Paste failed: {error:#}");
+    }
+}
+
+fn prepare_clipboard(
+    selected: &Selection,
+    content: crate::clipboard::PasteContent,
+) -> Result<PreparedPaste> {
+    match content {
+        crate::clipboard::PasteContent::Files(paths) => Ok(PreparedPaste::Files(paths)),
+        crate::clipboard::PasteContent::Image {
+            width,
+            height,
+            rgba,
+        } => Ok(PreparedPaste::Image(ion_host::image_input::load_rgba(
+            selected, width, height, rgba,
+        )?)),
+        crate::clipboard::PasteContent::Text(text) => Ok(PreparedPaste::Text(text)),
+    }
+}
+
+fn apply_clipboard(ui: &mut Frontend, content: PreparedPaste) -> Result<()> {
+    match content {
+        PreparedPaste::Files(paths) => {
+            let shell = ui.draft.trim_start().starts_with('!');
+            let text = clipboard_paths(&paths, shell)?;
+            let before = ui.draft[..ui.cursor].chars().next_back();
+            let after = ui.draft[ui.cursor..].chars().next();
+            let prefix = before.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
+            let suffix = after.filter(|ch| !ch.is_whitespace()).map_or("", |_| " ");
+            ui.insert(&format!("{prefix}{text}{suffix}"));
+        }
+        PreparedPaste::Image(image) => {
+            ui.images.push(image);
+            ui.status = format!("{} image(s) attached to the next prompt", ui.images.len());
+        }
+        PreparedPaste::Text(text) => ui.insert(&text),
+    }
+    Ok(())
+}
+
+fn clipboard_paths(paths: &[PathBuf], shell: bool) -> Result<String> {
+    let mut formatted = Vec::with_capacity(paths.len());
+    for path in paths {
+        let path = path.to_str().context("clipboard path is not UTF-8")?;
+        ensure!(
+            !path.chars().any(char::is_control),
+            "clipboard path contains control characters"
+        );
+        formatted.push(if shell {
+            shlex::try_quote(path)
+                .context("clipboard path cannot be shell quoted")?
+                .into_owned()
+        } else {
+            path.to_owned()
+        });
+    }
+    Ok(formatted.join(if shell { " " } else { "\n" }))
 }
 
 fn login_in_terminal(
@@ -700,7 +864,7 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\n!COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
@@ -877,8 +1041,9 @@ async fn run_compaction(
     ui: &mut Frontend,
     session: &CodingSession,
     agent: &CodingAgent,
-    model: ModelRef,
+    selected: &Selection,
 ) -> Result<()> {
+    let model = selected.identity();
     ui.status = "Summarizing context · Ctrl-C cancels".into();
     let stop = CancellationToken::new();
     let mut input_ended = false;
@@ -891,6 +1056,9 @@ async fn run_compaction(
                 result = &mut compact => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                        start_clipboard_paste(ui, selected);
+                    },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
@@ -902,10 +1070,11 @@ async fn run_compaction(
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
-                _ = tick.tick() => draw(terminal, screen, ui, None, &model, true)?,
+                _ = tick.tick() => { finish_ready_clipboard_paste(ui).await; draw(terminal, screen, ui, None, &model, true)?; },
             }
         }
     };
+    finish_pending_clipboard_paste(ui).await;
     if result.is_err() {
         return_pending_to_editor(ui);
     }
@@ -939,18 +1108,51 @@ fn busy_key(
     steering: Option<&SteeringInbox>,
     resources: Option<&Resources>,
 ) {
-    match ui.key(key) {
+    let action = ui.key(key);
+    let action = if ui.clipboard_job.is_some() {
+        match action {
+            Action::Submit(prompt) | Action::Queue(prompt) => {
+                ui.draft = if ui.draft.is_empty() {
+                    prompt
+                } else {
+                    format!("{prompt}\n\n{}", ui.draft)
+                };
+                ui.cursor = ui.draft.len();
+                ui.status = "Wait for clipboard paste, then send the prompt".into();
+                return;
+            }
+            other => other,
+        }
+    } else {
+        action
+    };
+    match action {
         Action::Submit(prompt) => {
             if let Some(steering) = steering {
-                steering.push(prompt);
-                ui.status = "Steering sent for the next model step".into();
+                match steering.push_message(user_input(prompt.clone(), ui.images.clone())) {
+                    Ok(()) => {
+                        ui.images.clear();
+                        ui.status = "Steering sent for the next model step".into();
+                    }
+                    Err(error) => {
+                        ui.draft = prompt;
+                        ui.cursor = ui.draft.len();
+                        ui.status = format!("Steering was not queued: {error}");
+                    }
+                }
             } else {
-                ui.pending.push_back(prompt);
+                ui.pending.push_back(PendingInput {
+                    prompt,
+                    images: std::mem::take(&mut ui.images),
+                });
                 ui.status = format!("{} follow-up(s) queued", ui.pending.len());
             }
         }
         Action::Queue(prompt) => {
-            ui.pending.push_back(prompt);
+            ui.pending.push_back(PendingInput {
+                prompt,
+                images: std::mem::take(&mut ui.images),
+            });
             ui.status = format!("{} follow-up(s) queued", ui.pending.len());
         }
         Action::Command(command) => {
@@ -985,6 +1187,7 @@ fn busy_key(
             ui.status = "Shell commands are available after this operation".into();
         }
         Action::Quit => stop.cancel(),
+        Action::PasteClipboard => ui.status = "Paste is unavailable during this operation".into(),
         Action::Pick(PickerValue::File { path, start, end }) => {
             ui.insert_file(path, start, end);
         }
@@ -992,11 +1195,26 @@ fn busy_key(
     }
 }
 
+fn is_clipboard_shortcut(key: KeyEvent) -> bool {
+    key.code == KeyCode::Char('v') && key.modifiers.contains(Modifiers::CONTROL)
+}
+
 fn return_pending_to_editor(ui: &mut Frontend) {
     if ui.pending.is_empty() {
         return;
     }
-    let remaining = ui.pending.drain(..).collect::<Vec<_>>().join("\n\n");
+    let mut restored = Vec::new();
+    let remaining = ui
+        .pending
+        .drain(..)
+        .map(|pending| {
+            restored.extend(pending.images);
+            pending.prompt
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    restored.append(&mut ui.images);
+    ui.images = restored;
     if ui.draft.is_empty() {
         ui.draft = remaining;
     } else {
@@ -1046,10 +1264,11 @@ async fn run_user_shell(
     input: &mut InputStream,
     ui: &mut Frontend,
     session: &CodingSession,
-    model: &ModelRef,
+    selected: &Selection,
     command: String,
     exclude_from_context: bool,
 ) -> Result<()> {
+    let model = selected.identity();
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
@@ -1065,6 +1284,9 @@ async fn run_user_shell(
                         stop.cancel();
                         ui.status = "Cancelling shell…".into();
                     }
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                        start_clipboard_paste(ui, selected);
+                    },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
@@ -1080,10 +1302,11 @@ async fn run_user_shell(
                     }
                     None => { stop.cancel(); input_ended = true; },
                 },
-                _ = tick.tick() => draw(terminal, screen, ui, None, model, true)?,
+                _ = tick.tick() => { finish_ready_clipboard_paste(ui).await; draw(terminal, screen, ui, None, &model, true)?; },
             }
         }
     };
+    finish_pending_clipboard_paste(ui).await;
     let output = output?;
     let view = session.view()?;
     ui.context_label = context_label(&view, ui.context_window_tokens);
@@ -1109,20 +1332,27 @@ async fn run_turn(
     ui: &mut Frontend,
     session: &CodingSession,
     agent: &CodingAgent,
-    model: ModelRef,
+    selected: &Selection,
     instructions: &str,
     resources: &Resources,
     prompt: String,
+    attached: Vec<LoadedImage>,
 ) -> Result<()> {
-    let prior_entry_count = session.entry_count()? as usize;
-    let attached = std::mem::take(&mut ui.images);
-    let user_message = Message {
-        role: Role::User,
-        content: std::iter::once(Content::Text(prompt.clone()))
-            .chain(attached.iter().cloned().flat_map(LoadedImage::into_parts))
-            .collect(),
-        provider_replay: None,
+    let model = selected.identity();
+    let prior_entry_count = match session.entry_count() {
+        Ok(count) => count as usize,
+        Err(error) => {
+            ui.images.splice(0..0, attached);
+            ui.draft = if ui.draft.is_empty() {
+                prompt
+            } else {
+                format!("{prompt}\n\n{}", ui.draft)
+            };
+            ui.cursor = ui.draft.len();
+            return Err(error.into());
+        }
     };
+    let user_message = user_input(prompt.clone(), attached.iter().cloned());
     let progress = Arc::new(Mutex::new(Progress::default()));
     let observer = progress.clone();
     let stop = CancellationToken::new();
@@ -1150,6 +1380,9 @@ async fn run_turn(
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                        start_clipboard_paste(ui, selected);
+                    },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
                     Some(Ok(InputEvent::Resize(size))) => screen.resize(size.columns, size.rows),
@@ -1162,14 +1395,16 @@ async fn run_turn(
                     None => { stop.cancel(); input_ended = true; },
                 },
                 _ = tick.tick() => {
+                    finish_ready_clipboard_paste(ui).await;
                     let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
                     draw(terminal, screen, ui, Some(&preview), &model, true)?;
                 }
             }
         }
     };
-    for prompt in steering.take_uncommitted() {
-        ui.pending.push_back(prompt);
+    finish_pending_clipboard_paste(ui).await;
+    for input in steering.take_uncommitted() {
+        ui.pending.push_back(PendingInput::from_message(input));
     }
     if result.is_err() {
         return_pending_to_editor(ui);
@@ -1180,7 +1415,7 @@ async fn run_turn(
             .iter()
             .any(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
     {
-        ui.images.extend(attached);
+        ui.images.splice(0..0, attached);
         ui.draft = if ui.draft.is_empty() {
             prompt
         } else {
@@ -1206,6 +1441,7 @@ enum Action {
     Submit(String),
     Shell(String, bool),
     Queue(String),
+    PasteClipboard,
     Command(String),
     Pick(PickerValue),
     Quit,
@@ -1249,7 +1485,12 @@ impl Frontend {
                         _ => None,
                     })
                 }
-                SessionEntry::Steering { prompt, .. } => Some(prompt.clone()),
+                SessionEntry::Steering { input, .. } => {
+                    input.content.iter().find_map(|part| match part {
+                        Content::Text(text) => Some(text.clone()),
+                        _ => None,
+                    })
+                }
                 _ => None,
             })
             .collect();
@@ -1323,6 +1564,10 @@ impl Frontend {
                 code: KeyCode::Char('g'),
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) => Action::Command("/editor".into()),
+            KeyEvent {
+                code: KeyCode::Char('v'),
+                modifiers,
+            } if modifiers.contains(Modifiers::CONTROL) => Action::PasteClipboard,
             KeyEvent {
                 code: KeyCode::Enter,
                 modifiers,
@@ -1728,7 +1973,8 @@ impl Frontend {
     }
 
     fn dequeue(&mut self) {
-        if let Some(prompt) = self.pending.pop_back() {
+        if let Some(PendingInput { prompt, images }) = self.pending.pop_back() {
+            self.images.extend(images);
             if self.draft.is_empty() {
                 self.draft = prompt;
             } else {
@@ -2104,6 +2350,92 @@ mod tests {
     }
 
     #[test]
+    fn clipboard_paths_are_quoted_for_shell_and_reject_controls() {
+        let paths = vec![PathBuf::from("/tmp/a b.png"), PathBuf::from("/tmp/code.rs")];
+        assert_eq!(
+            clipboard_paths(&paths, false).unwrap(),
+            "/tmp/a b.png\n/tmp/code.rs"
+        );
+        assert_eq!(
+            clipboard_paths(&paths, true).unwrap(),
+            "'/tmp/a b.png' /tmp/code.rs"
+        );
+        assert!(clipboard_paths(&[PathBuf::from("/tmp/bad\nname")], false).is_err());
+        let mut ui = Frontend::default();
+        assert!(matches!(
+            ui.key(KeyEvent::new(KeyCode::Char('v'), Modifiers::CONTROL)),
+            Action::PasteClipboard
+        ));
+    }
+
+    #[test]
+    fn clipboard_image_during_turn_stays_with_typed_steering() {
+        let selected = Selection {
+            provider: "local".into(),
+            model: "vision".into(),
+            endpoint: "http://127.0.0.1:1".into(),
+            wire: ion_core::HttpWire::ChatCompletions,
+            api_key_env: String::new(),
+            max_output_tokens: 1024,
+            context_window_tokens: None,
+            requires_key: false,
+            image_input: true,
+        };
+        let mut ui = Frontend::default();
+        let prepared = prepare_clipboard(
+            &selected,
+            crate::clipboard::PasteContent::Image {
+                width: 2,
+                height: 1,
+                rgba: vec![255, 0, 0, 255, 0, 0, 255, 255],
+            },
+        )
+        .unwrap();
+        apply_clipboard(&mut ui, prepared).unwrap();
+        ui.insert("describe the picture");
+        let steering = SteeringInbox::default();
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &CancellationToken::new(),
+            Some(&steering),
+            None,
+        );
+        let queued = steering.take_uncommitted();
+        assert_eq!(queued.len(), 1);
+        assert_eq!(queued[0].content.len(), 2);
+        assert_eq!(
+            queued[0].content[0],
+            Content::Text("describe the picture".into())
+        );
+        assert!(matches!(queued[0].content[1], Content::Image(_)));
+        assert!(ui.pending.is_empty());
+        assert!(ui.images.is_empty());
+    }
+
+    #[tokio::test]
+    async fn busy_submit_waits_for_pending_clipboard_read() {
+        let mut ui = Frontend::default();
+        ui.insert("describe this");
+        ui.clipboard_job = Some(tokio::spawn(async {
+            Ok(PreparedPaste::Text(" image".into()))
+        }));
+        let steering = SteeringInbox::default();
+        busy_key(
+            &mut ui,
+            KeyEvent::new(KeyCode::Enter, Modifiers::NONE),
+            &CancellationToken::new(),
+            Some(&steering),
+            None,
+        );
+        assert_eq!(ui.draft, "describe this");
+        assert!(steering.take_uncommitted().is_empty());
+        assert!(ui.pending.is_empty());
+        finish_pending_clipboard_paste(&mut ui).await;
+        assert_eq!(ui.draft, "describe this image");
+    }
+
+    #[test]
     fn skill_command_during_a_turn_is_expanded_before_steering() {
         let root = std::env::temp_dir().join(format!(
             "ion-terminal-resource-{}-{}",
@@ -2135,8 +2467,11 @@ mod tests {
         assert!(ui.draft.is_empty());
         let queued = steering.take_uncommitted();
         assert_eq!(queued.len(), 1);
-        assert!(queued[0].contains("AUDIT_MARKER"));
-        assert!(queued[0].contains("User request: src/lib.rs"));
+        let Content::Text(prompt) = &queued[0].content[0] else {
+            panic!("expected text steering");
+        };
+        assert!(prompt.contains("AUDIT_MARKER"));
+        assert!(prompt.contains("User request: src/lib.rs"));
         fs::remove_dir_all(root).unwrap();
     }
 

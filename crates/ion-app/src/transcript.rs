@@ -22,8 +22,9 @@ pub fn render(view: &SessionView) -> String {
                 let _ = write!(text, "\nTurn {turn} · user\n");
                 message(&mut text, input);
             }
-            SessionEntry::Steering { prompt, .. } => {
-                let _ = write!(text, "\nSteering\n  {prompt}\n");
+            SessionEntry::Steering { input, .. } => {
+                let _ = write!(text, "\nSteering\n");
+                message(&mut text, input);
             }
             SessionEntry::Assistant {
                 message: answer, ..

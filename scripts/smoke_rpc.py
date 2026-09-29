@@ -3,10 +3,12 @@
 import json
 import os
 import select
+import struct
 import subprocess
 import tempfile
 import threading
 import time
+import zlib
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -20,7 +22,8 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        slow = any("SLOW" in str(message.get("content")) for message in body["messages"])
+        users = [message for message in body["messages"] if message.get("role") == "user"]
+        slow = bool(users) and "SLOW" in str(users[-1].get("content"))
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
         self.end_headers()
@@ -65,11 +68,23 @@ def until(child, predicate):
             return records
 
 
+def chunk(kind, data):
+    return struct.pack(">I", len(data)) + kind + data + struct.pack(">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+
+def tiny_png():
+    return (b"\x89PNG\r\n\x1a\n"
+            + chunk(b"IHDR", struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"\x00\xff\x00\x00\xff"))
+            + chunk(b"IEND", b""))
+
+
 with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     work = Path(temporary)
     workspace = work / "workspace"
     workspace.mkdir()
     (workspace / ".git").mkdir()
+    (workspace / "pixel.png").write_bytes(tiny_png())
     prompts = workspace / ".ion" / "prompts"
     prompts.mkdir(parents=True)
     (prompts / "check.md").write_text("Check $1.\n")
@@ -80,7 +95,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
     child = None
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-        subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "rpc-smoke", "rpc-model", "--endpoint", endpoint, "--wire", "chat-completions", "--images"], env=env, check=True, capture_output=True)
         child = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
         ready = read(child)
         assert ready["type"] == "ready" and ready["cwd"] == str(workspace.resolve()), ready
@@ -107,6 +122,20 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert records[-1]["status"] == "completed"
         assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
         assert "Check RPC." in str(requests[0]["messages"])
+
+        send(child, {"id": "vision-turn", "type": "prompt", "message": "SLOW"})
+        until(child, lambda r: r.get("id") == "vision-turn")
+        send(child, {"id": "vision-steer", "type": "steer", "message": "Inspect the image", "images": ["pixel.png"]})
+        steered = until(child, lambda r: r.get("id") == "vision-steer")[-1]
+        assert steered["success"], steered
+        records = until(child, lambda r: r["type"] == "turn_end")
+        assert records[-1]["status"] == "completed", records[-1]
+        latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
+        assert latest[0] == {"type": "text", "text": "Inspect the image"}, latest
+        assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
+        send(child, {"id": "vision-inspect", "type": "inspect"})
+        inspected = read(child)
+        assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
 
         send(child, {"id": "state", "type": "get_state"})
         state = read(child)
@@ -137,7 +166,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         settled = until(closing, lambda r: r["type"] == "turn_end")[-1]
         assert settled["status"] == "cancelled", settled
         assert closing.wait(timeout=8) == 0, closing.stderr.read()
-        print("Ion RPC acceptance, settlement, abort, resources and session control: OK")
+        print("Ion RPC acceptance, typed image steering, settlement, abort, resources and session control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()

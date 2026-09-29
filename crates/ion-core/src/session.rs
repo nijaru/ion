@@ -21,7 +21,7 @@ use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 2;
+const FORMAT_VERSION: u32 = 3;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -52,7 +52,7 @@ pub enum SessionEntry {
     },
     Steering {
         turn: u64,
-        prompt: String,
+        input: Message,
     },
     Compacted {
         through_entry: u64,
@@ -236,18 +236,14 @@ impl State {
                 self.last_model = Some(model.clone());
                 messages.push(input.clone());
             }
-            SessionEntry::Steering { turn, prompt } => {
+            SessionEntry::Steering { turn, input } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
-                    || prompt.trim().is_empty()
+                    || !valid_user_message(input)
                 {
                     return Err(SessionError::InvalidHistory);
                 }
-                messages.push(Message {
-                    role: Role::User,
-                    content: vec![Content::Text(prompt.clone())],
-                    provider_replay: None,
-                });
+                messages.push(input.clone());
             }
             SessionEntry::Assistant {
                 turn,
@@ -763,7 +759,7 @@ impl Session {
         turn: u64,
         message: Message,
         usage: Usage,
-        steering: Vec<String>,
+        steering: Vec<Message>,
     ) -> Result<bool, SessionError> {
         let continue_turn = !steering.is_empty();
         self.record_assistant_entries(turn, message, usage, continue_turn, steering)
@@ -775,7 +771,7 @@ impl Session {
         message: Message,
         usage: Usage,
         continue_turn: bool,
-        steering: Vec<String>,
+        steering: Vec<Message>,
     ) -> Result<bool, SessionError> {
         let has_calls = message
             .content
@@ -796,7 +792,7 @@ impl Session {
         entries.extend(
             steering
                 .into_iter()
-                .map(|prompt| SessionEntry::Steering { turn, prompt }),
+                .map(|input| SessionEntry::Steering { turn, input }),
         );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
@@ -848,14 +844,14 @@ impl Session {
     pub(crate) fn record_steerings(
         &self,
         turn: u64,
-        prompts: Vec<String>,
+        inputs: Vec<Message>,
     ) -> Result<(), SessionError> {
-        if prompts.is_empty() {
+        if inputs.is_empty() {
             return Ok(());
         }
-        let entries = prompts
+        let entries = inputs
             .into_iter()
-            .map(|prompt| SessionEntry::Steering { turn, prompt })
+            .map(|input| SessionEntry::Steering { turn, input })
             .collect::<Vec<_>>();
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)
@@ -938,11 +934,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
             ..
         } => Some(shell_message(command, output, false)),
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
-        SessionEntry::Steering { prompt, .. } => Some(Message {
-            role: Role::User,
-            content: vec![Content::Text(prompt.clone())],
-            provider_replay: None,
-        }),
+        SessionEntry::Steering { input, .. } => Some(input.clone()),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
         SessionEntry::ToolResult { result, .. } => Some(Message {
             role: Role::Tool,
@@ -1012,7 +1004,7 @@ fn shell_message(command: &str, output: &serde_json::Value, excluded: bool) -> M
     }
 }
 
-fn valid_user_message(message: &Message) -> bool {
+pub(crate) fn valid_user_message(message: &Message) -> bool {
     message.role == Role::User
         && message.provider_replay.is_none()
         && !message.content.is_empty()
@@ -1564,7 +1556,11 @@ mod tests {
                         },
                         SessionEntry::Steering {
                             turn,
-                            prompt: String::new(),
+                            input: Message {
+                                role: Role::User,
+                                content: vec![Content::Text(String::new())],
+                                provider_replay: None,
+                            },
                         },
                     ],
                 ),
@@ -1768,7 +1764,14 @@ mod tests {
                 .unwrap()
         );
         session
-            .record_steerings(turn, vec!["follow-up steering".into()])
+            .record_steerings(
+                turn,
+                vec![Message {
+                    role: Role::User,
+                    content: vec![Content::Text("follow-up steering".into())],
+                    provider_replay: None,
+                }],
+            )
             .unwrap();
         assert_eq!(
             session

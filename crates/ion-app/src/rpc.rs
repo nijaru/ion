@@ -178,9 +178,10 @@ impl Control {
                 "steer" => {
                     let active = self.active.as_ref().context("no active Turn")?;
                     let message = required_string(&value, "message")?;
-                    let expanded = expand_input(&self.resources, message.to_owned())?;
-                    ensure!(!expanded.trim().is_empty(), "message is empty");
-                    active.steering.push(expanded);
+                    let prompt = expand_input(&self.resources, message.to_owned())?;
+                    let images = self.load_images(&value)?;
+                    ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
+                    active.steering.push_message(input_with_images(prompt, images))?;
                     Ok(json!({"disposition":"queued"}))
                 }
                 "abort" => {
@@ -262,11 +263,8 @@ impl Control {
         Ok(())
     }
 
-    async fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
-        self.idle()?;
-        let prompt = required_string(value, "message")?;
-        let prompt = expand_input(&self.resources, prompt.to_owned())?;
-        let images = value.get("images").map_or(Ok(Vec::new()), |images| {
+    fn load_images(&self, value: &Value) -> Result<Vec<ion_host::image_input::LoadedImage>> {
+        value.get("images").map_or(Ok(Vec::new()), |images| {
             images
                 .as_array()
                 .context("images must be an array of local paths")?
@@ -282,22 +280,19 @@ impl Control {
                     ion_host::image_input::load_image(&self.selected, &path)
                 })
                 .collect::<Result<Vec<_>>>()
-        })?;
+        })
+    }
+
+    async fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
+        self.idle()?;
+        let prompt = required_string(value, "message")?;
+        let prompt = expand_input(&self.resources, prompt.to_owned())?;
+        let images = self.load_images(value)?;
         ensure!(
             !prompt.trim().is_empty() || !images.is_empty(),
             "message is empty"
         );
-        let input = Message {
-            role: Role::User,
-            content: std::iter::once(Content::Text(prompt))
-                .chain(
-                    images
-                        .into_iter()
-                        .flat_map(ion_host::image_input::LoadedImage::into_parts),
-                )
-                .collect(),
-            provider_replay: None,
-        };
+        let input = input_with_images(prompt, images);
         let agent = self.host.agent_with_optional_tools(
             &self.session,
             &self.selected,
@@ -377,13 +372,27 @@ impl Control {
             for pending in task_steering.take_uncommitted() {
                 let _ = output
                     .send(Output::Record(
-                        json!({"type":"uncommitted_steering","message":pending}),
+                        json!({"type":"uncommitted_steering","input":pending}),
                     ))
                     .await;
             }
             let _ = output.send(Output::Done).await;
         });
         Ok(())
+    }
+}
+
+fn input_with_images(prompt: String, images: Vec<ion_host::image_input::LoadedImage>) -> Message {
+    Message {
+        role: Role::User,
+        content: std::iter::once(Content::Text(prompt))
+            .chain(
+                images
+                    .into_iter()
+                    .flat_map(ion_host::image_input::LoadedImage::into_parts),
+            )
+            .collect(),
+        provider_replay: None,
     }
 }
 

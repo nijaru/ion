@@ -74,7 +74,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 2; earlier development Session
+This unreleased branch uses Session format 3; earlier development Session
 files are not reopened.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
 Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
@@ -104,12 +104,14 @@ answer. `final` is the committed answer. Other commands are `steer`, `abort`,
 `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `set_model`, `new_session`, `fork`,
 `switch_session` and `set_name`.
-`prompt` also accepts `images` as an array of local paths, relative to the
-Session's working directory. `steer` queues text for the active Turn; `abort` requests
+`prompt` and `steer` also accept `images` as an array of local paths, relative to the
+Session's working directory. `steer` queues typed input for the active Turn; `abort` requests
 cancellation. Session, resource and model changes require an idle Turn.
 Malformed commands receive a failed response, and commands over 1 MiB are
 rejected. Stdout is reserved for protocol records, stderr for diagnostics.
 Closing stdin cancels a running Turn and waits for its terminal record.
+Uncommitted steering is returned as a typed `input` message if a Turn ends
+before the Session accepts it.
 While a turn runs, the editor remains available: Enter steers the next model
 step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
 recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
@@ -148,7 +150,11 @@ endpoints require HTTPS and a key supplied through
 
 Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
 `ion --image PATH chat`; repeat `--image` for several images. In chat,
-`/image PATH` attaches a file to the next prompt. Relative paths resolve in
+`/image PATH` attaches a file to the next prompt. Ctrl-V reads the clipboard
+on the host running Ion: copied files enter as paths, copied image pixels
+attach to the prompt, and otherwise text is pasted. Enter steers attached
+images during a running Turn; Alt-Enter queues a separate follow-up. A terminal's
+ordinary text paste still works. Relative paths resolve in
 the Session's working directory. Ion decodes and checks the file, applies
 image orientation and resizes large images before accepting the Turn. Source
 files are limited to 32 MiB, and each inline image to 5 MiB within the
@@ -156,8 +162,7 @@ current 8 MiB request bound. A resize note gives the model the sent dimensions.
 Image bytes are stored in the Session so follow-up requests can still see
 them after the source file changes; `ion inspect` shows an image marker
 instead of printing base64. A custom endpoint needs `ion use ... --images`
-to declare that its model accepts image input. Clipboard image paste is not
-yet a TUI input path; save the image to a file and attach it.
+to declare that its model accepts image input.
 
 Ion also discovers Agent Skills from `~/.agents/skills/`,
 `~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project

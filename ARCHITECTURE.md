@@ -278,6 +278,13 @@ model. The request byte bound still includes encoded image data; context-token
 estimation treats image payloads separately from text and yields to observed
 provider usage when available. Inspection and terminal history show an image
 marker rather than the stored base64.
+The terminal clipboard adapter reads file lists before images to avoid
+mistaking a copied file's icon for image input. Raw clipboard pixels enter
+through the same host normalization boundary as files. A queued prompt owns
+its attachments when queued; later pasted images cannot attach to an earlier
+follow-up. Steering is a typed user message with the same image validation as
+Turn input. A busy-turn submit carries its text and images to the next model
+step; an explicit follow-up remains a later Turn.
 
 The host discovers applicable project instructions, Agent Skills and prompt
 templates. Skill summaries belong in the model's available instructions;

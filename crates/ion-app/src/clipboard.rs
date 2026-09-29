@@ -1,7 +1,8 @@
-//! Clipboard output for the terminal client.
-use std::{io::Write, process::Stdio};
+//! Clipboard input and output for the terminal client.
+use std::{io::Write, path::PathBuf, process::Stdio};
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
+use arboard::{Clipboard, Error as ClipboardError};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ion_terminal::TerminalSession;
 use tokio::{
@@ -15,6 +16,50 @@ const OSC52_LIMIT: usize = 100_000;
 pub enum CopyOutcome {
     Copied,
     RequestedFromTerminal,
+}
+
+pub enum PasteContent {
+    Files(Vec<PathBuf>),
+    Image {
+        width: usize,
+        height: usize,
+        rgba: Vec<u8>,
+    },
+    Text(String),
+}
+
+/// File lists take precedence: Finder also offers an icon as clipboard image
+/// data for selected files. Read on a blocking worker because native clipboard
+/// transfer may wait for the owning application.
+pub async fn read() -> Result<PasteContent> {
+    tokio::task::spawn_blocking(|| {
+        let mut clipboard = Clipboard::new().context("open system clipboard")?;
+        match clipboard.get().file_list() {
+            Ok(files) if !files.is_empty() => return Ok(PasteContent::Files(files)),
+            Ok(_) | Err(ClipboardError::ContentNotAvailable) => {}
+            Err(error) => return Err(error).context("read clipboard file list"),
+        }
+        match clipboard.get().image() {
+            Ok(image) => {
+                return Ok(PasteContent::Image {
+                    width: image.width,
+                    height: image.height,
+                    rgba: image.bytes.into_owned(),
+                });
+            }
+            Err(ClipboardError::ContentNotAvailable) => {}
+            Err(error) => return Err(error).context("read clipboard image"),
+        }
+        match clipboard.get().text() {
+            Ok(text) => Ok(PasteContent::Text(text)),
+            Err(ClipboardError::ContentNotAvailable) => {
+                bail!("clipboard has no file, image or text")
+            }
+            Err(error) => Err(error).context("read clipboard text"),
+        }
+    })
+    .await
+    .context("clipboard reader stopped")?
 }
 
 pub async fn copy(text: &str, terminal: &mut TerminalSession) -> Result<CopyOutcome> {
