@@ -19,6 +19,7 @@ const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
 enum Input {
     Line(Vec<u8>),
     TooLarge,
+    Incomplete,
     Eof,
 }
 
@@ -68,6 +69,7 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
                 match line? {
                     Input::Line(line) => control.command(&line)?,
                     Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
+                    Input::Incomplete => write_json_record(&failure(None, "parse", "command is missing its final newline"))?,
                     Input::Eof => {
                         closing = true;
                         if let Some(active) = &control.active { active.stop.cancel(); }
@@ -100,8 +102,10 @@ async fn read_command<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Input> 
         if chunk.is_empty() {
             return if line.is_empty() && !too_large {
                 Ok(Input::Eof)
+            } else if too_large {
+                Ok(Input::TooLarge)
             } else {
-                Ok(Input::TooLarge) // Incomplete trailing records are never executed.
+                Ok(Input::Incomplete) // Incomplete trailing records are never executed.
             };
         }
         let end = chunk.iter().position(|byte| *byte == b'\n');
@@ -516,5 +520,19 @@ mod tests {
         assert!(
             matches!(read_command(&mut reader).await.unwrap(), Input::Line(line) if line == b"{}")
         );
+        assert!(matches!(
+            read_command(&mut reader).await.unwrap(),
+            Input::Eof
+        ));
+
+        let mut incomplete = BufReader::new(b"{\"type\":\"get_state\"}".as_slice());
+        assert!(matches!(
+            read_command(&mut incomplete).await.unwrap(),
+            Input::Incomplete
+        ));
+        assert!(matches!(
+            read_command(&mut incomplete).await.unwrap(),
+            Input::Eof
+        ));
     }
 }

@@ -259,6 +259,17 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         returned = until(closing, lambda r: r["type"] == "uncommitted_follow_up")[-1]
         assert returned["id"] == "uncommitted" and returned["input"]["content"][0]["Text"] == "LATER", returned
         assert closing.wait(timeout=8) == 0, closing.stderr.read()
+        incomplete = subprocess.run(
+            [binary, "--cwd", workspace, "rpc"],
+            env=env,
+            input=b'{"type":"get_state"}',
+            capture_output=True,
+            timeout=8,
+            check=True,
+        )
+        records = [json.loads(line) for line in incomplete.stdout.splitlines()]
+        assert [record["type"] for record in records] == ["ready", "response"], records
+        assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
         print("Ion RPC acceptance, inline images, steering, follow-ups, settlement, abort and session control: OK")
     finally:
         if child and child.poll() is None:

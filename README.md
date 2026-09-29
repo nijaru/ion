@@ -124,8 +124,9 @@ idle selection for that Session; `new_session` selects the current global
 default, and `switch_session` restores the selected Session's model. Starting,
 forking or switching Sessions refreshes project resources; use
 `reload_resources` to refresh them within the current Session.
-Malformed commands receive a failed response, and commands over 8 MiB are
-rejected. Stdout is reserved for protocol records, stderr for diagnostics.
+Malformed commands receive a failed response, commands over 8 MiB are
+rejected, and an incomplete final line is left unexecuted with a framing
+error. Stdout is reserved for protocol records, stderr for diagnostics.
 Uncommitted steering is returned as a typed `input` message if a Turn ends
 before the Session accepts it.
 While a turn runs, the editor remains available: Enter steers the next model
