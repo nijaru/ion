@@ -10,6 +10,7 @@ description = "Ion host composition for models, credentials, resources and sessi
 [dependencies]
 anyhow = "1.0"
 base64 = "0.22.1"
+futures-util = "0.3.34"
 getrandom = "0.3.4"
 ignore = "0.4.33"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }

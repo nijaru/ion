@@ -9,6 +9,7 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
+use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use ion_core::{CodingToolHost, CodingToolOutput};
 use rmcp::{
@@ -152,8 +153,11 @@ impl McpTools {
         let mut servers = Vec::new();
         let mut specs = Vec::new();
         let mut routes = HashMap::new();
-        for (name, definition) in saved {
-            match Self::connect_server(name, definition, cwd).await {
+        let attempts = saved
+            .into_iter()
+            .map(|(name, definition)| Self::connect_server(name, definition, cwd));
+        for attempt in join_all(attempts).await {
+            match attempt {
                 Ok((server, discovered)) => {
                     let index = servers.len();
                     for (spec, tool_name) in discovered {
