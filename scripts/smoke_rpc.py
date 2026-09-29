@@ -1,5 +1,6 @@
 """Exercise the built long-lived JSONL client against a local streaming route."""
 
+import base64
 import json
 import os
 import select
@@ -123,6 +124,20 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
         assert "Check RPC." in str(requests[0]["messages"])
 
+        inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
+        send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
+        rejected = read(child)
+        assert rejected["id"] == "bad-inline" and rejected["success"] is False
+        send(child, {"id": "inline", "type": "prompt", "message": "Inspect inline", "images": [inline]})
+        records = until(child, lambda r: r["type"] == "turn_end")
+        assert records[-1]["status"] == "completed", records
+        latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
+        assert latest[0] == {"type": "text", "text": "Inspect inline"}, latest
+        assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest
+        send(child, {"id": "inline-inspect", "type": "inspect"})
+        inspected = read(child)
+        assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
+
         send(child, {"id": "vision-turn", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "vision-turn")
         send(child, {"id": "vision-steer", "type": "steer", "message": "Inspect the image", "images": ["pixel.png"]})
@@ -166,7 +181,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         settled = until(closing, lambda r: r["type"] == "turn_end")[-1]
         assert settled["status"] == "cancelled", settled
         assert closing.wait(timeout=8) == 0, closing.stderr.read()
-        print("Ion RPC acceptance, typed image steering, settlement, abort, resources and session control: OK")
+        print("Ion RPC acceptance, inline images, typed image steering, settlement, abort, resources and session control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()

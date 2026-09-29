@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{expand_input, preview_input, redact_image_payloads, write_json_record};
 
-const MAX_COMMAND_BYTES: usize = 1024 * 1024;
+const MAX_COMMAND_BYTES: usize = 8 * 1024 * 1024;
 
 enum Input {
     Line(Vec<u8>),
@@ -74,7 +74,7 @@ pub async fn run(
             line = read_command(&mut input), if !closing => {
                 match line? {
                     Input::Line(line) => control.command(&line).await?,
-                    Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 1 MiB"))?,
+                    Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
                     Input::Eof => {
                         closing = true;
                         if let Some(active) = &control.active { active.stop.cancel(); }
@@ -267,17 +267,22 @@ impl Control {
         value.get("images").map_or(Ok(Vec::new()), |images| {
             images
                 .as_array()
-                .context("images must be an array of local paths")?
+                .context("images must be an array of local paths or inline images")?
                 .iter()
                 .map(|image| {
-                    let path =
-                        PathBuf::from(image.as_str().context("image path must be a string")?);
-                    let path = if path.is_absolute() {
-                        path
+                    if let Some(path) = image.as_str() {
+                        let path = PathBuf::from(path);
+                        let path = if path.is_absolute() {
+                            path
+                        } else {
+                            self.session.cwd().join(path)
+                        };
+                        ion_host::image_input::load_image(&self.selected, &path)
                     } else {
-                        self.session.cwd().join(path)
-                    };
-                    ion_host::image_input::load_image(&self.selected, &path)
+                        let mime_type = required_string(image, "mime_type")?;
+                        let data = required_string(image, "data")?;
+                        ion_host::image_input::load_encoded_image(&self.selected, mime_type, data)
+                    }
                 })
                 .collect::<Result<Vec<_>>>()
         })

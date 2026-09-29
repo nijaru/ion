@@ -104,10 +104,12 @@ answer. `final` is the committed answer. Other commands are `steer`, `abort`,
 `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `set_model`, `new_session`, `fork`,
 `switch_session` and `set_name`.
-`prompt` and `steer` also accept `images` as an array of local paths, relative to the
-Session's working directory. `steer` queues typed input for the active Turn; `abort` requests
+`prompt` and `steer` accept `images` as an array of local paths (relative to the
+Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
+objects. Ion validates and normalizes both before accepting the input.
+`steer` queues typed input for the active Turn; `abort` requests
 cancellation. Session, resource and model changes require an idle Turn.
-Malformed commands receive a failed response, and commands over 1 MiB are
+Malformed commands receive a failed response, and commands over 8 MiB are
 rejected. Stdout is reserved for protocol records, stderr for diagnostics.
 Closing stdin cancels a running Turn and waits for its terminal record.
 Uncommitted steering is returned as a typed `input` message if a Turn ends

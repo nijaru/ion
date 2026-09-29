@@ -48,6 +48,16 @@ pub enum ImageMime {
 }
 
 impl ImageMime {
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "image/jpeg" => Some(Self::Jpeg),
+            "image/png" => Some(Self::Png),
+            "image/gif" => Some(Self::Gif),
+            "image/webp" => Some(Self::Webp),
+            _ => None,
+        }
+    }
+
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {

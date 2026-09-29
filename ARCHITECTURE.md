@@ -337,6 +337,11 @@ correlate progress and settlement. A running Turn keeps its selected Session
 and model fixed. Cancellation requests the current Turn to stop; it never
 claims to undo tool effects. Closing input cancels active work and waits for
 its terminal record before exiting. Clients must keep draining stdout.
+RPC image input accepts local paths or inline MIME and base64 data. Both enter
+the same host normalization and selected-model capability check before Turn
+acceptance, so a controller can submit images without sharing Ion's filesystem.
+The command-size bound includes the encoded bytes; invalid or oversized inline
+content receives a command error without committing a Turn.
 
 Earlier-point exploration selects a committed Turn boundary without erasing
 later history. Forking before a selected user Turn makes that input editable
