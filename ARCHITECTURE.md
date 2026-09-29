@@ -255,19 +255,20 @@ DeepSeek and MiMo Chat Completions carry their exact streamed
 `reasoning_content` string on every later assistant message when tools are
 offered. This material is not answer text or a tool argument. A route that
 cannot replay a recorded form reports incompatibility before sending the next
-request; it must not silently strip it. An explicitly selected OpenRouter
-plain-reasoning route may use the documented plain `reasoning` string when every
-observed structured detail is unsigned `reasoning.text` and matches the
-stream's plain reasoning. This route is available to cataloged and custom
-OpenRouter models, but a custom model is qualified by a live tool turn, not
-merely by accepting the wire setting. Signed, encrypted or summarized details
-are a different replay contract and fail explicitly. Anthropic signed thinking
-blocks likewise need ordered, unmodified block replay before thinking is
-enabled on that route. For models that bind signed blocks to their request
-prefix, the adapter must preserve the provider-facing system, tools and
-earlier messages that produced each retained block. Client-side compaction,
-resource changes and tool-ID rewriting can change that prefix. When the
-prefix cannot be preserved, an explicit context change must remove the
+request; it must not silently strip it. The OpenRouter Chat Completions route
+retains ordered `reasoning_details` when returned, reconstructs streamed text
+and summary fragments, and replays the structured blocks rather than a plain
+reasoning alias. If a response supplies only plain `reasoning`, replay that
+string. This route is available to cataloged and custom OpenRouter models;
+a custom model is qualified by a live tool turn, not merely by accepting the
+wire setting. Preserve provider tool-call IDs in the encoded history: signed
+tool continuations can bind the signature to the original call. Anthropic
+signed thinking blocks likewise need ordered, unmodified block replay before
+thinking is enabled on that route. For models that bind signed blocks to their
+request prefix, the adapter must preserve the provider-facing system, tools and
+earlier messages that produced each retained block. Client-side compaction
+and resource changes can change that prefix. When the prefix cannot be
+preserved, an explicit context change must remove the
 affected reasoning blocks before dispatch; a successful response on an older
 account does not establish that replay is valid for every account.
 Transient request recovery, when enabled, must be

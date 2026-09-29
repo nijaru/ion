@@ -26,6 +26,7 @@ const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
 const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
+const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
@@ -33,7 +34,7 @@ pub enum HttpWire {
     LlamaCppNoThinking,
     DeepSeekChat,
     MiMoChat,
-    OpenRouterPlainReasoning,
+    OpenRouterChat,
     AnthropicMessages,
 }
 
@@ -530,13 +531,12 @@ fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// Remap provider call IDs for every request. Their original IDs are only
-/// meaningful inside the response which produced them and may collide later.
+/// Keep provider call IDs alongside their results. Some reasoning signatures
+/// bind to the original function-call identity during continuation.
 fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, ProviderError> {
     let anthropic = !wire.is_chat();
     let mut messages = Vec::new();
-    let mut pending = BTreeMap::<String, (String, String)>::new();
-    let mut next_call = 0usize;
+    let mut pending = BTreeMap::<String, String>::new();
     let mut tool_images = Vec::new();
     for message in &request.messages {
         let reasoning_content = match &message.provider_replay {
@@ -560,7 +560,7 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                 )
             }
             Some(replay)
-                if wire == HttpWire::OpenRouterPlainReasoning
+                if wire == HttpWire::OpenRouterChat
                     && replay.kind == OPENROUTER_PLAIN_REASONING_REPLAY =>
             {
                 Some(
@@ -569,6 +569,14 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                         .as_str()
                         .ok_or_else(|| invalid("invalid OpenRouter reasoning replay"))?,
                 )
+            }
+            Some(replay)
+                if wire == HttpWire::OpenRouterChat && replay.kind == OPENROUTER_DETAILS_REPLAY =>
+            {
+                if !valid_openrouter_details(&replay.data) {
+                    return Err(invalid("invalid OpenRouter reasoning replay"));
+                }
+                None
             }
             Some(_) => return Err(unsupported("provider replay is incompatible with route")),
             None => None,
@@ -622,17 +630,15 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                     {
                         return Err(invalid("invalid or duplicate tool call"));
                     }
-                    let wire_id = format!("ion_call_{next_call}");
-                    next_call += 1;
-                    pending.insert(call.id.clone(), (wire_id.clone(), call.name.clone()));
+                    pending.insert(call.id.clone(), call.name.clone());
                     if anthropic {
-                        blocks.push(json!({"type":"tool_use","id":wire_id,"name":call.name,"input":call.arguments}));
+                        blocks.push(json!({"type":"tool_use","id":call.id,"name":call.name,"input":call.arguments}));
                     } else {
-                        calls.push(json!({"id":wire_id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}));
+                        calls.push(json!({"id":call.id,"type":"function","function":{"name":call.name,"arguments":call.arguments.to_string()}}));
                     }
                 }
                 (Role::Tool, Content::ToolResult(result)) => {
-                    let Some((wire_id, name)) = pending.remove(&result.call_id) else {
+                    let Some(name) = pending.remove(&result.call_id) else {
                         return Err(invalid("orphan or duplicate tool result"));
                     };
                     if result.name != name {
@@ -649,9 +655,9 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                                 "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
                             }}));
                         }
-                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":content,"is_error":result.is_error}));
+                        blocks.push(json!({"type":"tool_result","tool_use_id":result.call_id,"content":content,"is_error":result.is_error}));
                     } else {
-                        results.push(json!({"role":"tool","tool_call_id":wire_id,"content":result.result.to_string()}));
+                        results.push(json!({"role":"tool","tool_call_id":result.call_id,"content":result.result.to_string()}));
                         for image in &result.images {
                             image
                                 .validate()
@@ -705,7 +711,7 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                 value["tool_calls"] = Value::Array(calls);
             }
             if let Some(reasoning) = reasoning_content {
-                let field = if wire == HttpWire::OpenRouterPlainReasoning {
+                let field = if wire == HttpWire::OpenRouterChat {
                     "reasoning"
                 } else {
                     "reasoning_content"
@@ -716,6 +722,11 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                 && matches!(wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat)
             {
                 value["reasoning_content"] = json!("");
+            }
+            if let Some(replay) = &message.provider_replay
+                && replay.kind == OPENROUTER_DETAILS_REPLAY
+            {
+                value["reasoning_details"] = replay.data.clone();
             }
             messages.push(value);
         }
@@ -820,7 +831,7 @@ fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderEr
             }
             Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
         },
-        HttpWire::OpenRouterPlainReasoning => match request.controls.reasoning {
+        HttpWire::OpenRouterChat => match request.controls.reasoning {
             Reasoning::ProviderDefault => {}
             Reasoning::Off => body["reasoning"] = json!({"enabled":false}),
             Reasoning::Low => body["reasoning"] = json!({"effort":"low"}),
@@ -935,7 +946,7 @@ fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
 struct ChatState {
     text: String,
     reasoning_content: String,
-    reasoning_details_text: String,
+    reasoning_details: Vec<Value>,
     wire: HttpWire,
     calls: BTreeMap<u64, ChatCall>,
     finish: Option<String>,
@@ -947,7 +958,7 @@ impl Default for ChatState {
         Self {
             text: String::new(),
             reasoning_content: String::new(),
-            reasoning_details_text: String::new(),
+            reasoning_details: Vec::new(),
             wire: HttpWire::ChatCompletions,
             calls: BTreeMap::new(),
             finish: None,
@@ -1007,12 +1018,11 @@ impl ChatState {
             let details = details
                 .as_array()
                 .ok_or_else(|| invalid("invalid reasoning_details delta"))?;
-            if !details.is_empty() && self.wire != HttpWire::OpenRouterPlainReasoning {
+            if !details.is_empty() && self.wire != HttpWire::OpenRouterChat {
                 return Err(unsupported("structured reasoning replay is unsupported"));
             }
             for detail in details {
-                self.reasoning_details_text
-                    .push_str(openrouter_plain_detail_text(detail)?);
+                append_openrouter_detail(&mut self.reasoning_details, detail)?;
             }
         }
         if let Some(reasoning) = chat_reasoning_delta(delta, self.wire)? {
@@ -1049,18 +1059,24 @@ impl ChatState {
         Ok(events)
     }
     fn complete(self, request: &ModelRequest) -> Result<ModelResponse, ProviderError> {
-        if self.wire == HttpWire::OpenRouterPlainReasoning
+        if self.wire == HttpWire::OpenRouterChat
             && !self.reasoning_content.is_empty()
-            && !self.reasoning_details_text.is_empty()
-            && self.reasoning_content != self.reasoning_details_text
+            && !self.reasoning_details.is_empty()
+            && self.reasoning_details.iter().all(|detail| {
+                detail["type"] == "reasoning.text"
+                    && detail
+                        .get("signature")
+                        .is_none_or(|value| !has_content(value))
+            })
+            && self.reasoning_content
+                != self
+                    .reasoning_details
+                    .iter()
+                    .filter_map(|detail| detail["text"].as_str())
+                    .collect::<String>()
         {
             return Err(invalid("OpenRouter plain reasoning and details disagree"));
         }
-        let reasoning = if self.reasoning_content.is_empty() {
-            self.reasoning_details_text
-        } else {
-            self.reasoning_content
-        };
         let finish = self
             .finish
             .ok_or_else(|| transport("[DONE] arrived before finish_reason"))?;
@@ -1102,17 +1118,25 @@ impl ChatState {
             message: Message {
                 role: Role::Assistant,
                 content,
-                provider_replay: (!reasoning.is_empty()).then(|| {
-                    ProviderReplay::new(
+                provider_replay: if !self.reasoning_details.is_empty() {
+                    Some(ProviderReplay::new(
                         &request.model.provider,
-                        if self.wire == HttpWire::OpenRouterPlainReasoning {
+                        OPENROUTER_DETAILS_REPLAY,
+                        Value::Array(self.reasoning_details),
+                    ))
+                } else if !self.reasoning_content.is_empty() {
+                    Some(ProviderReplay::new(
+                        &request.model.provider,
+                        if self.wire == HttpWire::OpenRouterChat {
                             OPENROUTER_PLAIN_REASONING_REPLAY
                         } else {
                             CHAT_REASONING_CONTENT_REPLAY
                         },
-                        json!(reasoning),
-                    )
-                }),
+                        Value::String(self.reasoning_content),
+                    ))
+                } else {
+                    None
+                },
             },
             usage: self.usage.value(),
             termination,
@@ -1125,33 +1149,94 @@ impl ChatState {
     }
 }
 
-fn openrouter_plain_detail_text(detail: &Value) -> Result<&str, ProviderError> {
-    let fields = detail
-        .as_object()
-        .ok_or_else(|| invalid("invalid OpenRouter reasoning detail"))?;
-    if fields.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "type" | "text" | "id" | "format" | "index" | "signature"
-        )
-    }) || fields
+fn valid_openrouter_detail(detail: &Value) -> bool {
+    let Some(fields) = detail.as_object() else {
+        return false;
+    };
+    if fields
         .get("id")
-        .is_some_and(|v| !v.is_null() && !v.is_string())
-        || fields.get("format").is_some_and(|v| !v.is_string())
-        || fields.get("index").is_some_and(|v| v.as_u64().is_none())
+        .is_some_and(|value| !value.is_null() && !value.is_string())
+        || fields.get("format").is_some_and(|value| !value.is_string())
+        || fields.get("index").is_some_and(|value| !value.is_number())
+        || fields
+            .get("signature")
+            .is_some_and(|value| !value.is_null() && !value.is_string())
     {
-        return Err(unsupported(
-            "OpenRouter reasoning detail needs structured replay",
-        ));
+        return false;
     }
-    if detail["type"] != "reasoning.text" || detail.get("signature").is_some_and(has_content) {
-        return Err(unsupported(
-            "OpenRouter reasoning detail needs structured replay",
-        ));
+    match fields.get("type").and_then(Value::as_str) {
+        Some("reasoning.text") => {
+            match fields.get("text") {
+                Some(text) => text.is_string(),
+                // Gemini can stream a signature without a text fragment.
+                None => fields
+                    .get("signature")
+                    .and_then(Value::as_str)
+                    .is_some_and(|signature| !signature.is_empty()),
+            }
+        }
+        Some("reasoning.summary") => fields.get("summary").is_some_and(Value::is_string),
+        Some("reasoning.encrypted") => fields.get("data").is_some_and(Value::is_string),
+        _ => false,
     }
-    detail["text"]
-        .as_str()
-        .ok_or_else(|| invalid("invalid OpenRouter reasoning text"))
+}
+
+fn valid_openrouter_details(value: &Value) -> bool {
+    value
+        .as_array()
+        .is_some_and(|details| !details.is_empty() && details.iter().all(valid_openrouter_detail))
+}
+
+fn append_openrouter_detail(
+    details: &mut Vec<Value>,
+    fragment: &Value,
+) -> Result<(), ProviderError> {
+    if !valid_openrouter_detail(fragment) {
+        return Err(invalid("invalid OpenRouter reasoning detail"));
+    }
+    let kind = fragment["type"].as_str().expect("validated detail type");
+    let payload = match kind {
+        "reasoning.text" => "text",
+        "reasoning.summary" => "summary",
+        _ => {
+            details.push(fragment.clone());
+            return Ok(());
+        }
+    };
+    if let Some(last) = details.last_mut().filter(|last| {
+        last["type"] == kind && (last.get(payload).is_some() || fragment.get(payload).is_some())
+    }) {
+        let last_fields = last.as_object_mut().expect("validated detail object");
+        let fragment_fields = fragment.as_object().expect("validated detail object");
+        let compatible = fragment_fields.iter().all(|(key, value)| {
+            key == "type"
+                || key == payload
+                || last_fields
+                    .get(key)
+                    .is_none_or(|old| old.is_null() || value.is_null() || old == value)
+        });
+        if compatible {
+            let suffix = fragment.get(payload).and_then(Value::as_str).unwrap_or("");
+            if !suffix.is_empty() {
+                if let Some(Value::String(text)) = last_fields.get_mut(payload) {
+                    text.push_str(suffix);
+                } else {
+                    last_fields.insert(payload.into(), Value::String(suffix.into()));
+                }
+            }
+            for (key, value) in fragment_fields {
+                if key != "type" && key != payload && !value.is_null() {
+                    let slot = last_fields.entry(key).or_insert(Value::Null);
+                    if slot.is_null() {
+                        *slot = value.clone();
+                    }
+                }
+            }
+            return Ok(());
+        }
+    }
+    details.push(fragment.clone());
+    Ok(())
 }
 
 fn chat_reasoning_delta(delta: &Value, wire: HttpWire) -> Result<Option<&str>, ProviderError> {
@@ -1173,7 +1258,7 @@ fn chat_reasoning_delta(delta: &Value, wire: HttpWire) -> Result<Option<&str>, P
         return Err(unsupported("unexpected reasoning field for route"));
     }
     match wire {
-        HttpWire::OpenRouterPlainReasoning => {
+        HttpWire::OpenRouterChat => {
             if reasoning.is_some() && content.is_some() && reasoning != content {
                 return Err(invalid("conflicting OpenRouter reasoning aliases"));
             }
@@ -1789,7 +1874,7 @@ mod tests {
     }
 
     #[test]
-    fn replay_remaps_call_ids_and_rejects_orphans() {
+    fn replay_preserves_call_ids_and_rejects_orphans() {
         let mut request = request();
         request.messages.push(Message {
             role: Role::Assistant,
@@ -1818,13 +1903,13 @@ mod tests {
             provider_replay: None,
         });
         let chat = chat_body(&request, HttpWire::ChatCompletions).unwrap();
-        assert_eq!(chat["messages"][2]["tool_calls"][0]["id"], "ion_call_0");
-        assert_eq!(chat["messages"][3]["tool_call_id"], "ion_call_0");
+        assert_eq!(chat["messages"][2]["tool_calls"][0]["id"], "provider-id");
+        assert_eq!(chat["messages"][3]["tool_call_id"], "provider-id");
         let anthropic = anthropic_body(&request).unwrap();
-        assert_eq!(anthropic["messages"][1]["content"][0]["id"], "ion_call_0");
+        assert_eq!(anthropic["messages"][1]["content"][0]["id"], "provider-id");
         assert_eq!(
             anthropic["messages"][2]["content"][0]["tool_use_id"],
-            "ion_call_0"
+            "provider-id"
         );
         assert_eq!(anthropic["messages"][2]["content"][0]["is_error"], false);
         request.messages[2].content = vec![Content::ToolResult(ToolResult {
@@ -1951,7 +2036,7 @@ mod tests {
         assert!(deepseek.get("max_completion_tokens").is_none());
         let mimo = chat_body(&request, HttpWire::MiMoChat).unwrap();
         assert!(mimo.get("thinking").is_none());
-        let openrouter = chat_body(&request, HttpWire::OpenRouterPlainReasoning).unwrap();
+        let openrouter = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
         assert!(openrouter.get("reasoning").is_none());
         let llama_cpp = chat_body(&request, HttpWire::LlamaCppNoThinking).unwrap();
         assert_eq!(llama_cpp["chat_template_kwargs"]["enable_thinking"], false);
@@ -1967,7 +2052,7 @@ mod tests {
             "enabled"
         );
         assert_eq!(
-            chat_body(&thinking, HttpWire::OpenRouterPlainReasoning).unwrap()["reasoning"]["effort"],
+            chat_body(&thinking, HttpWire::OpenRouterChat).unwrap()["reasoning"]["effort"],
             "high"
         );
         assert_eq!(
@@ -1984,7 +2069,7 @@ mod tests {
             );
         }
         assert_eq!(
-            chat_body(&thinking, HttpWire::OpenRouterPlainReasoning).unwrap()["reasoning"]["enabled"],
+            chat_body(&thinking, HttpWire::OpenRouterChat).unwrap()["reasoning"]["enabled"],
             false
         );
         let mut state = ChatState::default();
@@ -2033,8 +2118,8 @@ mod tests {
             });
             let body = chat_body(&request, wire).unwrap();
             assert_eq!(body["messages"][2]["reasoning_content"], "first second");
-            assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "ion_call_0");
-            assert_eq!(body["messages"][3]["tool_call_id"], "ion_call_0");
+            assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "remote");
+            assert_eq!(body["messages"][3]["tool_call_id"], "remote");
             let mut wrong_provider = request.clone();
             wrong_provider.model.provider = "other".into();
             assert_eq!(
@@ -2050,11 +2135,11 @@ mod tests {
     }
 
     #[test]
-    fn openrouter_plain_reasoning_replays_without_dropping_structured_material() {
+    fn openrouter_replays_fragmented_plain_details() {
         let mut request = request();
         request.model.provider = "openrouter".into();
         let mut state = ChatState {
-            wire: HttpWire::OpenRouterPlainReasoning,
+            wire: HttpWire::OpenRouterChat,
             ..ChatState::default()
         };
         for text in ["plan ", "read"] {
@@ -2064,7 +2149,7 @@ mod tests {
         let assistant = state.complete(&request).unwrap().message;
         assert_eq!(
             assistant.provider_replay.as_ref().unwrap().data,
-            "plan read"
+            json!([{"type":"reasoning.text","text":"plan read","format":"unknown","index":0}])
         );
         request.messages.push(assistant);
         request.messages.push(Message {
@@ -2078,17 +2163,17 @@ mod tests {
             })],
             provider_replay: None,
         });
-        let body = chat_body(&request, HttpWire::OpenRouterPlainReasoning).unwrap();
-        assert_eq!(body["messages"][2]["reasoning"], "plan read");
-        assert!(body["messages"][2].get("reasoning_details").is_none());
+        let body = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
+        assert_eq!(
+            body["messages"][2]["reasoning_details"],
+            json!([{"type":"reasoning.text","text":"plan read","format":"unknown","index":0}])
+        );
+        assert!(body["messages"][2].get("reasoning").is_none());
+        assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "remote");
+        assert_eq!(body["messages"][3]["tool_call_id"], "remote");
 
-        let mut encrypted = ChatState {
-            wire: HttpWire::OpenRouterPlainReasoning,
-            ..ChatState::default()
-        };
-        assert_eq!(encrypted.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.encrypted","data":"opaque"}]},"finish_reason":null}]})).unwrap_err().kind, ProviderErrorKind::Unsupported);
         let mut contradictory = ChatState {
-            wire: HttpWire::OpenRouterPlainReasoning,
+            wire: HttpWire::OpenRouterChat,
             ..ChatState::default()
         };
         contradictory.accept(&json!({"choices":[{"delta":{"reasoning":"one","reasoning_details":[{"type":"reasoning.text","text":"two"}]},"finish_reason":"stop"}]})).unwrap();
@@ -2104,6 +2189,137 @@ mod tests {
                 .kind,
             ProviderErrorKind::Unsupported
         );
+    }
+
+    #[test]
+    fn openrouter_replays_plain_reasoning_without_details() {
+        let mut request = request();
+        request.model.provider = "openrouter".into();
+        let mut state = ChatState {
+            wire: HttpWire::OpenRouterChat,
+            ..ChatState::default()
+        };
+        state
+            .accept(
+                &json!({"choices":[{"delta":{"reasoning":"inspect file"},"finish_reason":null}]}),
+            )
+            .unwrap();
+        state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
+        let assistant = state.complete(&request).unwrap().message;
+        assert_eq!(
+            assistant.provider_replay.as_ref().unwrap().kind,
+            OPENROUTER_PLAIN_REASONING_REPLAY
+        );
+        request.messages.push(assistant);
+        request.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "remote".into(),
+                name: "read".into(),
+                result: json!({"ok":true}),
+                images: Vec::new(),
+                is_error: false,
+            })],
+            provider_replay: None,
+        });
+        let body = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
+        assert_eq!(body["messages"][2]["reasoning"], "inspect file");
+        assert!(body["messages"][2].get("reasoning_details").is_none());
+    }
+
+    #[test]
+    fn openrouter_replays_signed_and_encrypted_details_in_order() {
+        let mut request = request();
+        request.model.provider = "openrouter".into();
+        let mut state = ChatState {
+            wire: HttpWire::OpenRouterChat,
+            ..ChatState::default()
+        };
+        state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Need ","index":0}]},"finish_reason":null}]})).unwrap();
+        state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"read","index":0,"signature":"signed","format":"google-gemini-v1"},{"type":"reasoning.summary","summary":"First ","index":1}]},"finish_reason":null}]})).unwrap();
+        state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.summary","summary":"inspect","index":1},{"type":"reasoning.encrypted","data":"opaque","format":"google-gemini-v1","id":"thought-1","index":2}]},"finish_reason":null}]})).unwrap();
+        state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"provider-call","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
+        let assistant = state.complete(&request).unwrap().message;
+        let details = json!([
+            {"type":"reasoning.text","text":"Need read","index":0,"signature":"signed","format":"google-gemini-v1"},
+            {"type":"reasoning.summary","summary":"First inspect","index":1},
+            {"type":"reasoning.encrypted","data":"opaque","format":"google-gemini-v1","id":"thought-1","index":2}
+        ]);
+        assert_eq!(assistant.provider_replay.as_ref().unwrap().data, details);
+        request.messages.push(assistant);
+        request.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "provider-call".into(),
+                name: "read".into(),
+                result: json!({"ok":true}),
+                images: Vec::new(),
+                is_error: false,
+            })],
+            provider_replay: None,
+        });
+        let body = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
+        assert_eq!(body["messages"][2]["reasoning_details"], details);
+        assert!(body["messages"][2].get("reasoning").is_none());
+        assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "provider-call");
+        assert_eq!(body["messages"][3]["tool_call_id"], "provider-call");
+
+        let mut wrong_provider = request.clone();
+        wrong_provider.model.provider = "other".into();
+        assert_eq!(
+            chat_body(&wrong_provider, HttpWire::OpenRouterChat)
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::Unsupported
+        );
+        request.messages[1].provider_replay.as_mut().unwrap().data =
+            json!([{"type":"reasoning.encrypted"}]);
+        assert_eq!(
+            chat_body(&request, HttpWire::OpenRouterChat)
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::InvalidRequest
+        );
+    }
+
+    #[test]
+    fn openrouter_keeps_signature_only_text_detail() {
+        let mut request = request();
+        request.model.provider = "openrouter".into();
+        let mut state = ChatState {
+            wire: HttpWire::OpenRouterChat,
+            ..ChatState::default()
+        };
+        let detail = json!({"type":"reasoning.text","format":"google-gemini-v1","index":0,"signature":"opaque"});
+        state
+            .accept(&json!({"choices":[{"delta":{"reasoning_details":[detail],"content":"Done"},"finish_reason":"stop"}]}))
+            .unwrap();
+        let assistant = state.complete(&request).unwrap().message;
+        assert_eq!(
+            assistant.provider_replay.as_ref().unwrap().data,
+            json!([detail])
+        );
+        request.messages.push(assistant);
+        request
+            .messages
+            .push(Message::user_input("Continue".into(), []));
+        let body = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
+        assert_eq!(body["messages"][2]["reasoning_details"], json!([detail]));
+
+        let mut invalid = ChatState {
+            wire: HttpWire::OpenRouterChat,
+            ..ChatState::default()
+        };
+        assert_eq!(
+            invalid
+                .accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","index":0}]},"finish_reason":null}]}))
+                .unwrap_err()
+                .kind,
+            ProviderErrorKind::InvalidRequest
+        );
+        assert!(!valid_openrouter_detail(&json!({
+            "type":"reasoning.text","text":42,"signature":"opaque"
+        })));
     }
 
     #[test]

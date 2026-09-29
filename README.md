@@ -154,11 +154,10 @@ Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
 copy of the same file. `ion use` also accepts a custom model with
 `--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
-For a custom OpenRouter model that returns plain `reasoning` and unsigned
-`reasoning.text` details, use `--wire openrouter-plain-reasoning`; this route
-rejects signed, encrypted, summarized or contradictory details until their
-structured replay is implemented. Qualify a new model with a tool-using turn
-before relying on it for coding.
+For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
+plain reasoning or ordered structured `reasoning_details` across tool calls;
+the generic `chat-completions` route does not assume that contract. Qualify a
+new model with a tool-using turn before relying on it for coding.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom remote
 endpoints require HTTPS and a key supplied through
@@ -261,18 +260,19 @@ save an empty assistant message that would break later provider replay.
 ## Current limits
 
 Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
-OpenRouter DeepSeek Flash, a custom OpenRouter plain-reasoning route for
-`stealth/space-bunny-alpha`, and a custom llama.cpp route. OpenRouter and local
-llama.cpp tasks also passed on Linux. The OpenRouter route passed user-image
-and workspace-image tasks, resource use, MCP tool use and Session
-continuation. These checks cover selected tasks and routes. Anthropic and
+OpenRouter DeepSeek Flash, custom OpenRouter routes for
+`stealth/space-bunny-alpha` and Gemini 3 Flash Preview, and a custom llama.cpp
+route. OpenRouter and local llama.cpp tasks also passed on Linux. The cataloged
+OpenRouter DeepSeek route passed user-image and workspace-image tasks,
+resource use, MCP tool use and Session continuation. These checks cover
+selected tasks and routes. Anthropic and
 direct OpenAI have not been live-qualified.
 
-Direct DeepSeek and MiMo, the cataloged OpenRouter DeepSeek Flash route and
-the qualified custom plain-reasoning route retain the reasoning needed for
-tool-call continuation across saved Turns.
-Signed, encrypted or summarized OpenRouter reasoning is unsupported, as is
-thinking on custom llama.cpp routes. Context pressure uses an approximate
+Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
+reasoning needed for tool-call continuation across saved Turns. The Gemini
+route completed a signed tool continuation and another Turn after cross-process
+resume. Native Anthropic signed thinking and thinking on custom llama.cpp
+routes remain unsupported. Context pressure uses an approximate
 token estimate; custom routes without a known context window use only the
 encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
 contract and [AGENTS.md](AGENTS.md) for repository checks.

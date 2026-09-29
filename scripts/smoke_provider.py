@@ -50,8 +50,11 @@ class Handler(BaseHTTPRequestHandler):
                     if count == 1 and require_steering:
                         assert last["role"] == "user" and "also check" in last["content"].lower()
                         assert body["messages"][-2]["role"] == "tool"
+                        assert body["messages"][-2]["tool_call_id"] == "call-1"
+                        assert body["messages"][-3]["tool_calls"][0]["id"] == "call-1"
                     else:
-                        assert last["role"] == "tool" and last["tool_call_id"] == f"ion_call_{count - 1}"
+                        assert last["role"] == "tool" and last["tool_call_id"] == f"call-{count}"
+                        assert body["messages"][-2]["tool_calls"][0]["id"] == f"call-{count}"
                 name, arguments = steps[count]
                 delta = {"tool_calls": [{"index": 0, "id": f"call-{count + 1}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}}]}
                 finish = "tool_calls"

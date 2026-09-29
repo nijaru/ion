@@ -21,7 +21,8 @@ use crate::{
 #[serde(rename_all = "kebab-case")]
 pub enum Wire {
     ChatCompletions,
-    OpenRouterPlainReasoning,
+    #[serde(rename = "openrouter-chat")]
+    OpenRouterChat,
     LlamaCppNoThinking,
     AnthropicMessages,
 }
@@ -32,7 +33,7 @@ impl std::str::FromStr for Wire {
     fn from_str(value: &str) -> std::result::Result<Self, Self::Err> {
         match value {
             "chat-completions" => Ok(Self::ChatCompletions),
-            "openrouter-plain-reasoning" => Ok(Self::OpenRouterPlainReasoning),
+            "openrouter-chat" => Ok(Self::OpenRouterChat),
             "llama-cpp-no-thinking" => Ok(Self::LlamaCppNoThinking),
             "anthropic-messages" => Ok(Self::AnthropicMessages),
             _ => Err(format!("unknown wire format: {value}")),
@@ -251,9 +252,7 @@ impl ModelStore {
                     catalog::CatalogWire::ChatCompletions => HttpWire::ChatCompletions,
                     catalog::CatalogWire::DeepSeekChat => HttpWire::DeepSeekChat,
                     catalog::CatalogWire::MiMoChat => HttpWire::MiMoChat,
-                    catalog::CatalogWire::OpenRouterPlainReasoning => {
-                        HttpWire::OpenRouterPlainReasoning
-                    }
+                    catalog::CatalogWire::OpenRouterChat => HttpWire::OpenRouterChat,
                     catalog::CatalogWire::AnthropicMessages => HttpWire::AnthropicMessages,
                 },
                 api_key_env: model.api_key_env.into(),
@@ -277,7 +276,7 @@ impl ModelStore {
             endpoint: endpoint.into(),
             wire: match wire {
                 Wire::ChatCompletions => HttpWire::ChatCompletions,
-                Wire::OpenRouterPlainReasoning => HttpWire::OpenRouterPlainReasoning,
+                Wire::OpenRouterChat => HttpWire::OpenRouterChat,
                 Wire::LlamaCppNoThinking => HttpWire::LlamaCppNoThinking,
                 Wire::AnthropicMessages => HttpWire::AnthropicMessages,
             },
@@ -355,10 +354,18 @@ mod tests {
             image_input: false,
         };
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
-        route.wire = Some("openrouter-plain-reasoning".parse().unwrap());
+        route.wire = Some("openrouter-chat".parse().unwrap());
+        assert_eq!(
+            serde_json::to_string(&route.wire).unwrap(),
+            "\"openrouter-chat\""
+        );
+        assert!(matches!(
+            serde_json::from_str::<Option<Wire>>("\"openrouter-chat\"").unwrap(),
+            Some(Wire::OpenRouterChat)
+        ));
         assert_eq!(
             store.resolve_saved(&route).unwrap().wire,
-            HttpWire::OpenRouterPlainReasoning
+            HttpWire::OpenRouterChat
         );
         route.endpoint = Some("https://localhost/v1/chat/completions".into());
         assert!(store.resolve_saved(&route).unwrap().requires_key);
