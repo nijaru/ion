@@ -235,7 +235,9 @@ healthy servers and the coding client remain available; a failed
 tool call becomes an error result visible to the model. Current MCP support
 handles text, structured data and normalized image tool results; audio and
 embedded resource content report an explicit unsupported-content error.
-Remote MCP OAuth login and changing tool lists are not yet supported.
+When a server announces a changed tool list, Ion refreshes that server before
+the next model request. A failed refresh reports a warning and keeps its last
+known list. Remote MCP OAuth login is not yet supported.
 For Rust embedders, `Host::agent_with_tools`
 composes a custom `CodingToolHost` with built-ins; a same-name custom tool
 replaces that one built-in.

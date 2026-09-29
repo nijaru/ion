@@ -1,9 +1,12 @@
-//! Explicit local MCP tool connections. Session facts remain in ion-core.
+//! Explicit MCP tool connections. Session facts remain in ion-core.
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, HashSet},
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc, RwLock as SyncRwLock,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -13,9 +16,9 @@ use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use ion_core::{CodingToolHost, CodingToolOutput};
 use rmcp::{
-    RoleClient,
+    ClientHandler, RoleClient,
     model::{CallToolRequestParams, CallToolResult, ContentBlock},
-    service::{RunningService, ServiceExt},
+    service::{NotificationContext, RunningService, ServiceExt},
     transport::{
         StreamableHttpClientTransport, TokioChildProcess,
         streamable_http_client::StreamableHttpClientTransportConfig,
@@ -24,7 +27,7 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use tokio::process::Command;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 use tokio_util::sync::CancellationToken;
 use url::Url;
 
@@ -179,17 +182,29 @@ fn valid_env_name(name: &str) -> bool {
         && bytes.all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
 }
 
-type Client = RunningService<RoleClient, ()>;
+#[derive(Clone)]
+struct ChangeHandler(Arc<AtomicU64>);
+
+impl ClientHandler for ChangeHandler {
+    async fn on_tool_list_changed(&self, _context: NotificationContext<RoleClient>) {
+        self.0.fetch_add(1, Ordering::AcqRel);
+    }
+}
+
+type Client = RunningService<RoleClient, ChangeHandler>;
+type RegisteredTools = Vec<(ToolSpec, String)>;
 
 struct Server {
     name: String,
     client: RwLock<Option<Client>>,
+    tool_list_version: Arc<AtomicU64>,
+    refreshed_version: AtomicU64,
+    refresh_gate: Mutex<()>,
 }
 
 pub struct McpTools {
     servers: Vec<Server>,
-    specs: Vec<ToolSpec>,
-    routes: HashMap<String, (usize, String)>,
+    discovered: SyncRwLock<Vec<RegisteredTools>>,
 }
 
 #[derive(Default)]
@@ -210,20 +225,15 @@ impl McpTools {
             }
         };
         let mut servers = Vec::new();
-        let mut specs = Vec::new();
-        let mut routes = HashMap::new();
+        let mut discovered = Vec::new();
         let attempts = saved
             .into_iter()
             .map(|(name, definition)| Self::connect_server(name, definition, cwd));
         for attempt in join_all(attempts).await {
             match attempt {
-                Ok((server, discovered)) => {
-                    let index = servers.len();
-                    for (spec, tool_name) in discovered {
-                        routes.insert(spec.name.clone(), (index, tool_name));
-                        specs.push(spec);
-                    }
+                Ok((server, tools)) => {
                     servers.push(server);
+                    discovered.push(tools);
                 }
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
@@ -231,8 +241,7 @@ impl McpTools {
         let tools = (!servers.is_empty()).then(|| {
             Arc::new(Self {
                 servers,
-                specs,
-                routes,
+                discovered: SyncRwLock::new(discovered),
             })
         });
         McpStartup { tools, diagnostics }
@@ -242,16 +251,18 @@ impl McpTools {
         name: String,
         definition: McpServer,
         cwd: &Path,
-    ) -> Result<(Server, Vec<(ToolSpec, String)>)> {
+    ) -> Result<(Server, RegisteredTools)> {
         validate_name(&name)?;
         validate_server(&definition)?;
+        let changed = Arc::new(AtomicU64::new(0));
+        let handler = ChangeHandler(changed.clone());
         let mut client = match definition {
             McpServer::Stdio(server) => {
                 let mut command = Command::new(&server.command);
                 command.args(&server.args).current_dir(cwd);
                 let transport = TokioChildProcess::new(command)
                     .with_context(|| format!("cannot start MCP server {name}"))?;
-                tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
+                tokio::time::timeout(Duration::from_secs(10), handler.serve(transport))
                     .await
                     .with_context(|| format!("MCP server {name} initialization timed out"))?
                     .with_context(|| format!("MCP server {name} initialization failed"))?
@@ -269,52 +280,21 @@ impl McpTools {
                     transport.auth_header = Some(token);
                 }
                 let transport = StreamableHttpClientTransport::from_config(transport);
-                tokio::time::timeout(Duration::from_secs(10), ().serve(transport))
+                tokio::time::timeout(Duration::from_secs(10), handler.serve(transport))
                     .await
                     .with_context(|| format!("MCP server {name} initialization timed out"))?
                     .with_context(|| format!("MCP server {name} initialization failed"))?
             }
         };
-        let discovered = async {
-            let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
-                .await
-                .with_context(|| format!("MCP server {name} tool listing timed out"))?
-                .with_context(|| format!("MCP server {name} tool listing failed"))?;
-            let mut registered = Vec::new();
-            let mut names = HashSet::new();
-            for tool in tools {
-                let tool_name = tool.name.to_string();
-                validate_name(&tool_name)?;
-                let exposed = format!("mcp__{name}__{tool_name}");
-                ensure!(
-                    exposed.len() <= 64,
-                    "MCP tool name {exposed} exceeds provider's 64-character bound"
-                );
-                ensure!(
-                    names.insert(exposed.clone()),
-                    "duplicate MCP tool name {exposed}"
-                );
-                let description = tool.description.map_or_else(
-                    || format!("Tool {tool_name} from MCP server {name}"),
-                    |description| description.into_owned(),
-                );
-                registered.push((
-                    ToolSpec {
-                        name: exposed,
-                        description,
-                        input_schema: Value::Object((*tool.input_schema).clone()),
-                    },
-                    tool_name,
-                ));
-            }
-            Ok(registered)
-        }
-        .await;
+        let discovered = discover_tools(&name, &client).await;
         match discovered {
             Ok(discovered) => Ok((
                 Server {
                     name,
                     client: RwLock::new(Some(client)),
+                    tool_list_version: changed,
+                    refreshed_version: AtomicU64::new(0),
+                    refresh_gate: Mutex::new(()),
                 },
                 discovered,
             )),
@@ -325,6 +305,51 @@ impl McpTools {
         }
     }
 
+    async fn refresh_changed(&self, stop: CancellationToken) -> Vec<String> {
+        let mut diagnostics = Vec::new();
+        for (index, server) in self.servers.iter().enumerate() {
+            if server.tool_list_version.load(Ordering::Acquire)
+                == server.refreshed_version.load(Ordering::Acquire)
+            {
+                continue;
+            }
+            let _gate = tokio::select! {
+                guard = server.refresh_gate.lock() => guard,
+                () = stop.cancelled() => break,
+            };
+            let version = server.tool_list_version.load(Ordering::Acquire);
+            if version == server.refreshed_version.load(Ordering::Acquire) {
+                continue;
+            }
+            let client = tokio::select! {
+                guard = server.client.read() => guard,
+                () = stop.cancelled() => break,
+            };
+            let Some(client) = client.as_ref() else {
+                diagnostics.push(format!("MCP server {} is closed", server.name));
+                server.refreshed_version.store(version, Ordering::Release);
+                continue;
+            };
+            let updated = tokio::select! {
+                () = stop.cancelled() => break,
+                result = discover_tools(&server.name, client) => result,
+            };
+            match updated {
+                Ok(updated) => {
+                    self.discovered
+                        .write()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)[index] = updated;
+                }
+                Err(error) => diagnostics.push(format!("{error:#}")),
+            }
+            // A failed listing keeps the previous snapshot and warns once.
+            // A notification that arrived during this listing has a newer
+            // version and will still be refreshed at the next boundary.
+            server.refreshed_version.store(version, Ordering::Release);
+        }
+        diagnostics
+    }
+
     /// Close every child process before the client runtime exits.
     pub async fn shutdown(&self) {
         for server in &self.servers {
@@ -332,12 +357,64 @@ impl McpTools {
                 let _ = client.close_with_timeout(Duration::from_secs(3)).await;
             }
         }
+        for tools in self
+            .discovered
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter_mut()
+        {
+            tools.clear();
+        }
     }
+}
+
+async fn discover_tools(name: &str, client: &Client) -> Result<RegisteredTools> {
+    let tools = tokio::time::timeout(Duration::from_secs(10), client.list_all_tools())
+        .await
+        .with_context(|| format!("MCP server {name} tool listing timed out"))?
+        .with_context(|| format!("MCP server {name} tool listing failed"))?;
+    let mut registered = Vec::new();
+    let mut names = HashSet::new();
+    for tool in tools {
+        let tool_name = tool.name.to_string();
+        validate_name(&tool_name)?;
+        let exposed = format!("mcp__{name}__{tool_name}");
+        ensure!(
+            exposed.len() <= 64,
+            "MCP tool name {exposed} exceeds provider's 64-character bound"
+        );
+        ensure!(
+            names.insert(exposed.clone()),
+            "duplicate MCP tool name {exposed}"
+        );
+        let description = tool.description.map_or_else(
+            || format!("Tool {tool_name} from MCP server {name}"),
+            |description| description.into_owned(),
+        );
+        registered.push((
+            ToolSpec {
+                name: exposed,
+                description,
+                input_schema: Value::Object((*tool.input_schema).clone()),
+            },
+            tool_name,
+        ));
+    }
+    Ok(registered)
 }
 
 impl CodingToolHost for McpTools {
     fn specs(&self) -> Vec<ToolSpec> {
-        self.specs.clone()
+        self.discovered
+            .read()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .iter()
+            .flat_map(|tools| tools.iter().map(|(spec, _)| spec.clone()))
+            .collect()
+    }
+
+    fn refresh_specs<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(self.refresh_changed(stop))
     }
 
     fn execute<'a>(
@@ -346,10 +423,22 @@ impl CodingToolHost for McpTools {
         stop: CancellationToken,
     ) -> BoxFuture<'a, CodingToolOutput> {
         Box::pin(async move {
-            let Some((index, tool_name)) = self.routes.get(&call.name) else {
+            let route = self
+                .discovered
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .iter()
+                .enumerate()
+                .find_map(|(index, tools)| {
+                    tools
+                        .iter()
+                        .find(|(spec, _)| spec.name == call.name)
+                        .map(|(_, name)| (index, name.clone()))
+                });
+            let Some((index, tool_name)) = route else {
                 return tool_error(format!("unknown MCP tool: {}", call.name));
             };
-            let server = &self.servers[*index];
+            let server = &self.servers[index];
             let client = server.client.read().await;
             let Some(client) = client.as_ref() else {
                 return tool_error(format!("MCP server {} is closed", server.name));
@@ -357,8 +446,7 @@ impl CodingToolHost for McpTools {
             let Some(args) = call.arguments.as_object() else {
                 return tool_error("MCP tool arguments must be an object".to_owned());
             };
-            let request =
-                CallToolRequestParams::new(tool_name.clone()).with_arguments(args.clone());
+            let request = CallToolRequestParams::new(tool_name).with_arguments(args.clone());
             let result = tokio::select! {
                 () = stop.cancelled() => return tool_error(format!("MCP tool {} cancelled; effects may be unknown",call.name)),
                 result = client.call_tool(request) => result,

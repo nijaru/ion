@@ -663,6 +663,9 @@ async fn headless(
                 CodingAgentEvent::ResponseRestarted => {
                     eprintln!("[incomplete response discarded; retrying]");
                 }
+                CodingAgentEvent::ToolCatalogWarning(message) => {
+                    eprintln!("[tool catalog: {message}]");
+                }
                 CodingAgentEvent::Final(_) => {}
             }
         })

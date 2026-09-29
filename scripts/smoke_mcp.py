@@ -63,6 +63,56 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_UNCERTAIN_OK"}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
             ]
+        elif len(requests) == 9:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__changing__first" in names and "mcp__changing__second" not in names, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-first", "type": "function", "function": {"name": "mcp__changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 10:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__changing__first" not in names and "mcp__changing__second" in names, names
+            assert body["messages"][-1]["role"] == "tool" and "FIRST" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-withdrawn", "type": "function", "function": {"name": "mcp__changing__first", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 11:
+            assert body["messages"][-1]["role"] == "tool" and "unknown tool" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-second", "type": "function", "function": {"name": "mcp__changing__second", "arguments": "{}"}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 12:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__changing__second" in names and "mcp__changing__first" not in names, names
+            assert body["messages"][-1]["role"] == "tool" and "SECOND" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_REFRESH_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
+        elif len(requests) == 13:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__remote__uppercase" in names and "mcp__remote__lowercase" not in names, names
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-shift", "type": "function", "function": {"name": "mcp__remote__uppercase", "arguments": '{"text":"shift"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 14:
+            names = {tool["function"]["name"] for tool in body["tools"]}
+            assert "mcp__remote__uppercase" not in names and "mcp__remote__lowercase" in names, names
+            assert body["messages"][-1]["role"] == "tool" and "SHIFT" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-http-new", "type": "function", "function": {"name": "mcp__remote__lowercase", "arguments": '{"text":"ION"}'}}]}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        elif len(requests) == 15:
+            assert body["messages"][-1]["role"] == "tool" and "ion" in body["messages"][-1]["content"], body
+            changes = [
+                {"id": "mcp", "choices": [{"index": 0, "delta": {"content": "MCP_HTTP_REFRESH_OK"}, "finish_reason": None}]},
+                {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         else:
             assert any(message.get("role") == "tool" and "Hello, Ion!" in message.get("content", "") for message in body["messages"]), body
             changes = [
@@ -89,14 +139,30 @@ class RemoteMcp(BaseHTTPRequestHandler):
         if method == "initialize":
             result = {"protocolVersion": "2025-06-18", "capabilities": {"tools": {}}, "serverInfo": {"name": "ion-remote-smoke", "version": "1"}}
         elif method == "tools/list":
-            result = {"tools": [{"name": "uppercase", "description": "Uppercase text", "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}
+            name = "lowercase" if getattr(self.server, "tool_changed", False) else "uppercase"
+            result = {"tools": [{"name": name, "description": name, "inputSchema": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}}]}
         elif method == "tools/call":
             remote_calls.append(request)
-            if request["params"]["arguments"]["text"] == "retry-check":
+            text = request["params"]["arguments"]["text"]
+            if text == "retry-check":
                 self.send_response(404)
                 self.end_headers()
                 return
-            result = {"content": [{"type": "text", "text": request["params"]["arguments"]["text"].upper()}], "isError": False}
+            result = {"content": [{"type": "text", "text": text.lower() if request["params"]["name"] == "lowercase" else text.upper()}], "isError": False}
+            if text == "shift":
+                self.server.tool_changed = True
+                notification = b'data: {"jsonrpc":"2.0","method":"notifications/tools/list_changed"}\n\n'
+                response = b"data: " + json.dumps({"jsonrpc": "2.0", "id": request["id"], "result": result}).encode() + b"\n\n"
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream")
+                self.send_header("Content-Length", str(len(notification) + len(response)))
+                self.end_headers()
+                self.wfile.write(notification)
+                self.wfile.flush()
+                import time
+                time.sleep(0.05)
+                self.wfile.write(response)
+                return
         else:
             self.send_response(202)
             self.end_headers()
@@ -193,6 +259,35 @@ for line in sys.stdin.buffer:
         sys.stdout.flush()
 '''
 
+changing_source = '''import json, sys, time
+from pathlib import Path
+log = Path('changing-mcp-events.txt')
+changed = 0
+for line in sys.stdin.buffer:
+    request = json.loads(line)
+    method = request.get('method')
+    if method == 'initialize':
+        result = {'protocolVersion': '2025-06-18', 'capabilities': {'tools': {'listChanged': True}}, 'serverInfo': {'name': 'changing', 'version': '1'}}
+    elif method == 'tools/list':
+        name = 'first' if changed == 0 else 'second' if changed == 1 else 'invalid'
+        with log.open('a') as output: output.write('list:' + name + '\\n')
+        result = {'tools': 'invalid list'} if changed == 2 else {'tools': [{'name': name, 'description': name, 'inputSchema': {'type': 'object'}}]}
+    elif method == 'tools/call':
+        name = request['params']['name']
+        with log.open('a') as output: output.write('called:' + name + '\\n')
+        if name in ('first', 'second'):
+            changed += 1
+            sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'method': 'notifications/tools/list_changed'}) + '\\n')
+            sys.stdout.flush()
+            time.sleep(0.05)
+        result = {'content': [{'type': 'text', 'text': name.upper()}], 'isError': False}
+    else:
+        continue
+    if 'id' in request:
+        sys.stdout.write(json.dumps({'jsonrpc': '2.0', 'id': request['id'], 'result': result}) + '\\n')
+        sys.stdout.flush()
+'''
+
 
 with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     work = Path(temporary)
@@ -204,6 +299,8 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
     bad_script.write_text(bad_listing_source)
     paired_script = work / "paired.py"
     paired_script.write_text(paired_source)
+    changing_script = work / "changing.py"
+    changing_script.write_text(changing_source)
     env = {**os.environ, "XDG_CONFIG_HOME": str(work / "config"), "XDG_STATE_HOME": str(work / "state"), "REMOTE_MCP_TOKEN": "test-token"}
     server = ThreadingHTTPServer(("127.0.0.1", 0), Provider)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -219,6 +316,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "add", "bad-listing", sys.executable, str(bad_script)], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-left", sys.executable, str(paired_script), "paired-left", "paired-right"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add", "paired-right", sys.executable, str(paired_script), "paired-right", "paired-left"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "add", "changing", sys.executable, str(changing_script)], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "add-http", "remote", f"http://127.0.0.1:{remote.server_port}/mcp", "--bearer-token-env", "REMOTE_MCP_TOKEN"], env=env, check=True, capture_output=True)
         listing = subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True)
         assert "demo" in listing.stdout and str(server_script) in listing.stdout and "/mcp" in listing.stdout
@@ -253,6 +351,15 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         uncertain = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote tool for retry-check."], env=env, check=True, capture_output=True, text=True)
         assert uncertain.stdout.strip() == "MCP_UNCERTAIN_OK", uncertain
         assert len(remote_calls) == 2 and remote_calls[1]["params"]["arguments"]["text"] == "retry-check", remote_calls
+        changed = subprocess.run([binary, "--cwd", workspace, "run", "Call the changing MCP tools."], env=env, check=True, capture_output=True, text=True)
+        assert changed.stdout.strip() == "MCP_REFRESH_OK", changed
+        assert "tool listing failed" in changed.stderr and "changing" in changed.stderr, changed
+        events = (workspace / "changing-mcp-events.txt").read_text()
+        assert "list:first" in events and "list:second" in events and "list:invalid" in events, events
+        assert events.count("called:first") == 1 and events.count("called:second") == 1, events
+        http_changed = subprocess.run([binary, "--cwd", workspace, "run", "Call the remote changing tools."], env=env, check=True, capture_output=True, text=True)
+        assert http_changed.stdout.strip() == "MCP_HTTP_REFRESH_OK", http_changed
+        assert len(remote_calls) == 4 and remote_calls[-1]["params"]["name"] == "lowercase", remote_calls
         config["servers"].pop("malformed")
         config_path.write_text(json.dumps(config))
         subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True)
@@ -260,6 +367,7 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         subprocess.run([binary, "mcp", "remove", "bad-listing"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "paired-left"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "paired-right"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "mcp", "remove", "changing"], env=env, check=True, capture_output=True)
         subprocess.run([binary, "mcp", "remove", "remote"], env=env, check=True, capture_output=True)
         assert subprocess.run([binary, "mcp", "list"], env=env, check=True, capture_output=True, text=True).stdout == ""
         print("Ion MCP discovery, tool call and child shutdown: OK")

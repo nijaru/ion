@@ -201,6 +201,9 @@ impl Progress {
                 self.events
                     .push("Incomplete response discarded; retrying".into());
             }
+            CodingAgentEvent::ToolCatalogWarning(message) => {
+                self.events.push(format!("Tool catalog: {message}"));
+            }
             CodingAgentEvent::Final(_) => {}
         }
         if self.events.len() > 16 {

@@ -487,6 +487,9 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             count,
         } => json!({"type":"provider_replay_notice","action":action,"reason":reason,"count":count}),
         CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
+        CodingAgentEvent::ToolCatalogWarning(message) => {
+            json!({"type":"tool_catalog_warning","message":message})
+        }
         CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
     }
 }

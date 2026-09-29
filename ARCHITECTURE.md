@@ -423,6 +423,10 @@ private OAuth login, separate from Session history. Transport recovery must
 not transparently replay a possibly effectful tool call. A changed server
 tool list replaces its advertised snapshot for later model requests; a
 withdrawn tool call receives an error.
+The server notification marks its snapshot stale. Refresh at the next
+model-request boundary; a successful listing atomically replaces that server's
+tools, while a failed listing keeps the last snapshot and reports a diagnostic.
+The composed tool set resolves current host snapshots in override order.
 Extensions beyond MCP tools need a documented lifecycle for registering commands,
 observing relevant Turn events, and using client UI capabilities when present.
 Extension callbacks cannot mutate committed Session entries or provider wire

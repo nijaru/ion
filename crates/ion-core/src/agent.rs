@@ -648,6 +648,12 @@ impl Agent {
             }
             let mut recovered_overflow = false;
             let response = loop {
+                for diagnostic in self.tools.refresh_specs(stop.clone()).await {
+                    observe(AgentEvent::ToolCatalogWarning(diagnostic));
+                }
+                if stop.is_cancelled() {
+                    return Err(AgentError::Cancelled);
+                }
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
@@ -948,6 +954,7 @@ pub enum AgentEvent {
         count: usize,
     },
     ResponseRestarted,
+    ToolCatalogWarning(String),
     ToolStarted {
         call_id: String,
         name: String,
@@ -976,6 +983,9 @@ pub struct ToolOutput {
 
 pub trait ToolHost: Send + Sync {
     fn specs(&self) -> Vec<ToolSpec>;
+    fn refresh_specs<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async { Vec::new() })
+    }
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
