@@ -138,6 +138,32 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         inspected = read(child)
         assert inspected["success"] and "base64 image data omitted" in str(inspected["data"])
 
+        send(child, {"id": "follow-parent", "type": "prompt", "message": "SLOW"})
+        until(child, lambda r: r.get("id") == "follow-parent")
+        send(child, {"id": "follow-child", "type": "follow_up", "message": "AFTER", "images": [inline]})
+        queued = until(child, lambda r: r.get("id") == "follow-child")[-1]
+        assert queued["success"] and queued["data"]["disposition"] == "queued", queued
+        parent_records = until(child, lambda r: r["type"] == "turn_end")
+        assert parent_records[-1]["status"] == "completed"
+        follow_records = until(child, lambda r: r["type"] == "turn_end")
+        started = [r for r in follow_records if r["type"] == "follow_up_started"]
+        assert len(started) == 1 and started[0]["id"] == "follow-child", follow_records
+        assert follow_records[-1]["status"] == "completed"
+        latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
+        assert latest[0] == {"type": "text", "text": "AFTER"} and latest[1]["type"] == "image_url", latest
+
+        send(child, {"id": "cancel-parent", "type": "prompt", "message": "SLOW"})
+        until(child, lambda r: r.get("id") == "cancel-parent")
+        send(child, {"id": "after-abort", "type": "follow_up", "message": "AFTER_ABORT"})
+        assert until(child, lambda r: r.get("id") == "after-abort")[-1]["success"]
+        send(child, {"id": "cancel-parent-now", "type": "abort"})
+        parent_records = until(child, lambda r: r["type"] == "turn_end")
+        assert any(r.get("id") == "cancel-parent-now" and r["success"] for r in parent_records)
+        assert parent_records[-1]["status"] == "cancelled", parent_records
+        follow_records = until(child, lambda r: r["type"] == "turn_end")
+        assert any(r["type"] == "follow_up_started" and r["id"] == "after-abort" for r in follow_records)
+        assert follow_records[-1]["status"] == "completed", follow_records
+
         send(child, {"id": "vision-turn", "type": "prompt", "message": "SLOW"})
         until(child, lambda r: r.get("id") == "vision-turn")
         send(child, {"id": "vision-steer", "type": "steer", "message": "Inspect the image", "images": ["pixel.png"]})
@@ -160,6 +186,12 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "blocked", "type": "new_session"})
         blocked = until(child, lambda r: r.get("id") == "blocked")[-1]
         assert blocked["success"] is False  # A running Turn owns its Session.
+        send(child, {"id": "clear-me", "type": "follow_up", "message": "NEVER"})
+        assert until(child, lambda r: r.get("id") == "clear-me")[-1]["success"]
+        send(child, {"id": "clear", "type": "clear_queue"})
+        cleared = until(child, lambda r: r.get("id") == "clear")[-1]
+        assert cleared["success"] and len(cleared["data"]["follow_up"]) == 1, cleared
+        assert cleared["data"]["follow_up"][0]["id"] == "clear-me", cleared
         send(child, {"id": "abort", "type": "abort"})
         records = until(child, lambda r: r["type"] == "turn_end")
         assert any(r.get("id") == "abort" and r["success"] for r in records)
@@ -177,11 +209,15 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert read(closing)["type"] == "ready"
         send(closing, {"id": "closing", "type": "prompt", "message": "SLOW"})
         until(closing, lambda r: r.get("id") == "closing")
+        send(closing, {"id": "uncommitted", "type": "follow_up", "message": "LATER"})
+        assert until(closing, lambda r: r.get("id") == "uncommitted")[-1]["success"]
         closing.stdin.close()
         settled = until(closing, lambda r: r["type"] == "turn_end")[-1]
         assert settled["status"] == "cancelled", settled
+        returned = until(closing, lambda r: r["type"] == "uncommitted_follow_up")[-1]
+        assert returned["id"] == "uncommitted" and returned["input"]["content"][0]["Text"] == "LATER", returned
         assert closing.wait(timeout=8) == 0, closing.stderr.read()
-        print("Ion RPC acceptance, inline images, typed image steering, settlement, abort, resources and session control: OK")
+        print("Ion RPC acceptance, inline images, steering, follow-ups, settlement, abort and session control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()

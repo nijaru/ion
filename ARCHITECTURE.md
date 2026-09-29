@@ -347,6 +347,12 @@ the same host normalization and selected-model capability check before Turn
 acceptance, so a controller can submit images without sharing Ion's filesystem.
 The command-size bound includes the encoded bytes; invalid or oversized inline
 content receives a command error without committing a Turn.
+RPC steering is input for the active Turn; a follow-up is retained by the
+control process for a later Turn and is not a Session fact until accepted.
+Normalize its images and expand its resource command when queued. A queued
+follow-up starts after the current Turn settles, even if that Turn was
+cancelled, unless the client clears the queue. Report its later Turn ID and
+return uncommitted queued input when the control process closes.
 
 Earlier-point exploration selects a committed Turn boundary without erasing
 later history. Forking before a selected user Turn makes that input editable

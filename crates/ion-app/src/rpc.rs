@@ -1,5 +1,5 @@
 //! Long-lived JSONL client of the shared host and coding loop.
-use std::{path::PathBuf, sync::Arc};
+use std::{collections::VecDeque, path::PathBuf, sync::Arc};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::{Content, Message, Role};
@@ -15,6 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{expand_input, preview_input, redact_image_payloads, write_json_record};
 
 const MAX_COMMAND_BYTES: usize = 8 * 1024 * 1024;
+const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
 
 enum Input {
     Line(Vec<u8>),
@@ -32,6 +33,12 @@ struct Active {
     steering: Arc<SteeringInbox>,
 }
 
+struct QueuedFollowUp {
+    id: Option<Value>,
+    input: Message,
+    encoded_bytes: usize,
+}
+
 /// The only mutable control state. The Session and selected route are fixed
 /// inside each spawned Turn, so idle commands cannot change a running Turn.
 struct Control {
@@ -41,6 +48,8 @@ struct Control {
     selected: Selection,
     resources: Resources,
     active: Option<Active>,
+    follow_ups: VecDeque<QueuedFollowUp>,
+    queued_bytes: usize,
     output: mpsc::Sender<Output>,
     external_tools: Option<Arc<dyn CodingToolHost>>,
 }
@@ -61,6 +70,8 @@ pub async fn run(
         selected,
         resources,
         active: None,
+        follow_ups: VecDeque::new(),
+        queued_bytes: 0,
         output,
         external_tools,
     };
@@ -73,7 +84,7 @@ pub async fn run(
         tokio::select! {
             line = read_command(&mut input), if !closing => {
                 match line? {
-                    Input::Line(line) => control.command(&line).await?,
+                    Input::Line(line) => control.command(&line)?,
                     Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
                     Input::Eof => {
                         closing = true;
@@ -84,11 +95,15 @@ pub async fn run(
             Some(output) = events.recv(), if control.active.is_some() => {
                 match output {
                     Output::Record(record) => write_json_record(&record)?,
-                    Output::Done => control.active = None,
+                    Output::Done => {
+                        control.active = None;
+                        if !closing { control.start_next_follow_up()?; }
+                    }
                 }
             }
         }
         if closing && control.active.is_none() {
+            control.return_uncommitted_follow_ups()?;
             break;
         }
     }
@@ -149,7 +164,7 @@ impl Control {
         Ok(())
     }
 
-    async fn command(&mut self, line: &[u8]) -> Result<()> {
+    fn command(&mut self, line: &[u8]) -> Result<()> {
         let value: Value = match serde_json::from_slice(line) {
             Ok(value) => value,
             Err(error) => {
@@ -168,7 +183,7 @@ impl Control {
             return Ok(());
         }
         if command == "prompt" {
-            if let Err(error) = self.prompt(&value, id.clone()).await {
+            if let Err(error) = self.prompt(&value, id.clone()) {
                 write_json_record(&failure(id, command, &format!("{error:#}")))?;
             }
             return Ok(());
@@ -184,6 +199,28 @@ impl Control {
                     active.steering.push_message(input_with_images(prompt, images))?;
                     Ok(json!({"disposition":"queued"}))
                 }
+                "follow_up" => {
+                    ensure!(self.active.is_some(), "no active Turn; use prompt instead");
+                    let message = required_string(&value, "message")?;
+                    let prompt = expand_input(&self.resources, message.to_owned())?;
+                    let images = self.load_images(&value)?;
+                    ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
+                    let input = input_with_images(prompt, images);
+                    let encoded_bytes = serde_json::to_vec(&(&id, &input))?.len();
+                    ensure!(
+                        self.queued_bytes.checked_add(encoded_bytes).is_some_and(|total| total <= MAX_QUEUED_BYTES),
+                        "queued follow-ups exceed the 32 MiB process bound"
+                    );
+                    self.follow_ups.push_back(QueuedFollowUp { id: id.clone(), input, encoded_bytes });
+                    self.queued_bytes += encoded_bytes;
+                    Ok(json!({"disposition":"queued","position":self.follow_ups.len()}))
+                }
+                "clear_queue" => {
+                    let steering = self.active.as_ref().map_or_else(Vec::new, |active| active.steering.take_uncommitted());
+                    let follow_up = self.follow_ups.drain(..).map(|pending| json!({"id":pending.id,"input":pending.input})).collect::<Vec<_>>();
+                    self.queued_bytes = 0;
+                    Ok(json!({"steering":steering,"follow_up":follow_up}))
+                }
                 "abort" => {
                     let active = self.active.as_ref().context("no active Turn")?;
                     active.stop.cancel();
@@ -191,7 +228,7 @@ impl Control {
                 }
                 "get_state" => {
                     let view = self.session.view()?;
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.selected.identity(),"busy":self.active.is_some(),"entries":view.entries.len()}))
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.selected.identity(),"busy":self.active.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
                     let mut view = serde_json::to_value(self.session.view()?)?;
@@ -288,7 +325,7 @@ impl Control {
         })
     }
 
-    async fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
+    fn prompt(&mut self, value: &Value, id: Option<Value>) -> Result<()> {
         self.idle()?;
         let prompt = required_string(value, "message")?;
         let prompt = expand_input(&self.resources, prompt.to_owned())?;
@@ -297,7 +334,36 @@ impl Control {
             !prompt.trim().is_empty() || !images.is_empty(),
             "message is empty"
         );
-        let input = input_with_images(prompt, images);
+        self.start_message(input_with_images(prompt, images), id, false)
+    }
+
+    fn start_next_follow_up(&mut self) -> Result<()> {
+        while let Some(pending) = self.follow_ups.pop_front() {
+            self.queued_bytes -= pending.encoded_bytes;
+            let id = pending.id;
+            let input = pending.input;
+            match self.start_message(input.clone(), id.clone(), true) {
+                Ok(()) => return Ok(()),
+                Err(error) => write_json_record(&json!({
+                    "type":"follow_up_failed","id":id,"input":input,"error":format!("{error:#}")
+                }))?,
+            }
+        }
+        Ok(())
+    }
+
+    fn return_uncommitted_follow_ups(&mut self) -> Result<()> {
+        for pending in self.follow_ups.drain(..) {
+            write_json_record(&json!({
+                "type":"uncommitted_follow_up","id":pending.id,"input":pending.input
+            }))?;
+        }
+        self.queued_bytes = 0;
+        Ok(())
+    }
+
+    fn start_message(&mut self, input: Message, id: Option<Value>, queued: bool) -> Result<()> {
+        self.idle()?;
         let agent = self.host.agent_with_optional_tools(
             &self.session,
             &self.selected,
@@ -311,6 +377,7 @@ impl Control {
         let output = self.output.clone();
         let task_stop = stop.clone();
         let task_steering = steering.clone();
+        let recover_input = queued.then(|| input.clone());
         self.active = Some(Active { stop, steering });
         tokio::spawn(async move {
             let mut accepted = None;
@@ -326,14 +393,16 @@ impl Control {
                     |event| match event {
                         CodingAgentEvent::TurnAccepted { turn } => {
                             accepted = Some(turn);
-                            if output
-                                .try_send(Output::Record(success(
+                            let record = if queued {
+                                json!({"type":"follow_up_started","id":id,"turn":turn})
+                            } else {
+                                success(
                                     id.clone(),
                                     "prompt",
                                     json!({"disposition":"started","turn":turn}),
-                                )))
-                                .is_err()
-                            {
+                                )
+                            };
+                            if output.try_send(Output::Record(record)).is_err() {
                                 output_fault = Some("RPC output queue is full".to_owned());
                                 task_stop.cancel();
                             }
@@ -370,9 +439,12 @@ impl Control {
                     || "Turn was not accepted".to_owned(),
                     |error| error.to_string(),
                 );
-                let _ = output
-                    .send(Output::Record(failure(id, "prompt", &error)))
-                    .await;
+                let record = if queued {
+                    json!({"type":"follow_up_failed","id":id,"input":recover_input,"error":error})
+                } else {
+                    failure(id, "prompt", &error)
+                };
+                let _ = output.send(Output::Record(record)).await;
             }
             for pending in task_steering.take_uncommitted() {
                 let _ = output
