@@ -1163,9 +1163,15 @@ fn busy_key(
             {
                 match expanded {
                     Ok(prompt) => {
-                        steering.push(prompt);
-                        ui.status = "Steering sent for the next model step".into();
-                        return;
+                        match steering.push_message(Message::user_input(prompt, ui.images.clone()))
+                        {
+                            Ok(()) => {
+                                ui.images.clear();
+                                ui.status = "Steering sent for the next model step".into();
+                                return;
+                            }
+                            Err(error) => ui.status = format!("Steering was not queued: {error}"),
+                        }
                     }
                     Err(error) => ui.status = format!("{error:#}"),
                 }
@@ -2483,6 +2489,8 @@ mod tests {
         .unwrap();
         let resources = Resources::load(&root, &root.join("config")).unwrap();
         let mut ui = Frontend::default();
+        ui.images
+            .push(ion_ai::normalize_rgba(1, 1, vec![255, 0, 0, 255]).unwrap());
         ui.insert("/skill:ion-terminal-audit-test src/lib.rs");
         let steering = SteeringInbox::default();
         busy_key(
@@ -2500,6 +2508,8 @@ mod tests {
         };
         assert!(prompt.contains("AUDIT_MARKER"));
         assert!(prompt.contains("User request: src/lib.rs"));
+        assert!(matches!(queued[0].content[1], Content::Image(_)));
+        assert!(ui.images.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 
