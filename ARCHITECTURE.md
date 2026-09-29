@@ -35,6 +35,12 @@ are outside this initial scope.
 
 ## Owners and loop
 
+Ion's core is the production Rust architecture that carries every coding
+workflow above: provider-neutral messages, one durable Session and Turn owner,
+host composition, and thin clients. Pi's Pico and durable-harness work informs
+the explicit ownership, passive-open and recovery boundaries. Ion's coding
+Turn and typed log are the chosen Rust expression of those lessons.
+
 `ion-ai` owns provider-neutral messages, streams and usage facts. Provider
 adapters own wire encoding and provider-specific constraints. `ion-core`
 owns one committed Session log and the coding Turn loop: ordered conversation,
