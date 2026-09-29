@@ -539,12 +539,16 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
     let mut messages = Vec::new();
     let mut pending = BTreeMap::<String, (String, String)>::new();
     let mut next_call = 0usize;
+    let mut tool_images = Vec::new();
     for message in &request.messages {
         if message.content.is_empty() {
             return Err(invalid("empty transcript message"));
         }
         if message.role != Role::Tool && !pending.is_empty() {
             return Err(invalid("unanswered tool calls"));
+        }
+        if !anthropic && message.role != Role::Tool && !tool_images.is_empty() {
+            append_chat_tool_images(&mut messages, &mut tool_images);
         }
         let mut text = String::new();
         let mut blocks = Vec::new();
@@ -603,9 +607,27 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
                         return Err(invalid("tool result name does not match call"));
                     }
                     if anthropic {
-                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":result.result.to_string(),"is_error":result.is_error}));
+                        let mut content =
+                            vec![json!({"type":"text","text":result.result.to_string()})];
+                        for image in &result.images {
+                            image
+                                .validate()
+                                .map_err(|_| invalid("invalid tool image data in transcript"))?;
+                            content.push(json!({"type":"image","source":{
+                                "type":"base64","media_type":image.mime_type().as_str(),"data":image.data()
+                            }}));
+                        }
+                        blocks.push(json!({"type":"tool_result","tool_use_id":wire_id,"content":content,"is_error":result.is_error}));
                     } else {
                         results.push(json!({"role":"tool","tool_call_id":wire_id,"content":result.result.to_string()}));
+                        for image in &result.images {
+                            image
+                                .validate()
+                                .map_err(|_| invalid("invalid tool image data in transcript"))?;
+                            tool_images.push(json!({"type":"image_url","image_url":{
+                                "url":format!("data:{};base64,{}", image.mime_type().as_str(), image.data())
+                            }}));
+                        }
                     }
                 }
                 _ => return Err(invalid("content does not match transcript role")),
@@ -653,6 +675,9 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
             messages.push(value);
         }
     }
+    if !anthropic && !tool_images.is_empty() {
+        append_chat_tool_images(&mut messages, &mut tool_images);
+    }
     if !pending.is_empty() {
         return Err(invalid("unanswered tool calls"));
     }
@@ -662,6 +687,12 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
         return Err(unsupported("Anthropic assistant prefill is unsupported"));
     }
     Ok(messages)
+}
+
+fn append_chat_tool_images(messages: &mut Vec<Value>, images: &mut Vec<Value>) {
+    let mut content = vec![json!({"type":"text","text":"Attached image(s) from tool result:"})];
+    content.append(images);
+    messages.push(json!({"role":"user","content":content}));
 }
 
 fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderError> {
@@ -1610,6 +1641,7 @@ mod tests {
                 call_id: "provider-id".into(),
                 name: "read".into(),
                 result: json!({"ok":true}),
+                images: Vec::new(),
                 is_error: false,
             })],
             provider_replay: None,
@@ -1633,6 +1665,7 @@ mod tests {
             call_id: "provider-id".into(),
             name: "read".into(),
             result: json!({"error":"file missing"}),
+            images: Vec::new(),
             is_error: true,
         })];
         let anthropic = anthropic_body(&request).unwrap();
@@ -1652,9 +1685,71 @@ mod tests {
             call_id: "wrong".into(),
             name: "read".into(),
             result: json!(null),
+            images: Vec::new(),
             is_error: true,
         })];
         assert!(chat_body(&request, HttpWire::ChatCompletions).is_err());
+    }
+
+    #[test]
+    fn tool_images_keep_all_tool_replies_adjacent_on_chat_and_stay_inside_anthropic_results() {
+        let image = ion_ai::ImageContent::from_bytes(&[
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ])
+        .unwrap();
+        let mut request = request();
+        request.messages.push(Message {
+            role: Role::Assistant,
+            content: ["first", "second"]
+                .into_iter()
+                .map(|id| {
+                    Content::ToolCall(ToolCall {
+                        id: id.into(),
+                        name: "read".into(),
+                        arguments: json!({"path":"a.png"}),
+                        raw_arguments: None,
+                    })
+                })
+                .collect(),
+            provider_replay: None,
+        });
+        for id in ["first", "second"] {
+            request.messages.push(Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult(ToolResult {
+                    call_id: id.into(),
+                    name: "read".into(),
+                    result: json!({"path":"a.png"}),
+                    images: vec![image.clone()],
+                    is_error: false,
+                })],
+                provider_replay: None,
+            });
+        }
+        let chat = chat_body(&request, HttpWire::ChatCompletions).unwrap();
+        let messages = chat["messages"].as_array().unwrap();
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[4]["role"], "tool");
+        assert_eq!(messages[5]["role"], "user");
+        assert_eq!(messages[5]["content"].as_array().unwrap().len(), 3);
+        assert!(
+            messages[5]["content"][1]["image_url"]["url"]
+                .as_str()
+                .unwrap()
+                .starts_with("data:image/png;base64,")
+        );
+
+        let anthropic = anthropic_body(&request).unwrap();
+        let results = anthropic["messages"][2]["content"].as_array().unwrap();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0]["content"][1]["type"], "image");
+        assert_eq!(
+            results[1]["content"][1]["source"]["media_type"],
+            "image/png"
+        );
     }
 
     #[test]

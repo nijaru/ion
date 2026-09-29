@@ -21,7 +21,7 @@ use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 3;
+const FORMAT_VERSION: u32 = 4;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -816,6 +816,7 @@ impl Session {
                     call_id: call.id.clone(),
                     name: call.name.clone(),
                     result: serde_json::json!({"error": "Tool call was not executed: the model response hit the output token limit and its arguments may be truncated. Reissue the complete call."}),
+                    images: Vec::new(),
                     is_error: true,
                 }),
                 _ => None,
@@ -881,6 +882,7 @@ fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry>
     pending.iter().map(|(call_id, name)| SessionEntry::ToolResult { turn, result: ToolResult {
         call_id: call_id.clone(), name: name.clone(),
         result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
+        images: Vec::new(),
         is_error: true,
     }}).collect()
 }
@@ -1712,6 +1714,7 @@ mod tests {
                     call_id: "one".into(),
                     name: "read".into(),
                     result: serde_json::json!({"content":"a"}),
+                    images: Vec::new(),
                     is_error: false,
                 },
             )
@@ -1724,6 +1727,7 @@ mod tests {
                     call_id: "two".into(),
                     name: "read".into(),
                     result: serde_json::json!({"content":"b"}),
+                    images: Vec::new(),
                     is_error: false,
                 },
             )
@@ -1830,6 +1834,7 @@ mod tests {
                     call_id: "call".into(),
                     name: "read".into(),
                     result: serde_json::json!({"error":"file missing"}),
+                    images: Vec::new(),
                     is_error: true,
                 },
             )

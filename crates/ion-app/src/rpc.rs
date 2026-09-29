@@ -441,7 +441,7 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             name,
             output,
         } => {
-            json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error})
+            json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error})
         }
         CodingAgentEvent::ToolRejected {
             call_id,

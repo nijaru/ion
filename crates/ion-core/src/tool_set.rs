@@ -46,6 +46,7 @@ impl ToolHost for ToolSet {
             None => Box::pin(async move {
                 ToolOutput {
                     value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
+                    images: Vec::new(),
                     is_error: true,
                 }
             }),
@@ -75,6 +76,7 @@ mod tests {
             Box::pin(async move {
                 ToolOutput {
                     value: json!(self.1),
+                    images: Vec::new(),
                     is_error: false,
                 }
             })

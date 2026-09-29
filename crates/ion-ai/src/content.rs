@@ -21,6 +21,9 @@ pub struct ToolResult {
     pub call_id: String,
     pub name: String,
     pub result: Value,
+    /// Normalized, replayable image attachments from this tool call.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageContent>,
     #[serde(default)]
     pub is_error: bool,
 }
@@ -55,7 +58,7 @@ impl ImageMime {
         }
     }
 
-    fn detect(bytes: &[u8]) -> Option<Self> {
+    pub fn detect(bytes: &[u8]) -> Option<Self> {
         if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
             Some(Self::Png)
         } else if bytes.starts_with(b"\xff\xd8\xff") {

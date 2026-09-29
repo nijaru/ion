@@ -305,9 +305,10 @@ impl Progress {
                 .events
                 .push(format!("→ {name} {}", brief(&arguments.to_string(), 2048))),
             CodingAgentEvent::ToolFinished { name, output, .. } => self.events.push(format!(
-                "← {name} {}: {}",
+                "← {name} {}: {}{}",
                 if output.is_error { "error" } else { "done" },
-                brief(&output.value.to_string(), 2048)
+                brief(&output.value.to_string(), 2048),
+                image_markers(&output.images)
             )),
             CodingAgentEvent::ToolRejected { name, output, .. } => self.events.push(format!(
                 "↛ {name} skipped: {}",
@@ -1869,8 +1870,12 @@ impl Frontend {
         let result = results[index - 1];
         self.tool_view = Some(ToolView {
             label: format!("Tool {index}: {} · Esc or Ctrl-O closes", result.name),
-            output: serde_json::to_string_pretty(&result.result)
-                .unwrap_or_else(|_| result.result.to_string()),
+            output: format!(
+                "{}{}",
+                serde_json::to_string_pretty(&result.result)
+                    .unwrap_or_else(|_| result.result.to_string()),
+                image_markers(&result.images)
+            ),
             scroll: 0,
         });
         self.status = format!("Viewing tool result {index}");
@@ -2224,9 +2229,10 @@ fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
                         push_wrapped(
                             &mut rows,
                             &format!(
-                                "← {} {}",
+                                "← {} {}{}",
                                 result.name,
-                                brief(&result.result.to_string(), 2048)
+                                brief(&result.result.to_string(), 2048),
+                                image_markers(&result.images)
                             ),
                             width,
                         );
@@ -2265,6 +2271,13 @@ fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
     }
     rows.push(line);
 }
+fn image_markers(images: &[ion_ai::ImageContent]) -> String {
+    images
+        .iter()
+        .map(|image| format!("\n[image: {}]", image.mime_type().as_str()))
+        .collect()
+}
+
 fn brief(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.into();
@@ -2504,6 +2517,7 @@ mod tests {
                     call_id: "call".into(),
                     name: "exec".into(),
                     result: serde_json::json!({"stdout": output}),
+                    images: Vec::new(),
                     is_error: false,
                 })],
                 provider_replay: None,

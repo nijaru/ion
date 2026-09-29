@@ -177,6 +177,16 @@ complete. Exact text edits must handle ordinary BOM and
 line-ending conventions without silently changing unrelated text. An atomic
 replacement of an existing file must still respect its effective write
 permission; directory rename access alone does not make it an editable target.
+The read tool can return a workspace image as a typed tool result. Image
+normalization and bounds have one provider-neutral owner shared with user
+attachments. Session history retains the normalized bytes for replay; terminal
+and inspection views show a marker rather than base64. Provider adapters
+translate this result without changing its Session identity: Anthropic can
+carry image blocks inside a tool result, while Chat Completions needs text in
+the tool message followed by an image-bearing user message. If a selected
+route cannot represent an image, report the limitation rather than silently
+discarding it. Count tool images under the same request-size and context
+bounds as user images.
 Support optional command timeouts and cancellation, and bound payload and
 output sizes at usable values. A raw input or provider response admitted by
 the host must fit its encoded Session entry; model context can still be a

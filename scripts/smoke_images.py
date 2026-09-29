@@ -38,10 +38,16 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        events = [
-            {"id": "images", "choices": [{"index": 0, "delta": {"content": "IMAGE_OK"}, "finish_reason": None}]},
-            {"id": "images", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
-        ]
+        if any(message.get("content") == "Read workspace picture." for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
+            events = [
+                {"id": "images", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-picture", "type": "function", "function": {"name": "read", "arguments": '{"path":"red.png"}'}}]}, "finish_reason": None}]},
+                {"id": "images", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
+            ]
+        else:
+            events = [
+                {"id": "images", "choices": [{"index": 0, "delta": {"content": "IMAGE_OK"}, "finish_reason": None}]},
+                {"id": "images", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            ]
         payload = b"".join(b"data: " + json.dumps(event).encode() + b"\n\n" for event in events) + b"data: [DONE]\n\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -144,6 +150,21 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 child.send_signal(signal.SIGKILL)
                 child.wait()
             os.close(master)
+        tool_read = subprocess.run([binary, "--cwd", workspace, "run", "Read workspace picture."], env=env, check=True, capture_output=True, text=True)
+        assert tool_read.stdout.strip() == "IMAGE_OK", tool_read
+        assert len(requests) == 6
+        assert requests[4]["messages"][-1]["content"] == "Read workspace picture."
+        tool_messages = requests[5]["messages"]
+        assert tool_messages[-2]["role"] == "tool"
+        assert tool_messages[-2]["content"] == '{"content":"Read image file [image/png]","note":null,"path":"red.png"}'
+        assert tool_messages[-1]["role"] == "user"
+        assert tool_messages[-1]["content"][1]["image_url"]["url"].startswith("data:image/png;base64,")
+        inspected = subprocess.run([binary, "--cwd", workspace, "--continue", "inspect"], env=env, check=True, capture_output=True, text=True).stdout
+        assert "base64 image data omitted" in inspected
+        assert "iVBORw0KGgo" not in inspected
+        exported = subprocess.run([binary, "--cwd", workspace, "--continue", "export"], env=env, check=True, capture_output=True, text=True).stdout
+        assert "[image: image/png]" in exported
+        assert "iVBORw0KGgo" not in exported
         print("Ion image input, resume, inspection and terminal attachment: OK")
     finally:
         server.shutdown()

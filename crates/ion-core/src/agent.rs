@@ -217,6 +217,12 @@ impl Agent {
             .flat_map(|message| &message.content)
             .fold((0usize, 0u64), |(bytes, count), part| match part {
                 Content::Image(image) => (bytes.saturating_add(image.data().len()), count + 1),
+                Content::ToolResult(result) => result
+                    .images
+                    .iter()
+                    .fold((bytes, count), |(bytes, count), image| {
+                        (bytes.saturating_add(image.data().len()), count + 1)
+                    }),
                 _ => (bytes, count),
             });
         // Serialized base64 counts against the transport bound, but it is
@@ -635,6 +641,14 @@ impl Agent {
                         parallel_tool_calls: true,
                     },
                 };
+                if !self.limits.image_input
+                    && request.messages.iter().flat_map(|message| &message.content).any(|part| {
+                        matches!(part, Content::Image(_))
+                            || matches!(part, Content::ToolResult(result) if !result.images.is_empty())
+                    })
+                {
+                    return Err(AgentError::ImagesUnsupported);
+                }
                 let (request_bytes, estimated_input) = Self::request_footprint(&request)?;
                 let Some(output_budget) = self.output_budget(
                     request_bytes,
@@ -761,6 +775,7 @@ impl Agent {
                         name: result.name,
                         output: ToolOutput {
                             value: result.result,
+                            images: Vec::new(),
                             is_error: true,
                         },
                     });
@@ -814,20 +829,39 @@ impl Agent {
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
                 });
-                let output = if call.raw_arguments.is_some() {
+                let mut output = if call.raw_arguments.is_some() {
                     ToolOutput {
                         value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
+                        images: Vec::new(),
                         is_error: true,
                     }
                 } else {
                     self.tools.execute(&call, stop.clone()).await
                 };
+                if !self.limits.image_input && !output.images.is_empty() {
+                    output = ToolOutput {
+                        value: serde_json::json!({"error":"selected model route does not support image tool results; choose an image-capable model and read the file again"}),
+                        images: Vec::new(),
+                        is_error: true,
+                    };
+                }
+                if output.images.iter().any(|image| image.validate().is_err())
+                    || serde_json::to_vec(&(&output.value, &output.images))?.len()
+                        > self.limits.max_request_bytes
+                {
+                    output = ToolOutput {
+                        value: serde_json::json!({"error":"tool result image data is invalid or exceeds this route's request bound; the tool may already have affected the workspace"}),
+                        images: Vec::new(),
+                        is_error: true,
+                    };
+                }
                 session.record_tool_result(
                     turn,
                     ToolResult {
                         call_id: call.id.clone(),
                         name: call.name.clone(),
                         result: output.value.clone(),
+                        images: output.images.clone(),
                         is_error: output.is_error,
                     },
                 )?;
@@ -889,6 +923,7 @@ pub enum AgentEvent {
 #[derive(Debug, Clone)]
 pub struct ToolOutput {
     pub value: Value,
+    pub images: Vec<ion_ai::ImageContent>,
     pub is_error: bool,
 }
 
@@ -1192,6 +1227,89 @@ mod tests {
             .unwrap();
         assert_eq!(answer, "still here");
         assert_eq!(reopened.messages().unwrap().len(), 7);
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() {
+        struct ImageTool;
+        impl ToolHost for ImageTool {
+            fn specs(&self) -> Vec<ToolSpec> {
+                vec![ToolSpec {
+                    name: "picture".into(),
+                    description: "picture".into(),
+                    input_schema: serde_json::json!({"type":"object"}),
+                }]
+            }
+            fn execute<'a>(
+                &'a self,
+                _: &'a ToolCall,
+                _: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async {
+                    ToolOutput {
+                        value: serde_json::json!({"path":"picture.png"}),
+                        images: vec![tiny_image()],
+                        is_error: false,
+                    }
+                })
+            }
+        }
+        let root = std::env::temp_dir().join(format!("ion-tool-image-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let call = || {
+            response(vec![Content::ToolCall(ToolCall {
+                id: "picture-call".into(),
+                name: "picture".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })])
+        };
+        let scripts = Arc::new(ScriptedModelService::new([
+            call(),
+            response(vec![Content::Text("saw it".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(ImageTool)).with_limits(AgentLimits {
+            image_input: true,
+            ..AgentLimits::default()
+        });
+        agent
+            .submit(
+                &session,
+                model(),
+                "inspect".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+        assert!(
+            matches!(&scripts.requests()[1].messages[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
+        );
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        assert!(
+            matches!(&reopened.messages().unwrap()[2].content[0], Content::ToolResult(result) if result.images.len() == 1)
+        );
+        let text_service = Arc::new(ScriptedModelService::new([]));
+        let text_agent = Agent::new(text_service.clone(), Arc::new(ImageTool));
+        let error = text_agent
+            .submit(
+                &reopened,
+                model(),
+                "continue".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap_err();
+        assert!(matches!(error, AgentError::ImagesUnsupported));
+        assert!(text_service.requests().is_empty());
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }

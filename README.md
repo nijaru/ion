@@ -74,7 +74,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 3; earlier development Session
+This unreleased branch uses Session format 4; earlier development Session
 files are not reopened.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
 Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
@@ -163,6 +163,10 @@ Image bytes are stored in the Session so follow-up requests can still see
 them after the source file changes; `ion inspect` shows an image marker
 instead of printing base64. A custom endpoint needs `ion use ... --images`
 to declare that its model accepts image input.
+The model's `read` tool can also open a workspace image and return it as a
+typed attachment. It uses the same normalization and size bounds as a user
+attachment. Tool images remain in Session history for replay; text-only model
+routes receive an explicit tool error instead of an unseen image.
 
 Ion also discovers Agent Skills from `~/.agents/skills/`,
 `~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project

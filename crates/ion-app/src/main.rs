@@ -610,7 +610,10 @@ async fn headless(
                 }
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
                 CodingAgentEvent::ToolFinished { name, output, .. } => {
-                    eprintln!("[tool: {name}] {}", output.value)
+                    eprintln!("[tool: {name}] {}", output.value);
+                    for image in &output.images {
+                        eprintln!("[tool image: {}]", image.mime_type().as_str());
+                    }
                 }
                 CodingAgentEvent::ToolRejected { name, output, .. } => {
                     eprintln!("[tool skipped: {name}] {}", output.value)
@@ -663,8 +666,11 @@ fn write_json_record(value: &serde_json::Value) -> io::Result<()> {
 fn redact_image_payloads(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(fields) => {
-            if let Some(serde_json::Value::Object(image)) = fields.get_mut("Image")
-                && let Some(serde_json::Value::String(data)) = image.get_mut("data")
+            if fields
+                .get("mime_type")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|mime| mime.starts_with("image/"))
+                && let Some(serde_json::Value::String(data)) = fields.get_mut("data")
             {
                 *data = format!("[base64 image data omitted: {} characters]", data.len());
             }

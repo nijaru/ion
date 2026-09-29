@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use ion_ai::{BoxFuture, ToolCall, ToolSpec};
+use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use rustix::process::{Pid, Signal, kill_process_group};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -131,6 +131,47 @@ impl LocalTools {
             Ok(_) => return error("read target is not a regular file"),
             Err(e) => return error(e.to_string()),
         };
+        let mut header = [0u8; 16];
+        let header_len = match file.read(&mut header) {
+            Ok(len) => len,
+            Err(e) => return error(format!("read {}: {e}", input.path)),
+        };
+        let image_extension = path
+            .extension()
+            .and_then(|part| part.to_str())
+            .is_some_and(|part| {
+                matches!(
+                    part.to_ascii_lowercase().as_str(),
+                    "png" | "jpg" | "jpeg" | "gif" | "webp"
+                )
+            });
+        if image_extension || ImageMime::detect(&header[..header_len]).is_some() {
+            if input.offset.is_some() || input.limit.is_some() {
+                return error("image read does not accept offset or limit");
+            }
+            if size > MAX_SOURCE_BYTES as u64 {
+                return error("image exceeds 32 MiB source bound");
+            }
+            if let Err(e) = file.seek(SeekFrom::Start(0)) {
+                return error(e.to_string());
+            }
+            let mut bytes = Vec::new();
+            if let Err(e) = file
+                .take(MAX_SOURCE_BYTES as u64 + 1)
+                .read_to_end(&mut bytes)
+            {
+                return error(format!("read {}: {e}", input.path));
+            }
+            let image = match normalize_image(&bytes) {
+                Ok(image) => image,
+                Err(e) => return error(format!("read image {}: {e}", input.path)),
+            };
+            return ToolOutput {
+                value: json!({"path":input.path,"content":format!("Read image file [{}]", image.content.mime_type().as_str()),"note":image.note}),
+                images: vec![image.content],
+                is_error: false,
+            };
+        }
         if offset > size {
             return error(format!(
                 "offset {offset} is beyond end of file ({size} bytes)"
@@ -324,6 +365,7 @@ impl LocalTools {
                 let result = json!({"exit_code": status.code(), "signal": status.signal(), "stdout": String::from_utf8_lossy(&stdout.bytes), "stderr": String::from_utf8_lossy(&stderr.bytes), "stdout_truncated": !stdout.complete || stdout.omitted_bytes != Some(0), "stderr_truncated": !stderr.complete || stderr.omitted_bytes != Some(0), "stdout_omitted_bytes": stdout.omitted_bytes, "stderr_omitted_bytes": stderr.omitted_bytes, "cancelled": cancelled, "timed_out": timed_out});
                 ToolOutput {
                     value: result,
+                    images: Vec::new(),
                     is_error: !status.success() || cancelled || timed_out,
                 }
             }
@@ -358,12 +400,14 @@ fn is_executable(path: &Path) -> bool {
 fn success(value: Value) -> ToolOutput {
     ToolOutput {
         value,
+        images: Vec::new(),
         is_error: false,
     }
 }
 fn error(message: impl Into<String>) -> ToolOutput {
     ToolOutput {
         value: json!({"error": message.into()}),
+        images: Vec::new(),
         is_error: true,
     }
 }
@@ -629,7 +673,7 @@ async fn stop_child(
 }
 fn specs() -> Vec<ToolSpec> {
     vec![
-        ToolSpec { name: "read".into(), description: "Read UTF-8 file content from the live working directory. Paths may be relative or absolute. Large files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
+        ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
         ToolSpec { name: "edit".into(), description: "Replace one exact occurrence of old_text in a UTF-8 file; optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","old_text","new_text"],"properties":{"path":{"type":"string"},"old_text":{"type":"string"},"new_text":{"type":"string"},"base_digest":{"type":"string"}}}) },
         ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
         ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. Cancellation is best effort.".into(), input_schema: json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
@@ -730,6 +774,31 @@ mod tests {
         assert_eq!(third.value["has_more"], false);
         let beyond = tools.read(&json!({"path":"file.txt","offset":5}));
         assert!(beyond.is_error);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn read_image_returns_normalized_typed_content() {
+        let root = std::env::temp_dir().join(format!("ion-read-image-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let bytes = [
+            137, 80, 78, 71, 13, 10, 26, 10, 0, 0, 0, 13, 73, 72, 68, 82, 0, 0, 0, 1, 0, 0, 0, 1,
+            8, 6, 0, 0, 0, 31, 21, 196, 137, 0, 0, 0, 13, 73, 68, 65, 84, 120, 156, 99, 248, 207,
+            192, 240, 31, 0, 5, 0, 1, 255, 137, 153, 61, 29, 0, 0, 0, 0, 73, 69, 78, 68, 174, 66,
+            96, 130,
+        ];
+        fs::write(root.join("picture.png"), bytes).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let output = tools.read(&json!({"path":"picture.png"}));
+        assert!(!output.is_error, "{}", output.value);
+        assert_eq!(output.images.len(), 1);
+        assert_eq!(output.images[0].mime_type().as_str(), "image/png");
+        assert_eq!(output.value["path"], "picture.png");
+        assert!(
+            tools
+                .read(&json!({"path":"picture.png","offset":1}))
+                .is_error
+        );
         fs::remove_dir_all(root).unwrap();
     }
 

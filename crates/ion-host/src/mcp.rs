@@ -216,6 +216,7 @@ impl CodingToolHost for McpTools {
                     if serde_json::to_vec(&value).is_ok_and(|bytes| bytes.len() <= 64 * 1024) {
                         CodingToolOutput {
                             value,
+                            images: Vec::new(),
                             is_error: result.is_error.unwrap_or(false),
                         }
                     } else {
@@ -245,6 +246,7 @@ fn validate_name(name: &str) -> Result<()> {
 fn tool_error(message: String) -> CodingToolOutput {
     CodingToolOutput {
         value: json!({"error":message}),
+        images: Vec::new(),
         is_error: true,
     }
 }

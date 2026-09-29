@@ -40,6 +40,9 @@ pub fn render(view: &SessionView) -> String {
                     if result.is_error { "error" } else { "ok" }
                 );
                 json_value(&mut text, &result.result);
+                for image in &result.images {
+                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                }
             }
             SessionEntry::UserShell {
                 command,
@@ -97,6 +100,9 @@ fn message(text: &mut String, message: &Message) {
             Content::ToolResult(result) => {
                 let _ = writeln!(text, "  Tool result · {} · {}", result.name, result.call_id);
                 json_value(text, &result.result);
+                for image in &result.images {
+                    let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());
+                }
             }
         }
     }
