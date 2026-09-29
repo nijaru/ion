@@ -48,6 +48,10 @@ continuation, recovery and bounded model context. A public host composition
 layer selects models, credentials, project resources, tools and Sessions;
 terminal, one-shot headless and sustained-control clients use that layer.
 Terminal rendering and input never become a second agent loop.
+The terminal may cache a bounded wrapped history view, invalidating it after
+Session changes or terminal width changes. Idle keys must not rebuild the
+committed Session projection merely to redraw the editor. The cache never
+owns conversation facts.
 For an active interactive or sustained client, the host owns one binding of
 Session, selected model, resources and agent. New, clone, fork, switch, model
 selection and resource reload update that binding through the same operations

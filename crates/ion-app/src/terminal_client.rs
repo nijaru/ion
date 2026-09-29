@@ -36,6 +36,7 @@ struct Frontend {
     images: Vec<LoadedImage>,
     cursor: usize,
     history: Vec<Message>,
+    wrapped_history: Option<(usize, Vec<String>)>,
     scroll: usize,
     status: String,
     notices: Vec<String>,
@@ -234,8 +235,11 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ui.note(diagnostic);
     }
     loop {
-        ui.context_window_tokens = runtime.selected().context_window_tokens;
-        ui.update_context(runtime.session())?;
+        let context_window_tokens = runtime.selected().context_window_tokens;
+        if ui.context_window_tokens != context_window_tokens {
+            ui.context_window_tokens = context_window_tokens;
+            ui.update_context(runtime.session())?;
+        }
         if let Some(PendingInput { prompt, images }) = ui.pending.pop_front() {
             let prompt = match expand_resource_input(runtime.resources(), prompt) {
                 Ok(prompt) => prompt,
@@ -272,7 +276,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         draw(
             &mut terminal,
             &mut screen,
-            &ui,
+            &mut ui,
             None,
             &runtime.selected().identity(),
             false,
@@ -1341,6 +1345,7 @@ impl Frontend {
 
     fn load_history(&mut self, view: &SessionView) {
         self.history = view.display_messages();
+        self.wrapped_history = None;
         self.prompt_history = view
             .entries
             .iter()
@@ -1367,6 +1372,16 @@ impl Frontend {
     fn update_context(&mut self, session: &CodingSession) -> Result<()> {
         self.context_label = context_label(&session.view()?, self.context_window_tokens);
         Ok(())
+    }
+
+    fn ensure_wrapped_history(&mut self, width: usize) {
+        if self
+            .wrapped_history
+            .as_ref()
+            .is_none_or(|(cached_width, _)| *cached_width != width)
+        {
+            self.wrapped_history = Some((width, history_tail_rows(&self.history, width)));
+        }
     }
 
     fn note(&mut self, message: String) {
@@ -1886,7 +1901,7 @@ fn vertical_cursor(draft: &str, cursor: usize, down: bool) -> Option<usize> {
 fn draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    ui: &Frontend,
+    ui: &mut Frontend,
     progress: Option<&Progress>,
     model: &ModelRef,
     _busy: bool,
@@ -1912,7 +1927,8 @@ fn draw(
         .saturating_sub(composer_height - 1)
         .min(composer.lines.len().saturating_sub(composer_height));
     let history_height = height - composer_height - chrome_height;
-    let mut history = if let Some(view) = &ui.tool_view {
+    let normal_history = ui.tool_view.is_none() && ui.picker.is_none();
+    let dynamic_rows = if let Some(view) = &ui.tool_view {
         let mut rows = vec![view.label.clone()];
         push_wrapped(&mut rows, &view.output, width);
         rows
@@ -1931,7 +1947,7 @@ fn draw(
         }
         rows
     } else {
-        let mut rows = history_rows(&ui.history, width);
+        let mut rows = Vec::new();
         for notice in &ui.notices {
             push_wrapped(&mut rows, notice, width);
         }
@@ -1945,6 +1961,21 @@ fn draw(
         }
         rows
     };
+    if normal_history {
+        ui.ensure_wrapped_history(width);
+    }
+    let mut history = if normal_history {
+        ui.wrapped_history
+            .as_ref()
+            .expect("normal history has a wrapped cache")
+            .1
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    history.extend(dynamic_rows.iter().map(String::as_str));
     if ui.tool_view.is_none() && history.len() > MAX_ROWS {
         history.drain(..history.len() - MAX_ROWS);
     }
@@ -1958,7 +1989,7 @@ fn draw(
     let mut rows = vec![Line::raw(""); height];
     let padding = history_height.saturating_sub(end - start);
     for (i, row) in history[start..end].iter().enumerate() {
-        rows[padding + i] = Line::raw(row.clone());
+        rows[padding + i] = Line::raw((*row).to_owned());
     }
     if chrome_height > 0 {
         rows[history_height] = Line::raw("─".repeat(width));
@@ -2105,6 +2136,27 @@ fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
                 }
             }
         }
+    }
+    rows
+}
+
+fn history_tail_rows(messages: &[Message], width: usize) -> Vec<String> {
+    let mut groups = Vec::new();
+    let mut row_count = 0usize;
+    for message in messages.iter().rev() {
+        let rows = history_rows(std::slice::from_ref(message), width);
+        row_count = row_count.saturating_add(rows.len());
+        groups.push(rows);
+        if row_count >= MAX_ROWS {
+            break;
+        }
+    }
+    let mut rows = Vec::with_capacity(row_count.min(MAX_ROWS));
+    for group in groups.into_iter().rev() {
+        rows.extend(group);
+    }
+    if rows.len() > MAX_ROWS {
+        rows.drain(..rows.len() - MAX_ROWS);
     }
     rows
 }
@@ -2440,5 +2492,30 @@ mod tests {
         ui.insert_file(path, start, end);
         assert_eq!(ui.draft, "Read @src/main.rs");
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn wrapped_history_keeps_recent_rows_and_reflows_on_width_change() {
+        let mut ui = Frontend {
+            history: (0..MAX_ROWS + 100)
+                .map(|index| Message {
+                    role: Role::User,
+                    content: vec![Content::Text(format!("message-{index}"))],
+                    provider_replay: None,
+                })
+                .collect(),
+            ..Frontend::default()
+        };
+        ui.ensure_wrapped_history(80);
+        let cached = &ui.wrapped_history.as_ref().unwrap().1;
+        assert_eq!(cached.len(), MAX_ROWS);
+        assert_eq!(cached.first().unwrap(), "you> message-100");
+        assert_eq!(cached.last().unwrap(), "you> message-4195");
+        let previous = cached.as_ptr();
+        ui.ensure_wrapped_history(80);
+        assert_eq!(ui.wrapped_history.as_ref().unwrap().1.as_ptr(), previous);
+        ui.ensure_wrapped_history(8);
+        assert_eq!(ui.wrapped_history.as_ref().unwrap().0, 8);
+        assert_eq!(ui.wrapped_history.as_ref().unwrap().1.len(), MAX_ROWS);
     }
 }
