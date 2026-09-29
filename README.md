@@ -261,14 +261,16 @@ save an empty assistant message that would break later provider replay.
 ## Current limits
 
 Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
-OpenRouter DeepSeek Flash, and a custom llama.cpp route. OpenRouter and local
+OpenRouter DeepSeek Flash, a custom OpenRouter plain-reasoning route for
+`stealth/space-bunny-alpha`, and a custom llama.cpp route. OpenRouter and local
 llama.cpp tasks also passed on Linux. The OpenRouter route passed user-image
 and workspace-image tasks, resource use, MCP tool use and Session
 continuation. These checks cover selected tasks and routes. Anthropic and
 direct OpenAI have not been live-qualified.
 
-Direct DeepSeek and MiMo and the cataloged OpenRouter DeepSeek Flash route
-retain the reasoning needed for tool-call continuation across saved Turns.
+Direct DeepSeek and MiMo, the cataloged OpenRouter DeepSeek Flash route and
+the qualified custom plain-reasoning route retain the reasoning needed for
+tool-call continuation across saved Turns.
 Signed, encrypted or summarized OpenRouter reasoning is unsupported, as is
 thinking on custom llama.cpp routes. Context pressure uses an approximate
 token estimate; custom routes without a known context window use only the
