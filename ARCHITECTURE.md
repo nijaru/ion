@@ -236,6 +236,17 @@ to rewrite model context. Preserve a bounded provider error reason when an
 Anthropic SSE error arrives after HTTP success; unknown future Anthropic
 event types do not invalidate an otherwise complete message. Stream framing
 accepts SSE line endings across arbitrary transport chunk boundaries.
+When a route emits reasoning that must accompany assistant history during tool
+use, its adapter retains that continuation as provider-scoped opaque replay in
+the committed assistant message and re-encodes it only for a compatible route.
+DeepSeek and MiMo Chat Completions carry their exact streamed
+`reasoning_content` string on every later assistant message when tools are
+offered. This material is not answer text or a tool argument. A route that
+cannot replay a recorded form reports incompatibility before sending the next
+request; it must not silently strip it. Other reasoning formats, including
+OpenRouter `reasoning_details` and Anthropic signed thinking blocks, need
+their own validated replay encoding before thinking is enabled on those
+routes.
 Transient request recovery, when enabled, must be
 bounded, visible, cancellable and must not repeat a completed tool effect.
 Coalesce streamed tool calls by their call index: later repeated or changed

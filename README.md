@@ -255,6 +255,11 @@ unprivileged Linux ARM64 container. On native Fedora, a custom local
 llama.cpp Qwen endpoint completed a read/edit/shell repair and cross-process
 resume. The code and session results were checked independently; these are
 short-task samples, not broad model or platform parity.
+Direct DeepSeek and MiMo routes keep their default thinking behavior and
+retain provider reasoning needed for tool-call continuation across saved
+turns. Both passed live two-turn read-tool checks after this change.
+OpenRouter and custom llama.cpp routes still disable reasoning until their
+different continuation formats are supported.
 
 An OpenRouter DeepSeek V4.1 Flash task also read a workspace PNG through the
 model's `read` tool, identified its left-half color, wrote `red\n` to a file

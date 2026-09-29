@@ -9,7 +9,7 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
     BoxFuture, Content, IncompleteReason, Message, ModelRequest, ModelResponse, ModelService,
-    ModelStream, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
+    ModelStream, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
     ResponseTermination, Role, ToolCall, ToolChoice, Usage,
 };
 use reqwest::{
@@ -24,6 +24,7 @@ use crate::CredentialResolver;
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
+const CHAT_REASONING_CONTENT_REPLAY: &str = "chat_reasoning_content";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
@@ -218,7 +219,7 @@ impl ModelService for HttpModelService {
                 let mut bytes = response.bytes_stream();
                 let mut frame = Vec::new();
                 let mut total = 0usize;
-                let mut decoder = if wire.is_chat() { Decoder::Chat(ChatState::default()) } else { Decoder::Anthropic(AnthropicState::default()) };
+                let mut decoder = if wire.is_chat() { Decoder::Chat(ChatState { wire, ..ChatState::default() }) } else { Decoder::Anthropic(AnthropicState::default()) };
                 while let Some(next) = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, bytes.next())
                     .await
                     .map_err(|_| error(ProviderErrorKind::Timeout, "provider stream idle timeout"))? {
@@ -495,11 +496,6 @@ fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
     if request.model.model.is_empty() || request.messages.is_empty() {
         return Err(invalid("model and conversation must be nonempty"));
     }
-    if request.messages.iter().any(|m| m.provider_replay.is_some()) {
-        return Err(unsupported(
-            "opaque provider replay is unsupported by this transport",
-        ));
-    }
     if request.tools.is_empty()
         && matches!(
             request.controls.tool_choice,
@@ -535,12 +531,36 @@ fn valid_name(name: &str) -> bool {
 
 /// Remap provider call IDs for every request. Their original IDs are only
 /// meaningful inside the response which produced them and may collide later.
-fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, ProviderError> {
+fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, ProviderError> {
+    let anthropic = !wire.is_chat();
     let mut messages = Vec::new();
     let mut pending = BTreeMap::<String, (String, String)>::new();
     let mut next_call = 0usize;
     let mut tool_images = Vec::new();
     for message in &request.messages {
+        let reasoning_content = match &message.provider_replay {
+            Some(_) if message.role != Role::Assistant => {
+                return Err(invalid("provider replay requires an assistant message"));
+            }
+            Some(replay) if !replay.is_compatible_with(&request.model.provider) => {
+                return Err(unsupported(
+                    "provider replay belongs to a different provider",
+                ));
+            }
+            Some(replay)
+                if matches!(wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat)
+                    && replay.kind == CHAT_REASONING_CONTENT_REPLAY =>
+            {
+                Some(
+                    replay
+                        .data
+                        .as_str()
+                        .ok_or_else(|| invalid("invalid reasoning-content replay"))?,
+                )
+            }
+            Some(_) => return Err(unsupported("provider replay is incompatible with route")),
+            None => None,
+        };
         if message.content.is_empty() {
             return Err(invalid("empty transcript message"));
         }
@@ -672,6 +692,14 @@ fn wire_messages(request: &ModelRequest, anthropic: bool) -> Result<Vec<Value>, 
             if !calls.is_empty() {
                 value["tool_calls"] = Value::Array(calls);
             }
+            if let Some(reasoning) = reasoning_content {
+                value["reasoning_content"] = json!(reasoning);
+            } else if message.role == Role::Assistant
+                && !request.tools.is_empty()
+                && matches!(wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat)
+            {
+                value["reasoning_content"] = json!("");
+            }
             messages.push(value);
         }
     }
@@ -706,7 +734,7 @@ fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderEr
     if let Some(instructions) = &request.instructions {
         messages.push(json!({"role":"system","content":instructions}));
     }
-    messages.extend(wire_messages(request, false)?);
+    messages.extend(wire_messages(request, wire)?);
     let mut body = json!({"model":request.model.model,"messages":messages,"stream":true,
         "stream_options":{"include_usage":true},"max_completion_tokens":request.controls.max_output_tokens});
     if let Some(temperature) = request.controls.temperature {
@@ -753,29 +781,28 @@ fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value, ProviderEr
             body["chat_template_kwargs"] = json!({"enable_thinking":false});
         }
         HttpWire::DeepSeekChat => {
-            if !matches!(
-                request.controls.reasoning,
-                Reasoning::ProviderDefault | Reasoning::Off
-            ) {
-                return Err(unsupported(
-                    "DeepSeek thinking needs reasoning-content replay",
-                ));
-            }
             body.as_object_mut()
                 .expect("constructed object")
                 .remove("max_completion_tokens");
             body["max_tokens"] = json!(request.controls.max_output_tokens);
-            body["reasoning_effort"] = json!("none");
-        }
-        HttpWire::MiMoChat => {
-            if !matches!(
-                request.controls.reasoning,
-                Reasoning::ProviderDefault | Reasoning::Off
-            ) {
-                return Err(unsupported("MiMo thinking needs reasoning-content replay"));
+            match request.controls.reasoning {
+                Reasoning::ProviderDefault => {}
+                Reasoning::Off => body["thinking"] = json!({"type":"disabled"}),
+                Reasoning::Low => body["reasoning_effort"] = json!("low"),
+                Reasoning::Medium | Reasoning::High => {
+                    body["reasoning_effort"] = json!("high");
+                }
+                Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
             }
-            body["thinking"] = json!({"type":"disabled"});
         }
+        HttpWire::MiMoChat => match request.controls.reasoning {
+            Reasoning::ProviderDefault => {}
+            Reasoning::Off => body["thinking"] = json!({"type":"disabled"}),
+            Reasoning::Low | Reasoning::Medium | Reasoning::High => {
+                body["thinking"] = json!({"type":"enabled"});
+            }
+            Reasoning::BudgetTokens(_) => unreachable!("rejected above"),
+        },
         HttpWire::OpenRouterNoReasoning => {
             if !matches!(
                 request.controls.reasoning,
@@ -800,7 +827,7 @@ fn anthropic_body(request: &ModelRequest) -> Result<Value, ProviderError> {
             "explicit reasoning and sampling controls are unsupported by Messages",
         ));
     }
-    let messages = wire_messages(request, true)?;
+    let messages = wire_messages(request, HttpWire::AnthropicMessages)?;
     let mut body = json!({"model":request.model.model,"messages":messages,"stream":true,
         "max_tokens":request.controls.max_output_tokens});
     if let Some(instructions) = &request.instructions
@@ -889,13 +916,27 @@ fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
         _ => (json!({}), Some(raw)),
     }
 }
-#[derive(Default)]
 struct ChatState {
     text: String,
+    reasoning_content: String,
+    wire: HttpWire,
     calls: BTreeMap<u64, ChatCall>,
     finish: Option<String>,
     model: Option<String>,
     usage: UsageState,
+}
+impl Default for ChatState {
+    fn default() -> Self {
+        Self {
+            text: String::new(),
+            reasoning_content: String::new(),
+            wire: HttpWire::ChatCompletions,
+            calls: BTreeMap::new(),
+            finish: None,
+            model: None,
+            usage: UsageState::default(),
+        }
+    }
 }
 impl ChatState {
     fn accept(&mut self, value: &Value) -> Result<Vec<ModelStreamEvent>, ProviderError> {
@@ -944,12 +985,21 @@ impl ChatState {
             return Ok(events);
         }
         let delta = &choice["delta"];
-        if delta.get("reasoning_content").is_some_and(has_content)
-            || delta.get("reasoning_details").is_some_and(has_content)
-        {
-            return Err(unsupported(
-                "reasoning content cannot be replayed by this transport",
-            ));
+        if delta.get("reasoning_details").is_some_and(has_content) {
+            return Err(unsupported("structured reasoning replay is unsupported"));
+        }
+        if let Some(reasoning) = delta.get("reasoning_content").filter(|v| !v.is_null()) {
+            let reasoning = reasoning
+                .as_str()
+                .ok_or_else(|| invalid("invalid reasoning_content delta"))?;
+            if !reasoning.is_empty() {
+                if !matches!(self.wire, HttpWire::DeepSeekChat | HttpWire::MiMoChat) {
+                    return Err(unsupported(
+                        "reasoning content cannot be replayed by this transport",
+                    ));
+                }
+                self.reasoning_content.push_str(reasoning);
+            }
         }
         if let Some(part) = delta["content"].as_str().filter(|s| !s.is_empty()) {
             self.text.push_str(part);
@@ -1023,7 +1073,13 @@ impl ChatState {
             message: Message {
                 role: Role::Assistant,
                 content,
-                provider_replay: None,
+                provider_replay: (!self.reasoning_content.is_empty()).then(|| {
+                    ProviderReplay::new(
+                        &request.model.provider,
+                        CHAT_REASONING_CONTENT_REPLAY,
+                        json!(self.reasoning_content),
+                    )
+                }),
             },
             usage: self.usage.value(),
             termination,
@@ -1497,7 +1553,7 @@ mod tests {
             Content::Image(image.clone()),
             Content::Text("and explain".into()),
         ];
-        let chat = wire_messages(&request, false).unwrap();
+        let chat = wire_messages(&request, HttpWire::ChatCompletions).unwrap();
         assert_eq!(chat[0]["content"][0]["text"], "inspect");
         assert!(
             chat[0]["content"][1]["image_url"]["url"]
@@ -1506,7 +1562,7 @@ mod tests {
                 .starts_with("data:image/png;base64,")
         );
         assert_eq!(chat[0]["content"][2]["text"], "and explain");
-        let anthropic = wire_messages(&request, true).unwrap();
+        let anthropic = wire_messages(&request, HttpWire::AnthropicMessages).unwrap();
         assert_eq!(anthropic[0]["content"][0]["text"], "inspect");
         assert_eq!(
             anthropic[0]["content"][1]["source"]["media_type"],
@@ -1515,11 +1571,11 @@ mod tests {
         assert_eq!(anthropic[0]["content"][2]["text"], "and explain");
 
         request.messages[0].content = vec![Content::Text(String::new()), Content::Image(image)];
-        let chat = wire_messages(&request, false).unwrap();
+        let chat = wire_messages(&request, HttpWire::ChatCompletions).unwrap();
         let chat_parts = chat[0]["content"].as_array().unwrap();
         assert_eq!(chat_parts.len(), 1);
         assert_eq!(chat_parts[0]["type"], "image_url");
-        let anthropic = wire_messages(&request, true).unwrap();
+        let anthropic = wire_messages(&request, HttpWire::AnthropicMessages).unwrap();
         assert_eq!(anthropic[0]["content"].as_array().unwrap().len(), 1);
     }
 
@@ -1784,14 +1840,15 @@ mod tests {
     }
 
     #[test]
-    fn flash_profiles_disable_unreplayable_thinking() {
+    fn direct_flash_profiles_keep_default_thinking_with_replay() {
         let request = request();
         let deepseek = chat_body(&request, HttpWire::DeepSeekChat).unwrap();
-        assert_eq!(deepseek["reasoning_effort"], "none");
+        assert!(deepseek.get("reasoning_effort").is_none());
+        assert!(deepseek.get("thinking").is_none());
         assert_eq!(deepseek["max_tokens"], request.controls.max_output_tokens);
         assert!(deepseek.get("max_completion_tokens").is_none());
         let mimo = chat_body(&request, HttpWire::MiMoChat).unwrap();
-        assert_eq!(mimo["thinking"]["type"], "disabled");
+        assert!(mimo.get("thinking").is_none());
         let openrouter = chat_body(&request, HttpWire::OpenRouterNoReasoning).unwrap();
         assert_eq!(openrouter["reasoning"]["enabled"], false);
         let llama_cpp = chat_body(&request, HttpWire::LlamaCppNoThinking).unwrap();
@@ -1799,9 +1856,15 @@ mod tests {
 
         let mut thinking = request;
         thinking.controls.reasoning = Reasoning::High;
+        assert_eq!(
+            chat_body(&thinking, HttpWire::DeepSeekChat).unwrap()["reasoning_effort"],
+            "high"
+        );
+        assert_eq!(
+            chat_body(&thinking, HttpWire::MiMoChat).unwrap()["thinking"]["type"],
+            "enabled"
+        );
         for wire in [
-            HttpWire::DeepSeekChat,
-            HttpWire::MiMoChat,
             HttpWire::OpenRouterNoReasoning,
             HttpWire::LlamaCppNoThinking,
         ] {
@@ -1810,8 +1873,73 @@ mod tests {
                 ProviderErrorKind::Unsupported
             );
         }
+        thinking.controls.reasoning = Reasoning::Off;
+        for wire in [HttpWire::DeepSeekChat, HttpWire::MiMoChat] {
+            assert_eq!(
+                chat_body(&thinking, wire).unwrap()["thinking"]["type"],
+                "disabled"
+            );
+        }
         let mut state = ChatState::default();
         assert_eq!(state.accept(&json!({"choices":[{"delta":{"reasoning_content":"hidden"},"finish_reason":null}]})).unwrap_err().kind, ProviderErrorKind::Unsupported);
+    }
+
+    #[test]
+    fn direct_reasoning_survives_streaming_and_later_tool_requests() {
+        for wire in [HttpWire::DeepSeekChat, HttpWire::MiMoChat] {
+            let mut request = request();
+            request.model.provider = match wire {
+                HttpWire::DeepSeekChat => "deepseek",
+                HttpWire::MiMoChat => "xiaomi",
+                _ => unreachable!(),
+            }
+            .into();
+            let mut state = ChatState {
+                wire,
+                ..ChatState::default()
+            };
+            for part in ["first ", "second"] {
+                state.accept(&json!({"choices":[{"delta":{"reasoning_content":part},"finish_reason":null}]})).unwrap();
+            }
+            state.accept(&json!({"choices":[{"delta":{"tool_calls":[{"index":0,"id":"remote","function":{"name":"read","arguments":"{}"}}]},"finish_reason":"tool_calls"}]})).unwrap();
+            let assistant = state.complete(&request).unwrap().message;
+            assert_eq!(
+                assistant.provider_replay.as_ref().unwrap().data,
+                "first second"
+            );
+            request.messages.push(assistant);
+            request.messages.push(Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult(ToolResult {
+                    call_id: "remote".into(),
+                    name: "read".into(),
+                    result: json!({"value":42}),
+                    images: Vec::new(),
+                    is_error: false,
+                })],
+                provider_replay: None,
+            });
+            request.messages.push(Message {
+                role: Role::User,
+                content: vec![Content::Text("continue".into())],
+                provider_replay: None,
+            });
+            let body = chat_body(&request, wire).unwrap();
+            assert_eq!(body["messages"][2]["reasoning_content"], "first second");
+            assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "ion_call_0");
+            assert_eq!(body["messages"][3]["tool_call_id"], "ion_call_0");
+            let mut wrong_provider = request.clone();
+            wrong_provider.model.provider = "other".into();
+            assert_eq!(
+                chat_body(&wrong_provider, wire).unwrap_err().kind,
+                ProviderErrorKind::Unsupported
+            );
+            request.messages[1].provider_replay.as_mut().unwrap().kind = "unknown".into();
+            assert_eq!(
+                chat_body(&request, wire).unwrap_err().kind,
+                ProviderErrorKind::Unsupported
+            );
+        }
     }
 
     #[test]
