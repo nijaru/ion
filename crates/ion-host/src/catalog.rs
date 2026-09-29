@@ -1,6 +1,6 @@
 //! Curated starting points for the model wire APIs Ion currently implements.
 //!
-//! Checked 2026-09-26, with current Claude models refreshed 2026-09-29,
+//! Checked 2026-09-26, with current Claude and OpenAI models refreshed 2026-09-29,
 //! against the linked provider model pages. A context window
 //! includes input and output tokens; it is not an independent input allowance.
 //! Catalog membership says the wire route exists, not that an account has access
@@ -37,7 +37,7 @@ pub struct CatalogModel {
 }
 
 const CHECKED_ON: &str = "2026-09-26";
-const CLAUDE_CHECKED_ON: &str = "2026-09-29";
+const CURRENT_CHECKED_ON: &str = "2026-09-29";
 const OPENAI_ENDPOINT: &str = "https://api.openai.com/v1/chat/completions";
 const ANTHROPIC_ENDPOINT: &str = "https://api.anthropic.com/v1/messages";
 const OPENROUTER_ENDPOINT: &str = "https://openrouter.ai/api/v1/chat/completions";
@@ -83,6 +83,19 @@ const MODELS: &[CatalogModel] = &[
         image_input: true,
         source_url: "https://openrouter.ai/deepseek/deepseek-v4.1-flash/providers",
         checked_on: CHECKED_ON,
+    },
+    CatalogModel {
+        provider: "openai",
+        id: "gpt-5.5",
+        label: "GPT-5.5",
+        wire: CatalogWire::ChatCompletions,
+        endpoint: OPENAI_ENDPOINT,
+        api_key_env: "OPENAI_API_KEY",
+        context_window: 1_050_000,
+        max_output_tokens: 128_000,
+        image_input: true,
+        source_url: "https://developers.openai.com/api/docs/models/gpt-5.5",
+        checked_on: CURRENT_CHECKED_ON,
     },
     CatalogModel {
         provider: "openai",
@@ -134,7 +147,7 @@ const MODELS: &[CatalogModel] = &[
         max_output_tokens: 128_000,
         image_input: true,
         source_url: "https://platform.claude.com/docs/en/models/opus-5-5/overview",
-        checked_on: CLAUDE_CHECKED_ON,
+        checked_on: CURRENT_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -147,7 +160,7 @@ const MODELS: &[CatalogModel] = &[
         max_output_tokens: 128_000,
         image_input: true,
         source_url: "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
-        checked_on: CLAUDE_CHECKED_ON,
+        checked_on: CURRENT_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -160,7 +173,7 @@ const MODELS: &[CatalogModel] = &[
         max_output_tokens: 128_000,
         image_input: true,
         source_url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
-        checked_on: CLAUDE_CHECKED_ON,
+        checked_on: CURRENT_CHECKED_ON,
     },
     CatalogModel {
         provider: "anthropic",
@@ -226,7 +239,7 @@ mod tests {
         for model in models() {
             assert!(identities.insert((model.provider, model.id)));
             assert!(model.context_window > model.max_output_tokens);
-            assert!(matches!(model.checked_on, CHECKED_ON | CLAUDE_CHECKED_ON));
+            assert!(matches!(model.checked_on, CHECKED_ON | CURRENT_CHECKED_ON));
             assert!(model.source_url.starts_with("https://"));
             assert!(model.endpoint.starts_with("https://"));
             assert!(model.api_key_env.ends_with("_API_KEY"));
