@@ -1,8 +1,11 @@
 # Ion architecture
 
 This file states the chosen coding-agent contracts. [README.md](README.md)
-describes implemented and validated behavior. Ion is unreleased v0, so
-obsolete runtime representations can be replaced directly.
+describes implemented and validated behavior. Ion is unreleased v0 with no
+backward-compatibility or stability guarantees. Replace obsolete runtime,
+API and on-disk representations directly; do not add migration layers,
+deprecated aliases, compatibility facades or preserved development formats
+unless the current design itself requires them.
 
 ## Product
 
@@ -41,12 +44,14 @@ host composition, and thin clients. Pi's Pico and durable-harness work informs
 the explicit ownership, passive-open and recovery boundaries. Ion's coding
 Turn and typed log are the chosen Rust expression of those lessons.
 
-`ion-ai` owns provider-neutral messages, streams and usage facts. Provider
-adapters own wire encoding and provider-specific constraints. `ion-core`
-owns one committed Session log and the coding Turn loop: ordered conversation,
-continuation, recovery and bounded model context. A public host composition
-layer selects models, credentials, project resources, tools and Sessions;
-terminal, one-shot headless and sustained-control clients use that layer.
+`ion-ai` owns provider-neutral messages, streams and usage facts. `ion-core`
+owns one committed Session log, the coding Turn loop and the abstract model/
+tool contracts they consume: ordered conversation, continuation, recovery and
+bounded model context. Concrete HTTP/provider adapters, credentials, native
+filesystem/shell tools, MCP and project resources are host implementations,
+not Session/runtime responsibilities. A public host composition layer selects
+and composes those implementations with models and Sessions; terminal,
+one-shot headless and sustained-control clients use that layer.
 Terminal rendering and input never become a second agent loop.
 The terminal may cache a bounded wrapped history view, invalidating it after
 Session changes or terminal width changes. Idle keys must not rebuild the
@@ -67,7 +72,12 @@ user input -> model stream -> final answer
 ```
 
 One Turn starts from an accepted user message. Each model request uses one
-coherent selection of model, tools, instructions and context. The loop
+coherent selection of model, instructions, context and a **tool catalog
+snapshot**. One snapshot binds every advertised tool schema to the same
+semantic presentation identity and execution route for that model step.
+Dynamic tool discovery may replace the snapshot at a later request boundary,
+but it cannot change the meaning or owner of a call already advertised to the
+model. The loop
 builds model input, streams a response,
 dispatches complete tool calls in order, records their results and continues
 until a final response, cancellation or an explicit failure. There is no
@@ -451,11 +461,21 @@ withdrawn tool call receives an error.
 The server notification marks its snapshot stale. Refresh at the next
 model-request boundary; a successful listing atomically replaces that server's
 tools, while a failed listing keeps the last snapshot and reports a diagnostic.
-The composed tool set resolves current host snapshots in override order.
-Extensions beyond MCP tools need a documented lifecycle for registering commands,
-observing relevant Turn events, and using client UI capabilities when present.
-Extension callbacks cannot mutate committed Session entries or provider wire
-state behind their owners. The external mechanism need not execute Pi's
+The composed tool catalog resolves current host definitions in override order
+and freezes one catalog snapshot per model request. A definition carries the
+provider-facing schema plus non-terminal semantic activity metadata; the
+snapshot retains its execution route so dispatch does not rediscover ownership
+from a later catalog state.
+
+Extensions beyond MCP tools need a documented lifecycle for registering
+commands, observing relevant Turn events, and using client UI capabilities
+when present. Executable registrations are scope-owned: unloading an extension
+must remove its tools, commands, hooks and UI contributions without stale
+callbacks. Use direct Rust ownership/RAII or explicit close semantics before
+considering a general reactive component framework. Add dependency-driven
+activation only for capabilities that genuinely appear or disappear while the
+process stays alive. Extension callbacks cannot mutate committed Session
+entries or provider wire state behind their owners. The external mechanism need not execute Pi's
 TypeScript modules. One-shot JSONL remains a progress stream; a long-lived
 bidirectional control mode must correlate requests, distinguish acceptance
 from settlement, and expose Session, model and resource operations through the

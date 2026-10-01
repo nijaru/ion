@@ -11,9 +11,12 @@
   workflows and fx as a primary reference for shell-like terminal
   presentation; neither is a template to clone. Ion keeps its own Rust
   Session/Turn/host architecture. OAuth is not a first-use gate.
-- Ion is unreleased v0. Replace obsolete R1 representations directly. Do
-  not keep a generic task graph, second runtime, private importer/registry,
-  attempt ledger or compatibility facade simply because it existed before.
+- Ion is unreleased v0 with no backward-compatibility or stability
+  guarantees. Replace obsolete representations, APIs and development storage
+  formats directly. Do not add migrations, deprecated aliases, compatibility
+  facades or parallel old/new paths unless the current coding contract itself
+  requires them. Do not keep a generic task graph, second runtime, private
+  importer/registry or attempt ledger simply because it existed before.
   Retain a mechanism only when the coding contract or a reproduced failure
   warrants it.
 - Tools act in the live working directory with host permissions. There is
