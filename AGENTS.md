@@ -4,12 +4,13 @@
 
 - `ARCHITECTURE.md` holds the current coding-agent design target;
   `README.md` describes implemented and validated behavior.
-- Build one Pi-like local coding loop for TUI, headless and library hosts:
+- Build one cohesive local coding loop for TUI, headless and library hosts:
   read, edit, write, native shell, project instructions, model catalog,
   automatic environment keys, optional masked API-key entry and resumable
-  sessions. The core is Ion's cohesive Rust agent architecture, informed by
-  Pico and other current harnesses; these initial capabilities are its first
-  workflows, not its architectural boundary. OAuth is not a first-use gate.
+  sessions. Use current Pi as a primary reference for mature coding-agent
+  workflows and fx as a primary reference for shell-like terminal
+  presentation; neither is a template to clone. Ion keeps its own Rust
+  Session/Turn/host architecture. OAuth is not a first-use gate.
 - Ion is unreleased v0. Replace obsolete R1 representations directly. Do
   not keep a generic task graph, second runtime, private importer/registry,
   attempt ledger or compatibility facade simply because it existed before.
@@ -26,11 +27,12 @@
 ## Changes
 
 - Before a substantial coding-path slice, trace affected Ion code and Git
-  status, then inspect analogous current Pi source, tests and recent fixes at
-  a recorded revision. Check other harnesses when the design choice needs
-  them. Start from the user workflow and Ion's semantic owner: a reference
-  difference alone is not a requirement. Reconcile the accepted contract
-  before changing implementation, and verify the failure boundary.
+  status, then inspect the current reference that actually matches the
+  concern: Pi for coding-agent workflow semantics, fx for terminal
+  presentation, or another harness when a distinct boundary needs it. Record
+  moving revisions. Start from the user workflow and Ion's semantic owner: a
+  reference difference alone is not a requirement. Reconcile the accepted
+  contract before changing implementation, and verify the failure boundary.
 - Preserve user work and secrets. Delete obsolete production paths once the
   replacement owns the behavior; Git retains historical source. Update
   public documentation when behavior or a maintainer contract changes.

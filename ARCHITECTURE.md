@@ -326,39 +326,53 @@ reported as incomplete rather than silently replayed. A valid provider retry
 delay takes precedence over local backoff, up to a bounded automatic wait;
 longer requested waits are surfaced as errors rather than held open.
 
-The TUI shows prompt, streaming response, tool calls/results and errors while
-keeping terminal input and restoration reliable. Terminal input is parsed
-incrementally across read boundaries; a lone Escape waits briefly for a
-possible key sequence, with a longer wait over SSH. Bracketed paste and
-enabled mouse/keyboard sequences remain semantic events rather than draft
-text. The input reader releases the tty before a synchronous login prompt.
-An external editor receives only the unsent draft in a private temporary
-file while Ion releases terminal ownership; failure leaves the original
-draft intact. Copy uses committed assistant text. A readable export derives
-from committed Session entries, marks image content without inlining its
-bytes, and creates a new user-selected file without replacing existing data.
+The TUI is shell-like by default: completed conversation content becomes
+native terminal scrollback, while Ion owns only the mutable live interaction
+region needed for the current prompt, progress and transient notices. Ordinary
+chat must not require a permanent fullscreen viewport. Fullscreen or
+alternate-screen rendering is reserved for temporary views that benefit from
+owning the screen, such as full detail, search and pickers, and must return to
+the inline shell without corrupting scrollback.
+
+Default transcript presentation is for a human, not a dump of the internal
+agent protocol. Tool activity may be summarized semantically in the normal
+view while complete arguments, outputs, provider diagnostics and usage remain
+inspectable on demand. Persistent metadata such as working directory, Session,
+model and context pressure is conditional or opt-in rather than occupying
+rows merely because it is available. These are presentation projections only;
+Session facts and tool/model semantics remain owned outside the terminal.
+
+Terminal input is parsed incrementally across read boundaries; a lone Escape
+waits briefly for a possible key sequence, with a longer wait over SSH.
+Bracketed paste and enabled mouse/keyboard sequences remain semantic events
+rather than draft text. The input reader releases the tty before a synchronous
+login prompt. An external editor receives only the unsent draft in a private
+temporary file while Ion releases terminal ownership; failure leaves the
+original draft intact. Copy uses committed assistant text. A readable export
+derives from committed Session entries, marks image content without inlining
+its bytes, and creates a new user-selected file without replacing existing
+data.
+
 Headless mode exposes the same loop without terminal dependencies. Text mode
-writes only the committed
-final answer to stdout after a successful Turn; provisional streamed text can
-be discarded or replaced and must not masquerade as the answer. Failures have
-a nonzero exit status. A JSONL output mode emits one session identity, ordered
-progress events and a terminal invocation result on stdout; diagnostics stay
-on stderr.
-Tool lifecycle events carry call IDs so a host can correlate them. This is a
-view of the same loop, not a second Session authority or a copy of Pi's event
-schema.
-Start a fresh Session by default, explicitly continue recent work or select
-an earlier Session by human-visible identity. Users can name sessions and
-clone the current conversation into a new Session to explore an alternate
-approach without erasing the source history. A clone copies committed
-conversation facts and context boundaries; its future history is independent.
-Both Sessions still act on the same live working directory, so cloning is not
-a filesystem snapshot. An unfinished Turn retains its interruption and
-unknown-effect semantics in the clone. Exact
-session paths remain available to scripts. The TUI preserves draft input
-during a running Turn, distinguishes steering from follow-up work, and makes
-full tool results inspectable even when the default view is compact. Active
-directory, Session, model and known context pressure are visible.
+writes only the committed final answer to stdout after a successful Turn;
+provisional streamed text can be discarded or replaced and must not masquerade
+as the answer. Failures have a nonzero exit status. A JSONL output mode emits
+one session identity, ordered progress events and a terminal invocation result
+on stdout; diagnostics stay on stderr. Tool lifecycle events carry call IDs so
+a host can correlate them. This is a view of the same loop, not a second
+Session authority or a copy of another harness's event schema.
+
+Start a fresh Session by default, explicitly continue recent work or select an
+earlier Session by human-visible identity. Users can name sessions and clone
+the current conversation into a new Session to explore an alternate approach
+without erasing the source history. A clone copies committed conversation
+facts and context boundaries; its future history is independent. Both Sessions
+still act on the same live working directory, so cloning is not a filesystem
+snapshot. An unfinished Turn retains its interruption and unknown-effect
+semantics in the clone. Exact session paths remain available to scripts. The
+TUI preserves draft input during a running Turn, distinguishes steering from
+follow-up work, and makes full tool results inspectable even when the default
+view is compact.
 
 ## Common-workflow expansion
 
