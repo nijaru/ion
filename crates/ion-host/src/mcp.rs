@@ -59,16 +59,15 @@ pub struct McpHttpServer {
     pub bearer_token_env: Option<String>,
 }
 
-#[derive(Serialize)]
-#[serde(deny_unknown_fields)]
-struct SavedServers {
-    servers: BTreeMap<String, McpServer>,
-}
-
-#[derive(Deserialize)]
+#[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawServers {
     servers: BTreeMap<String, Value>,
+}
+
+pub struct McpListing {
+    pub servers: BTreeMap<String, McpServer>,
+    pub diagnostics: Vec<String>,
 }
 
 pub struct McpConfig {
@@ -82,14 +81,7 @@ impl McpConfig {
         }
     }
 
-    pub fn list(&self) -> Result<BTreeMap<String, McpServer>> {
-        self.read_raw()?
-            .into_iter()
-            .map(|(name, value)| parse_server(&name, value).map(|server| (name, server)))
-            .collect()
-    }
-
-    fn load_startup(&self) -> Result<(BTreeMap<String, McpServer>, Vec<String>)> {
+    pub fn list(&self) -> Result<McpListing> {
         let mut servers = BTreeMap::new();
         let mut diagnostics = Vec::new();
         for (name, value) in self.read_raw()? {
@@ -100,7 +92,15 @@ impl McpConfig {
                 Err(error) => diagnostics.push(format!("{error:#}")),
             }
         }
-        Ok((servers, diagnostics))
+        Ok(McpListing {
+            servers,
+            diagnostics,
+        })
+    }
+
+    fn load_startup(&self) -> Result<(BTreeMap<String, McpServer>, Vec<String>)> {
+        let listing = self.list()?;
+        Ok((listing.servers, listing.diagnostics))
     }
 
     fn read_raw(&self) -> Result<BTreeMap<String, Value>> {
@@ -116,22 +116,22 @@ impl McpConfig {
     pub fn add(&self, name: &str, server: McpServer) -> Result<()> {
         validate_name(name)?;
         validate_server(&server)?;
-        let mut servers = self.list()?;
+        let mut servers = self.read_raw()?;
         ensure!(
             !servers.contains_key(name),
             "MCP server {name} already exists"
         );
-        servers.insert(name.to_owned(), server);
-        write_json(&self.path, &SavedServers { servers })
+        servers.insert(name.to_owned(), serde_json::to_value(server)?);
+        write_json(&self.path, &RawServers { servers })
     }
 
     pub fn remove(&self, name: &str) -> Result<()> {
-        let mut servers = self.list()?;
+        let mut servers = self.read_raw()?;
         ensure!(
             servers.remove(name).is_some(),
             "MCP server {name} was not found"
         );
-        write_json(&self.path, &SavedServers { servers })
+        write_json(&self.path, &RawServers { servers })
     }
 }
 
@@ -676,7 +676,7 @@ mod tests {
             .add("remote", remote("https://example.com/mcp", Some("MCP_KEY")))
             .unwrap();
         assert!(
-            matches!(&config.list().unwrap()["remote"], McpServer::Http(server) if server.bearer_token_env.as_deref() == Some("MCP_KEY"))
+            matches!(&config.list().unwrap().servers["remote"], McpServer::Http(server) if server.bearer_token_env.as_deref() == Some("MCP_KEY"))
         );
         assert!(
             fs::read_to_string(&config.path)
@@ -704,24 +704,33 @@ mod tests {
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].contains("invalid MCP server \"bad\""));
         assert!(diagnostics[0].contains("expected a string"));
-        assert!(config.list().is_err());
-        assert!(config.remove("good").is_err());
-        assert!(
-            config
-                .add(
-                    "new",
-                    McpServer::Stdio(McpStdioServer {
-                        command: "echo".into(),
-                        args: Vec::new()
-                    })
-                )
-                .is_err()
-        );
-        assert!(
-            fs::read_to_string(&config.path)
-                .unwrap()
-                .contains("\"bad\"")
-        );
+        let listing = config.list().unwrap();
+        assert_eq!(listing.servers.len(), 1);
+        assert!(listing.servers.contains_key("good"));
+        assert_eq!(listing.diagnostics.len(), 1);
+
+        config.remove("good").unwrap();
+        config
+            .add(
+                "new",
+                McpServer::Stdio(McpStdioServer {
+                    command: "echo".into(),
+                    args: Vec::new(),
+                }),
+            )
+            .unwrap();
+        let saved = fs::read_to_string(&config.path).unwrap();
+        assert!(saved.contains("\"bad\""));
+        assert!(saved.contains("\"new\""));
+        assert!(!saved.contains("\"good\""));
+
+        // Invalid entries are still addressable by name, so the user can
+        // repair the file without hand-editing unrelated JSON.
+        config.remove("bad").unwrap();
+        let listing = config.list().unwrap();
+        assert_eq!(listing.servers.len(), 1);
+        assert!(listing.servers.contains_key("new"));
+        assert!(listing.diagnostics.is_empty());
         fs::remove_dir_all(root).unwrap();
     }
 

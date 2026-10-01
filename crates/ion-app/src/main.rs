@@ -280,7 +280,11 @@ async fn run_cli(cli: Cli) -> Result<()> {
             let config = host.mcp_config();
             match action {
                 McpAction::List => {
-                    for (name, server) in config.list()? {
+                    let listing = config.list()?;
+                    for diagnostic in listing.diagnostics {
+                        eprintln!("[mcp config: {diagnostic}]");
+                    }
+                    for (name, server) in listing.servers {
                         match server {
                             McpServer::Stdio(server) => {
                                 println!("{name}\t{} {}", server.command, server.args.join(" "));

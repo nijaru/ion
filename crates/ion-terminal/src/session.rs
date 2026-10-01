@@ -279,15 +279,26 @@ impl Drop for TerminalSession {
     }
 }
 
+fn write_emergency_restore(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        DisableMouseCapture,
+        PopKeyboardEnhancementFlags,
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        Show
+    )?;
+    out.write_all(b"\x1b[0m")?;
+    out.flush()
+}
+
 /// Install a panic hook that restores the process terminal before the
 /// previous hook prints its diagnostic.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
-        let _ = io::stdout().write_all(b"\x1b[0m");
-        let _ = io::stdout().flush();
+        let _ = write_emergency_restore(&mut io::stdout());
         previous(info);
     }));
 }
@@ -295,6 +306,17 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emergency_restore_leaves_temporary_terminal_modes() {
+        let mut output = Vec::new();
+        write_emergency_restore(&mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("\x1b[?1049l"), "{text:?}");
+        assert!(text.contains("\x1b[?2004l"), "{text:?}");
+        assert!(text.contains("\x1b[?25h"), "{text:?}");
+        assert!(text.ends_with("\x1b[0m"), "{text:?}");
+    }
 
     #[test]
     fn default_requirements_enable_paste_and_keyboard() {

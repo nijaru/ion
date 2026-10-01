@@ -390,7 +390,7 @@ impl Session {
             .open(path)?;
         let lock = lock(path)?;
         let mut connection = Connection::open(path)?;
-        initialize(&connection)?;
+        initialize_new(&connection)?;
         let header = Header {
             version: FORMAT_VERSION,
             cwd,
@@ -423,9 +423,10 @@ impl Session {
         }
         let lock = lock(path)?;
         let connection = Connection::open(path)?;
-        initialize(&connection)?;
+        configure_connection(&connection)?;
         let header = read_header(&connection)?;
         let (state, settled, messages) = project(&read_entries(&connection)?)?;
+        prepare_writer(&connection)?;
         Ok(Self {
             store: Mutex::new(Store {
                 connection,
@@ -1197,11 +1198,21 @@ fn read_header(connection: &Connection) -> Result<Header, SessionError> {
     Ok(header)
 }
 
-fn initialize(connection: &Connection) -> Result<(), SessionError> {
+fn configure_connection(connection: &Connection) -> Result<(), SessionError> {
     connection.busy_timeout(Duration::from_secs(5))?;
+    Ok(())
+}
+
+fn prepare_writer(connection: &Connection) -> Result<(), SessionError> {
     connection.pragma_update(None, "journal_mode", "WAL")?;
     connection.pragma_update(None, "synchronous", "FULL")?;
-    connection.execute_batch("CREATE TABLE IF NOT EXISTS session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE IF NOT EXISTS entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);")?;
+    Ok(())
+}
+
+fn initialize_new(connection: &Connection) -> Result<(), SessionError> {
+    configure_connection(connection)?;
+    prepare_writer(connection)?;
+    connection.execute_batch("CREATE TABLE session (id INTEGER PRIMARY KEY CHECK(id=1), header BLOB NOT NULL); CREATE TABLE entries (seq INTEGER PRIMARY KEY, body BLOB NOT NULL);")?;
     Ok(())
 }
 
@@ -1292,6 +1303,37 @@ mod tests {
             Some(SessionEntry::UserShell { .. })
         ));
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn opening_invalid_database_does_not_initialize_session_schema() {
+        let (root, path) = fixture();
+        let connection = Connection::open(&path).unwrap();
+        connection
+            .execute_batch("CREATE TABLE unrelated (value INTEGER);")
+            .unwrap();
+        drop(connection);
+
+        assert!(Session::open(&path).is_err());
+
+        let connection =
+            Connection::open_with_flags(&path, OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap();
+        let table_exists = |name: &str| {
+            connection
+                .query_row(
+                    "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
+                    params![name],
+                    |_| Ok(()),
+                )
+                .optional()
+                .unwrap()
+                .is_some()
+        };
+        assert!(table_exists("unrelated"));
+        assert!(!table_exists("session"));
+        assert!(!table_exists("entries"));
+        drop(connection);
         fs::remove_dir_all(root).unwrap();
     }
 
