@@ -402,13 +402,7 @@ impl LiveTranscript {
             } => {
                 self.commit_partial_text_boundary();
                 let result = live_result(output);
-                self.finish_or_insert(
-                    call_id,
-                    name,
-                    activity,
-                    ActivityOutcome::Rejected,
-                    result,
-                );
+                self.finish_or_insert(call_id, name, activity, ActivityOutcome::Rejected, result);
             }
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
