@@ -234,8 +234,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut screen,
                         &mut input,
                         &mut ui,
-                        runtime.session(),
-                        runtime.selected(),
+                        &runtime,
                         command.clone(),
                         exclude_from_context,
                     )
@@ -400,7 +399,7 @@ fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
 }
 
 async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
-    start_clipboard_paste(ui, selected);
+    start_clipboard_paste(ui, runtime.selected());
     finish_clipboard_paste(ui).await
 }
 
@@ -855,7 +854,7 @@ async fn run_compaction(
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
-                        start_clipboard_paste(ui, selected);
+                        start_clipboard_paste(ui, runtime.selected());
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
@@ -1067,18 +1066,17 @@ async fn run_user_shell(
     screen: &mut Screen,
     input: &mut InputStream,
     ui: &mut Frontend,
-    session: &CodingSession,
-    selected: &Selection,
+    runtime: &ion_host::SessionBinding,
     command: String,
     exclude_from_context: bool,
 ) -> Result<()> {
-    let model = selected.identity();
+    let model = runtime.selected().identity();
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
     ui.status = "Running shell · Ctrl-C cancels".into();
     let output = {
-        let running = session.run_user_shell(&command, stop.clone(), exclude_from_context);
+        let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context);
         tokio::pin!(running);
         loop {
             tokio::select! {
@@ -1089,7 +1087,7 @@ async fn run_user_shell(
                         ui.status = "Cancelling shell…".into();
                     }
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
-                        start_clipboard_paste(ui, selected);
+                        start_clipboard_paste(ui, runtime.selected());
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
@@ -1112,8 +1110,8 @@ async fn run_user_shell(
     };
     finish_pending_clipboard_paste(ui).await;
     let output = output?;
-    let view = session.view()?;
-    ui.load_history(session, &view);
+    let view = runtime.session().view()?;
+    ui.load_history(runtime.session(), &view);
     ui.scroll = 0;
     ui.status = if output.is_error {
         "Shell finished with an error"
@@ -1184,7 +1182,7 @@ async fn run_turn(
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
-                        start_clipboard_paste(ui, selected);
+                        start_clipboard_paste(ui, runtime.selected());
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),

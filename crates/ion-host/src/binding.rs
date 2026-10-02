@@ -9,9 +9,12 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_ai::ModelRef;
-use ion_core::{CodingAgent, CodingSession, CodingToolHost, ForkPoint};
+use ion_core::{
+    CodingAgent, CodingSession, CodingToolHost, CodingToolOutput, ForkPoint, LocalTools,
+};
 
 use crate::{Host, Resources, Selection, SessionCatalog};
+use tokio_util::sync::CancellationToken;
 
 pub struct SessionBinding {
     host: Arc<Host>,
@@ -71,6 +74,24 @@ impl SessionBinding {
 
     pub fn instructions(&self) -> &str {
         self.resources.instructions()
+    }
+
+    pub async fn run_user_shell(
+        &self,
+        command: &str,
+        stop: CancellationToken,
+        exclude_from_context: bool,
+    ) -> Result<CodingToolOutput> {
+        let permit = self.session.begin_user_shell(stop.clone()).await?;
+        let tools = LocalTools::new(self.session.cwd())?;
+        let output = tools.run_user_shell(command, stop).await;
+        permit.record(
+            command.to_owned(),
+            output.value.clone(),
+            output.is_error,
+            exclude_from_context,
+        )?;
+        Ok(output)
     }
 
     pub fn session_id(&self) -> String {

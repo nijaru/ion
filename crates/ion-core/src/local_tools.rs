@@ -50,7 +50,7 @@ impl LocalTools {
     }
 
     /// Use the same shell execution path for a user's direct terminal command.
-    pub(crate) async fn run_user_shell(
+    pub async fn run_user_shell(
         &self,
         command: &str,
         stop: CancellationToken,
