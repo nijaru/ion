@@ -54,6 +54,9 @@ struct Cli {
     /// Attach an image file to the first submitted prompt (repeatable).
     #[arg(long, global = true)]
     image: Vec<PathBuf>,
+    /// Interactive transcript surface: inline native scrollback (default) or fullscreen.
+    #[arg(long, value_enum, global = true, default_value = "inline")]
+    tui_mode: terminal_client::TuiMode,
     #[command(subcommand)]
     action: Option<Action>,
 }
@@ -527,6 +530,7 @@ async fn run_cli(cli: Cli) -> Result<()> {
                             binding,
                             images,
                             startup_diagnostics,
+                            tui_mode: cli.tui_mode,
                         })
                         .await
                     }
