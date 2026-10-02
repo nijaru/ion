@@ -30,11 +30,7 @@ use anthropic::{
     validated_anthropic_replay,
 };
 use chat::{ChatState, chat_body};
-#[cfg(test)]
-use chat::{
-    UsageState, append_openrouter_detail, chat_reasoning_delta, empty_post_finish_delta,
-    has_content, parse_tool_arguments,
-};
+
 
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
@@ -827,6 +823,13 @@ fn validate_output(request: &ModelRequest, response: &ModelResponse) -> Result<(
     Ok(())
 }
 
+fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
+    match serde_json::from_str::<Value>(&raw) {
+        Ok(arguments) if arguments.is_object() => (arguments, None),
+        _ => (json!({}), Some(raw)),
+    }
+}
+
 enum Decoder {
     Chat(ChatState),
     Anthropic(AnthropicState),
@@ -891,6 +894,10 @@ fn valid_openrouter_details(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use super::chat::{
+        UsageState, append_openrouter_detail, chat_reasoning_delta, empty_post_finish_delta,
+        has_content,
+    };
     use ion_ai::{GenerationControls, ModelRef, ToolResult, ToolSpec};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},

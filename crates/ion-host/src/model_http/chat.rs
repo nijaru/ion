@@ -101,12 +101,6 @@ struct ChatCall {
     arguments: String,
 }
 
-pub(super) fn parse_tool_arguments(raw: String) -> (Value, Option<String>) {
-    match serde_json::from_str::<Value>(&raw) {
-        Ok(arguments) if arguments.is_object() => (arguments, None),
-        _ => (json!({}), Some(raw)),
-    }
-}
 pub(super) struct ChatState {
     text: String,
     reasoning_content: String,
