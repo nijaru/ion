@@ -5,6 +5,7 @@ use ion_ai::Role;
 use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
+    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -19,8 +20,8 @@ use ion_core::{
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
 use ion_terminal::{
-    InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen, TerminalSession,
-    install_panic_hook,
+    Frame, InputEvent, InputStream, KeyCode, KeyEvent, Modifiers, MouseKind, Screen,
+    TerminalSession, install_panic_hook,
 };
 use ratatui::text::Line;
 use tokio::time::{Duration, interval};
@@ -29,7 +30,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_DRAFT: usize = 64 * 1024;
-const MAX_ROWS: usize = 4096;
+const LIVE_REGION_MAX_ROWS: usize = 12;
 
 #[derive(Default)]
 struct Frontend {
@@ -38,7 +39,6 @@ struct Frontend {
     cursor: usize,
     history: TranscriptProjection,
     tool_results: Vec<ToolResult>,
-    wrapped_history: Option<(usize, Vec<String>)>,
     history_session: Option<PathBuf>,
     history_committed_items: usize,
     pending_history_items: Vec<TranscriptItem>,
@@ -48,10 +48,6 @@ struct Frontend {
     status: String,
     notices: Vec<String>,
     picker: Option<Picker>,
-    session_label: String,
-    cwd_label: String,
-    context_label: String,
-    context_window_tokens: Option<u32>,
     pending: VecDeque<PendingInput>,
     prompt_history: Vec<String>,
     history_cursor: Option<usize>,
@@ -154,13 +150,9 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let images = init.images;
     install_panic_hook();
     let mut terminal = TerminalSession::enter().context("interactive chat requires a terminal")?;
-    terminal.enter_alt_screen()?;
-    let (width, height) = terminal.size()?;
-    let mut screen = Screen::new(width, 0, height);
+    let mut screen = new_inline_screen(&mut terminal)?;
     let mut input = terminal.input()?;
     let mut ui = Frontend {
-        status: "Enter to send · Shift-Enter newline · Ctrl-C clear/quit".into(),
-        context_window_tokens: runtime.selected().context_window_tokens,
         images,
         ..Frontend::default()
     };
@@ -169,11 +161,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         ui.note(diagnostic);
     }
     loop {
-        let context_window_tokens = runtime.selected().context_window_tokens;
-        if ui.context_window_tokens != context_window_tokens {
-            ui.context_window_tokens = context_window_tokens;
-            ui.update_context(runtime.session())?;
-        }
         if let Some(PendingInput { prompt, images }) = ui.pending.pop_front() {
             let prompt = match expand_resource_input(runtime.resources(), prompt) {
                 Ok(prompt) => prompt,
@@ -388,8 +375,36 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         }
     }
     input.suspend()?;
+    if terminal.is_alt_screen() {
+        terminal.leave_alt_screen()?;
+        screen.invalidate();
+    }
+    screen.finish(terminal.output())?;
     terminal.restore()?;
     Ok(())
+}
+
+fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
+    if terminal.is_alt_screen() {
+        terminal.leave_alt_screen()?;
+    }
+    let (width, height) = terminal.size().context("read terminal size")?;
+    let (_, cursor_row) = terminal
+        .cursor_position()
+        .context("read terminal cursor position")?;
+    let live_height = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize).max(1);
+    let origin = height.saturating_sub(live_height as u16);
+    if cursor_row >= origin && height > 1 {
+        let rows = cursor_row.saturating_sub(origin).saturating_add(1);
+        write!(terminal.output(), "{}", "\r\n".repeat(rows as usize))?;
+        terminal.output().flush()?;
+    }
+    Ok(Screen::with_live_height(
+        width,
+        origin,
+        height,
+        live_height,
+    ))
 }
 
 async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
@@ -521,11 +536,7 @@ fn login_in_terminal(
         credentials.save_api_key(provider, &key)
     })();
     terminal.resume().context("resume terminal after login")?;
-    terminal
-        .enter_alt_screen()
-        .context("restore chat screen after login")?;
-    let (width, height) = terminal.size().context("read terminal size after login")?;
-    *screen = Screen::new(width, 0, height);
+    *screen = new_inline_screen(terminal).context("restore inline chat after login")?;
     *input = terminal
         .input()
         .context("resume terminal input after login")?;
@@ -585,11 +596,7 @@ async fn edit_draft_in_terminal(
     terminal.suspend().context("suspend terminal for editor")?;
     let edited = crate::external_editor::edit(&ui.draft, MAX_DRAFT).await;
     terminal.resume().context("resume terminal after editor")?;
-    terminal
-        .enter_alt_screen()
-        .context("restore chat screen after editor")?;
-    let (width, height) = terminal.size()?;
-    *screen = Screen::new(width, 0, height);
+    *screen = new_inline_screen(terminal).context("restore inline chat after editor")?;
     *input = terminal
         .input()
         .context("resume terminal input after editor")?;
@@ -680,13 +687,14 @@ fn handle_command(
         "/session" => {
             let view = runtime.session().view()?;
             ui.note(format!(
-                "Session {} · {} turn(s) · {}",
+                "Session {} · {} turn(s) · {} · {}",
                 runtime.session().path().display(),
                 view.entries
                     .iter()
                     .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
                     .count(),
                 view.name.unwrap_or_else(|| "unnamed".into()),
+                context_label(&view, runtime.selected().context_window_tokens),
             ));
         }
         "/export" => {
@@ -1115,7 +1123,6 @@ async fn run_user_shell(
     finish_pending_clipboard_paste(ui).await;
     let output = output?;
     let view = session.view()?;
-    ui.context_label = context_label(&view, ui.context_window_tokens);
     let catalog = agent.tool_catalog();
     ui.load_history(session, &view, &catalog);
     ui.scroll = 0;
@@ -1235,7 +1242,7 @@ async fn run_turn(
     ui.load_history(session, &view, &catalog);
     ui.scroll = 0;
     ui.status = match result {
-        Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
+        Ok(_) => String::new(),
         Err(error) => format!("Turn ended: {error}"),
     };
     if input_ended {
@@ -1258,24 +1265,12 @@ enum Action {
 impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession, agent: &CodingAgent) -> Result<()> {
         let view = session.view()?;
-        self.context_label = context_label(&view, self.context_window_tokens);
         let catalog = agent.tool_catalog();
         self.load_history(session, &view, &catalog);
         self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
-        self.cwd_label = session.cwd().display().to_string();
         self.cwd = session.cwd().to_path_buf();
-        let id = session.path().file_stem().map_or_else(
-            || "session".into(),
-            |stem| stem.to_string_lossy().into_owned(),
-        );
-        self.session_label = format!(
-            "{}{}",
-            &id[..id.len().min(8)],
-            view.name
-                .map_or_else(String::new, |name| format!(" {name}"))
-        );
         if view.unfinished_turn.is_some() {
             self.status = "Previous turn interrupted; tool effects may be unknown".into();
         }
@@ -1313,7 +1308,6 @@ impl Frontend {
                 _ => None,
             })
             .collect();
-        self.wrapped_history = None;
         self.prompt_history = view
             .entries
             .iter()
@@ -1337,23 +1331,30 @@ impl Frontend {
         self.saved_draft.clear();
     }
 
-    fn update_context(&mut self, session: &CodingSession) -> Result<()> {
-        self.context_label = context_label(&session.view()?, self.context_window_tokens);
-        Ok(())
+    fn pending_history_rows(&self, width: usize) -> Vec<String> {
+        let mut rows = Vec::new();
+        if let Some(banner) = &self.pending_history_banner {
+            rows.push(String::new());
+            rows.push(banner.clone());
+            rows.push(String::new());
+        } else if self.history_committed_items > 0 && !self.pending_history_items.is_empty() {
+            rows.push(String::new());
+        }
+        if !self.pending_history_items.is_empty() {
+            rows.extend(crate::transcript_render::rows(
+                &TranscriptProjection {
+                    items: self.pending_history_items.clone(),
+                },
+                width.saturating_sub(1).max(1),
+            ));
+        }
+        rows
     }
 
-    fn ensure_wrapped_history(&mut self, width: usize) {
-        if self
-            .wrapped_history
-            .as_ref()
-            .is_none_or(|(cached_width, _)| *cached_width != width)
-        {
-            let mut rows = crate::transcript_render::rows(&self.history, width);
-            if rows.len() > MAX_ROWS {
-                rows.drain(..rows.len() - MAX_ROWS);
-            }
-            self.wrapped_history = Some((width, rows));
-        }
+    fn finish_history_commit(&mut self) {
+        self.history_committed_items = self.pending_history_target;
+        self.pending_history_items.clear();
+        self.pending_history_banner = None;
     }
 
     fn note(&mut self, message: String) {
@@ -1861,123 +1862,173 @@ fn draw(
     screen: &mut Screen,
     ui: &mut Frontend,
     progress: Option<&LiveTranscript>,
-    model: &ModelRef,
+    _model: &ModelRef,
     _busy: bool,
 ) -> Result<()> {
     let (width, height) = terminal.size()?;
     screen.resize(width, height);
+
+    if ui.tool_view.is_some() || ui.picker.is_some() {
+        terminal.enter_alt_screen()?;
+        return draw_modal_fullscreen(terminal, screen, ui, width, height);
+    }
+
+    if terminal.is_alt_screen() {
+        terminal.leave_alt_screen()?;
+        screen.invalidate();
+    }
+
+    let commit_rows = ui.pending_history_rows(width.max(1) as usize);
+    if !commit_rows.is_empty() {
+        screen.commit_text_lines(terminal.output(), &commit_rows)?;
+    }
+    if !ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some() {
+        ui.finish_history_commit();
+    }
+
     let width = width.max(1) as usize;
-    let height = height.max(1) as usize;
-    let (draft, cursor) = ui.picker.as_ref().map_or((&ui.draft, ui.cursor), |picker| {
-        (&picker.query, picker.query.len())
-    });
-    let composer = wrap_input(draft, cursor, width);
-    let chrome_height = if height >= 5 {
-        3
-    } else if height >= 3 {
-        2
-    } else {
-        0
-    };
-    let composer_height = composer.lines.len().min(4).min(height - chrome_height);
+    let mut live_rows = Vec::new();
+    for notice in &ui.notices {
+        push_wrapped(&mut live_rows, notice, width);
+    }
+    if let Some(progress) = progress {
+        live_rows.extend(crate::transcript_render::rows(progress.projection(), width));
+        for notice in progress.notices() {
+            push_wrapped(&mut live_rows, notice, width);
+        }
+    }
+
+    let idle_status = ui.status.is_empty()
+        || ui.status.starts_with("Ready ·")
+        || ui.status.starts_with("Enter to send");
+    if !idle_status || !ui.images.is_empty() {
+        let attachment = if ui.images.is_empty() {
+            String::new()
+        } else {
+            format!(" · {} image(s) attached", ui.images.len())
+        };
+        let status = if idle_status {
+            attachment.trim_start_matches(" · ").to_owned()
+        } else {
+            format!("{}{}", ui.status, attachment)
+        };
+        if !status.is_empty() {
+            push_wrapped(&mut live_rows, &status, width);
+        }
+    }
+
+    let composer = wrap_input(&ui.draft, ui.cursor, width);
+    let composer_height = composer.lines.len().min(4);
     let composer_start = composer
         .cursor_row
-        .saturating_sub(composer_height - 1)
+        .saturating_sub(composer_height.saturating_sub(1))
         .min(composer.lines.len().saturating_sub(composer_height));
-    let history_height = height - composer_height - chrome_height;
-    let normal_history = ui.tool_view.is_none() && ui.picker.is_none();
-    let dynamic_rows = if let Some(view) = &ui.tool_view {
-        let mut rows = vec![view.label.clone()];
-        push_wrapped(&mut rows, &view.output, width);
-        rows
+    let composer_offset = live_rows.len();
+    for line in composer.lines.iter().skip(composer_start).take(composer_height) {
+        live_rows.push(line.clone());
+    }
+    let mut cursor_row =
+        composer_offset + composer.cursor_row.saturating_sub(composer_start);
+
+    let live_height = LIVE_REGION_MAX_ROWS
+        .min(screen.size().1.max(1) as usize)
+        .max(1);
+    if live_rows.len() > live_height {
+        let drop = live_rows.len() - live_height;
+        live_rows.drain(..drop);
+        cursor_row = cursor_row.saturating_sub(drop);
+    }
+    screen.set_live_height(live_height);
+
+    let live = live_rows.into_iter().map(Line::raw).collect::<Vec<_>>();
+    let cursor = (cursor_row < live.len()).then_some((
+        cursor_row,
+        composer.cursor_col.min(width.saturating_sub(1)) as u16,
+    ));
+    terminal.render(
+        screen,
+        &Frame {
+            committed: &[],
+            live: &live,
+            cursor,
+        },
+    )?;
+    Ok(())
+}
+
+fn draw_modal_fullscreen(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &Frontend,
+    width: u16,
+    height: u16,
+) -> Result<()> {
+    let width = width.max(1) as usize;
+    let height = height.max(1) as usize;
+    let mut content = Vec::new();
+    let mut composer = None;
+
+    if let Some(view) = &ui.tool_view {
+        content.push(view.label.clone());
+        push_wrapped(&mut content, &view.output, width);
     } else if let Some(picker) = &ui.picker {
         let matching = picker.matches();
-        let mut rows = vec![format!("{} · {} match(es)", picker.title, matching.len())];
-        let visible = history_height.saturating_sub(1);
+        content.push(format!("{} · {} match(es)", picker.title, matching.len()));
+        let visible = height.saturating_sub(2);
         let start = picker.selected.saturating_sub(visible.saturating_sub(1));
         for (index, item) in matching.iter().enumerate().skip(start).take(visible) {
             let label = &picker.items[*item].label;
-            rows.push(format!(
+            content.push(format!(
                 "{} {}",
                 if index == picker.selected { '›' } else { ' ' },
                 brief(label, width.saturating_sub(2))
             ));
         }
-        rows
-    } else {
-        let mut rows = Vec::new();
-        for notice in &ui.notices {
-            push_wrapped(&mut rows, notice, width);
-        }
-        if let Some(progress) = progress {
-            rows.extend(crate::transcript_render::rows(progress.projection(), width));
-            for notice in progress.notices() {
-                push_wrapped(&mut rows, notice, width);
+        composer = Some(wrap_input(&picker.query, picker.query.len(), width));
+    }
+
+    let composer_height = composer
+        .as_ref()
+        .map_or(0, |composer| composer.lines.len().min(3));
+    let status_height = usize::from(!ui.status.is_empty());
+    let viewport = height.saturating_sub(composer_height + status_height);
+    let scroll = ui.tool_view.as_ref().map_or(0, |view| view.scroll);
+    let end = content.len().saturating_sub(scroll.min(content.len()));
+    let start = end.saturating_sub(viewport);
+    let mut rows = vec![Line::raw(""); height];
+    let padding = viewport.saturating_sub(end - start);
+    for (index, row) in content[start..end].iter().enumerate() {
+        rows[padding + index] = Line::raw(row.clone());
+    }
+
+    let mut cursor = None;
+    let mut next_row = viewport;
+    if !ui.status.is_empty() && next_row < height {
+        rows[next_row] = Line::raw(brief(&ui.status, width));
+        next_row += 1;
+    }
+    if let Some(composer) = composer {
+        let start = composer
+            .cursor_row
+            .saturating_sub(composer_height.saturating_sub(1))
+            .min(composer.lines.len().saturating_sub(composer_height));
+        for (index, line) in composer
+            .lines
+            .iter()
+            .skip(start)
+            .take(composer_height)
+            .enumerate()
+        {
+            if next_row + index < height {
+                rows[next_row + index] = Line::raw(line.clone());
             }
         }
-        rows
-    };
-    if normal_history {
-        ui.ensure_wrapped_history(width);
-    }
-    let mut history = if normal_history {
-        ui.wrapped_history
-            .as_ref()
-            .expect("normal history has a wrapped cache")
-            .1
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-    } else {
-        Vec::new()
-    };
-    history.extend(dynamic_rows.iter().map(String::as_str));
-    if ui.tool_view.is_none() && history.len() > MAX_ROWS {
-        history.drain(..history.len() - MAX_ROWS);
-    }
-    let scroll = ui.tool_view.as_ref().map_or(ui.scroll, |view| view.scroll);
-    let end = history.len().saturating_sub(if ui.picker.is_some() {
-        0
-    } else {
-        scroll.min(history.len())
-    });
-    let start = end.saturating_sub(history_height);
-    let mut rows = vec![Line::raw(""); height];
-    let padding = history_height.saturating_sub(end - start);
-    for (i, row) in history[start..end].iter().enumerate() {
-        rows[padding + i] = Line::raw((*row).to_owned());
-    }
-    if chrome_height > 0 {
-        rows[history_height] = Line::raw("─".repeat(width));
-        if chrome_height == 3 {
-            let attachment_label = if ui.images.is_empty() {
-                String::new()
-            } else {
-                format!(" · {} image(s) attached", ui.images.len())
-            };
-            rows[history_height + 1] =
-                Line::raw(brief(&format!("{}{}", ui.status, attachment_label), width));
-            rows[history_height + 2] = Line::raw(brief(
-                &format!(
-                    "{} · {} · {}/{} · {}",
-                    ui.cwd_label, ui.session_label, model.provider, model.model, ui.context_label
-                ),
-                width,
-            ));
-        } else {
-            rows[history_height + 1] = Line::raw(brief(
-                &format!("{} / {} · {}", model.provider, model.model, ui.status),
-                width,
-            ));
+        let row = next_row + composer.cursor_row.saturating_sub(start);
+        if row < height {
+            cursor = Some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
         }
     }
-    let composer_row = height - composer_height;
-    for i in 0..composer_height {
-        rows[composer_row + i] = Line::raw(composer.lines[composer_start + i].clone());
-    }
-    let row = composer_row + composer.cursor_row.saturating_sub(composer_start);
-    let cursor = (ui.tool_view.is_none() && row < height)
-        .then_some((row, composer.cursor_col.min(width.saturating_sub(1)) as u16));
+
     screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
 }
@@ -2361,33 +2412,5 @@ mod tests {
         std::fs::remove_dir_all(root).unwrap();
     }
 
-    #[test]
-    fn wrapped_history_keeps_recent_rows_and_reflows_on_width_change() {
-        let mut ui = Frontend {
-            history: TranscriptProjection {
-                items: (0..MAX_ROWS + 100)
-                    .map(|index| {
-                        ion_core::TranscriptItem::User(ion_core::TranscriptMessage {
-                            turn: Some(index as u64 + 1),
-                            steering: false,
-                            parts: vec![ion_core::TranscriptPart::Text(format!("message-{index}"))],
-                        })
-                    })
-                    .collect(),
-            },
-            ..Frontend::default()
-        };
-        ui.ensure_wrapped_history(80);
-        let cached = &ui.wrapped_history.as_ref().unwrap().1;
-        assert_eq!(cached.len(), MAX_ROWS);
-        assert_eq!(cached.last().unwrap(), "› message-4195");
-        assert!(cached.iter().any(|row| row == "› message-4194"));
-        assert!(!cached.iter().any(|row| row.starts_with("you> ")));
-        let previous = cached.as_ptr();
-        ui.ensure_wrapped_history(80);
-        assert_eq!(ui.wrapped_history.as_ref().unwrap().1.as_ptr(), previous);
-        ui.ensure_wrapped_history(8);
-        assert_eq!(ui.wrapped_history.as_ref().unwrap().0, 8);
-        assert_eq!(ui.wrapped_history.as_ref().unwrap().1.len(), MAX_ROWS);
-    }
+
 }
