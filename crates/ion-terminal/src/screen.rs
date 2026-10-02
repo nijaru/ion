@@ -221,11 +221,7 @@ impl Screen {
     /// older content into native scrollback. The anchor advances to the cursor's
     /// resulting physical row. Already committed rows are never re-rendered on
     /// resize; a subsequent `draw` repaints only the live band.
-    pub fn commit_text_lines(
-        &mut self,
-        out: &mut impl Write,
-        lines: &[String],
-    ) -> io::Result<()> {
+    pub fn commit_text_lines(&mut self, out: &mut impl Write, lines: &[String]) -> io::Result<()> {
         if lines.is_empty() {
             return Ok(());
         }
@@ -237,8 +233,7 @@ impl Screen {
         out.flush()?;
 
         let advanced = self.origin as usize + lines.len();
-        self.origin = advanced
-            .min(self.screen_height.saturating_sub(1) as usize) as u16;
+        self.origin = advanced.min(self.screen_height.saturating_sub(1) as usize) as u16;
         self.current = None;
         self.fullscreen = None;
         self.cursor_shown = false;
