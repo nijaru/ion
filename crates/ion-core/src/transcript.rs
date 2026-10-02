@@ -639,7 +639,7 @@ mod tests {
             entries: vec![
                 SessionEntry::TurnStarted {
                     turn: 1,
-                    input: Message::user("inspect"),
+                    input: Message::user_input("inspect".into(), std::iter::empty()),
                     model,
                 },
                 assistant(
