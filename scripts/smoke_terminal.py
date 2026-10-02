@@ -163,7 +163,77 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert entries[-1]["kind"] == "model_selected", entries[-1]
             assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
-            print("Ion inline terminal, grouped activity, transient modals and restoration: OK")
+
+            fullscreen_master, fullscreen_slave = pty.openpty()
+            fcntl.ioctl(fullscreen_slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+
+            def attach_fullscreen_terminal():
+                os.setsid()
+                fcntl.ioctl(fullscreen_slave, termios.TIOCSCTTY, 0)
+
+            fullscreen = subprocess.Popen(
+                [binary, "--cwd", workspace, "--tui-mode", "fullscreen", "chat"],
+                env=env,
+                stdin=fullscreen_slave,
+                stdout=fullscreen_slave,
+                stderr=fullscreen_slave,
+                preexec_fn=attach_fullscreen_terminal,
+            )
+            os.close(fullscreen_slave)
+            fullscreen_output = bytearray()
+            sent_inline_mode = sent_fullscreen_mode = sent_fullscreen_quit = False
+            fullscreen_deadline = time.monotonic() + 8
+            try:
+                while time.monotonic() < fullscreen_deadline:
+                    readable, _, _ = select.select([fullscreen_master], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(fullscreen_master, 65536)
+                        except OSError:
+                            data = b""
+                        fullscreen_output.extend(data)
+                        if b"\x1b[6n" in data:
+                            os.write(fullscreen_master, b"\x1b[2;1R")
+                    if (
+                        b"\x1b[?1049h" in fullscreen_output
+                        and b"\xe2\x80\xba " in fullscreen_output
+                        and not sent_inline_mode
+                    ):
+                        os.write(fullscreen_master, b"/tui inline\r")
+                        sent_inline_mode = True
+                    if (
+                        sent_inline_mode
+                        and b"Inline TUI" in fullscreen_output
+                        and b"\x1b[?1049l" in fullscreen_output
+                        and not sent_fullscreen_mode
+                    ):
+                        os.write(fullscreen_master, b"/tui fullscreen\r")
+                        sent_fullscreen_mode = True
+                    if (
+                        sent_fullscreen_mode
+                        and fullscreen_output.count(b"\x1b[?1049h") >= 2
+                        and b"Fullscreen TUI" in fullscreen_output
+                        and not sent_fullscreen_quit
+                    ):
+                        os.write(fullscreen_master, b"\x03")
+                        sent_fullscreen_quit = True
+                    if fullscreen.poll() is not None:
+                        break
+                assert fullscreen.poll() == 0, (
+                    f"fullscreen terminal did not exit cleanly: {fullscreen.poll()}; "
+                    f"tail={fullscreen_output[-2000:]!r}"
+                )
+                enters = fullscreen_output.count(b"\x1b[?1049h")
+                leaves = fullscreen_output.count(b"\x1b[?1049l")
+                assert sent_inline_mode and sent_fullscreen_mode and sent_fullscreen_quit
+                assert enters >= 2 and enters == leaves, (enters, leaves)
+            finally:
+                if fullscreen.poll() is None:
+                    fullscreen.send_signal(signal.SIGKILL)
+                    fullscreen.wait()
+                os.close(fullscreen_master)
+
+            print("Ion inline/fullscreen terminal, grouped activity, modals and restoration: OK")
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
