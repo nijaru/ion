@@ -49,6 +49,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         os.close(slave)
         output = bytearray()
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
+        saw_inline_start = False
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -60,7 +61,9 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\x1b[?1049h" in output and not sent_file_start:
+                if b"\xe2\x80\xba " in output and not sent_file_start:
+                    assert b"\x1b[?1049h" not in output, "chat entered alternate screen before showing the inline composer"
+                    saw_inline_start = True
                     os.write(master, b"Read @")
                     sent_file_start = True
                 if sent_file_start and b"Choose file" in output and not selected_file:
@@ -132,7 +135,12 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if child.poll() is not None:
                     break
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
-            assert b"\x1b[?1049h" in output and b"\x1b[?1049l" in output, "alternate screen was not restored"
+            alt_enters = output.count(b"\x1b[?1049h")
+            alt_leaves = output.count(b"\x1b[?1049l")
+            assert saw_inline_start, "inline composer never appeared before modal interaction"
+            assert alt_enters > 0 and alt_enters == alt_leaves, (alt_enters, alt_leaves)
+            assert b"\xe2\x97\x8f " in output, "semantic activity group header was not rendered"
+            assert b"\xe2\x94\x9c " in output or b"\xe2\x94\x94 " in output, "grouped tool tree was not rendered"
             assert sent_file_start and selected_file and sent_first and sent_steering and sent_second and resized and sent_tool and closed_tool and sent_compact and sent_clone and sent_controls and sent_key and sent_logout and sent_copy and sent_quit, "terminal did not complete the session/model/login workflow"
             assert "RESUMED" in copy_file.read_text(), "copy did not use the committed assistant answer"
             assert b"disposable-smoke-key" not in output, "masked key leaked to terminal output"
@@ -155,7 +163,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
             assert len(turns) == 2 and turns[1] == "What did we finish previously?", turns
             assert entries[-1]["kind"] == "model_selected", entries[-1]
             assert not (work / "config" / "ion" / "credentials" / "smoke.key").exists()
-            print("Ion terminal coding, session/model/login and restoration: OK")
+            print("Ion inline terminal, grouped activity, transient modals and restoration: OK")
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
