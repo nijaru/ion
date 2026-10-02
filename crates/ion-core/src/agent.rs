@@ -12,7 +12,10 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     generation::generate_with_retry,
-    session::{Session, SessionError, StoredToolActivity, TurnEndReason, valid_user_message},
+    session::{
+        ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
+        valid_user_message,
+    },
     tool_set::{ToolActivity, ToolHost, ToolOutput, ToolSet},
 };
 
@@ -574,11 +577,12 @@ impl Agent {
                     return Err(AgentError::Cancelled);
                 }
                 let tool_catalog = self.tools.snapshot();
+                let declared_tools = tool_catalog.specs();
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages_for(&model)?,
-                    tools: tool_catalog.specs(),
+                    tools: declared_tools.clone(),
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
                         temperature: None,
@@ -615,6 +619,13 @@ impl Agent {
                     return Err(AgentError::ContextTooLarge);
                 };
                 request.controls.max_output_tokens = output_budget;
+                session.record_model_context(
+                    turn,
+                    ModelContextSnapshot {
+                        instructions: instructions.clone(),
+                        tools: declared_tools,
+                    },
+                )?;
                 let mut emitted_text = false;
                 let generated = generate_with_retry(&self.model, request, stop, &mut |event| {
                     if matches!(event, AgentEvent::TextDelta(_)) {
