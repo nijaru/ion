@@ -463,20 +463,23 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             call_id,
             name,
             arguments,
-        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments}),
+            activity,
+        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments,"activity":activity}),
         CodingAgentEvent::ToolFinished {
             call_id,
             name,
+            activity,
             output,
         } => {
-            json!({"type":"tool_finished","call_id":call_id,"name":name,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error})
+            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error})
         }
         CodingAgentEvent::ToolRejected {
             call_id,
             name,
+            activity,
             output,
         } => {
-            json!({"type":"tool_rejected","call_id":call_id,"name":name,"output":output.value,"is_error":output.is_error})
+            json!({"type":"tool_rejected","call_id":call_id,"name":name,"activity":activity,"output":output.value,"is_error":output.is_error})
         }
         CodingAgentEvent::InterruptedCalls(count) => {
             json!({"type":"interrupted_calls","count":count})

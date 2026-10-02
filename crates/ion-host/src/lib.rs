@@ -113,7 +113,7 @@ impl Host {
         custom: Arc<dyn CodingToolHost>,
     ) -> Result<Arc<CodingAgent>> {
         let builtins: Arc<dyn CodingToolHost> = Arc::new(LocalTools::new(cwd)?);
-        self.agent_with_tool_host(selected, Arc::new(ToolSet::new([builtins, custom])))
+        self.agent_with_tool_set(selected, Arc::new(ToolSet::new([builtins, custom])))
     }
 
     /// Compose a selected route with a complete caller-owned tool host.
@@ -121,6 +121,14 @@ impl Host {
         &self,
         selected: &Selection,
         tools: Arc<dyn CodingToolHost>,
+    ) -> Result<Arc<CodingAgent>> {
+        self.agent_with_tool_set(selected, Arc::new(ToolSet::new([tools])))
+    }
+
+    fn agent_with_tool_set(
+        &self,
+        selected: &Selection,
+        tools: Arc<ToolSet>,
     ) -> Result<Arc<CodingAgent>> {
         selected.require_access(&self.credentials)?;
         let resolver = self
@@ -131,7 +139,7 @@ impl Host {
             selected.wire,
             resolver,
         )?);
-        Ok(Arc::new(CodingAgent::new(service, tools).with_limits(
+        Ok(Arc::new(CodingAgent::with_tool_set(service, tools).with_limits(
             AgentLimits {
                 max_output_tokens: selected.max_output_tokens,
                 context_window_tokens: selected.context_window_tokens,

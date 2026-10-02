@@ -16,7 +16,9 @@ use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
-use ion_core::{CodingToolHost, CodingToolOutput};
+use ion_core::{
+    CodingToolHost, CodingToolOutput, ToolActivityKind, ToolDefinition, ToolPresentation,
+};
 use rmcp::{
     ClientHandler, RoleClient,
     model::{CallToolRequestParams, CallToolResult, ContentBlock},
@@ -436,16 +438,27 @@ fn exposed_tool_name(server: &str, original: &str) -> String {
 }
 
 impl CodingToolHost for McpTools {
-    fn specs(&self) -> Vec<ToolSpec> {
+    fn definitions(&self) -> Vec<ToolDefinition> {
         self.discovered
             .read()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .iter()
-            .flat_map(|tools| tools.iter().map(|(spec, _)| spec.clone()))
+            .flat_map(|tools| {
+                tools.iter().map(|(spec, original)| ToolDefinition {
+                    spec: spec.clone(),
+                    presentation: ToolPresentation::static_target(
+                        ToolActivityKind::External,
+                        original.clone(),
+                    ),
+                })
+            })
             .collect()
     }
 
-    fn refresh_specs<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
+    fn refresh_definitions<'a>(
+        &'a self,
+        stop: CancellationToken,
+    ) -> BoxFuture<'a, Vec<String>> {
         Box::pin(self.refresh_changed(stop))
     }
 

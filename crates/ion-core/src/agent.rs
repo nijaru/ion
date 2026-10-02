@@ -5,15 +5,18 @@ use std::time::Duration;
 
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest,
-    ModelResponse, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
-    ResponseTermination, Role, ToolCall, ToolChoice, ToolResult, ToolSpec,
+    Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
+    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
+    ResponseTermination, Role, ToolCall, ToolChoice, ToolResult,
 };
 use serde_json::Value;
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
-use crate::session::{Session, SessionError, TurnEndReason, valid_user_message};
+use crate::{
+    session::{Session, SessionError, TurnEndReason, valid_user_message},
+    tool_set::{ToolActivity, ToolHost, ToolOutput, ToolSet},
+};
 
 fn user_text(prompt: String) -> Message {
     Message {
@@ -145,12 +148,16 @@ impl Default for AgentLimits {
 
 pub struct Agent {
     model: Arc<dyn ModelService>,
-    tools: Arc<dyn ToolHost>,
+    tools: Arc<ToolSet>,
     limits: AgentLimits,
 }
 
 impl Agent {
     pub fn new(model: Arc<dyn ModelService>, tools: Arc<dyn ToolHost>) -> Self {
+        Self::with_tool_set(model, Arc::new(ToolSet::new([tools])))
+    }
+
+    pub fn with_tool_set(model: Arc<dyn ModelService>, tools: Arc<ToolSet>) -> Self {
         Self {
             model,
             tools,
@@ -647,18 +654,19 @@ impl Agent {
                 inbox.record_pending(session, turn, self.limits)?;
             }
             let mut recovered_overflow = false;
-            let response = loop {
-                for diagnostic in self.tools.refresh_specs(stop.clone()).await {
+            let (response, tool_catalog) = loop {
+                for diagnostic in self.tools.refresh(stop.clone()).await {
                     observe(AgentEvent::ToolCatalogWarning(diagnostic));
                 }
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
+                let tool_catalog = self.tools.snapshot();
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages_for(&model)?,
-                    tools: self.tools.specs(),
+                    tools: tool_catalog.specs(),
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
                         temperature: None,
@@ -772,7 +780,7 @@ impl Agent {
                     }
                     continue;
                 }
-                break generated?;
+                break (generated?, tool_catalog);
             };
             let truncated_calls = matches!(
                 response.termination,
@@ -816,9 +824,17 @@ impl Agent {
                 let results =
                     session.record_truncated_assistant(turn, response.message, response.usage)?;
                 for result in results {
+                    let activity = calls
+                        .iter()
+                        .find(|call| call.id == result.call_id)
+                        .map_or_else(
+                            || ToolActivity::external(&result.name),
+                            |call| tool_catalog.activity(call),
+                        );
                     observe(AgentEvent::ToolRejected {
                         call_id: result.call_id,
                         name: result.name,
+                        activity,
                         output: ToolOutput {
                             value: result.result,
                             images: Vec::new(),
@@ -871,10 +887,12 @@ impl Agent {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
+                let activity = tool_catalog.activity(&call);
                 observe(AgentEvent::ToolStarted {
                     call_id: call.id.clone(),
                     name: call.name.clone(),
                     arguments: call.arguments.clone(),
+                    activity: activity.clone(),
                 });
                 let mut output = if call.raw_arguments.is_some() {
                     ToolOutput {
@@ -883,7 +901,7 @@ impl Agent {
                         is_error: true,
                     }
                 } else {
-                    self.tools.execute(&call, stop.clone()).await
+                    tool_catalog.execute(&call, stop.clone()).await
                 };
                 if !self.limits.image_input && !output.images.is_empty() {
                     output = ToolOutput {
@@ -915,6 +933,7 @@ impl Agent {
                 observe(AgentEvent::ToolFinished {
                     call_id: call.id,
                     name: call.name,
+                    activity,
                     output,
                 });
             }
@@ -959,38 +978,22 @@ pub enum AgentEvent {
         call_id: String,
         name: String,
         arguments: Value,
+        activity: ToolActivity,
     },
     ToolFinished {
         call_id: String,
         name: String,
+        activity: ToolActivity,
         output: ToolOutput,
     },
     ToolRejected {
         call_id: String,
         name: String,
+        activity: ToolActivity,
         output: ToolOutput,
     },
     InterruptedCalls(usize),
     Final(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolOutput {
-    pub value: Value,
-    pub images: Vec<ion_ai::ImageContent>,
-    pub is_error: bool,
-}
-
-pub trait ToolHost: Send + Sync {
-    fn specs(&self) -> Vec<ToolSpec>;
-    fn refresh_specs<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
-        Box::pin(async { Vec::new() })
-    }
-    fn execute<'a>(
-        &'a self,
-        call: &'a ToolCall,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolOutput>;
 }
 
 #[derive(Debug, Error)]
@@ -1052,9 +1055,10 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CodingSession, LocalTools};
+    use crate::{CodingSession, LocalTools, ToolDefinition};
     use ion_ai::{
-        ImageContent, Message, ModelResponse, ModelStreamEvent, Script, ScriptedModelService, Usage,
+        BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
+        ScriptedModelService, ToolSpec, Usage,
     };
 
     fn tiny_image() -> ImageContent {
@@ -1419,12 +1423,12 @@ mod tests {
     async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() {
         struct ImageTool;
         impl ToolHost for ImageTool {
-            fn specs(&self) -> Vec<ToolSpec> {
-                vec![ToolSpec {
+            fn definitions(&self) -> Vec<ToolDefinition> {
+                vec![ToolDefinition::external(ToolSpec {
                     name: "picture".into(),
                     description: "picture".into(),
                     input_schema: serde_json::json!({"type":"object"}),
-                }]
+                })]
             }
             fn execute<'a>(
                 &'a self,
@@ -2355,7 +2359,7 @@ mod tests {
     async fn malformed_tool_arguments_return_error_without_dispatch() {
         struct NeverDispatch;
         impl ToolHost for NeverDispatch {
-            fn specs(&self) -> Vec<ToolSpec> {
+            fn definitions(&self) -> Vec<ToolDefinition> {
                 Vec::new()
             }
             fn execute<'a>(

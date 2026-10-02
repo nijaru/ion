@@ -9,7 +9,7 @@ mod tool_set;
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, SteeringInbox, ToolHost as CodingToolHost, ToolOutput as CodingToolOutput,
+    AgentLimits, SteeringInbox,
 };
 pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use local_tools::LocalTools;
@@ -18,4 +18,7 @@ pub use session::{
     ForkPoint, Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
     SessionView, TurnEndReason, TurnSummary,
 };
-pub use tool_set::ToolSet;
+pub use tool_set::{
+    ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolHost as CodingToolHost,
+    ToolOutput as CodingToolOutput, ToolPresentation, ToolPresentationTarget, ToolSet,
+};

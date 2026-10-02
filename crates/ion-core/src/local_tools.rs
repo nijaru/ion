@@ -22,7 +22,9 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::agent::{ToolHost, ToolOutput};
+use crate::tool_set::{
+    ToolActivityKind, ToolDefinition, ToolHost, ToolOutput, ToolPresentation,
+};
 
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;
@@ -60,8 +62,20 @@ impl LocalTools {
 }
 
 impl ToolHost for LocalTools {
-    fn specs(&self) -> Vec<ToolSpec> {
+    fn definitions(&self) -> Vec<ToolDefinition> {
         specs()
+            .into_iter()
+            .map(|spec| {
+                let presentation = match spec.name.as_str() {
+                    "read" => ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                    "edit" => ToolPresentation::argument(ToolActivityKind::Edit, "path"),
+                    "write" => ToolPresentation::argument(ToolActivityKind::Write, "path"),
+                    "exec" => ToolPresentation::argument(ToolActivityKind::Command, "command"),
+                    _ => ToolPresentation::external(),
+                };
+                ToolDefinition { spec, presentation }
+            })
+            .collect()
     }
     fn execute<'a>(
         &'a self,
