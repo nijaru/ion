@@ -67,7 +67,12 @@ default for new sessions.
 
 Terminal chat is inline-first. Settled transcript rows are appended once to
 native terminal scrollback; Ion keeps only the active composer/progress region
-mutable. Related tool calls are rendered as semantic activity groups with a
+mutable. Resuming or switching to a saved Session bootstraps at most the latest
+six turns into scrollback and labels omitted earlier history as retained; the
+complete Session remains available through inspect/export and tool detail.
+After settled history is published, an expanded live band shrinks back to the
+rows the active composer/status actually need. Related tool calls are rendered
+as semantic activity groups with a
 compact tree (`●`, `├`, `└`) instead of raw tool-call/result protocol
 rows. Repeated successful observation work can coalesce, while edits, writes,
 commands and exceptional outcomes remain explicit. The live band grows only

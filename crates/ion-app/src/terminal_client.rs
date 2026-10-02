@@ -30,6 +30,8 @@ use unicode_width::UnicodeWidthStr;
 
 const MAX_DRAFT: usize = 64 * 1024;
 const LIVE_REGION_MAX_ROWS: usize = 12;
+const RESUME_TURN_LIMIT: usize = 6;
+const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
 #[derive(Default)]
 struct Frontend {
@@ -38,7 +40,7 @@ struct Frontend {
     cursor: usize,
     tool_results: Vec<ToolResult>,
     history_session: Option<PathBuf>,
-    history_committed_items: usize,
+    history_published_items: usize,
     pending_history_items: Vec<TranscriptItem>,
     pending_history_target: usize,
     pending_history_banner: Option<String>,
@@ -1236,6 +1238,60 @@ async fn run_turn(
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ResumeHistoryTail {
+    start: usize,
+    omitted_turns: usize,
+    omitted_entries: usize,
+}
+
+fn transcript_item_turn(item: &TranscriptItem) -> Option<u64> {
+    match item {
+        TranscriptItem::User(message) | TranscriptItem::Assistant(message) => message.turn,
+        TranscriptItem::ActivityGroup(group) => Some(group.turn),
+        TranscriptItem::UserShell(_) => None,
+    }
+}
+
+fn resume_history_tail(items: &[TranscriptItem]) -> ResumeHistoryTail {
+    let mut turns = Vec::new();
+    for item in items {
+        if let Some(turn) = transcript_item_turn(item)
+            && turns.last().copied() != Some(turn)
+        {
+            turns.push(turn);
+        }
+    }
+
+    if turns.len() > RESUME_TURN_LIMIT {
+        let first_turn = turns[turns.len() - RESUME_TURN_LIMIT];
+        let start = items
+            .iter()
+            .position(|item| transcript_item_turn(item) == Some(first_turn))
+            .unwrap_or(0);
+        return ResumeHistoryTail {
+            start,
+            omitted_turns: turns.len() - RESUME_TURN_LIMIT,
+            omitted_entries: start,
+        };
+    }
+
+    if turns.is_empty() && items.len() > RESUME_ENTRY_LIMIT_WITHOUT_TURNS {
+        let start = items.len() - RESUME_ENTRY_LIMIT_WITHOUT_TURNS;
+        return ResumeHistoryTail {
+            start,
+            omitted_turns: 0,
+            omitted_entries: start,
+        };
+    }
+
+    ResumeHistoryTail {
+        start: 0,
+        omitted_turns: 0,
+        omitted_entries: 0,
+    }
+}
+
 enum Action {
     None,
     Submit(String),
@@ -1266,16 +1322,35 @@ impl Frontend {
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {
-            if self.history_session.is_some() {
-                let label = session_path.file_stem().map_or_else(
-                    || "session".into(),
-                    |stem| stem.to_string_lossy().into_owned(),
-                );
-                self.pending_history_banner = Some(format!("— session {label} —"));
-            }
-            self.history_committed_items = 0;
+            let had_previous_session = self.history_session.is_some();
+            let label = session_path.file_stem().map_or_else(
+                || "session".into(),
+                |stem| stem.to_string_lossy().into_owned(),
+            );
+            let tail = resume_history_tail(&history.items);
+            self.history_published_items = tail.start;
+            self.pending_history_banner = if !history.items.is_empty() {
+                Some(if tail.omitted_turns > 0 {
+                    format!(
+                        "— resumed session {label} · {} earlier turn(s) retained —",
+                        tail.omitted_turns
+                    )
+                } else if tail.omitted_entries > 0 {
+                    format!(
+                        "— resumed session {label} · {} earlier entr{} retained —",
+                        tail.omitted_entries,
+                        if tail.omitted_entries == 1 { "y" } else { "ies" }
+                    )
+                } else {
+                    format!("— resumed session {label} —")
+                })
+            } else if had_previous_session {
+                Some(format!("— session {label} —"))
+            } else {
+                None
+            };
         }
-        let start = self.history_committed_items.min(history.items.len());
+        let start = self.history_published_items.min(history.items.len());
         self.pending_history_items = history.items[start..].to_vec();
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
@@ -1316,7 +1391,7 @@ impl Frontend {
             rows.push(String::new());
             rows.push(banner.clone());
             rows.push(String::new());
-        } else if self.history_committed_items > 0 && !self.pending_history_items.is_empty() {
+        } else if self.history_published_items > 0 && !self.pending_history_items.is_empty() {
             rows.push(String::new());
         }
         if !self.pending_history_items.is_empty() {
@@ -1331,7 +1406,7 @@ impl Frontend {
     }
 
     fn finish_history_commit(&mut self) {
-        self.history_committed_items = self.pending_history_target;
+        self.history_published_items = self.pending_history_target;
         self.pending_history_items.clear();
         self.pending_history_banner = None;
     }
@@ -1852,13 +1927,16 @@ fn draw(
         return draw_modal_fullscreen(terminal, screen, ui, width, height);
     }
 
+    let mut surface_reset = false;
     if terminal.is_alt_screen() {
         terminal.leave_alt_screen()?;
         screen.invalidate();
+        surface_reset = true;
     }
 
     let commit_rows = ui.pending_history_rows(width.max(1) as usize);
-    if !commit_rows.is_empty() {
+    let history_committed = !commit_rows.is_empty();
+    if history_committed {
         screen.commit_text_lines(terminal.output(), &commit_rows)?;
     }
     if !ui.pending_history_items.is_empty() || ui.pending_history_banner.is_some() {
@@ -1914,7 +1992,13 @@ fn draw(
     let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
 
     let desired_live_height = live_rows.len().clamp(1, LIVE_REGION_MAX_ROWS);
-    screen.ensure_live_height(terminal.output(), desired_live_height)?;
+    if desired_live_height > screen.live_height() {
+        screen.ensure_live_height(terminal.output(), desired_live_height)?;
+    } else if desired_live_height < screen.live_height() && (history_committed || surface_reset) {
+        // The settled-history commit or fullscreen exit erased/replaced the
+        // mutable surface, so shrinking cannot leak stale rows into scrollback.
+        screen.set_live_height(desired_live_height);
+    }
     let live_height = screen.live_height();
     if live_rows.len() > live_height {
         let drop = live_rows.len() - live_height;
@@ -2125,6 +2209,41 @@ fn next_grapheme(text: &str, cursor: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn resume_history_tail_keeps_the_last_six_turns() {
+        let items = (1..=9)
+            .map(|turn| {
+                TranscriptItem::User(ion_core::TranscriptMessage {
+                    turn: Some(turn),
+                    steering: false,
+                    parts: vec![ion_core::TranscriptPart::Text(format!("turn-{turn}"))],
+                })
+            })
+            .collect::<Vec<_>>();
+        let tail = resume_history_tail(&items);
+        assert_eq!(tail.start, 3);
+        assert_eq!(tail.omitted_turns, 3);
+        assert_eq!(transcript_item_turn(&items[tail.start]), Some(4));
+    }
+
+    #[test]
+    fn resume_history_tail_bounds_shell_only_history() {
+        let items = (0..40)
+            .map(|index| {
+                TranscriptItem::UserShell(ion_core::UserShellActivity {
+                    command: format!("echo {index}"),
+                    output: serde_json::Value::Null,
+                    is_error: false,
+                    exclude_from_context: false,
+                })
+            })
+            .collect::<Vec<_>>();
+        let tail = resume_history_tail(&items);
+        assert_eq!(tail.start, 8);
+        assert_eq!(tail.omitted_turns, 0);
+        assert_eq!(tail.omitted_entries, 8);
+    }
 
     #[test]
     fn copy_uses_the_last_completed_answer() {

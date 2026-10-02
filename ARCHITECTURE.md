@@ -342,10 +342,14 @@ longer requested waits are surfaced as errors rather than held open.
 The TUI is shell-like by default: completed conversation content becomes
 native terminal scrollback, while Ion owns only the mutable live interaction
 region needed for the current prompt, progress and transient notices. Ordinary
-chat must not require a permanent fullscreen viewport. Fullscreen or
-alternate-screen rendering is reserved for temporary views that benefit from
-owning the screen, such as full detail, search and pickers, and must return to
-the inline shell without corrupting scrollback.
+chat must not require a permanent fullscreen viewport. A resumed or switched
+Session publishes only a bounded recent semantic tail into fresh native
+scrollback; earlier durable history remains inspectable rather than flooding
+the terminal. The mutable live band may grow for active work but returns to the
+smallest safe size after a settled-history publication or temporary fullscreen
+reset. Fullscreen or alternate-screen rendering is reserved for temporary
+views that benefit from owning the screen, such as full detail, search and
+pickers, and must return to the inline shell without corrupting scrollback.
 
 Default transcript presentation is for a human, not a dump of the internal
 agent protocol. Tool activity may be summarized semantically in the normal

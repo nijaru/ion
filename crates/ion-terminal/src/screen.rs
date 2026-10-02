@@ -1035,6 +1035,53 @@ mod tests {
     }
 
     #[test]
+    fn settled_commit_allows_live_band_to_shrink_fresh() {
+        let mut out = Vec::new();
+        let mut screen = Screen::with_live_height(40, 0, 8, 6);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[],
+                    live: &[
+                        line("one"),
+                        line("two"),
+                        line("three"),
+                        line("four"),
+                        line("five"),
+                        line("composer"),
+                    ],
+                    cursor: Some((5, 8)),
+                },
+            )
+            .expect("initial draw");
+        screen
+            .commit_text_lines(&mut out, &[String::from("settled")])
+            .expect("commit");
+        out.clear();
+
+        screen.set_live_height(1);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[],
+                    live: &[line("› ")],
+                    cursor: Some((0, 2)),
+                },
+            )
+            .expect("shrunk draw");
+
+        assert_eq!(screen.live_height(), 1);
+        let rendered = String::from_utf8(out).expect("utf8");
+        assert!(rendered.contains("› "), "{rendered:?}");
+        assert!(
+            !rendered.contains("\x1b[8;1H\r\n"),
+            "fresh shrink must not scroll history: {rendered:?}"
+        );
+    }
+
+    #[test]
     fn cursor_hidden_when_outside_the_window() {
         let committed: Vec<Line> = (0..10).map(|i| line(&format!("c{i}"))).collect();
         let out = render(vec![(&committed, &[line("s")], Some((1, 0)))]);
