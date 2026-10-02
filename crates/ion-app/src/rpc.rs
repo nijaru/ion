@@ -363,7 +363,10 @@ impl Control {
             let mut output_fault = None;
             let result = agent
                 .compact(&session, model, task_stop.clone(), |event| {
-                    if output.try_send(Output::Record(event_record(event))).is_err() {
+                    if output
+                        .try_send(Output::Record(event_record(event)))
+                        .is_err()
+                    {
                         output_fault = Some("RPC output queue is full".to_owned());
                         task_stop.cancel();
                     }
