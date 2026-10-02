@@ -134,7 +134,10 @@ fn group_header(group: &ActivityGroup) -> String {
     }
 
     let count = group.activities.len();
-    let mut parts = vec![format!("{count} action{}", if count == 1 { "" } else { "s" })];
+    let mut parts = vec![format!(
+        "{count} action{}",
+        if count == 1 { "" } else { "s" }
+    )];
     const LABELS: [&str; 9] = [
         "read", "list", "search", "edit", "write", "command", "ask", "subagent", "external",
     ];
@@ -273,7 +276,11 @@ fn append_result_summary(summary: &mut String, activity: &TranscriptActivity) {
     };
     match activity.activity.kind {
         ToolActivityKind::Edit => {
-            if let Some(count) = result.value.get("replacements").and_then(serde_json::Value::as_u64) {
+            if let Some(count) = result
+                .value
+                .get("replacements")
+                .and_then(serde_json::Value::as_u64)
+            {
                 summary.push_str(&format!(
                     " · {count} replacement{}",
                     if count == 1 { "" } else { "s" }
@@ -291,7 +298,11 @@ fn append_result_summary(summary: &mut String, activity: &TranscriptActivity) {
                     summary.replace_range(..5, "Created");
                 }
             }
-            if let Some(bytes) = result.value.get("bytes").and_then(serde_json::Value::as_u64) {
+            if let Some(bytes) = result
+                .value
+                .get("bytes")
+                .and_then(serde_json::Value::as_u64)
+            {
                 summary.push_str(&format!(" · {bytes} B"));
             }
         }
@@ -536,9 +547,27 @@ mod tests {
                 turn: 1,
                 open: false,
                 activities: vec![
-                    activity("r1", ToolActivityKind::Read, "src/a.rs", ActivityOutcome::Completed, None),
-                    activity("r2", ToolActivityKind::Read, "src/b.rs", ActivityOutcome::Completed, None),
-                    activity("r3", ToolActivityKind::Read, "src/c.rs", ActivityOutcome::Completed, None),
+                    activity(
+                        "r1",
+                        ToolActivityKind::Read,
+                        "src/a.rs",
+                        ActivityOutcome::Completed,
+                        None,
+                    ),
+                    activity(
+                        "r2",
+                        ToolActivityKind::Read,
+                        "src/b.rs",
+                        ActivityOutcome::Completed,
+                        None,
+                    ),
+                    activity(
+                        "r3",
+                        ToolActivityKind::Read,
+                        "src/c.rs",
+                        ActivityOutcome::Completed,
+                        None,
+                    ),
                     activity(
                         "e1",
                         ToolActivityKind::Edit,
@@ -551,7 +580,9 @@ mod tests {
                         ToolActivityKind::Command,
                         "cargo test",
                         ActivityOutcome::Completed,
-                        Some(serde_json::json!({"stdout":"running\ntest result: ok. 148 passed","stderr":""})),
+                        Some(
+                            serde_json::json!({"stdout":"running\ntest result: ok. 148 passed","stderr":""}),
+                        ),
                     ),
                 ],
             })],
