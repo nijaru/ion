@@ -12,8 +12,9 @@ use ion_ai::ModelRef;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
+    HttpModelService, HttpWire,
     auth::{CredentialStatus, CredentialStore},
-    catalog, HttpModelService, HttpWire,
+    catalog,
 };
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

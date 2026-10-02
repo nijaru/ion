@@ -8,10 +8,10 @@ use std::{
     sync::Arc,
 };
 
+use crate::{CredentialResolutionError, CredentialResolver};
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use ion_ai::BoxFuture;
-use crate::{CredentialResolutionError, CredentialResolver};
 use tokio_util::sync::CancellationToken;
 
 const MAX_KEY_BYTES: u64 = 4096;
