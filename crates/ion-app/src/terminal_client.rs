@@ -1,5 +1,7 @@
 //! Terminal view over the same coding loop used by headless and library hosts.
 #[cfg(test)]
+use ion_ai::Role;
+#[cfg(test)]
 use std::fs;
 use std::{
     collections::{HashSet, VecDeque},

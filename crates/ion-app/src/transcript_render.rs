@@ -293,10 +293,9 @@ fn append_result_summary(summary: &mut String, activity: &TranscriptActivity) {
                 .get("created")
                 .and_then(serde_json::Value::as_bool)
                 == Some(true)
+                && summary.starts_with("Wrote")
             {
-                if summary.starts_with("Wrote") {
-                    summary.replace_range(..5, "Created");
-                }
+                summary.replace_range(..5, "Created");
             }
             if let Some(bytes) = result
                 .value
