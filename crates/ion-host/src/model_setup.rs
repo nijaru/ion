@@ -9,12 +9,11 @@ use std::{
 
 use anyhow::{Context, Result, bail, ensure};
 use ion_ai::ModelRef;
-use ion_core::{HttpModelService, HttpWire};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
 use crate::{
     auth::{CredentialStatus, CredentialStore},
-    catalog,
+    catalog, HttpModelService, HttpWire,
 };
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize)]

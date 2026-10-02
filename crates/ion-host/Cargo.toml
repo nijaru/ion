@@ -8,19 +8,23 @@ repository.workspace = true
 description = "Ion host composition for models, credentials, resources and sessions"
 
 [dependencies]
+async-stream = "0.3.6"
 anyhow = "1.0"
 base64 = "0.22.1"
 futures-util = "0.3.34"
 getrandom = "0.3.4"
 ignore = "0.4.33"
+httpdate = "1.0.3"
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png", "gif", "webp"] }
 ion-ai.workspace = true
 ion-core.workspace = true
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
 rmcp = { version = "3.4.0", default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
 serde_yaml_ng = "0.10.0"
 sha2 = "0.10.9"
+thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 url = "2.5.8"

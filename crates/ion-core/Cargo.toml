@@ -8,10 +8,7 @@ repository.workspace = true
 description = "Ion durable coding-turn runtime"
 
 [dependencies]
-async-stream = "0.3.6"
 futures-util = "0.3.34"
-httpdate = "1.0.3"
-reqwest = { version = "0.13.5", default-features = false, features = ["json", "stream", "rustls"] }
 ion-ai.workspace = true
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 rustix = { version = "1.1.4", features = ["event", "fs", "pipe", "process"] }

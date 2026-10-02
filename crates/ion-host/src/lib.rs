@@ -1,12 +1,14 @@
 //! Shared local host setup for Ion clients and Rust embedders.
-//! Session history and model/tool execution remain owned by `ion-core`.
+//! Session/Turn semantics live in `ion-core`; concrete provider/tool implementations live here.
 
 pub mod auth;
 mod binding;
+mod credentials;
 pub mod catalog;
 pub mod image_input;
 pub mod mcp;
 pub mod model_setup;
+mod model_http;
 pub mod project_instructions;
 pub mod resources;
 pub mod session_catalog;
@@ -17,11 +19,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, CodingToolHost, HttpModelService, LocalTools, ToolSet};
+use ion_core::{AgentLimits, CodingAgent, CodingToolHost, LocalTools, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
+pub use credentials::{CredentialResolutionError, CredentialResolver};
 pub use binding::SessionBinding;
 pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
+pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
 pub use resources::{PromptTemplate, ResourceDiagnostic, Resources, Skill};
 pub use session_catalog::{SessionCatalog, SessionSummary};
