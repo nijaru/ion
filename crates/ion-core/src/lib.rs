@@ -6,6 +6,7 @@ mod local_tools;
 mod model_http;
 mod session;
 mod tool_set;
+mod transcript;
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
@@ -21,4 +22,9 @@ pub use session::{
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolHost as CodingToolHost,
     ToolOutput as CodingToolOutput, ToolPresentation, ToolPresentationTarget, ToolSet,
+};
+
+pub use transcript::{
+    ActivityGroup, ActivityOutcome, ActivityResult, LiveTranscript, TranscriptActivity,
+    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
 };

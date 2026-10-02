@@ -170,6 +170,10 @@ impl Agent {
         self
     }
 
+    pub fn tool_catalog(&self) -> crate::tool_set::ToolCatalog {
+        self.tools.snapshot()
+    }
+
     /// Summarize a settled prefix while retaining the complete raw Session.
     pub async fn compact<F>(
         &self,
