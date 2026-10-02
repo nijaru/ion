@@ -892,10 +892,6 @@ fn valid_openrouter_details(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::chat::{
-        UsageState, append_openrouter_detail, chat_reasoning_delta, empty_post_finish_delta,
-        has_content,
-    };
     use super::*;
     use ion_ai::{GenerationControls, ModelRef, ToolResult, ToolSpec};
     use tokio::{
