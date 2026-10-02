@@ -372,7 +372,10 @@ pub(super) fn append_openrouter_detail(
     Ok(())
 }
 
-pub(super) fn chat_reasoning_delta(delta: &Value, wire: HttpWire) -> Result<Option<&str>, ProviderError> {
+pub(super) fn chat_reasoning_delta(
+    delta: &Value,
+    wire: HttpWire,
+) -> Result<Option<&str>, ProviderError> {
     let field = |name| -> Result<Option<&str>, ProviderError> {
         delta
             .get(name)
@@ -465,4 +468,3 @@ impl UsageState {
         Ok(())
     }
 }
-

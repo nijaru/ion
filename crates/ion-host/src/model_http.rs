@@ -25,15 +25,15 @@ mod anthropic;
 mod chat;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
+use anthropic::{
+    AnthropicState, anthropic_body, anthropic_body_prefix_digest, managed_anthropic_thinking,
+    validated_anthropic_replay,
+};
 use chat::{ChatState, chat_body};
 #[cfg(test)]
 use chat::{
     UsageState, append_openrouter_detail, chat_reasoning_delta, empty_post_finish_delta,
     has_content, parse_tool_arguments,
-};
-use anthropic::{
-    AnthropicState, anthropic_body, anthropic_body_prefix_digest, managed_anthropic_thinking,
-    validated_anthropic_replay,
 };
 
 const MAX_FRAME: usize = 256 * 1024;
