@@ -1339,7 +1339,11 @@ impl Frontend {
                     format!(
                         "— resumed session {label} · {} earlier entr{} retained —",
                         tail.omitted_entries,
-                        if tail.omitted_entries == 1 { "y" } else { "ies" }
+                        if tail.omitted_entries == 1 {
+                            "y"
+                        } else {
+                            "ies"
+                        }
                     )
                 } else {
                     format!("— resumed session {label} —")
