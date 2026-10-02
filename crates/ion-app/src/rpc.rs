@@ -142,7 +142,7 @@ impl Control {
     fn idle(&self) -> Result<()> {
         ensure!(
             self.active.is_none(),
-            "a Turn is active; abort or wait for turn_end"
+            "an operation is active; abort or wait for its terminal record"
         );
         Ok(())
     }
@@ -174,7 +174,7 @@ impl Control {
         let outcome: Result<Value> = (|| {
             match command {
                 "steer" => {
-                    let active = self.active.as_ref().context("no active Turn")?;
+                    let active = self.active.as_ref().context("no active operation")?;
                     let steering = active.steering.as_ref().context("no active Turn")?;
                     let message = required_string(&value, "message")?;
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
@@ -570,6 +570,78 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn manual_compaction_uses_the_shared_active_operation_slot() {
+        use std::fs;
+
+        use ion_core::CodingSession;
+        use ion_host::{Host, SavedSelection, SessionBinding, Wire};
+
+        let root = std::env::temp_dir().join(format!("ion-rpc-{}", uuid::Uuid::now_v7()));
+        let cwd = root.join("work");
+        fs::create_dir_all(&cwd).unwrap();
+        let host = Arc::new(Host::new(root.join("config"), root.join("state")));
+        let selected = host
+            .models()
+            .save_default(&SavedSelection {
+                provider: "desktop".into(),
+                model: "test".into(),
+                endpoint: Some("http://127.0.0.1:9/v1/chat/completions".into()),
+                wire: Some(Wire::ChatCompletions),
+                api_key_env: None,
+                image_input: false,
+            })
+            .unwrap();
+        let session_path = host.sessions(cwd.clone()).new_path().unwrap();
+        let session = Arc::new(CodingSession::create(&session_path, &cwd).unwrap());
+        session.select_model(selected.identity()).unwrap();
+        let binding = SessionBinding::new(host, session, selected, None).unwrap();
+        let (output, mut events) = mpsc::channel(16);
+        let mut control = Control {
+            binding,
+            active: None,
+            follow_ups: VecDeque::new(),
+            queued_bytes: 0,
+            output,
+        };
+
+        assert_eq!(
+            control
+                .start_compaction(Some(json!("cancelled")))
+                .unwrap(),
+            json!({"disposition":"started"})
+        );
+        assert!(control.idle().is_err());
+        let active = control.active.as_ref().unwrap();
+        assert!(active.steering.is_none());
+        active.stop.cancel();
+
+        let Output::Record(cancelled) = events.recv().await.unwrap() else {
+            panic!("expected compact_end record");
+        };
+        assert_eq!(cancelled["type"], "compact_end");
+        assert_eq!(cancelled["id"], "cancelled");
+        assert_eq!(cancelled["status"], "cancelled");
+        assert!(matches!(events.recv().await.unwrap(), Output::Done));
+        control.active = None;
+
+        assert_eq!(
+            control.start_compaction(Some(json!("noop"))).unwrap(),
+            json!({"disposition":"started"})
+        );
+        let Output::Record(completed) = events.recv().await.unwrap() else {
+            panic!("expected compact_end record");
+        };
+        assert_eq!(completed["type"], "compact_end");
+        assert_eq!(completed["id"], "noop");
+        assert_eq!(completed["status"], "completed");
+        assert_eq!(completed["changed"], false);
+        assert!(matches!(events.recv().await.unwrap(), Output::Done));
+
+        drop(control);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[tokio::test]
     async fn framing_is_lf_only_and_recovers_after_oversize() {
