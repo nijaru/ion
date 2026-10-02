@@ -17,7 +17,7 @@ pub use local_tools::LocalTools;
 pub use model_http::{HttpModelService, HttpWire};
 pub use session::{
     ForkPoint, Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
-    SessionView, TurnEndReason, TurnSummary,
+    SessionView, StoredToolActivity, TurnEndReason, TurnSummary,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolHost as CodingToolHost,

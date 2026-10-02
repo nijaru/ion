@@ -9,7 +9,10 @@ use std::{
     time::Duration,
 };
 
-use crate::{local_tools::LocalTools, tool_set::ToolOutput};
+use crate::{
+    local_tools::LocalTools,
+    tool_set::{ToolActivity, ToolOutput},
+};
 use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
     Usage,
@@ -21,7 +24,7 @@ use thiserror::Error;
 use tokio::sync::Mutex as AsyncMutex;
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 4;
+const FORMAT_VERSION: u32 = 5;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -73,6 +76,7 @@ pub enum SessionEntry {
     Assistant {
         turn: u64,
         message: Message,
+        tool_activities: Vec<StoredToolActivity>,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
         #[serde(default = "completed_termination")]
@@ -86,6 +90,12 @@ pub enum SessionEntry {
         turn: u64,
         reason: TurnEndReason,
     },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredToolActivity {
+    pub call_id: String,
+    pub activity: ToolActivity,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -273,6 +283,7 @@ impl State {
             SessionEntry::Assistant {
                 turn,
                 message,
+                tool_activities,
                 usage,
                 termination,
             } => {
@@ -293,6 +304,7 @@ impl State {
                 {
                     return Err(SessionError::InvalidHistory);
                 }
+                let mut activity_index = 0usize;
                 for part in &message.content {
                     match part {
                         Content::ToolCall(ToolCall { id, name, .. })
@@ -301,11 +313,21 @@ impl State {
                             if self.pending.iter().any(|(pending_id, _)| pending_id == id) {
                                 return Err(SessionError::InvalidHistory);
                             }
+                            let Some(stored) = tool_activities.get(activity_index) else {
+                                return Err(SessionError::InvalidHistory);
+                            };
+                            if stored.call_id != *id {
+                                return Err(SessionError::InvalidHistory);
+                            }
+                            activity_index += 1;
                             self.pending.push((id.clone(), name.clone()));
                         }
                         Content::Text(_) => {}
                         _ => return Err(SessionError::InvalidHistory),
                     }
+                }
+                if activity_index != tool_activities.len() {
+                    return Err(SessionError::InvalidHistory);
                 }
                 messages.push(message.clone());
                 self.assistant_seen_in_turn = true;
@@ -824,7 +846,26 @@ impl Session {
         usage: Usage,
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
-        self.record_assistant_entries(turn, message, usage, continue_turn, Vec::new())
+        let activities = default_tool_activities(&message);
+        self.record_assistant_with_activities(turn, message, activities, usage, continue_turn)
+    }
+
+    pub(crate) fn record_assistant_with_activities(
+        &self,
+        turn: u64,
+        message: Message,
+        tool_activities: Vec<StoredToolActivity>,
+        usage: Usage,
+        continue_turn: bool,
+    ) -> Result<bool, SessionError> {
+        self.record_assistant_entries(
+            turn,
+            message,
+            tool_activities,
+            usage,
+            continue_turn,
+            Vec::new(),
+        )
     }
 
     /// Publish the completed assistant and queued steering in one batch; a
@@ -833,17 +874,26 @@ impl Session {
         &self,
         turn: u64,
         message: Message,
+        tool_activities: Vec<StoredToolActivity>,
         usage: Usage,
         steering: Vec<Message>,
     ) -> Result<bool, SessionError> {
         let continue_turn = !steering.is_empty();
-        self.record_assistant_entries(turn, message, usage, continue_turn, steering)
+        self.record_assistant_entries(
+            turn,
+            message,
+            tool_activities,
+            usage,
+            continue_turn,
+            steering,
+        )
     }
 
     fn record_assistant_entries(
         &self,
         turn: u64,
         message: Message,
+        tool_activities: Vec<StoredToolActivity>,
         usage: Usage,
         continue_turn: bool,
         steering: Vec<Message>,
@@ -852,9 +902,11 @@ impl Session {
             .content
             .iter()
             .any(|part| matches!(part, Content::ToolCall(_)));
+        validate_tool_activities(&message, &tool_activities)?;
         let mut entries = vec![SessionEntry::Assistant {
             turn,
             message,
+            tool_activities,
             usage,
             termination: ResponseTermination::Completed,
         }];
@@ -881,6 +933,7 @@ impl Session {
         &self,
         turn: u64,
         message: Message,
+        tool_activities: Vec<StoredToolActivity>,
         usage: Usage,
     ) -> Result<Vec<ToolResult>, SessionError> {
         let results = message
@@ -900,9 +953,11 @@ impl Session {
         if results.is_empty() {
             return Err(SessionError::InvalidHistory);
         }
+        validate_tool_activities(&message, &tool_activities)?;
         let mut entries = vec![SessionEntry::Assistant {
             turn,
             message,
+            tool_activities,
             usage,
             termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
         }];
@@ -1045,6 +1100,43 @@ fn context_projection(
         }
     }
     Ok(messages)
+}
+
+fn default_tool_activities(message: &Message) -> Vec<StoredToolActivity> {
+    message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Content::ToolCall(call) => Some(StoredToolActivity {
+                call_id: call.id.clone(),
+                activity: ToolActivity::external(call.name.clone()),
+            }),
+            _ => None,
+        })
+        .collect()
+}
+
+fn validate_tool_activities(
+    message: &Message,
+    activities: &[StoredToolActivity],
+) -> Result<(), SessionError> {
+    let call_ids = message
+        .content
+        .iter()
+        .filter_map(|part| match part {
+            Content::ToolCall(call) => Some(call.id.as_str()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    if call_ids.len() != activities.len()
+        || call_ids
+            .iter()
+            .zip(activities)
+            .any(|(call_id, activity)| *call_id != activity.call_id)
+    {
+        return Err(SessionError::InvalidHistory);
+    }
+    Ok(())
 }
 
 fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {

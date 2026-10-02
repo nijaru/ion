@@ -14,7 +14,7 @@ use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, ToolResult};
 use ion_core::{
     CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
-    SteeringInbox, ToolCatalog, TranscriptItem, TranscriptProjection, TurnEndReason,
+    SteeringInbox, TranscriptItem, TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -154,7 +154,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         images,
         ..Frontend::default()
     };
-    ui.refresh_session(runtime.session(), runtime.agent())?;
+    ui.refresh_session(runtime.session())?;
     for diagnostic in init.startup_diagnostics {
         ui.note(diagnostic);
     }
@@ -217,7 +217,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         runtime.session(),
-                        runtime.agent(),
                         runtime.selected(),
                         runtime.instructions(),
                         runtime.resources(),
@@ -356,7 +355,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     };
                     match result {
                         Ok(()) => {
-                            ui.refresh_session(runtime.session(), runtime.agent())?;
+                            ui.refresh_session(runtime.session())?;
                             ui.status = "Ready".into();
                         }
                         Err(error) => ui.status = format!("{error:#}"),
@@ -604,7 +603,7 @@ fn apply_fork(
     restore: Option<Message>,
 ) -> Result<()> {
     let id = runtime.fork_session(point)?;
-    ui.refresh_session(runtime.session(), runtime.agent())?;
+    ui.refresh_session(runtime.session())?;
     let mut too_large_to_restore = false;
     if let Some(input) = restore {
         let draft = input
@@ -697,12 +696,12 @@ fn handle_command(
         }
         "/new" => {
             runtime.new_session()?;
-            ui.refresh_session(runtime.session(), runtime.agent())?;
+            ui.refresh_session(runtime.session())?;
             ui.note("Started a new session".into());
         }
         "/clone" => {
             let id = runtime.clone_session()?;
-            ui.refresh_session(runtime.session(), runtime.agent())?;
+            ui.refresh_session(runtime.session())?;
             ui.note(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
@@ -728,7 +727,7 @@ fn handle_command(
         "/resume" => {
             if !args.is_empty() {
                 runtime.switch_session(runtime.catalog().by_id(args)?)?;
-                ui.refresh_session(runtime.session(), runtime.agent())?;
+                ui.refresh_session(runtime.session())?;
             } else {
                 let items = runtime
                     .catalog()
@@ -763,7 +762,7 @@ fn handle_command(
                 );
             } else {
                 runtime.session().set_name(Some(args))?;
-                ui.refresh_session(runtime.session(), runtime.agent())?;
+                ui.refresh_session(runtime.session())?;
             }
         }
         "/model" => {
@@ -837,7 +836,6 @@ async fn run_compaction(
     input: &mut InputStream,
     ui: &mut Frontend,
     session: &CodingSession,
-    agent: &CodingAgent,
     selected: &Selection,
 ) -> Result<()> {
     let model = selected.identity();
@@ -1113,8 +1111,7 @@ async fn run_user_shell(
     finish_pending_clipboard_paste(ui).await;
     let output = output?;
     let view = session.view()?;
-    let catalog = agent.tool_catalog();
-    ui.load_history(session, &view, &catalog);
+    ui.load_history(session, &view);
     ui.scroll = 0;
     ui.status = if output.is_error {
         "Shell finished with an error"
@@ -1227,8 +1224,7 @@ async fn run_turn(
         };
         ui.cursor = ui.draft.len();
     }
-    let catalog = agent.tool_catalog();
-    ui.load_history(session, &view, &catalog);
+    ui.load_history(session, &view);
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => String::new(),
@@ -1252,10 +1248,9 @@ enum Action {
 }
 
 impl Frontend {
-    fn refresh_session(&mut self, session: &CodingSession, agent: &CodingAgent) -> Result<()> {
+    fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         let view = session.view()?;
-        let catalog = agent.tool_catalog();
-        self.load_history(session, &view, &catalog);
+        self.load_history(session, &view);
         self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
@@ -1266,8 +1261,8 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(&mut self, session: &CodingSession, view: &SessionView, catalog: &ToolCatalog) {
-        let history = TranscriptProjection::from_session(view, catalog);
+    fn load_history(&mut self, session: &CodingSession, view: &SessionView) {
+        let history = TranscriptProjection::from_session(view);
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {

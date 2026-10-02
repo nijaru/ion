@@ -104,9 +104,12 @@ transactions, then explicitly releases the lock after the store closes. A
 briefly inherited file description cannot keep the Session locked after its
 writer exits. Turn acceptance and its user message commit
 together; record the nonsecret context needed to interpret the history without
-duplicating a full request manifest. Save a complete assistant message
-containing tool calls durably before executing those calls, then
-save each observed result durably before another model request depends on it. A final
+duplicating a full request manifest. Save a complete assistant message containing tool calls durably before
+executing those calls. The same atomic assistant entry retains the semantic
+activity metadata resolved from that model request's frozen tool catalog, so
+later transcript replay does not reinterpret an old call through a different
+catalog. Then save each observed result durably before another model request
+depends on it. A final
 answer and explicit Turn-end reason commit together. Cancellation, provider
 failure and limits also have explicit end reasons. Turn state is derived from
 entries; any index is rebuildable. Partial model text and streaming tool

@@ -14,7 +14,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    session::{Session, SessionError, TurnEndReason, valid_user_message},
+    session::{Session, SessionError, StoredToolActivity, TurnEndReason, valid_user_message},
     tool_set::{ToolActivity, ToolHost, ToolOutput, ToolSet},
 };
 
@@ -88,6 +88,7 @@ impl SteeringInbox {
         session: &Session,
         turn: u64,
         message: ion_ai::Message,
+        tool_activities: Vec<StoredToolActivity>,
         usage: ion_ai::Usage,
         limits: AgentLimits,
     ) -> Result<bool, AgentError> {
@@ -99,6 +100,7 @@ impl SteeringInbox {
         let complete = session.record_assistant_with_steering(
             turn,
             message,
+            tool_activities,
             usage,
             pending.iter().cloned().collect(),
         )?;
@@ -818,6 +820,13 @@ impl Agent {
                     calls.push(call.clone());
                 }
             }
+            let tool_activities = calls
+                .iter()
+                .map(|call| StoredToolActivity {
+                    call_id: call.id.clone(),
+                    activity: tool_catalog.activity(call),
+                })
+                .collect::<Vec<_>>();
             prefix_bound_continuation |= response
                 .message
                 .provider_replay
@@ -826,7 +835,12 @@ impl Agent {
             if truncated_calls {
                 assistant_seen_in_turn = true;
                 let results =
-                    session.record_truncated_assistant(turn, response.message, response.usage)?;
+                    session.record_truncated_assistant(
+                        turn,
+                        response.message,
+                        tool_activities.clone(),
+                        response.usage,
+                    )?;
                 for result in results {
                     let activity = calls
                         .iter()
@@ -873,14 +887,27 @@ impl Agent {
                         session,
                         turn,
                         response.message,
+                        tool_activities.clone(),
                         response.usage,
                         self.limits,
                     )?
                 } else {
-                    session.record_assistant(turn, response.message, response.usage, false)?
+                    session.record_assistant_with_activities(
+                        turn,
+                        response.message,
+                        tool_activities.clone(),
+                        response.usage,
+                        false,
+                    )?
                 }
             } else {
-                session.record_assistant(turn, response.message, response.usage, false)?
+                session.record_assistant_with_activities(
+                    turn,
+                    response.message,
+                    tool_activities.clone(),
+                    response.usage,
+                    false,
+                )?
             };
             assistant_seen_in_turn = true;
             if complete {

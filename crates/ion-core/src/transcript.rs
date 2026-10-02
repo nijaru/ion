@@ -7,7 +7,7 @@ use serde_json::Value;
 use crate::{
     agent::AgentEvent,
     session::{SessionEntry, SessionView},
-    tool_set::{ToolActivity, ToolCatalog, ToolOutput},
+    tool_set::{ToolActivity, ToolOutput},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,7 +81,7 @@ pub struct TranscriptProjection {
 }
 
 impl TranscriptProjection {
-    pub fn from_session(view: &SessionView, catalog: &ToolCatalog) -> Self {
+    pub fn from_session(view: &SessionView) -> Self {
         let mut items = Vec::new();
         let mut active_group: Option<(u64, usize)> = None;
         let mut calls: HashMap<(u64, String), (usize, usize)> = HashMap::new();
@@ -99,6 +99,7 @@ impl TranscriptProjection {
                 SessionEntry::Assistant {
                     turn,
                     message,
+                    tool_activities,
                     termination,
                     ..
                 } => {
@@ -125,13 +126,20 @@ impl TranscriptProjection {
                             Content::ToolCall(call) => {
                                 let group_index =
                                     ensure_group(&mut items, &mut active_group, *turn, false);
+                                let activity = tool_activities
+                                    .iter()
+                                    .find(|stored| stored.call_id == call.id)
+                                    .map_or_else(
+                                        || ToolActivity::external(&call.name),
+                                        |stored| stored.activity.clone(),
+                                    );
                                 let activity_index = match &mut items[group_index] {
                                     TranscriptItem::ActivityGroup(group) => {
                                         let index = group.activities.len();
                                         group.activities.push(TranscriptActivity {
                                             call_id: call.id.clone(),
                                             name: call.name.clone(),
-                                            activity: catalog.activity(call),
+                                            activity,
                                             arguments: call.arguments.clone(),
                                             outcome: if matches!(
                                                 termination,
@@ -625,6 +633,30 @@ mod tests {
     }
 
     fn assistant(turn: u64, content: Vec<Content>) -> SessionEntry {
+        let tool_activities = content
+            .iter()
+            .filter_map(|part| match part {
+                Content::ToolCall(call) => {
+                    let kind = match call.name.as_str() {
+                        "read" => ToolActivityKind::Read,
+                        "edit" => ToolActivityKind::Edit,
+                        "exec" => ToolActivityKind::Command,
+                        _ => ToolActivityKind::External,
+                    };
+                    let subject = match call.name.as_str() {
+                        "exec" => call.arguments.get("command"),
+                        _ => call.arguments.get("path"),
+                    }
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                    Some(crate::StoredToolActivity {
+                        call_id: call.id.clone(),
+                        activity: ToolActivity { kind, subject },
+                    })
+                }
+                _ => None,
+            })
+            .collect();
         SessionEntry::Assistant {
             turn,
             message: Message {
@@ -632,6 +664,7 @@ mod tests {
                 content,
                 provider_replay: None,
             },
+            tool_activities,
             usage: Usage::unknown(),
             termination: ResponseTermination::Completed,
         }
@@ -720,7 +753,7 @@ mod tests {
             last_usage: None,
         };
 
-        let projected = TranscriptProjection::from_session(&view, &catalog());
+        let projected = TranscriptProjection::from_session(&view);
         let groups = projected
             .items
             .iter()

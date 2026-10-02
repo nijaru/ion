@@ -86,8 +86,10 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 4; earlier development Session
-files are not reopened.
+This unreleased branch uses Session format 5; earlier development Session
+files are not reopened. Tool activity classification used by the transcript is
+stored with each assistant tool-call batch, so resumed history is not
+reinterpreted through the currently installed tool catalog.
 For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
 Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
 selected model's context window and Ion's encoded request bound can reject
