@@ -12,7 +12,7 @@ use std::{
 use crate::tool_set::ToolActivity;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
-    Usage,
+    ToolSpec, Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
@@ -48,6 +48,13 @@ pub enum SessionEntry {
     /// after a changed request context. Raw assistant facts remain intact.
     ProviderReplayRebased {
         turn: u64,
+    },
+    /// Provider-neutral, model-visible request context at this point in the
+    /// Session. Execution routes remain request-bound host state and are never
+    /// persisted here.
+    ModelContextChanged {
+        turn: u64,
+        context: ModelContextSnapshot,
     },
     UserShell {
         command: String,
@@ -89,6 +96,12 @@ pub enum SessionEntry {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ModelContextSnapshot {
+    pub instructions: String,
+    pub tools: Vec<ToolSpec>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredToolActivity {
     pub call_id: String,
@@ -119,6 +132,7 @@ pub struct SessionView {
     pub unfinished_turn: Option<u64>,
     pub last_end: Option<(u64, TurnEndReason)>,
     pub last_model: Option<ModelRef>,
+    pub last_context: Option<ModelContextSnapshot>,
     pub compacted_through: Option<u64>,
     pub last_usage: Option<Usage>,
 }
@@ -186,6 +200,7 @@ struct State {
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
+    last_context: Option<ModelContextSnapshot>,
     // Derived from model-selection entries; older opaque replay stays in raw history.
     replay_epoch_start: u64,
     sequence: u64,
@@ -223,6 +238,16 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.replay_epoch_start = self.sequence + 1;
+            }
+            SessionEntry::ModelContextChanged { turn, context } => {
+                if self.active != Some(*turn)
+                    || !self.pending.is_empty()
+                    || self.last_context.as_ref() == Some(context)
+                    || !valid_model_context(context)
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.last_context = Some(context.clone());
             }
             SessionEntry::UserShell {
                 command,
@@ -552,6 +577,7 @@ impl Session {
             unfinished_turn: state.active,
             last_end: state.last_end,
             last_model: state.last_model,
+            last_context: state.last_context,
             compacted_through: state.compaction.map(|(through, _)| through),
             last_usage: state.last_usage,
         })
@@ -645,6 +671,26 @@ impl Session {
         append(&mut store, &[SessionEntry::ProviderReplayRebased { turn }])
     }
 
+    /// Record a model-visible context transition immediately before a request.
+    /// Identical consecutive snapshots are elided. The snapshot contains only
+    /// provider-neutral prompt/tool declarations; concrete execution routes stay
+    /// frozen in the in-memory request-bound ToolCatalog.
+    pub(crate) fn record_model_context(
+        &self,
+        turn: u64,
+        context: ModelContextSnapshot,
+    ) -> Result<bool, SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store.state.last_context.as_ref() == Some(&context) {
+            return Ok(false);
+        }
+        append(
+            &mut store,
+            &[SessionEntry::ModelContextChanged { turn, context }],
+        )?;
+        Ok(true)
+    }
+
     /// Find the earliest settled cut that fits a useful recent suffix.
     /// The returned prefix includes the previous summary, if any.
     pub(crate) fn compaction_plan(
@@ -706,6 +752,7 @@ impl Session {
                 | SessionEntry::ToolResult { .. } => true,
                 SessionEntry::ModelSelected { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
+                | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::TurnEnded { .. } => false,
             });
@@ -775,6 +822,7 @@ impl Session {
             unfinished_turn: store.state.active,
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
+            last_context: store.state.last_context.clone(),
             compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
             last_usage: store.state.last_usage,
         })
@@ -1150,6 +1198,14 @@ fn validate_tool_activities(
     Ok(())
 }
 
+fn valid_model_context(context: &ModelContextSnapshot) -> bool {
+    let mut names = BTreeSet::new();
+    context
+        .tools
+        .iter()
+        .all(|tool| !tool.name.trim().is_empty() && names.insert(tool.name.as_str()))
+}
+
 fn messages_from_entries(entries: &[SessionEntry]) -> Vec<Message> {
     entries.iter().filter_map(message_from_entry).collect()
 }
@@ -1173,6 +1229,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::UserShell { .. }
         | SessionEntry::ModelSelected { .. }
         | SessionEntry::ProviderReplayRebased { .. }
+        | SessionEntry::ModelContextChanged { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
     }
