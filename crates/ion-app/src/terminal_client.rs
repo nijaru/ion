@@ -691,12 +691,12 @@ fn handle_command(
         }
         "/new" => {
             runtime.new_session()?;
-            ui.refresh_session(runtime.session())?;
+            ui.refresh_session(runtime.session(), runtime.agent())?;
             ui.note("Started a new session".into());
         }
         "/clone" => {
             let id = runtime.clone_session()?;
-            ui.refresh_session(runtime.session())?;
+            ui.refresh_session(runtime.session(), runtime.agent())?;
             ui.note(format!(
                 "Cloned conversation as {id}; both sessions use the same working directory"
             ));
@@ -722,7 +722,7 @@ fn handle_command(
         "/resume" => {
             if !args.is_empty() {
                 runtime.switch_session(runtime.catalog().by_id(args)?)?;
-                ui.refresh_session(runtime.session())?;
+                ui.refresh_session(runtime.session(), runtime.agent())?;
             } else {
                 let items = runtime
                     .catalog()
@@ -757,7 +757,7 @@ fn handle_command(
                 );
             } else {
                 runtime.session().set_name(Some(args))?;
-                ui.refresh_session(runtime.session())?;
+                ui.refresh_session(runtime.session(), runtime.agent())?;
             }
         }
         "/model" => {
