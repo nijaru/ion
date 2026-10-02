@@ -9,7 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{agent::ToolOutput, local_tools::LocalTools};
+use crate::{local_tools::LocalTools, tool_set::ToolOutput};
 use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
     Usage,

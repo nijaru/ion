@@ -7,7 +7,7 @@ use futures_util::StreamExt;
 use ion_ai::{
     Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
     ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
-    ResponseTermination, Role, ToolCall, ToolChoice, ToolResult,
+    ResponseTermination, Role, ToolChoice, ToolResult,
 };
 use serde_json::Value;
 use thiserror::Error;
@@ -1058,7 +1058,7 @@ mod tests {
     use crate::{CodingSession, LocalTools, ToolDefinition};
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
-        ScriptedModelService, ToolSpec, Usage,
+        ScriptedModelService, ToolCall, ToolSpec, Usage,
     };
 
     fn tiny_image() -> ImageContent {
