@@ -14,7 +14,7 @@ use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef, ToolResult};
 use ion_core::{
     CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
-    SteeringInbox, ToolCatalog, TranscriptProjection, TurnEndReason,
+    SteeringInbox, ToolCatalog, TranscriptItem, TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -39,6 +39,11 @@ struct Frontend {
     history: TranscriptProjection,
     tool_results: Vec<ToolResult>,
     wrapped_history: Option<(usize, Vec<String>)>,
+    history_session: Option<PathBuf>,
+    history_committed_items: usize,
+    pending_history_items: Vec<TranscriptItem>,
+    pending_history_target: usize,
+    pending_history_banner: Option<String>,
     scroll: usize,
     status: String,
     notices: Vec<String>,
@@ -1112,7 +1117,7 @@ async fn run_user_shell(
     let view = session.view()?;
     ui.context_label = context_label(&view, ui.context_window_tokens);
     let catalog = agent.tool_catalog();
-    ui.load_history(&view, &catalog);
+    ui.load_history(session, &view, &catalog);
     ui.scroll = 0;
     ui.status = if output.is_error {
         "Shell finished with an error"
@@ -1227,7 +1232,7 @@ async fn run_turn(
     }
     ui.context_label = context_label(&view, ui.context_window_tokens);
     let catalog = agent.tool_catalog();
-    ui.load_history(&view, &catalog);
+    ui.load_history(session, &view, &catalog);
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
@@ -1255,7 +1260,7 @@ impl Frontend {
         let view = session.view()?;
         self.context_label = context_label(&view, self.context_window_tokens);
         let catalog = agent.tool_catalog();
-        self.load_history(&view, &catalog);
+        self.load_history(session, &view, &catalog);
         self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
@@ -1277,8 +1282,29 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(&mut self, view: &SessionView, catalog: &ToolCatalog) {
-        self.history = TranscriptProjection::from_session(view, catalog);
+    fn load_history(
+        &mut self,
+        session: &CodingSession,
+        view: &SessionView,
+        catalog: &ToolCatalog,
+    ) {
+        let history = TranscriptProjection::from_session(view, catalog);
+        let session_path = session.path().to_path_buf();
+        let same_session = self.history_session.as_ref() == Some(&session_path);
+        if !same_session {
+            if self.history_session.is_some() {
+                let label = session_path
+                    .file_stem()
+                    .map_or_else(|| "session".into(), |stem| stem.to_string_lossy().into_owned());
+                self.pending_history_banner = Some(format!("— session {label} —"));
+            }
+            self.history_committed_items = 0;
+        }
+        let start = self.history_committed_items.min(history.items.len());
+        self.pending_history_items = history.items[start..].to_vec();
+        self.pending_history_target = history.items.len();
+        self.history_session = Some(session_path);
+        self.history = history;
         self.tool_results = view
             .entries
             .iter()
