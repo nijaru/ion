@@ -13,8 +13,9 @@ pub use agent::{
 };
 pub use local_tools::LocalTools;
 pub use session::{
-    ForkPoint, Session as CodingSession, SessionEntry, SessionError as CodingSessionError,
-    SessionView, StoredToolActivity, TurnEndReason, TurnSummary, UserShellPermit,
+    ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
+    SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
+    TurnSummary, UserShellPermit,
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolHost as CodingToolHost,
