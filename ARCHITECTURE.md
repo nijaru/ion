@@ -124,9 +124,11 @@ truncated call that was rejected is distinguishable from a complete call.
 User-run shell commands are separate Session facts recorded after their
 observed result. A command may be visible only in the transcript or also
 projected as a user message for later model requests; the latter choice is
-persisted and respected after reopen and compaction. Direct user shell work
-uses the same live-directory executor as the model's shell tool and cannot
-interleave with an active coding Turn.
+persisted and respected after reopen and compaction. Session owns an exclusive
+direct-shell permit and observed-result publication; the host owns the concrete
+live-directory shell executor. The host holds that permit across execution, so
+direct shell work cannot interleave with an active coding Turn and its observed
+result commits before exclusivity is released.
 
 An unmatched call after process loss has an unknown effect, including when
 dispatch may not have begun. An accepted Turn without an end entry is

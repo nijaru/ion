@@ -174,8 +174,10 @@ overwritten.
 In the terminal, `!command` runs a shell command in the live working
 directory and includes its observed result in later model context.
 `!!command` runs it without sharing the result with the model. Both commands
-remain visible in the saved Session. Ctrl-C requests cancellation of a
-running command; a command that started can still have external effects.
+remain visible in the saved Session. The host executes the command while the
+Session holds an exclusive direct-shell permit, then publishes the observed
+result before releasing that permit. Ctrl-C requests cancellation of a running
+command; a command that started can still have external effects.
 
 Ion loads `AGENTS.md` instructions found along the working directory's
 ancestor path. A nested linked worktree's copy shadows the main checkout's
