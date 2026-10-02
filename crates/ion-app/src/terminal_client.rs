@@ -854,7 +854,7 @@ async fn run_compaction(
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
-                        start_clipboard_paste(ui, runtime.selected());
+                        start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
@@ -1182,7 +1182,7 @@ async fn run_turn(
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
                     Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
-                        start_clipboard_paste(ui, runtime.selected());
+                        start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
                     Some(Ok(InputEvent::Paste(text))) => ui.insert(&text),
