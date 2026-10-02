@@ -455,10 +455,7 @@ impl CodingToolHost for McpTools {
             .collect()
     }
 
-    fn refresh_definitions<'a>(
-        &'a self,
-        stop: CancellationToken,
-    ) -> BoxFuture<'a, Vec<String>> {
+    fn refresh_definitions<'a>(&'a self, stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
         Box::pin(self.refresh_changed(stop))
     }
 

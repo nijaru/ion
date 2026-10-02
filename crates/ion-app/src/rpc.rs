@@ -464,7 +464,9 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
             name,
             arguments,
             activity,
-        } => json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments,"activity":activity}),
+        } => {
+            json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments,"activity":activity})
+        }
         CodingAgentEvent::ToolFinished {
             call_id,
             name,

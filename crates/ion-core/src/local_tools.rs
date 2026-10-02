@@ -22,9 +22,7 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::tool_set::{
-    ToolActivityKind, ToolDefinition, ToolHost, ToolOutput, ToolPresentation,
-};
+use crate::tool_set::{ToolActivityKind, ToolDefinition, ToolHost, ToolOutput, ToolPresentation};
 
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
 const MAX_READ_BYTES: usize = 64 * 1024;

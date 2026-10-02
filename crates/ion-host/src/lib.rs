@@ -139,14 +139,14 @@ impl Host {
             selected.wire,
             resolver,
         )?);
-        Ok(Arc::new(CodingAgent::with_tool_set(service, tools).with_limits(
-            AgentLimits {
+        Ok(Arc::new(
+            CodingAgent::with_tool_set(service, tools).with_limits(AgentLimits {
                 max_output_tokens: selected.max_output_tokens,
                 context_window_tokens: selected.context_window_tokens,
                 image_input: selected.image_input,
                 ..AgentLimits::default()
-            },
-        )))
+            }),
+        ))
     }
 }
 

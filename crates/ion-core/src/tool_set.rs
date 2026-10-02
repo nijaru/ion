@@ -116,10 +116,7 @@ pub struct ToolOutput {
 pub trait ToolHost: Send + Sync {
     fn definitions(&self) -> Vec<ToolDefinition>;
 
-    fn refresh_definitions<'a>(
-        &'a self,
-        _stop: CancellationToken,
-    ) -> BoxFuture<'a, Vec<String>> {
+    fn refresh_definitions<'a>(&'a self, _stop: CancellationToken) -> BoxFuture<'a, Vec<String>> {
         Box::pin(async { Vec::new() })
     }
 
@@ -208,10 +205,10 @@ impl ToolCatalog {
     }
 
     pub fn activity(&self, call: &ToolCall) -> ToolActivity {
-        self.definition(&call.name)
-            .map_or_else(|| ToolActivity::external(&call.name), |definition| {
-                definition.presentation.resolve(call)
-            })
+        self.definition(&call.name).map_or_else(
+            || ToolActivity::external(&call.name),
+            |definition| definition.presentation.resolve(call),
+        )
     }
 
     pub fn execute<'a>(
@@ -338,7 +335,10 @@ mod tests {
         changing.0.store(true, Ordering::Release);
         let after = tools.snapshot();
         assert_eq!(after.specs().len(), 2);
-        assert_eq!(after.definition("read").unwrap().spec.description, "builtin");
+        assert_eq!(
+            after.definition("read").unwrap().spec.description,
+            "builtin"
+        );
         assert!(after.definition("new").is_some());
 
         let call = |name: &str| ToolCall {
