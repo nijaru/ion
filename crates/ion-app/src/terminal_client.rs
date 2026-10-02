@@ -2342,9 +2342,7 @@ mod tests {
                         ion_core::TranscriptItem::User(ion_core::TranscriptMessage {
                             turn: Some(index as u64 + 1),
                             steering: false,
-                            parts: vec![ion_core::TranscriptPart::Text(format!(
-                                "message-{index}"
-                            ))],
+                            parts: vec![ion_core::TranscriptPart::Text(format!("message-{index}"))],
                         })
                     })
                     .collect(),
