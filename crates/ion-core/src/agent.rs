@@ -1,12 +1,9 @@
 //! One coding loop for library, headless and terminal clients.
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
-
-use futures_util::StreamExt;
 use ion_ai::{
     Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
-    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, Reasoning,
+    ModelService, ProviderError, ProviderErrorKind, Reasoning,
     ResponseTermination, Role, ToolChoice, ToolResult,
 };
 use serde_json::Value;
@@ -14,6 +11,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
+    generation::generate_with_retry,
     session::{Session, SessionError, StoredToolActivity, TurnEndReason, valid_user_message},
     tool_set::{ToolActivity, ToolHost, ToolOutput, ToolSet},
 };
@@ -322,7 +320,7 @@ impl Agent {
                 return Err(AgentError::ContextTooLarge);
             }
         };
-        let response = self.generate(request, stop, &mut |_| {}).await?;
+        let response = generate_with_retry(&self.model, request, stop, &mut |_| {}).await?;
         if !matches!(response.termination, ResponseTermination::Completed)
             || response.message.role != Role::Assistant
             || response
@@ -352,98 +350,6 @@ impl Agent {
         session.record_compaction(through_entry, summary, response.usage)?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))
-    }
-
-    async fn generate<F>(
-        &self,
-        request: ModelRequest,
-        stop: &CancellationToken,
-        observe: &mut F,
-    ) -> Result<ModelResponse, AgentError>
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        for attempt in 0..=2 {
-            let (result, observed) = self.generate_once(request.clone(), stop, observe).await;
-            match result {
-                Err(AgentError::Provider(error))
-                    if !observed && attempt < 2 && retryable_provider_error(&error) =>
-                {
-                    // A server's pacing takes precedence over local backoff.
-                    // Leave long waits to the caller instead of holding a Turn
-                    // open for an unbounded provider-requested interval.
-                    let delay_ms = error.retry_after_ms.unwrap_or(500 * (1 << attempt));
-                    if delay_ms > 60_000 {
-                        return Err(AgentError::Provider(error));
-                    }
-                    let delay = Duration::from_millis(delay_ms);
-                    observe(AgentEvent::ProviderRetry {
-                        attempt: attempt + 1,
-                        max_retries: 2,
-                        delay_ms: delay.as_millis() as u64,
-                    });
-                    tokio::select! {
-                        () = tokio::time::sleep(delay) => {},
-                        () = stop.cancelled() => return Err(AgentError::Cancelled),
-                    }
-                }
-                other => return other,
-            }
-        }
-        unreachable!("bounded retry loop returns on its final attempt")
-    }
-
-    async fn generate_once<F>(
-        &self,
-        request: ModelRequest,
-        stop: &CancellationToken,
-        observe: &mut F,
-    ) -> (Result<ModelResponse, AgentError>, bool)
-    where
-        F: FnMut(AgentEvent) + Send,
-    {
-        let stream = tokio::select! {
-            result = self.model.stream(request) => match result {
-                Ok(stream) => stream,
-                Err(error) if error.kind == ProviderErrorKind::ReplayContextChanged => {
-                    return (Err(AgentError::ReplayContextChanged), false);
-                }
-                Err(error) => return (Err(AgentError::Provider(error)), false),
-            },
-            () = stop.cancelled() => return (Err(AgentError::Cancelled), false),
-        };
-        tokio::pin!(stream);
-        let mut observed = false;
-        loop {
-            let event = tokio::select! {
-                item = stream.next() => item,
-                () = stop.cancelled() => return (Err(AgentError::Cancelled), observed),
-            };
-            match event {
-                Some(Ok(ModelStreamEvent::TextDelta(text))) => {
-                    observed = true;
-                    observe(AgentEvent::TextDelta(text));
-                }
-                Some(Ok(ModelStreamEvent::ToolCall(_))) | Some(Ok(ModelStreamEvent::Usage(_))) => {
-                    observed = true;
-                }
-                Some(Ok(ModelStreamEvent::ProviderReplayNotice {
-                    action,
-                    reason,
-                    count,
-                })) => {
-                    observed = true;
-                    observe(AgentEvent::ProviderReplayNotice {
-                        action,
-                        reason,
-                        count,
-                    });
-                }
-                Some(Ok(ModelStreamEvent::Completed(response))) => return (Ok(response), observed),
-                Some(Err(error)) => return (Err(AgentError::Provider(error)), observed),
-                None => return (Err(AgentError::IncompleteModelResponse), observed),
-            }
-        }
     }
 
     pub async fn submit<F>(
@@ -710,8 +616,7 @@ impl Agent {
                 };
                 request.controls.max_output_tokens = output_budget;
                 let mut emitted_text = false;
-                let generated = self
-                    .generate(request, stop, &mut |event| {
+                let generated = generate_with_retry(&self.model, request, stop, &mut |event| {
                         if matches!(event, AgentEvent::TextDelta(_)) {
                             emitted_text = true;
                         }
@@ -971,17 +876,6 @@ impl Agent {
     }
 }
 
-fn retryable_provider_error(error: &ProviderError) -> bool {
-    matches!(
-        error.kind,
-        ProviderErrorKind::Transport
-            | ProviderErrorKind::Timeout
-            | ProviderErrorKind::RateLimited
-            | ProviderErrorKind::Overloaded
-            | ProviderErrorKind::Server
-    )
-}
-
 #[derive(Debug, Clone)]
 pub enum AgentEvent {
     TurnAccepted {
@@ -1212,8 +1106,8 @@ mod tests {
             },
         };
         let mut retry_delay = None;
-        agent
-            .generate(request.clone(), &CancellationToken::new(), &mut |event| {
+        generate_with_retry(
+            &agent.model, request.clone(), &CancellationToken::new(), &mut |event| {
                 if let AgentEvent::ProviderRetry { delay_ms, .. } = event {
                     retry_delay = Some(delay_ms);
                 }
@@ -1230,8 +1124,8 @@ mod tests {
         ]));
         let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
         let mut visible = String::new();
-        let error = agent
-            .generate(request.clone(), &CancellationToken::new(), &mut |event| {
+        let error = generate_with_retry(
+            &agent.model, request.clone(), &CancellationToken::new(), &mut |event| {
                 if let AgentEvent::TextDelta(text) = event {
                     visible.push_str(&text);
                 }
@@ -1251,8 +1145,8 @@ mod tests {
             response(vec![Content::Text("should not be used".into())]),
         ]));
         let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
-        let error = agent
-            .generate(request, &CancellationToken::new(), &mut |_| {})
+        let error = generate_with_retry(
+            &agent.model, request, &CancellationToken::new(), &mut |_| {})
             .await
             .unwrap_err();
         assert!(matches!(error, AgentError::Provider(_)));

@@ -1,6 +1,7 @@
 //! Ion's local coding loop, typed Session history, and abstract model/tool contracts.
 
 mod agent;
+mod generation;
 mod local_tools;
 mod session;
 mod tool_set;
