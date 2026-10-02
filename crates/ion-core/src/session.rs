@@ -2438,6 +2438,52 @@ mod tests {
     }
 
     #[test]
+    fn model_context_changes_are_durable_and_elide_repeats() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let (turn, _) = session.begin_turn("hello".into(), model).unwrap();
+        let first = ModelContextSnapshot {
+            instructions: "first instructions".into(),
+            tools: vec![ToolSpec {
+                name: "read".into(),
+                description: "Read a file".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }],
+        };
+        assert!(session.record_model_context(turn, first.clone()).unwrap());
+        assert!(!session.record_model_context(turn, first).unwrap());
+
+        let changed = ModelContextSnapshot {
+            instructions: "changed instructions".into(),
+            tools: vec![ToolSpec {
+                name: "read".into(),
+                description: "Read a file".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }],
+        };
+        assert!(session.record_model_context(turn, changed.clone()).unwrap());
+        let view = session.view().unwrap();
+        assert_eq!(view.last_context, Some(changed.clone()));
+        assert_eq!(
+            view.entries
+                .iter()
+                .filter(|entry| matches!(entry, SessionEntry::ModelContextChanged { .. }))
+                .count(),
+            2
+        );
+        drop(session);
+
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.view().unwrap().last_context, Some(changed));
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cloned_session_preserves_context_but_diverges_independently() {
         let (root, path) = fixture();
         let clone_path = root.join("clone.sqlite");
