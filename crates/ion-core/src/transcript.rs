@@ -700,6 +700,7 @@ mod tests {
             unfinished_turn: None,
             last_end: None,
             last_model: None,
+            last_context: None,
             compacted_through: None,
             last_usage: None,
         };
