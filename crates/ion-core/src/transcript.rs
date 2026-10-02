@@ -200,7 +200,8 @@ impl TranscriptProjection {
                 }
                 SessionEntry::TurnEnded { .. } => active_group = None,
                 SessionEntry::ModelSelected { .. }
-                | SessionEntry::ProviderReplayRebased { .. } | SessionEntry::ModelContextChanged { .. }
+                | SessionEntry::ProviderReplayRebased { .. }
+                | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::Compacted { .. } => {}
             }
         }
