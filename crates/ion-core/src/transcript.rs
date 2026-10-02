@@ -123,12 +123,8 @@ impl TranscriptProjection {
                                 }));
                             }
                             Content::ToolCall(call) => {
-                                let group_index = ensure_group(
-                                    &mut items,
-                                    &mut active_group,
-                                    *turn,
-                                    false,
-                                );
+                                let group_index =
+                                    ensure_group(&mut items, &mut active_group, *turn, false);
                                 let activity_index = match &mut items[group_index] {
                                     TranscriptItem::ActivityGroup(group) => {
                                         let index = group.activities.len();
@@ -394,10 +390,9 @@ impl LiveTranscript {
                 output,
             } => {
                 self.commit_partial_text_boundary();
-                let output_is_error = output.is_error;
                 let outcome = result_outcome(output.is_error, &output.value);
                 let result = live_result(output);
-                self.finish_or_insert(call_id, name, activity, outcome, result, output_is_error);
+                self.finish_or_insert(call_id, name, activity, outcome, result);
             }
             AgentEvent::ToolRejected {
                 call_id,
@@ -413,7 +408,6 @@ impl LiveTranscript {
                     activity,
                     ActivityOutcome::Rejected,
                     result,
-                    true,
                 );
             }
             AgentEvent::InterruptedCalls(count) => self.note(format!(
@@ -470,9 +464,7 @@ impl LiveTranscript {
             self.projection.items.pop();
         }
         if let Some(group_index) = self.group_closed_for_partial_text.take() {
-            if let TranscriptItem::ActivityGroup(group) =
-                &mut self.projection.items[group_index]
-            {
+            if let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index] {
                 group.open = true;
             }
             self.active_group = Some(group_index);
@@ -502,11 +494,9 @@ impl LiveTranscript {
         activity: ToolActivity,
         outcome: ActivityOutcome,
         result: ActivityResult,
-        _is_error: bool,
     ) {
         if let Some(&(group_index, activity_index)) = self.calls.get(&call_id)
-            && let TranscriptItem::ActivityGroup(group) =
-                &mut self.projection.items[group_index]
+            && let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index]
             && let Some(item) = group.activities.get_mut(activity_index)
         {
             item.outcome = outcome;
@@ -712,8 +702,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(groups.len(), 2);
         assert_eq!(groups[0].activities.len(), 2);
-        assert_eq!(groups[0].activities[0].activity.kind, ToolActivityKind::Read);
-        assert_eq!(groups[0].activities[1].activity.kind, ToolActivityKind::Edit);
+        assert_eq!(
+            groups[0].activities[0].activity.kind,
+            ToolActivityKind::Read
+        );
+        assert_eq!(
+            groups[0].activities[1].activity.kind,
+            ToolActivityKind::Edit
+        );
         assert_eq!(groups[1].activities.len(), 1);
         assert!(projected.items.iter().any(|item| {
             matches!(
