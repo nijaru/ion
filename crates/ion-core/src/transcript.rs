@@ -319,6 +319,25 @@ pub struct LiveTranscript {
 }
 
 impl LiveTranscript {
+    pub fn with_user_input(input: &Message) -> Self {
+        let parts = visible_parts(input);
+        let projection = if parts.is_empty() {
+            TranscriptProjection::default()
+        } else {
+            TranscriptProjection {
+                items: vec![TranscriptItem::User(TranscriptMessage {
+                    turn: None,
+                    steering: false,
+                    parts,
+                })],
+            }
+        };
+        Self {
+            projection,
+            ..Self::default()
+        }
+    }
+
     pub fn projection(&self) -> &TranscriptProjection {
         &self.projection
     }
@@ -329,7 +348,22 @@ impl LiveTranscript {
 
     pub fn observe(&mut self, event: AgentEvent) {
         match event {
-            AgentEvent::TurnAccepted { turn } => self.turn = Some(turn),
+            AgentEvent::TurnAccepted { turn } => {
+                self.turn = Some(turn);
+                for item in &mut self.projection.items {
+                    match item {
+                        TranscriptItem::User(message) | TranscriptItem::Assistant(message)
+                            if message.turn.is_none() =>
+                        {
+                            message.turn = Some(turn);
+                        }
+                        TranscriptItem::ActivityGroup(group) if group.turn == 0 => {
+                            group.turn = turn;
+                        }
+                        _ => {}
+                    }
+                }
+            }
             AgentEvent::TextDelta(text) => self.push_text(text),
             AgentEvent::ProviderRetry {
                 attempt,

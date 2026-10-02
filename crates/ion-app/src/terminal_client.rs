@@ -9,10 +9,10 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
-use ion_ai::{Content, Message, ModelRef, Role};
+use ion_ai::{Content, Message, ModelRef, ToolResult};
 use ion_core::{
-    CodingAgent, CodingAgentEvent, CodingSession, ForkPoint, SessionEntry, SessionView,
-    SteeringInbox, TurnEndReason,
+    CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
+    SteeringInbox, ToolCatalog, TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -27,7 +27,6 @@ use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 const MAX_DRAFT: usize = 64 * 1024;
-const MAX_PREVIEW: usize = 64 * 1024;
 const MAX_ROWS: usize = 4096;
 
 #[derive(Default)]
@@ -35,7 +34,8 @@ struct Frontend {
     draft: String,
     images: Vec<LoadedImage>,
     cursor: usize,
-    history: Vec<Message>,
+    history: TranscriptProjection,
+    tool_results: Vec<ToolResult>,
     wrapped_history: Option<(usize, Vec<String>)>,
     scroll: usize,
     status: String,
@@ -136,82 +136,6 @@ impl Picker {
     }
 }
 
-#[derive(Default)]
-struct Progress {
-    text: String,
-    events: Vec<String>,
-}
-
-impl Progress {
-    fn observe(&mut self, event: CodingAgentEvent) {
-        match event {
-            CodingAgentEvent::TurnAccepted { .. } => {}
-            CodingAgentEvent::TextDelta(text) => {
-                self.text.push_str(&text);
-                if self.text.len() > MAX_PREVIEW {
-                    let mut start = self.text.len() - MAX_PREVIEW;
-                    while !self.text.is_char_boundary(start) {
-                        start += 1;
-                    }
-                    self.text.drain(..start);
-                }
-            }
-            CodingAgentEvent::ProviderRetry {
-                attempt,
-                max_retries,
-                delay_ms,
-            } => self.events.push(format!(
-                "Provider retry {attempt}/{max_retries} in {delay_ms}ms"
-            )),
-            CodingAgentEvent::ToolStarted {
-                name, arguments, ..
-            } => self
-                .events
-                .push(format!("→ {name} {}", brief(&arguments.to_string(), 2048))),
-            CodingAgentEvent::ToolFinished { name, output, .. } => self.events.push(format!(
-                "← {name} {}: {}{}",
-                if output.is_error { "error" } else { "done" },
-                brief(&output.value.to_string(), 2048),
-                image_markers(&output.images)
-            )),
-            CodingAgentEvent::ToolRejected { name, output, .. } => self.events.push(format!(
-                "↛ {name} skipped: {}",
-                brief(&output.value.to_string(), 2048)
-            )),
-            CodingAgentEvent::InterruptedCalls(n) => self.events.push(format!(
-                "{n} previous tool call(s) had unknown effects; inspect before retrying"
-            )),
-            CodingAgentEvent::ContextCompacted { through_entry } => {
-                self.text.clear();
-                self.events
-                    .push(format!("Context summarized through entry {through_entry}"));
-            }
-            CodingAgentEvent::ProviderReplayRebased => {
-                self.events.push("Provider reasoning context reset".into());
-            }
-            CodingAgentEvent::ProviderReplayNotice {
-                action,
-                reason,
-                count,
-            } => self.events.push(format!(
-                "Provider reasoning {action}: {count} block(s), {reason}"
-            )),
-            CodingAgentEvent::ResponseRestarted => {
-                self.text.clear();
-                self.events
-                    .push("Incomplete response discarded; retrying".into());
-            }
-            CodingAgentEvent::ToolCatalogWarning(message) => {
-                self.events.push(format!("Tool catalog: {message}"));
-            }
-            CodingAgentEvent::Final(_) => {}
-        }
-        if self.events.len() > 16 {
-            self.events.drain(..self.events.len() - 16);
-        }
-    }
-}
-
 pub struct ChatInit {
     pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
@@ -233,7 +157,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
         images,
         ..Frontend::default()
     };
-    ui.refresh_session(runtime.session())?;
+    ui.refresh_session(runtime.session(), runtime.agent())?;
     for diagnostic in init.startup_diagnostics {
         ui.note(diagnostic);
     }
@@ -317,6 +241,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         runtime.session(),
+                        runtime.agent(),
                         runtime.selected(),
                         command.clone(),
                         exclude_from_context,
@@ -439,7 +364,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                     };
                     match result {
                         Ok(()) => {
-                            ui.refresh_session(runtime.session())?;
+                            ui.refresh_session(runtime.session(), runtime.agent())?;
                             ui.status = "Ready".into();
                         }
                         Err(error) => ui.status = format!("{error:#}"),
@@ -674,7 +599,7 @@ fn apply_fork(
     restore: Option<Message>,
 ) -> Result<()> {
     let id = runtime.fork_session(point)?;
-    ui.refresh_session(runtime.session())?;
+    ui.refresh_session(runtime.session(), runtime.agent())?;
     let mut too_large_to_restore = false;
     if let Some(input) = restore {
         let draft = input
@@ -1137,6 +1062,7 @@ async fn run_user_shell(
     input: &mut InputStream,
     ui: &mut Frontend,
     session: &CodingSession,
+    agent: &CodingAgent,
     selected: &Selection,
     command: String,
     exclude_from_context: bool,
@@ -1183,7 +1109,8 @@ async fn run_user_shell(
     let output = output?;
     let view = session.view()?;
     ui.context_label = context_label(&view, ui.context_window_tokens);
-    ui.load_history(&view);
+    let catalog = agent.tool_catalog();
+    ui.load_history(&view, &catalog);
     ui.scroll = 0;
     ui.status = if output.is_error {
         "Shell finished with an error"
@@ -1226,7 +1153,7 @@ async fn run_turn(
         }
     };
     let user_message = Message::user_input(prompt.clone(), attached.iter().cloned());
-    let progress = Arc::new(Mutex::new(Progress::default()));
+    let progress = Arc::new(Mutex::new(LiveTranscript::with_user_input(&user_message)));
     let observer = progress.clone();
     let stop = CancellationToken::new();
     let steering = SteeringInbox::default();
@@ -1297,7 +1224,8 @@ async fn run_turn(
         ui.cursor = ui.draft.len();
     }
     ui.context_label = context_label(&view, ui.context_window_tokens);
-    ui.load_history(&view);
+    let catalog = agent.tool_catalog();
+    ui.load_history(&view, &catalog);
     ui.scroll = 0;
     ui.status = match result {
         Ok(_) => "Ready · Enter to send · Ctrl-C to quit".into(),
@@ -1321,10 +1249,11 @@ enum Action {
 }
 
 impl Frontend {
-    fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
+    fn refresh_session(&mut self, session: &CodingSession, agent: &CodingAgent) -> Result<()> {
         let view = session.view()?;
         self.context_label = context_label(&view, self.context_window_tokens);
-        self.load_history(&view);
+        let catalog = agent.tool_catalog();
+        self.load_history(&view, &catalog);
         self.tool_view = None;
         self.notices.clear();
         self.scroll = 0;
@@ -1346,8 +1275,16 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(&mut self, view: &SessionView) {
-        self.history = view.display_messages();
+    fn load_history(&mut self, view: &SessionView, catalog: &ToolCatalog) {
+        self.history = TranscriptProjection::from_session(view, catalog);
+        self.tool_results = view
+            .entries
+            .iter()
+            .filter_map(|entry| match entry {
+                SessionEntry::ToolResult { result, .. } => Some(result.clone()),
+                _ => None,
+            })
+            .collect();
         self.wrapped_history = None;
         self.prompt_history = view
             .entries
@@ -1383,7 +1320,11 @@ impl Frontend {
             .as_ref()
             .is_none_or(|(cached_width, _)| *cached_width != width)
         {
-            self.wrapped_history = Some((width, history_tail_rows(&self.history, width)));
+            let mut rows = crate::transcript_render::rows(&self.history, width);
+            if rows.len() > MAX_ROWS {
+                rows.drain(..rows.len() - MAX_ROWS);
+            }
+            self.wrapped_history = Some((width, rows));
         }
     }
 
@@ -1718,15 +1659,10 @@ impl Frontend {
 
     fn list_tools(&mut self) {
         let names = self
-            .history
+            .tool_results
             .iter()
-            .flat_map(|message| message.content.iter())
-            .filter_map(|content| match content {
-                Content::ToolResult(result) => Some(result.name.as_str()),
-                _ => None,
-            })
             .enumerate()
-            .map(|(index, name)| format!("{}:{name}", index + 1))
+            .map(|(index, result)| format!("{}:{}", index + 1, result.name))
             .collect::<Vec<_>>();
         self.note(if names.is_empty() {
             "No tool results in this session".into()
@@ -1736,21 +1672,12 @@ impl Frontend {
     }
 
     fn open_tool(&mut self, number: Option<usize>) {
-        let results = self
-            .history
-            .iter()
-            .flat_map(|message| message.content.iter())
-            .filter_map(|content| match content {
-                Content::ToolResult(result) => Some(result),
-                _ => None,
-            })
-            .collect::<Vec<_>>();
-        let index = number.unwrap_or(results.len());
-        if index == 0 || index > results.len() {
+        let index = number.unwrap_or(self.tool_results.len());
+        if index == 0 || index > self.tool_results.len() {
             self.status = "Tool result not found; use /tools to list results".into();
             return;
         }
-        let result = results[index - 1];
+        let result = &self.tool_results[index - 1];
         self.tool_view = Some(ToolView {
             label: format!("Tool {index}: {} · Esc or Ctrl-O closes", result.name),
             output: format!(
@@ -1905,7 +1832,7 @@ fn draw(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
     ui: &mut Frontend,
-    progress: Option<&Progress>,
+    progress: Option<&LiveTranscript>,
     model: &ModelRef,
     _busy: bool,
 ) -> Result<()> {
@@ -1955,11 +1882,9 @@ fn draw(
             push_wrapped(&mut rows, notice, width);
         }
         if let Some(progress) = progress {
-            if !progress.text.is_empty() {
-                push_wrapped(&mut rows, &format!("ion> {}", progress.text), width);
-            }
-            for event in &progress.events {
-                push_wrapped(&mut rows, event, width);
+            rows.extend(crate::transcript_render::rows(progress.projection(), width));
+            for notice in progress.notices() {
+                push_wrapped(&mut rows, notice, width);
             }
         }
         rows
@@ -2077,91 +2002,6 @@ fn wrap_input(draft: &str, cursor: usize, width: usize) -> WrappedInput {
         cursor_row: position.0,
         cursor_col: position.1,
     }
-}
-
-fn history_rows(messages: &[Message], width: usize) -> Vec<String> {
-    let mut rows = Vec::new();
-    for message in messages {
-        match message.role {
-            Role::User => {
-                for item in &message.content {
-                    match item {
-                        Content::Text(text) => push_wrapped(
-                            &mut rows,
-                            &format!("you> {}", brief(text, MAX_PREVIEW)),
-                            width,
-                        ),
-                        Content::Image(image) => push_wrapped(
-                            &mut rows,
-                            &format!("you> [image: {}]", image.mime_type().as_str()),
-                            width,
-                        ),
-                        Content::ToolCall(_) | Content::ToolResult(_) => {}
-                    }
-                }
-            }
-            Role::Assistant => {
-                for item in &message.content {
-                    match item {
-                        Content::Text(text) => push_wrapped(
-                            &mut rows,
-                            &format!("ion> {}", brief(text, MAX_PREVIEW)),
-                            width,
-                        ),
-                        Content::ToolCall(call) => push_wrapped(
-                            &mut rows,
-                            &format!(
-                                "→ {} {}",
-                                call.name,
-                                brief(&call.arguments.to_string(), 2048)
-                            ),
-                            width,
-                        ),
-                        Content::Image(_) => {}
-                        Content::ToolResult(_) => {}
-                    }
-                }
-            }
-            Role::Tool => {
-                for item in &message.content {
-                    if let Content::ToolResult(result) = item {
-                        push_wrapped(
-                            &mut rows,
-                            &format!(
-                                "← {} {}{}",
-                                result.name,
-                                brief(&result.result.to_string(), 2048),
-                                image_markers(&result.images)
-                            ),
-                            width,
-                        );
-                    }
-                }
-            }
-        }
-    }
-    rows
-}
-
-fn history_tail_rows(messages: &[Message], width: usize) -> Vec<String> {
-    let mut groups = Vec::new();
-    let mut row_count = 0usize;
-    for message in messages.iter().rev() {
-        let rows = history_rows(std::slice::from_ref(message), width);
-        row_count = row_count.saturating_add(rows.len());
-        groups.push(rows);
-        if row_count >= MAX_ROWS {
-            break;
-        }
-    }
-    let mut rows = Vec::with_capacity(row_count.min(MAX_ROWS));
-    for group in groups.into_iter().rev() {
-        rows.extend(group);
-    }
-    if rows.len() > MAX_ROWS {
-        rows.drain(..rows.len() - MAX_ROWS);
-    }
-    rows
 }
 
 fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
@@ -2453,16 +2293,12 @@ mod tests {
     fn tool_view_keeps_output_beyond_the_compact_preview() {
         let output = format!("{}END_MARKER", "x".repeat(4_000));
         let mut ui = Frontend {
-            history: vec![Message {
-                role: Role::Tool,
-                content: vec![Content::ToolResult(ion_ai::ToolResult {
-                    call_id: "call".into(),
-                    name: "exec".into(),
-                    result: serde_json::json!({"stdout": output}),
-                    images: Vec::new(),
-                    is_error: false,
-                })],
-                provider_replay: None,
+            tool_results: vec![ToolResult {
+                call_id: "call".into(),
+                name: "exec".into(),
+                result: serde_json::json!({"stdout": output}),
+                images: Vec::new(),
+                is_error: false,
             }],
             ..Frontend::default()
         };
@@ -2500,20 +2336,27 @@ mod tests {
     #[test]
     fn wrapped_history_keeps_recent_rows_and_reflows_on_width_change() {
         let mut ui = Frontend {
-            history: (0..MAX_ROWS + 100)
-                .map(|index| Message {
-                    role: Role::User,
-                    content: vec![Content::Text(format!("message-{index}"))],
-                    provider_replay: None,
-                })
-                .collect(),
+            history: TranscriptProjection {
+                items: (0..MAX_ROWS + 100)
+                    .map(|index| {
+                        ion_core::TranscriptItem::User(ion_core::TranscriptMessage {
+                            turn: Some(index as u64 + 1),
+                            steering: false,
+                            parts: vec![ion_core::TranscriptPart::Text(format!(
+                                "message-{index}"
+                            ))],
+                        })
+                    })
+                    .collect(),
+            },
             ..Frontend::default()
         };
         ui.ensure_wrapped_history(80);
         let cached = &ui.wrapped_history.as_ref().unwrap().1;
         assert_eq!(cached.len(), MAX_ROWS);
-        assert_eq!(cached.first().unwrap(), "you> message-100");
-        assert_eq!(cached.last().unwrap(), "you> message-4195");
+        assert_eq!(cached.last().unwrap(), "› message-4195");
+        assert!(cached.iter().any(|row| row == "› message-4194"));
+        assert!(!cached.iter().any(|row| row.starts_with("you> ")));
         let previous = cached.as_ptr();
         ui.ensure_wrapped_history(80);
         assert_eq!(ui.wrapped_history.as_ref().unwrap().1.as_ptr(), previous);
