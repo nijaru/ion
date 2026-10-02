@@ -399,12 +399,7 @@ fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
         write!(terminal.output(), "{}", "\r\n".repeat(rows as usize))?;
         terminal.output().flush()?;
     }
-    Ok(Screen::with_live_height(
-        width,
-        origin,
-        height,
-        live_height,
-    ))
+    Ok(Screen::with_live_height(width, origin, height, live_height))
 }
 
 async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
@@ -1277,20 +1272,16 @@ impl Frontend {
         Ok(())
     }
 
-    fn load_history(
-        &mut self,
-        session: &CodingSession,
-        view: &SessionView,
-        catalog: &ToolCatalog,
-    ) {
+    fn load_history(&mut self, session: &CodingSession, view: &SessionView, catalog: &ToolCatalog) {
         let history = TranscriptProjection::from_session(view, catalog);
         let session_path = session.path().to_path_buf();
         let same_session = self.history_session.as_ref() == Some(&session_path);
         if !same_session {
             if self.history_session.is_some() {
-                let label = session_path
-                    .file_stem()
-                    .map_or_else(|| "session".into(), |stem| stem.to_string_lossy().into_owned());
+                let label = session_path.file_stem().map_or_else(
+                    || "session".into(),
+                    |stem| stem.to_string_lossy().into_owned(),
+                );
                 self.pending_history_banner = Some(format!("— session {label} —"));
             }
             self.history_committed_items = 0;
@@ -1924,11 +1915,15 @@ fn draw(
         .saturating_sub(composer_height.saturating_sub(1))
         .min(composer.lines.len().saturating_sub(composer_height));
     let composer_offset = live_rows.len();
-    for line in composer.lines.iter().skip(composer_start).take(composer_height) {
+    for line in composer
+        .lines
+        .iter()
+        .skip(composer_start)
+        .take(composer_height)
+    {
         live_rows.push(line.clone());
     }
-    let mut cursor_row =
-        composer_offset + composer.cursor_row.saturating_sub(composer_start);
+    let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
 
     let live_height = LIVE_REGION_MAX_ROWS
         .min(screen.size().1.max(1) as usize)
@@ -2411,6 +2406,4 @@ mod tests {
         assert_eq!(ui.draft, "Read @src/main.rs");
         std::fs::remove_dir_all(root).unwrap();
     }
-
-
 }
