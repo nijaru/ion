@@ -607,9 +607,7 @@ mod tests {
         };
 
         assert_eq!(
-            control
-                .start_compaction(Some(json!("cancelled")))
-                .unwrap(),
+            control.start_compaction(Some(json!("cancelled"))).unwrap(),
             json!({"disposition":"started"})
         );
         assert!(control.idle().is_err());
