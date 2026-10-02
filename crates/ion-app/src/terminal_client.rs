@@ -217,6 +217,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         runtime.session(),
+                        runtime.agent(),
                         runtime.selected(),
                         runtime.instructions(),
                         runtime.resources(),
@@ -232,7 +233,6 @@ pub async fn chat(init: ChatInit) -> Result<()> {
                         &mut input,
                         &mut ui,
                         runtime.session(),
-                        runtime.agent(),
                         runtime.selected(),
                         command.clone(),
                         exclude_from_context,
@@ -836,6 +836,7 @@ async fn run_compaction(
     input: &mut InputStream,
     ui: &mut Frontend,
     session: &CodingSession,
+    agent: &CodingAgent,
     selected: &Selection,
 ) -> Result<()> {
     let model = selected.identity();
@@ -1065,7 +1066,6 @@ async fn run_user_shell(
     input: &mut InputStream,
     ui: &mut Frontend,
     session: &CodingSession,
-    agent: &CodingAgent,
     selected: &Selection,
     command: String,
     exclude_from_context: bool,
@@ -2135,6 +2135,7 @@ mod tests {
                 content: vec![Content::Text(text.into())],
                 provider_replay: None,
             },
+            tool_activities: Vec::new(),
             usage: ion_ai::Usage::unknown(),
             termination: ion_ai::ResponseTermination::Completed,
         };
