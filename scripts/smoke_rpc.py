@@ -126,6 +126,14 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
         assert "Check RPC." in str(requests[0]["messages"])
 
+        send(child, {"id": "compact", "type": "compact"})
+        compact_ack = read(child)
+        assert compact_ack["id"] == "compact" and compact_ack["success"]
+        assert compact_ack["data"]["disposition"] == "started", compact_ack
+        compact_records = until(child, lambda r: r["type"] == "compact_end")
+        assert compact_records[-1]["id"] == "compact"
+        assert compact_records[-1]["status"] == "completed", compact_records
+
         inline = {"mime_type": "image/png", "data": base64.b64encode(tiny_png()).decode()}
         send(child, {"id": "bad-inline", "type": "prompt", "message": "Look", "images": [{**inline, "mime_type": "image/jpeg"}]})
         rejected = read(child)
@@ -270,7 +278,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         records = [json.loads(line) for line in incomplete.stdout.splitlines()]
         assert [record["type"] for record in records] == ["ready", "response"], records
         assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
-        print("Ion RPC acceptance, inline images, steering, follow-ups, settlement, abort and session control: OK")
+        print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, abort and session control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()

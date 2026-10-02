@@ -30,7 +30,9 @@ enum Output {
 
 struct Active {
     stop: CancellationToken,
-    steering: Arc<SteeringInbox>,
+    /// Present only for an active coding Turn. Other cancellable operations
+    /// such as manual compaction do not accept steering or follow-ups.
+    steering: Option<Arc<SteeringInbox>>,
 }
 
 struct QueuedFollowUp {
@@ -173,15 +175,21 @@ impl Control {
             match command {
                 "steer" => {
                     let active = self.active.as_ref().context("no active Turn")?;
+                    let steering = active.steering.as_ref().context("no active Turn")?;
                     let message = required_string(&value, "message")?;
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
                     ensure!(!prompt.trim().is_empty() || !images.is_empty(), "message is empty");
-                    active.steering.push_message(Message::user_input(prompt, images))?;
+                    steering.push_message(Message::user_input(prompt, images))?;
                     Ok(json!({"disposition":"queued"}))
                 }
                 "follow_up" => {
-                    ensure!(self.active.is_some(), "no active Turn; use prompt instead");
+                    ensure!(
+                        self.active
+                            .as_ref()
+                            .is_some_and(|active| active.steering.is_some()),
+                        "no active Turn; use prompt instead"
+                    );
                     let message = required_string(&value, "message")?;
                     let prompt = expand_input(self.binding.resources(), message.to_owned())?;
                     let images = self.load_images(&value)?;
@@ -197,7 +205,11 @@ impl Control {
                     Ok(json!({"disposition":"queued","position":self.follow_ups.len()}))
                 }
                 "clear_queue" => {
-                    let steering = self.active.as_ref().map_or_else(Vec::new, |active| active.steering.take_uncommitted());
+                    let steering = self
+                        .active
+                        .as_ref()
+                        .and_then(|active| active.steering.as_ref())
+                        .map_or_else(Vec::new, |steering| steering.take_uncommitted());
                     let follow_up = self.follow_ups.drain(..).map(|pending| json!({"id":pending.id,"input":pending.input})).collect::<Vec<_>>();
                     self.queued_bytes = 0;
                     Ok(json!({"steering":steering,"follow_up":follow_up}))
@@ -209,7 +221,10 @@ impl Control {
                 }
                 "get_state" => {
                     let view = self.binding.session().view()?;
-                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"busy":self.active.is_some(),"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
+                    let operation = self.active.as_ref().map(|active| {
+                        if active.steering.is_some() { "turn" } else { "compact" }
+                    });
+                    Ok(json!({"session":self.session_id(),"cwd":view.cwd,"name":view.name,"model":self.binding.selected().identity(),"busy":self.active.is_some(),"operation":operation,"entries":view.entries.len(),"follow_ups":self.follow_ups.len()}))
                 }
                 "inspect" => {
                     let mut view = serde_json::to_value(self.binding.session().view()?)?;
@@ -225,6 +240,7 @@ impl Control {
                     self.binding.reload_resources()?;
                     Ok(json!({"skills":self.binding.resources().skills().count(),"prompts":self.binding.resources().templates().count()}))
                 }
+                "compact" => self.start_compaction(id.clone())?,
                 "set_model" => {
                     self.idle()?;
                     let provider = required_string(&value, "provider")?;
@@ -331,6 +347,48 @@ impl Control {
         Ok(())
     }
 
+    fn start_compaction(&mut self, id: Option<Value>) -> Result<Value> {
+        self.idle()?;
+        let agent = self.binding.agent().clone();
+        let session = self.binding.session().clone();
+        let model = self.binding.selected().identity();
+        let stop = CancellationToken::new();
+        let task_stop = stop.clone();
+        let output = self.output.clone();
+        self.active = Some(Active {
+            stop,
+            steering: None,
+        });
+        tokio::spawn(async move {
+            let mut output_fault = None;
+            let result = agent
+                .compact(&session, model, task_stop.clone(), |event| {
+                    if output.try_send(Output::Record(event_record(event))).is_err() {
+                        output_fault = Some("RPC output queue is full".to_owned());
+                        task_stop.cancel();
+                    }
+                })
+                .await;
+            let status = match &result {
+                Ok(_) => "completed",
+                Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
+                Err(_) => "failed",
+            };
+            let mut record = json!({"type":"compact_end","id":id,"status":status});
+            if let Ok(changed) = result {
+                record["changed"] = json!(changed);
+            } else if let Err(error) = result {
+                record["error"] = json!(error.to_string());
+            }
+            if let Some(fault) = output_fault {
+                record["output_error"] = json!(fault);
+            }
+            let _ = output.send(Output::Record(record)).await;
+            let _ = output.send(Output::Done).await;
+        });
+        Ok(json!({"disposition":"started"}))
+    }
+
     fn start_message(&mut self, input: Message, id: Option<Value>, queued: bool) -> Result<()> {
         self.idle()?;
         let agent = self.binding.agent().clone();
@@ -343,7 +401,10 @@ impl Control {
         let task_stop = stop.clone();
         let task_steering = steering.clone();
         let recover_input = queued.then(|| input.clone());
-        self.active = Some(Active { stop, steering });
+        self.active = Some(Active {
+            stop,
+            steering: Some(steering),
+        });
         tokio::spawn(async move {
             let mut accepted = None;
             let mut output_fault = None;

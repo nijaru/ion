@@ -127,8 +127,8 @@ Session. Keep reading progress records with that Turn ID until `turn_end`
 reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
-`list_resources`, `reload_resources`, `set_model`, `new_session`, `fork`,
-`switch_session` and `set_name`.
+`list_resources`, `reload_resources`, `compact`, `set_model`, `new_session`,
+`fork`, `switch_session` and `set_name`.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
@@ -140,8 +140,11 @@ follow-ups queued. Queued input is process-local and bounded to 32 MiB of
 encoded messages. Closing stdin cancels active work and returns pending
 follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
 image payloads, so clients should handle them as their own input data.
-Session, resource and model changes require an idle Turn. `set_model` saves the
-idle selection for that Session; `new_session` selects the current global
+Session, resource, model and manual-compaction changes require an idle Turn.
+`compact` acknowledges that the operation started, can be cancelled with
+`abort`, and later emits `compact_end` with completed/cancelled/failed status
+and whether the model-context projection changed. `steer` and `follow_up`
+remain valid only for a coding Turn. `set_model` saves the idle selection for that Session; `new_session` selects the current global
 default, and `switch_session` restores the selected Session's model. Starting,
 forking or switching Sessions refreshes project resources; use
 `reload_resources` to refresh them within the current Session.

@@ -30,6 +30,8 @@ jobs:
         run: cargo build --locked -p ion
       - name: Terminal PTY smoke
         run: python3 scripts/smoke_terminal.py
+      - name: RPC smoke
+        run: python3 scripts/smoke_rpc.py
 
   audit:
     if: github.event_name == 'schedule'
