@@ -31,7 +31,6 @@ use anthropic::{
 };
 use chat::{ChatState, chat_body};
 
-
 const MAX_FRAME: usize = 256 * 1024;
 const MAX_RESPONSE: usize = 8 * 1024 * 1024;
 const PROVIDER_IDLE_TIMEOUT: Duration = Duration::from_secs(300);
@@ -893,11 +892,11 @@ fn valid_openrouter_details(value: &Value) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::chat::{
         UsageState, append_openrouter_detail, chat_reasoning_delta, empty_post_finish_delta,
         has_content,
     };
+    use super::*;
     use ion_ai::{GenerationControls, ModelRef, ToolResult, ToolSpec};
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
