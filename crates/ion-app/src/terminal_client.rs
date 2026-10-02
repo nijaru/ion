@@ -34,8 +34,29 @@ const LIVE_REGION_MAX_ROWS: usize = 12;
 const RESUME_TURN_LIMIT: usize = 6;
 const RESUME_ENTRY_LIMIT_WITHOUT_TURNS: usize = 32;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, clap::ValueEnum)]
+pub enum TuiMode {
+    #[default]
+    #[value(alias = "regular")]
+    Inline,
+    Fullscreen,
+}
+
+impl TuiMode {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::Inline => "inline",
+            Self::Fullscreen => "fullscreen",
+        }
+    }
+}
+
 #[derive(Default)]
 struct Frontend {
+    mode: TuiMode,
+    history: TranscriptProjection,
+    fullscreen_rows: usize,
+    fullscreen_width: usize,
     draft: String,
     images: Vec<LoadedImage>,
     cursor: usize,
@@ -144,9 +165,11 @@ pub struct ChatInit {
     pub binding: ion_host::SessionBinding,
     pub images: Vec<LoadedImage>,
     pub startup_diagnostics: Vec<String>,
+    pub tui_mode: TuiMode,
 }
 
 pub async fn chat(init: ChatInit) -> Result<()> {
+    let tui_mode = init.tui_mode;
     let mut runtime = init.binding;
     let images = init.images;
     install_panic_hook();
@@ -154,6 +177,7 @@ pub async fn chat(init: ChatInit) -> Result<()> {
     let mut screen = new_inline_screen(&mut terminal)?;
     let mut input = terminal.input()?;
     let mut ui = Frontend {
+        mode: tui_mode,
         images,
         ..Frontend::default()
     };
@@ -661,8 +685,28 @@ fn handle_command(
     let args = args.trim();
     match name {
         "/help" => ui.note(
-            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
+            "/new /clone /fork [TURN] /fork-after TURN /resume /session /name NAME /model /compact /tools /tool [N] /tui MODE /image PATH /copy /editor /export PATH /skills /prompts /reload /login PROVIDER /logout PROVIDER /quit\nCtrl-V pastes files, image or text from the host clipboard. !COMMAND runs shell and shares result with model; !!COMMAND keeps it out of model context".into(),
         ),
+        "/tui" => {
+            match args {
+                "" => ui.note(format!(
+                    "TUI mode: {}. Use /tui inline or /tui fullscreen",
+                    ui.mode.label()
+                )),
+                "inline" | "regular" => {
+                    ui.mode = TuiMode::Inline;
+                    ui.scroll = 0;
+                    ui.status = "Inline TUI · native terminal scrollback".into();
+                }
+                "fullscreen" => {
+                    ui.mode = TuiMode::Fullscreen;
+                    ui.scroll = 0;
+                    ui.fullscreen_rows = 0;
+                    ui.status = "Fullscreen TUI · PageUp/PageDown or mouse wheel scrolls".into();
+                }
+                _ => anyhow::bail!("use /tui inline or /tui fullscreen"),
+            }
+        }
         "/image" => {
             anyhow::ensure!(!args.is_empty(), "use /image PATH");
             let path = Path::new(args);
@@ -1367,6 +1411,7 @@ impl Frontend {
             .flatten()
             .cloned()
             .collect();
+        self.history = history;
         self.prompt_history = view
             .entries
             .iter()
@@ -1985,6 +2030,10 @@ fn draw(
         terminal.enter_alt_screen()?;
         return draw_modal_fullscreen(terminal, screen, ui, width, height);
     }
+    if ui.mode == TuiMode::Fullscreen {
+        terminal.enter_alt_screen()?;
+        return draw_chat_fullscreen(terminal, screen, ui, progress, width, height);
+    }
 
     let mut surface_reset = false;
     if terminal.is_alt_screen() {
@@ -2014,23 +2063,8 @@ fn draw(
         }
     }
 
-    let idle_status = ui.status.is_empty()
-        || ui.status.starts_with("Ready ·")
-        || ui.status.starts_with("Enter to send");
-    if !idle_status || !ui.images.is_empty() {
-        let attachment = if ui.images.is_empty() {
-            String::new()
-        } else {
-            format!(" · {} image(s) attached", ui.images.len())
-        };
-        let status = if idle_status {
-            attachment.trim_start_matches(" · ").to_owned()
-        } else {
-            format!("{}{}", ui.status, attachment)
-        };
-        if !status.is_empty() {
-            push_wrapped(&mut live_rows, &status, width);
-        }
+    if let Some(status) = visible_status(ui) {
+        push_wrapped(&mut live_rows, &status, width);
     }
 
     let composer = wrap_input(&ui.draft, ui.cursor, width);
@@ -2078,6 +2112,114 @@ fn draw(
             cursor,
         },
     )?;
+    Ok(())
+}
+
+fn visible_status(ui: &Frontend) -> Option<String> {
+    let idle = ui.status.is_empty()
+        || ui.status.starts_with("Ready ·")
+        || ui.status.starts_with("Enter to send");
+    if idle && ui.images.is_empty() {
+        return None;
+    }
+    let attachment = if ui.images.is_empty() {
+        String::new()
+    } else {
+        format!(" · {} image(s) attached", ui.images.len())
+    };
+    let status = if idle {
+        attachment.trim_start_matches(" · ").to_owned()
+    } else {
+        format!("{}{}", ui.status, attachment)
+    };
+    (!status.is_empty()).then_some(status)
+}
+
+fn draw_chat_fullscreen(
+    terminal: &mut TerminalSession,
+    screen: &mut Screen,
+    ui: &mut Frontend,
+    progress: Option<&LiveTranscript>,
+    width: u16,
+    height: u16,
+) -> Result<()> {
+    let width = width.max(1) as usize;
+    let height = height.max(1) as usize;
+    let mut content = crate::transcript_render::rows(&ui.history, width);
+
+    for notice in &ui.notices {
+        if !content.is_empty() && content.last().is_some_and(|row| !row.is_empty()) {
+            content.push(String::new());
+        }
+        push_wrapped(&mut content, notice, width);
+    }
+    if let Some(progress) = progress {
+        let live = crate::transcript_render::rows(progress.projection(), width);
+        if !live.is_empty() && !content.is_empty() && content.last().is_some_and(|row| !row.is_empty())
+        {
+            content.push(String::new());
+        }
+        content.extend(live);
+        for notice in progress.notices() {
+            push_wrapped(&mut content, notice, width);
+        }
+    }
+
+    // Keep a scrolled-up viewport visually stable while new streaming rows arrive.
+    // Width changes can reflow the whole transcript, so start a new row-count
+    // baseline rather than guessing how the old offset maps to the new wrapping.
+    if ui.fullscreen_width == width && ui.scroll > 0 && content.len() > ui.fullscreen_rows {
+        ui.scroll = ui
+            .scroll
+            .saturating_add(content.len().saturating_sub(ui.fullscreen_rows));
+    }
+    ui.fullscreen_width = width;
+    ui.fullscreen_rows = content.len();
+    ui.scroll = ui.scroll.min(content.len());
+
+    let composer = wrap_input(&ui.draft, ui.cursor, width);
+    let composer_height = composer.lines.len().min(4);
+    let composer_start = composer
+        .cursor_row
+        .saturating_sub(composer_height.saturating_sub(1))
+        .min(composer.lines.len().saturating_sub(composer_height));
+    let status = visible_status(ui);
+    let status_height = usize::from(status.is_some());
+    let viewport = height.saturating_sub(composer_height + status_height);
+
+    let end = content.len().saturating_sub(ui.scroll);
+    let start = end.saturating_sub(viewport);
+    let mut rows = vec![Line::raw(""); height];
+    let padding = viewport.saturating_sub(end.saturating_sub(start));
+    for (index, row) in content[start..end].iter().enumerate() {
+        rows[padding + index] = Line::raw(row.clone());
+    }
+
+    let mut next_row = viewport;
+    if let Some(status) = status
+        && next_row < height
+    {
+        rows[next_row] = Line::raw(brief(&status, width));
+        next_row += 1;
+    }
+    for (index, line) in composer
+        .lines
+        .iter()
+        .skip(composer_start)
+        .take(composer_height)
+        .enumerate()
+    {
+        if next_row + index < height {
+            rows[next_row + index] = Line::raw(line.clone());
+        }
+    }
+    let cursor_row = next_row + composer.cursor_row.saturating_sub(composer_start);
+    let cursor = (cursor_row < height).then_some((
+        cursor_row,
+        composer.cursor_col.min(width.saturating_sub(1)) as u16,
+    ));
+
+    screen.draw_fullscreen(terminal.output(), &rows, cursor)?;
     Ok(())
 }
 
