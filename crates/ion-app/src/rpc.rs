@@ -240,7 +240,7 @@ impl Control {
                     self.binding.reload_resources()?;
                     Ok(json!({"skills":self.binding.resources().skills().count(),"prompts":self.binding.resources().templates().count()}))
                 }
-                "compact" => self.start_compaction(id.clone())?,
+                "compact" => self.start_compaction(id.clone()),
                 "set_model" => {
                     self.idle()?;
                     let provider = required_string(&value, "provider")?;
