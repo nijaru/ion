@@ -37,7 +37,6 @@ struct Frontend {
     draft: String,
     images: Vec<LoadedImage>,
     cursor: usize,
-    history: TranscriptProjection,
     tool_results: Vec<ToolResult>,
     history_session: Option<PathBuf>,
     history_committed_items: usize,
@@ -1232,7 +1231,6 @@ async fn run_turn(
         };
         ui.cursor = ui.draft.len();
     }
-    ui.context_label = context_label(&view, ui.context_window_tokens);
     let catalog = agent.tool_catalog();
     ui.load_history(session, &view, &catalog);
     ui.scroll = 0;
@@ -1290,7 +1288,6 @@ impl Frontend {
         self.pending_history_items = history.items[start..].to_vec();
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
-        self.history = history;
         self.tool_results = view
             .entries
             .iter()
