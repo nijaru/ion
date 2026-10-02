@@ -399,7 +399,7 @@ fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
 }
 
 async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
-    start_clipboard_paste(ui, runtime.selected());
+    start_clipboard_paste(ui, selected);
     finish_clipboard_paste(ui).await
 }
 
@@ -2346,7 +2346,7 @@ mod tests {
             provider: "local".into(),
             model: "vision".into(),
             endpoint: "http://127.0.0.1:1".into(),
-            wire: ion_core::HttpWire::ChatCompletions,
+            wire: ion_host::HttpWire::ChatCompletions,
             api_key_env: None,
             max_output_tokens: 1024,
             context_window_tokens: None,
