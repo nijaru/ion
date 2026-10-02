@@ -687,7 +687,7 @@ fn handle_command(
                     .iter()
                     .filter(|entry| matches!(entry, ion_core::SessionEntry::TurnStarted { .. }))
                     .count(),
-                view.name.unwrap_or_else(|| "unnamed".into()),
+                view.name.as_deref().unwrap_or("unnamed"),
                 context_label(&view, runtime.selected().context_window_tokens),
             ));
         }
@@ -878,7 +878,6 @@ async fn run_compaction(
     if result.is_err() {
         return_pending_to_editor(ui);
     }
-    ui.update_context(session)?;
     ui.status = match result {
         Ok(true) => "Context summarized; raw history retained".into(),
         Ok(false) => "No settled history to summarize".into(),
