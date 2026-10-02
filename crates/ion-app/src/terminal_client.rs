@@ -5,7 +5,6 @@ use ion_ai::Role;
 use std::fs;
 use std::{
     collections::{HashSet, VecDeque},
-    io::Write,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
 };
@@ -391,14 +390,12 @@ fn new_inline_screen(terminal: &mut TerminalSession) -> Result<Screen> {
     let (_, cursor_row) = terminal
         .cursor_position()
         .context("read terminal cursor position")?;
-    let live_height = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize).max(1);
-    let origin = height.saturating_sub(live_height as u16);
-    if cursor_row >= origin && height > 1 {
-        let rows = cursor_row.saturating_sub(origin).saturating_add(1);
-        write!(terminal.output(), "{}", "\r\n".repeat(rows as usize))?;
-        terminal.output().flush()?;
-    }
-    Ok(Screen::with_live_height(width, origin, height, live_height))
+    Ok(Screen::with_live_height(
+        width,
+        cursor_row.min(height.saturating_sub(1)),
+        height,
+        1,
+    ))
 }
 
 async fn paste_clipboard(ui: &mut Frontend, selected: &Selection) -> Result<()> {
@@ -1921,15 +1918,14 @@ fn draw(
     }
     let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
 
-    let live_height = LIVE_REGION_MAX_ROWS
-        .min(screen.size().1.max(1) as usize)
-        .max(1);
+    let desired_live_height = live_rows.len().clamp(1, LIVE_REGION_MAX_ROWS);
+    screen.ensure_live_height(terminal.output(), desired_live_height)?;
+    let live_height = screen.live_height();
     if live_rows.len() > live_height {
         let drop = live_rows.len() - live_height;
         live_rows.drain(..drop);
         cursor_row = cursor_row.saturating_sub(drop);
     }
-    screen.set_live_height(live_height);
 
     let live = live_rows.into_iter().map(Line::raw).collect::<Vec<_>>();
     let cursor = (cursor_row < live.len()).then_some((

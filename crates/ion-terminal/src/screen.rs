@@ -143,6 +143,45 @@ impl Screen {
         (self.width, self.avail())
     }
 
+    #[must_use]
+    pub fn live_height(&self) -> usize {
+        self.live_height.unwrap_or(1)
+    }
+
+    /// Grow the mutable inline band without ever scrolling mutable content
+    /// into native history. The band only grows during one inline session.
+    pub fn ensure_live_height(
+        &mut self,
+        out: &mut impl Write,
+        rows: usize,
+    ) -> io::Result<()> {
+        let rows = rows.max(1).min(self.screen_height as usize);
+        if rows <= self.live_height() {
+            return Ok(());
+        }
+
+        let available = self.avail() as usize;
+        if available < rows {
+            // Erase the mutable surface before scrolling. Only terminal-owned
+            // content above the band may move into scrollback.
+            write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+            let grow = rows - available;
+            for _ in 0..grow {
+                write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
+            }
+            out.flush()?;
+            self.origin = self.origin.saturating_sub(grow.min(u16::MAX as usize) as u16);
+        }
+
+        self.live_height = Some(rows);
+        self.current = None;
+        self.fullscreen = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+        self.live_height_bias = 0;
+        Ok(())
+    }
+
     /// Visible rows of the region: origin to screen bottom. Follows
     /// terminal growth and shrinkage.
     fn avail(&self) -> u16 {
@@ -594,6 +633,24 @@ mod tests {
 
     fn line(text: &str) -> Line<'static> {
         Line::from(text.to_owned())
+    }
+
+    #[test]
+    fn growing_live_band_scrolls_only_after_clearing_mutable_rows() {
+        let mut screen = Screen::with_live_height(80, 22, 24, 1);
+        let mut output = Vec::new();
+        screen.ensure_live_height(&mut output, 4).unwrap();
+        assert_eq!(screen.origin, 20);
+        assert_eq!(screen.live_height(), 4);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("\x1b[23;1H\x1b[J"));
+        assert_eq!(text.matches("\x1b[24;1H\r\n").count(), 2);
+
+        output = Vec::new();
+        screen.ensure_live_height(&mut output, 2).unwrap();
+        assert!(output.is_empty(), "the live band never shrinks during chat");
+        assert_eq!(screen.origin, 20);
+        assert_eq!(screen.live_height(), 4);
     }
 
     #[test]
