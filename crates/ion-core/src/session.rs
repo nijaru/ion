@@ -9,10 +9,7 @@ use std::{
     time::Duration,
 };
 
-use crate::{
-    local_tools::LocalTools,
-    tool_set::{ToolActivity, ToolOutput},
-};
+use crate::tool_set::ToolActivity;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
     Usage,
@@ -21,7 +18,7 @@ use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
 const FORMAT_VERSION: u32 = 5;
@@ -387,6 +384,24 @@ pub struct Session {
     pub(crate) submit_gate: AsyncMutex<()>,
 }
 
+pub struct UserShellPermit<'a> {
+    session: &'a Session,
+    _gate: AsyncMutexGuard<'a, ()>,
+}
+
+impl UserShellPermit<'_> {
+    pub fn record(
+        self,
+        command: String,
+        output: serde_json::Value,
+        is_error: bool,
+        exclude_from_context: bool,
+    ) -> Result<(), SessionError> {
+        self.session
+            .record_user_shell(command, output, is_error, exclude_from_context)
+    }
+}
+
 struct SessionLock(File);
 
 impl Drop for SessionLock {
@@ -578,30 +593,24 @@ impl Session {
         )
     }
 
-    /// Run a direct user command while holding the same exclusive gate as a
-    /// model Turn, then record the observed result before releasing it.
-    pub async fn run_user_shell(
+    /// Acquire exclusive authority for one direct user shell effect. The host
+    /// executes the effect, then publishes its observed result through the
+    /// returned permit before exclusivity is released.
+    pub async fn begin_user_shell(
         &self,
-        command: &str,
         stop: CancellationToken,
-        exclude_from_context: bool,
-    ) -> Result<ToolOutput, SessionError> {
-        let _gate = tokio::select! {
+    ) -> Result<UserShellPermit<'_>, SessionError> {
+        let gate = tokio::select! {
             gate = self.submit_gate.lock() => gate,
             () = stop.cancelled() => return Err(SessionError::UserShellCancelled),
         };
         if stop.is_cancelled() {
             return Err(SessionError::UserShellCancelled);
         }
-        let tools = LocalTools::new(self.cwd())?;
-        let output = tools.run_user_shell(command, stop).await;
-        self.record_user_shell(
-            command.to_owned(),
-            output.value.clone(),
-            output.is_error,
-            exclude_from_context,
-        )?;
-        Ok(output)
+        Ok(UserShellPermit {
+            session: self,
+            _gate: gate,
+        })
     }
 
     pub fn entry_count(&self) -> Result<u64, SessionError> {
@@ -1373,25 +1382,29 @@ mod tests {
     use ion_ai::{ProviderReplay, ToolCall};
 
     #[tokio::test]
-    async fn user_shell_waits_for_turn_gate_before_effect_and_commit() {
+    async fn user_shell_permit_waits_for_turn_gate_and_commits_before_release() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
         {
             let guard = session.submit_gate.lock().await;
-            let command =
-                session.run_user_shell("printf done > result.txt", CancellationToken::new(), false);
-            tokio::pin!(command);
+            let permit = session.begin_user_shell(CancellationToken::new());
+            tokio::pin!(permit);
             assert!(
-                tokio::time::timeout(Duration::from_millis(30), command.as_mut())
+                tokio::time::timeout(Duration::from_millis(30), permit.as_mut())
                     .await
                     .is_err()
             );
-            assert!(!root.join("result.txt").exists());
             drop(guard);
-            let output = command.await.unwrap();
-            assert!(!output.is_error);
+            let permit = permit.await.unwrap();
+            permit
+                .record(
+                    "echo done".into(),
+                    serde_json::json!({"stdout":"done","exit_code":0}),
+                    false,
+                    false,
+                )
+                .unwrap();
         }
-        assert_eq!(fs::read_to_string(root.join("result.txt")).unwrap(), "done");
         assert!(matches!(
             session.view().unwrap().entries.last(),
             Some(SessionEntry::UserShell { .. })
