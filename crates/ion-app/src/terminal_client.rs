@@ -2235,13 +2235,6 @@ fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
     }
     rows.push(line);
 }
-fn image_markers(images: &[ion_ai::ImageContent]) -> String {
-    images
-        .iter()
-        .map(|image| format!("\n[image: {}]", image.mime_type().as_str()))
-        .collect()
-}
-
 fn brief(text: &str, max: usize) -> String {
     if text.len() <= max {
         return text.into();
