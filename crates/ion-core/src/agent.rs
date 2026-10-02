@@ -1,12 +1,12 @@
 //! One coding loop for library, headless and terminal clients.
-use std::collections::VecDeque;
-use std::sync::{Arc, Mutex};
 use ion_ai::{
     Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
-    ModelService, ProviderError, ProviderErrorKind, Reasoning,
-    ResponseTermination, Role, ToolChoice, ToolResult,
+    ModelService, ProviderError, ProviderErrorKind, Reasoning, ResponseTermination, Role,
+    ToolChoice, ToolResult,
 };
 use serde_json::Value;
+use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
@@ -617,12 +617,12 @@ impl Agent {
                 request.controls.max_output_tokens = output_budget;
                 let mut emitted_text = false;
                 let generated = generate_with_retry(&self.model, request, stop, &mut |event| {
-                        if matches!(event, AgentEvent::TextDelta(_)) {
-                            emitted_text = true;
-                        }
-                        observe(event);
-                    })
-                    .await;
+                    if matches!(event, AgentEvent::TextDelta(_)) {
+                        emitted_text = true;
+                    }
+                    observe(event);
+                })
+                .await;
                 if !assistant_seen_in_turn
                     && !replay_rebased
                     && matches!(&generated, Err(AgentError::ReplayContextChanged))
@@ -1107,13 +1107,17 @@ mod tests {
         };
         let mut retry_delay = None;
         generate_with_retry(
-            &agent.model, request.clone(), &CancellationToken::new(), &mut |event| {
+            &agent.model,
+            request.clone(),
+            &CancellationToken::new(),
+            &mut |event| {
                 if let AgentEvent::ProviderRetry { delay_ms, .. } = event {
                     retry_delay = Some(delay_ms);
                 }
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(retry_delay, Some(10));
         assert_eq!(service.requests(), vec![request.clone(), request.clone()]);
         assert_eq!(service.requests().len(), 2);
@@ -1125,13 +1129,17 @@ mod tests {
         let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
         let mut visible = String::new();
         let error = generate_with_retry(
-            &agent.model, request.clone(), &CancellationToken::new(), &mut |event| {
+            &agent.model,
+            request.clone(),
+            &CancellationToken::new(),
+            &mut |event| {
                 if let AgentEvent::TextDelta(text) = event {
                     visible.push_str(&text);
                 }
-            })
-            .await
-            .unwrap_err();
+            },
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(error, AgentError::IncompleteModelResponse));
         assert_eq!(visible, "partial");
         assert_eq!(service.requests().len(), 1);
@@ -1146,9 +1154,13 @@ mod tests {
         ]));
         let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
         let error = generate_with_retry(
-            &agent.model, request, &CancellationToken::new(), &mut |_| {})
-            .await
-            .unwrap_err();
+            &agent.model,
+            request,
+            &CancellationToken::new(),
+            &mut |_| {},
+        )
+        .await
+        .unwrap_err();
         assert!(matches!(error, AgentError::Provider(_)));
         assert_eq!(service.requests().len(), 1);
         std::fs::remove_dir_all(root).unwrap();
