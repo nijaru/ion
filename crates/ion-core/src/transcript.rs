@@ -1,7 +1,7 @@
 //! Typed coding transcript projection over durable Session facts and live agent events.
 use std::collections::HashMap;
 
-use ion_ai::{Content, Message, ResponseTermination, ToolCall};
+use ion_ai::{Content, Message, ResponseTermination};
 use serde_json::Value;
 
 use crate::{
@@ -538,11 +538,12 @@ mod tests {
     use super::*;
     use std::sync::Arc;
 
-    use ion_ai::{BoxFuture, ModelRef, Role, ToolResult, ToolSpec, Usage};
+    use ion_ai::{BoxFuture, ModelRef, Role, ToolCall, ToolResult, ToolSpec, Usage};
     use tokio_util::sync::CancellationToken;
 
     use crate::{
-        ToolActivityKind, ToolDefinition, ToolHost, ToolPresentation, ToolSet, TurnEndReason,
+        CodingToolHost as ToolHost, ToolActivityKind, ToolDefinition, ToolPresentation, ToolSet,
+        TurnEndReason,
     };
 
     struct TestTools;
