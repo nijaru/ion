@@ -834,13 +834,12 @@ impl Agent {
                 .is_some_and(|replay| replay.prefix_bound);
             if truncated_calls {
                 assistant_seen_in_turn = true;
-                let results =
-                    session.record_truncated_assistant(
-                        turn,
-                        response.message,
-                        tool_activities.clone(),
-                        response.usage,
-                    )?;
+                let results = session.record_truncated_assistant(
+                    turn,
+                    response.message,
+                    tool_activities.clone(),
+                    response.usage,
+                )?;
                 for result in results {
                     let activity = calls
                         .iter()
