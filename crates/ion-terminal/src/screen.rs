@@ -150,11 +150,7 @@ impl Screen {
 
     /// Grow the mutable inline band without ever scrolling mutable content
     /// into native history. The band only grows during one inline session.
-    pub fn ensure_live_height(
-        &mut self,
-        out: &mut impl Write,
-        rows: usize,
-    ) -> io::Result<()> {
+    pub fn ensure_live_height(&mut self, out: &mut impl Write, rows: usize) -> io::Result<()> {
         let rows = rows.max(1).min(self.screen_height as usize);
         if rows <= self.live_height() {
             return Ok(());
@@ -170,7 +166,9 @@ impl Screen {
                 write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
             }
             out.flush()?;
-            self.origin = self.origin.saturating_sub(grow.min(u16::MAX as usize) as u16);
+            self.origin = self
+                .origin
+                .saturating_sub(grow.min(u16::MAX as usize) as u16);
         }
 
         self.live_height = Some(rows);
