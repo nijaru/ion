@@ -11,10 +11,11 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
-use ion_ai::{Content, Message, ModelRef, ToolResult};
+use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
-    SteeringInbox, TranscriptItem, TranscriptProjection, TurnEndReason,
+    ActivityOutcome, CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry,
+    SessionView, SteeringInbox, ToolActivityKind, TranscriptActivity, TranscriptItem,
+    TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -38,7 +39,7 @@ struct Frontend {
     draft: String,
     images: Vec<LoadedImage>,
     cursor: usize,
-    tool_results: Vec<ToolResult>,
+    tool_details: Vec<TranscriptActivity>,
     history_session: Option<PathBuf>,
     history_published_items: usize,
     pending_history_items: Vec<TranscriptItem>,
@@ -1356,13 +1357,15 @@ impl Frontend {
         self.pending_history_items = history.items[start..].to_vec();
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
-        self.tool_results = view
-            .entries
+        self.tool_details = history
+            .items
             .iter()
-            .filter_map(|entry| match entry {
-                SessionEntry::ToolResult { result, .. } => Some(result.clone()),
+            .filter_map(|item| match item {
+                TranscriptItem::ActivityGroup(group) => Some(&group.activities),
                 _ => None,
             })
+            .flatten()
+            .cloned()
             .collect();
         self.prompt_history = view
             .entries
@@ -1744,10 +1747,17 @@ impl Frontend {
 
     fn list_tools(&mut self) {
         let names = self
-            .tool_results
+            .tool_details
             .iter()
             .enumerate()
-            .map(|(index, result)| format!("{}:{}", index + 1, result.name))
+            .map(|(index, activity)| {
+                format!(
+                    "{}:{} ({})",
+                    index + 1,
+                    activity.name,
+                    activity_kind_label(activity.activity.kind)
+                )
+            })
             .collect::<Vec<_>>();
         self.note(if names.is_empty() {
             "No tool results in this session".into()
@@ -1757,20 +1767,41 @@ impl Frontend {
     }
 
     fn open_tool(&mut self, number: Option<usize>) {
-        let index = number.unwrap_or(self.tool_results.len());
-        if index == 0 || index > self.tool_results.len() {
+        let index = number.unwrap_or(self.tool_details.len());
+        if index == 0 || index > self.tool_details.len() {
             self.status = "Tool result not found; use /tools to list results".into();
             return;
         }
-        let result = &self.tool_results[index - 1];
+        let activity = &self.tool_details[index - 1];
+        let mut output = format!(
+            "Call ID: {}\nKind: {}\nOutcome: {}",
+            activity.call_id,
+            activity_kind_label(activity.activity.kind),
+            activity_outcome_label(activity.outcome)
+        );
+        if let Some(subject) = activity.activity.subject.as_deref() {
+            output.push_str(&format!("\nSubject: {subject}"));
+        }
+        output.push_str("\n\nArguments\n");
+        output.push_str(
+            &serde_json::to_string_pretty(&activity.arguments)
+                .unwrap_or_else(|_| activity.arguments.to_string()),
+        );
+        if let Some(result) = &activity.result {
+            output.push_str("\n\nResult\n");
+            output.push_str(
+                &serde_json::to_string_pretty(&result.value)
+                    .unwrap_or_else(|_| result.value.to_string()),
+            );
+            for mime in &result.image_mime_types {
+                output.push_str(&format!("\n[image: {mime}]"));
+            }
+        } else {
+            output.push_str("\n\nResult\n[no committed result]");
+        }
         self.tool_view = Some(ToolView {
-            label: format!("Tool {index}: {} · Esc or Ctrl-O closes", result.name),
-            output: format!(
-                "{}{}",
-                serde_json::to_string_pretty(&result.result)
-                    .unwrap_or_else(|_| result.result.to_string()),
-                image_markers(&result.images)
-            ),
+            label: format!("Tool {index}: {} · Esc or Ctrl-O closes", activity.name),
+            output,
             scroll: 0,
         });
         self.status = format!("Viewing tool result {index}");
@@ -1884,6 +1915,32 @@ impl Frontend {
             self.history_cursor = None;
             self.status = format!("{} follow-up(s) remain queued", self.pending.len());
         }
+    }
+}
+
+fn activity_kind_label(kind: ToolActivityKind) -> &'static str {
+    match kind {
+        ToolActivityKind::Read => "read",
+        ToolActivityKind::List => "list",
+        ToolActivityKind::Search => "search",
+        ToolActivityKind::Edit => "edit",
+        ToolActivityKind::Write => "write",
+        ToolActivityKind::Command => "command",
+        ToolActivityKind::Ask => "ask",
+        ToolActivityKind::Subagent => "subagent",
+        ToolActivityKind::External => "external",
+    }
+}
+
+fn activity_outcome_label(outcome: ActivityOutcome) -> &'static str {
+    match outcome {
+        ActivityOutcome::Pending => "pending",
+        ActivityOutcome::Completed => "completed",
+        ActivityOutcome::Failed => "failed",
+        ActivityOutcome::Cancelled => "cancelled",
+        ActivityOutcome::TimedOut => "timed out",
+        ActivityOutcome::Rejected => "rejected",
+        ActivityOutcome::Unknown => "unknown",
     }
 }
 
@@ -2476,17 +2533,28 @@ mod tests {
     fn tool_view_keeps_output_beyond_the_compact_preview() {
         let output = format!("{}END_MARKER", "x".repeat(4_000));
         let mut ui = Frontend {
-            tool_results: vec![ToolResult {
+            tool_details: vec![TranscriptActivity {
                 call_id: "call".into(),
                 name: "exec".into(),
-                result: serde_json::json!({"stdout": output}),
-                images: Vec::new(),
-                is_error: false,
+                activity: ion_core::ToolActivity {
+                    kind: ToolActivityKind::Command,
+                    subject: Some("printf test".into()),
+                },
+                arguments: serde_json::json!({"command":"printf test"}),
+                outcome: ActivityOutcome::Completed,
+                result: Some(ion_core::ActivityResult {
+                    value: serde_json::json!({"stdout": output}),
+                    image_mime_types: Vec::new(),
+                    is_error: false,
+                }),
             }],
             ..Frontend::default()
         };
         ui.open_tool(None);
         let view = ui.tool_view.as_ref().unwrap();
+        assert!(view.output.contains("Arguments"));
+        assert!(view.output.contains("printf test"));
+        assert!(view.output.contains("Result"));
         assert!(view.output.contains("END_MARKER"));
         assert!(view.output.len() > 2_048);
     }
