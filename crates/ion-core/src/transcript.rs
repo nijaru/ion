@@ -578,59 +578,9 @@ impl LiveTranscript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use ion_ai::{ModelRef, Role, ToolCall, ToolResult, Usage};
 
-    use ion_ai::{BoxFuture, ModelRef, Role, ToolCall, ToolResult, ToolSpec, Usage};
-    use tokio_util::sync::CancellationToken;
-
-    use crate::{
-        CodingToolHost as ToolHost, ToolActivityKind, ToolDefinition, ToolPresentation, ToolSet,
-        TurnEndReason,
-    };
-
-    struct TestTools;
-
-    impl ToolHost for TestTools {
-        fn definitions(&self) -> Vec<ToolDefinition> {
-            ["read", "edit", "exec"]
-                .into_iter()
-                .map(|name| {
-                    let kind = match name {
-                        "read" => ToolActivityKind::Read,
-                        "edit" => ToolActivityKind::Edit,
-                        _ => ToolActivityKind::Command,
-                    };
-                    let argument = if name == "exec" { "command" } else { "path" };
-                    ToolDefinition {
-                        spec: ToolSpec {
-                            name: name.into(),
-                            description: name.into(),
-                            input_schema: serde_json::json!({"type":"object"}),
-                        },
-                        presentation: ToolPresentation::argument(kind, argument),
-                    }
-                })
-                .collect()
-        }
-
-        fn execute<'a>(
-            &'a self,
-            _call: &'a ToolCall,
-            _stop: CancellationToken,
-        ) -> BoxFuture<'a, ToolOutput> {
-            Box::pin(async {
-                ToolOutput {
-                    value: Value::Null,
-                    images: Vec::new(),
-                    is_error: false,
-                }
-            })
-        }
-    }
-
-    fn catalog() -> ToolCatalog {
-        ToolSet::new([Arc::new(TestTools) as Arc<dyn ToolHost>]).snapshot()
-    }
+    use crate::{ToolActivityKind, TurnEndReason};
 
     fn assistant(turn: u64, content: Vec<Content>) -> SessionEntry {
         let tool_activities = content

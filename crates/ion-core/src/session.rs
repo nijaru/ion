@@ -839,6 +839,7 @@ impl Session {
         Ok((turn, interrupted))
     }
 
+    #[cfg(test)]
     pub(crate) fn record_assistant(
         &self,
         turn: u64,
@@ -1102,6 +1103,7 @@ fn context_projection(
     Ok(messages)
 }
 
+#[cfg(test)]
 fn default_tool_activities(message: &Message) -> Vec<StoredToolActivity> {
     message
         .content
@@ -1804,6 +1806,7 @@ mod tests {
                         SessionEntry::Assistant {
                             turn,
                             message: answer.clone(),
+                            tool_activities: Vec::new(),
                             usage: Usage::unknown(),
                             termination: ResponseTermination::Completed,
                         },
