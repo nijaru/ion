@@ -1430,11 +1430,8 @@ dependencies = [
 name = "ion-core"
 version = "0.0.0"
 dependencies = [
- "async-stream",
  "futures-util",
- "httpdate",
  "ion-ai",
- "reqwest",
  "rusqlite",
  "rustix",
  "serde",
@@ -1451,13 +1448,16 @@ name = "ion-host"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "async-stream",
  "base64 0.22.1",
  "futures-util",
  "getrandom 0.3.4",
+ "httpdate",
  "ignore",
  "image",
  "ion-ai",
  "ion-core",
+ "reqwest",
  "rmcp",
  "serde",
  "serde_json",
