@@ -1,12 +1,10 @@
-//! Line-diff screen renderer: committed scrollback and
-//! the live composer/footer region form one growing line array; each
-//! frame diffs against the previous visible window and rewrites only
-//! changed rows. Physical scrolling happens only when committed
-//! history advances: the live region is a fixed-height band rebuilt
-//! every frame, so reversible edits can never leak into terminal
-//! scrollback. The window occupies the bottom `height` rows of the
-//! physical screen; the host reserves those rows before the first draw
-//! (`reserve_rows`).
+//! Line-diff renderer for Ion's mutable terminal surface.
+//!
+//! Normal inline chat owns only a live band. Settled transcript rows can be
+//! appended once with `commit_text_lines`, after which the physical terminal
+//! owns their scrollback/reflow. `draw` still supports a monotonically growing
+//! committed slice for callers that need it, but normal chat does not have to
+//! re-own historical rows. Fullscreen rendering is a separate transient surface.
 
 use std::io::{self, Write};
 
@@ -214,6 +212,39 @@ impl Screen {
         self.cursor_shown = false;
         self.cursor_at = None;
         self.live_height_bias = 0;
+    }
+
+    /// Append settled plain-text rows exactly once above the mutable live band.
+    ///
+    /// The current live surface is discarded, the rows are printed from the
+    /// band's anchor with explicit CRLFs, and ordinary terminal scrolling moves
+    /// older content into native scrollback. The anchor advances to the cursor's
+    /// resulting physical row. Already committed rows are never re-rendered on
+    /// resize; a subsequent `draw` repaints only the live band.
+    pub fn commit_text_lines(
+        &mut self,
+        out: &mut impl Write,
+        lines: &[String],
+    ) -> io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+        for line in lines {
+            write!(out, "{line}\r\n")?;
+        }
+        out.flush()?;
+
+        let advanced = self.origin as usize + lines.len();
+        self.origin = advanced
+            .min(self.screen_height.saturating_sub(1) as usize) as u16;
+        self.current = None;
+        self.fullscreen = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+        self.live_height_bias = 0;
+        Ok(())
     }
 
     /// Render one frame. Lines must already be wrapped to `width`;
@@ -565,6 +596,25 @@ mod tests {
 
     fn line(text: &str) -> Line<'static> {
         Line::from(text.to_owned())
+    }
+
+    #[test]
+    fn settled_rows_advance_anchor_without_reowning_history() {
+        let mut screen = Screen::with_live_height(80, 5, 24, 4);
+        let mut output = Vec::new();
+        screen
+            .commit_text_lines(
+                &mut output,
+                &["first".into(), "second".into(), "third".into()],
+            )
+            .unwrap();
+        assert_eq!(screen.origin, 8);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("\x1b[6;1H\x1b[J"));
+        assert!(text.contains("first\r\nsecond\r\nthird\r\n"));
+
+        screen.resize(100, 30);
+        assert_eq!(screen.origin, 8);
     }
 
     #[test]

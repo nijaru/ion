@@ -118,6 +118,9 @@ impl TerminalSession {
     /// alt screen preserves native scrollback verbatim — leaving it
     /// restores the inline frontend's exact prior surface.
     pub fn enter_alt_screen(&mut self) -> io::Result<()> {
+        if self.alt_screen {
+            return Ok(());
+        }
         execute!(self.output, EnterAlternateScreen, EnableMouseCapture)?;
         self.mouse_enabled = true;
         self.alt_screen = true;
@@ -130,10 +133,18 @@ impl TerminalSession {
     /// fullscreen viewport survives into scrollback unless the caller
     /// prints it.
     pub fn leave_alt_screen(&mut self) -> io::Result<()> {
+        if !self.alt_screen {
+            return Ok(());
+        }
         execute!(self.output, DisableMouseCapture, LeaveAlternateScreen)?;
         self.mouse_enabled = false;
         self.alt_screen = false;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn is_alt_screen(&self) -> bool {
+        self.alt_screen
     }
 
     pub fn size(&self) -> io::Result<(u16, u16)> {
