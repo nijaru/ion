@@ -2155,7 +2155,9 @@ fn draw_chat_fullscreen(
     }
     if let Some(progress) = progress {
         let live = crate::transcript_render::rows(progress.projection(), width);
-        if !live.is_empty() && !content.is_empty() && content.last().is_some_and(|row| !row.is_empty())
+        if !live.is_empty()
+            && !content.is_empty()
+            && content.last().is_some_and(|row| !row.is_empty())
         {
             content.push(String::new());
         }
