@@ -228,12 +228,15 @@ impl Screen {
 
         write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
         for line in lines {
-            write!(out, "{line}\r\n")?;
+            // Put one settled row at the top edge of the mutable band, then
+            // scroll the physical terminal exactly once from its bottom row.
+            // The settled row moves above the band while the band itself stays
+            // anchored and blank for the next live repaint.
+            write!(out, "\x1b[{};1H\x1b[2K{line}", self.origin + 1)?;
+            write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
         }
         out.flush()?;
 
-        let advanced = self.origin as usize + lines.len();
-        self.origin = advanced.min(self.screen_height.saturating_sub(1) as usize) as u16;
         self.current = None;
         self.fullscreen = None;
         self.cursor_shown = false;
@@ -603,13 +606,15 @@ mod tests {
                 &["first".into(), "second".into(), "third".into()],
             )
             .unwrap();
-        assert_eq!(screen.origin, 8);
+        assert_eq!(screen.origin, 5);
         let text = String::from_utf8(output).unwrap();
         assert!(text.starts_with("\x1b[6;1H\x1b[J"));
-        assert!(text.contains("first\r\nsecond\r\nthird\r\n"));
+        assert!(text.contains("\x1b[6;1H\x1b[2Kfirst"));
+        assert!(text.contains("\x1b[24;1H\r\n"));
+        assert!(text.contains("\x1b[6;1H\x1b[2Kthird"));
 
         screen.resize(100, 30);
-        assert_eq!(screen.origin, 8);
+        assert_eq!(screen.origin, 5);
     }
 
     #[test]
