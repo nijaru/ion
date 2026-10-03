@@ -491,3 +491,42 @@ impl UsageState {
         Ok(())
     }
 }
+
+
+#[cfg(test)]
+mod cache_usage_tests {
+    use super::*;
+
+    #[test]
+    fn prompt_cache_usage_remains_separate_from_total_input() {
+        let mut usage = UsageState::default();
+        usage
+            .set_chat(&json!({
+                "prompt_tokens": 1_000,
+                "completion_tokens": 50,
+                "prompt_tokens_details": {
+                    "cached_tokens": 700,
+                    "cache_write_tokens": 200
+                }
+            }))
+            .unwrap();
+        assert_eq!(usage.value(), Usage::known_with_cache(1_000, 50, 700, 200));
+        assert_eq!(usage.value().uncached_input_tokens(), Some(100));
+    }
+
+    #[test]
+    fn prompt_cache_subcounts_cannot_exceed_total_input() {
+        let mut usage = UsageState::default();
+        let error = usage
+            .set_chat(&json!({
+                "prompt_tokens": 100,
+                "completion_tokens": 1,
+                "prompt_tokens_details": {
+                    "cached_tokens": 90,
+                    "cache_write_tokens": 20
+                }
+            }))
+            .unwrap_err();
+        assert!(error.message.contains("exceed prompt token count"));
+    }
+}
