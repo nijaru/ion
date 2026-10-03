@@ -8,7 +8,7 @@ mod transcript;
 
 pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
-    AgentLimits, SteeringInbox,
+    AgentLimits, PromptCacheWarmingPolicy, SteeringInbox,
 };
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
