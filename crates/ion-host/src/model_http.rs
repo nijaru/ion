@@ -9,8 +9,9 @@ use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
     BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRequest, ModelResponse,
-    ModelService, ModelStream, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay,
-    Reasoning, ResponseTermination, Role, ToolCall, ToolChoice, ToolSpec, Usage,
+    ModelService, ModelStream, ModelStreamEvent, PromptCacheIntent, ProviderError,
+    ProviderErrorKind, ProviderReplay, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice,
+    ToolSpec, Usage,
 };
 use reqwest::{
     Client, Url,
@@ -167,7 +168,7 @@ impl ModelService for HttpModelService {
             request.controls.validate()?;
             let native_anthropic = self.wire == HttpWire::AnthropicMessages
                 && self.endpoint.host_str() == Some("api.anthropic.com");
-            let body = if self.wire.is_chat() {
+            let mut body = if self.wire.is_chat() {
                 chat_body(&request, self.wire)?
             } else {
                 anthropic_body_for_route(
@@ -176,6 +177,12 @@ impl ModelService for HttpModelService {
                     self.capabilities.context_mutation.inline_tool_definitions,
                 )?
             };
+            if native_anthropic
+                && request.prompt_cache == PromptCacheIntent::Reusable
+                && self.capabilities.prompt_cache.automatic_request
+            {
+                body["cache_control"] = json!({"type":"ephemeral"});
+            }
             let inline_tools = anthropic_body_uses_inline_tools(&body);
             let anthropic_prefix = (self.wire == HttpWire::AnthropicMessages)
                 .then(|| anthropic_body_prefix_digest(&body))
