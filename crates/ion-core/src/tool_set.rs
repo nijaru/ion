@@ -342,12 +342,20 @@ impl ToolCatalog {
         &self,
         additional: &std::collections::BTreeSet<String>,
     ) -> Vec<ToolSpec> {
+        let search_needed = self.entries.iter().any(|entry| {
+            entry.definition.exposure == ToolExposure::Deferred
+                && !self.declared.contains(&entry.definition.spec.name)
+                && !additional.contains(&entry.definition.spec.name)
+        });
         self.entries
             .iter()
-            .filter(|entry| {
-                self.declared.contains(&entry.definition.spec.name)
-                    || (entry.definition.exposure == ToolExposure::Deferred
-                        && additional.contains(&entry.definition.spec.name))
+            .filter(|entry| match entry.route {
+                ToolRoute::Search => search_needed,
+                ToolRoute::Host(_) => {
+                    self.declared.contains(&entry.definition.spec.name)
+                        || (entry.definition.exposure == ToolExposure::Deferred
+                            && additional.contains(&entry.definition.spec.name))
+                }
             })
             .map(|entry| entry.definition.spec.clone())
             .collect()
@@ -762,7 +770,7 @@ mod tests {
             .into_iter()
             .map(|spec| spec.name)
             .collect::<Vec<_>>();
-        assert_eq!(names, ["direct", "deferred", TOOL_SEARCH_NAME]);
+        assert_eq!(names, ["direct", "deferred"]);
     }
 
     #[test]
