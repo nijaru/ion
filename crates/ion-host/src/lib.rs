@@ -20,7 +20,9 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, CodingToolHost, ToolSet};
+use ion_core::{
+    AgentLimits, CodingAgent, CodingToolHost, PromptCacheWarmingPolicy, ToolSet,
+};
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
@@ -151,10 +153,32 @@ impl Host {
                 max_output_tokens: selected.max_output_tokens,
                 context_window_tokens: selected.context_window_tokens,
                 image_input: selected.image_input,
+                prompt_cache_warming: prompt_cache_warming(selected),
                 ..AgentLimits::default()
             }),
         ))
     }
+}
+
+fn prompt_cache_warming(selected: &Selection) -> Option<PromptCacheWarmingPolicy> {
+    let cache = selected.capabilities.prompt_cache;
+    let catalog::PromptCacheLifetime::Fixed {
+        default_seconds, ..
+    } = cache.lifetime
+    else {
+        return None;
+    };
+    if !cache.native_prewarm {
+        return None;
+    }
+    let pricing = cache.pricing?;
+    Some(PromptCacheWarmingPolicy {
+        lifetime_seconds: u64::from(default_seconds),
+        cache_write_microusd_per_million: pricing.write_5m_microusd_per_million,
+        cache_read_microusd_per_million: pricing.read_microusd_per_million,
+        output_microusd_per_million: pricing.output_microusd_per_million,
+        minimum_savings_microusd: 50_000,
+    })
 }
 
 fn app_root(variable: &str, fallback: &str) -> Result<PathBuf> {
