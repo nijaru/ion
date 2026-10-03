@@ -130,12 +130,65 @@ fn validate_steering(pending: &VecDeque<Message>, limits: AgentLimits) -> Result
     Ok(())
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptCacheWarmingPolicy {
+    pub lifetime_seconds: u64,
+    /// Micro-US-dollars per million tokens.
+    pub cache_write_microusd_per_million: u64,
+    pub cache_read_microusd_per_million: u64,
+    pub output_microusd_per_million: u64,
+    pub minimum_savings_microusd: u64,
+}
+
+impl PromptCacheWarmingPolicy {
+    fn cached_prefix_tokens(self, usage: ion_ai::Usage) -> Option<u64> {
+        let tokens = usage
+            .cache_read_input_tokens?
+            .checked_add(usage.cache_write_input_tokens?)?;
+        (tokens > 0).then_some(tokens)
+    }
+
+    fn token_cost_microusd(tokens: u64, rate_microusd_per_million: u64) -> u128 {
+        u128::from(tokens)
+            .saturating_mul(u128::from(rate_microusd_per_million))
+            / 1_000_000
+    }
+
+    fn net_refresh_savings_microusd(self, prefix_tokens: u64) -> Option<u64> {
+        let miss = Self::token_cost_microusd(
+            prefix_tokens,
+            self.cache_write_microusd_per_million,
+        );
+        let hit =
+            Self::token_cost_microusd(prefix_tokens, self.cache_read_microusd_per_million);
+        let refresh = hit.saturating_add(Self::token_cost_microusd(
+            1,
+            self.output_microusd_per_million,
+        ));
+        let net = miss.checked_sub(hit)?.checked_sub(refresh)?;
+        u64::try_from(net).ok()
+    }
+
+    fn should_warm(self, usage: ion_ai::Usage) -> bool {
+        self.cached_prefix_tokens(usage)
+            .and_then(|tokens| self.net_refresh_savings_microusd(tokens))
+            .is_some_and(|net| net >= self.minimum_savings_microusd)
+    }
+
+    fn refresh_after(self) -> std::time::Duration {
+        let ninety_percent = self.lifetime_seconds.saturating_mul(9) / 10;
+        let ten_second_margin = self.lifetime_seconds.saturating_sub(10);
+        std::time::Duration::from_secs(ninety_percent.min(ten_second_margin))
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct AgentLimits {
     pub max_request_bytes: usize,
     pub max_output_tokens: u32,
     pub context_window_tokens: Option<u32>,
     pub image_input: bool,
+    pub prompt_cache_warming: Option<PromptCacheWarmingPolicy>,
 }
 
 impl Default for AgentLimits {
@@ -145,6 +198,7 @@ impl Default for AgentLimits {
             max_output_tokens: 16_384,
             context_window_tokens: None,
             image_input: false,
+            prompt_cache_warming: None,
         }
     }
 }
