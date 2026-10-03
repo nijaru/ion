@@ -878,12 +878,13 @@ impl Agent {
                         is_error: true,
                     };
                 }
-                let next_context = (index + 1 == call_count && !activate_tools.is_empty()).then(
-                    || ModelContextSnapshot {
-                        instructions: instructions.clone(),
-                        tools: tool_catalog.declared_specs_with(&activate_tools),
-                    },
-                );
+                let next_context =
+                    (index + 1 == call_count && !activate_tools.is_empty()).then(|| {
+                        ModelContextSnapshot {
+                            instructions: instructions.clone(),
+                            tools: tool_catalog.declared_specs_with(&activate_tools),
+                        }
+                    });
                 session.record_tool_result_with_context(
                     turn,
                     ToolResult {
@@ -1009,9 +1010,7 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        CodingSession, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation,
-    };
+    use crate::{CodingSession, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation};
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
         ScriptedModelService, ToolCall, ToolSpec, Usage,
@@ -1184,8 +1183,8 @@ mod tests {
             response(vec![Content::Text("first".into())]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 max_output_tokens: 128_000,
                 context_window_tokens: Some(200_000),
                 ..AgentLimits::default()
@@ -1550,8 +1549,7 @@ mod tests {
             }
         }
 
-        let root =
-            std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
         let session = CodingSession::create(&path, &root).unwrap();
@@ -1952,12 +1950,10 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "done".into(),
         )])]));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(
-            AgentLimits {
-                max_request_bytes: 80 * 1024 * 1024,
-                ..AgentLimits::default()
-            },
-        );
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+            max_request_bytes: 80 * 1024 * 1024,
+            ..AgentLimits::default()
+        });
         let steering = SteeringInbox::default();
         let prompt = "\0".repeat(11 * 1024 * 1024);
         steering.push(prompt.clone());
@@ -1998,12 +1994,10 @@ mod tests {
                 returned_model: Some("test".into()),
             }),
         ])]));
-        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(
-            AgentLimits {
-                max_request_bytes: 80 * 1024 * 1024,
-                ..AgentLimits::default()
-            },
-        );
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
+            max_request_bytes: 80 * 1024 * 1024,
+            ..AgentLimits::default()
+        });
         let steering = SteeringInbox::default();
         let prompt = "\0".repeat(11 * 1024 * 1024);
         let result = agent
@@ -2141,8 +2135,8 @@ mod tests {
             ]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 image_input: true,
                 ..AgentLimits::default()
             });
@@ -2392,8 +2386,8 @@ mod tests {
             response(vec![Content::Text("Earlier result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 context_window_tokens: Some(50_000),
                 ..AgentLimits::default()
             });
@@ -2517,8 +2511,8 @@ mod tests {
             })]),
             response(vec![Content::Text("unexpected retry".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 max_output_tokens: limit as u32,
                 ..AgentLimits::default()
             });
@@ -2748,8 +2742,8 @@ mod tests {
             response(vec![Content::Text("First task completed.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 // Leave room for the built-in tool schemas; the second Turn
                 // still has to compact the first Turn's long answer.
                 max_request_bytes: 3_200,
