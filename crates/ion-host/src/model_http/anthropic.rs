@@ -260,6 +260,7 @@ fn digest_anthropic_prefix(
     Ok(format!("{:x}", Sha256::digest(encoded)))
 }
 
+#[cfg(test)]
 pub(super) fn anthropic_body(
     request: &ModelRequest,
     native_api: bool,
