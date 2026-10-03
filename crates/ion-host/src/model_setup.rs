@@ -430,7 +430,7 @@ mod tests {
             catalog::ModelCapabilities::conservative()
         );
 
-        fs::remove_dir_all(root).unwrap();
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
