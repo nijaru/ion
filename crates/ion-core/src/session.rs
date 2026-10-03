@@ -67,6 +67,13 @@ pub enum SessionEntry {
         turn: u64,
         input: Message,
     },
+    /// Provider usage from a best-effort prompt-cache refresh. This is an
+    /// accounting fact only and never enters model context.
+    CacheWarm {
+        turn: u64,
+        #[serde(default = "Usage::unknown")]
+        usage: Usage,
+    },
     Compacted {
         through_entry: u64,
         summary: String,
@@ -263,6 +270,11 @@ impl State {
                     messages.push(shell_message(command, output, false));
                 }
                 new_settled.push(self.sequence + 1);
+            }
+            SessionEntry::CacheWarm { turn, .. } => {
+                if self.active != Some(*turn) {
+                    return Err(SessionError::InvalidHistory);
+                }
             }
             SessionEntry::Compacted {
                 through_entry,
@@ -859,6 +871,15 @@ impl Session {
         }))
     }
 
+    pub(crate) fn record_cache_warm(
+        &self,
+        turn: u64,
+        usage: Usage,
+    ) -> Result<(), SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        append(&mut store, &[SessionEntry::CacheWarm { turn, usage }])
+    }
+
     pub(crate) fn record_compaction(
         &self,
         through_entry: u64,
@@ -1318,6 +1339,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         | SessionEntry::ModelSelected { .. }
         | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::ModelContextChanged { .. }
+        | SessionEntry::CacheWarm { .. }
         | SessionEntry::Compacted { .. }
         | SessionEntry::TurnEnded { .. } => None,
     }
