@@ -38,6 +38,7 @@ fn request() -> ModelRequest {
             }),
         }],
         context_timeline: None,
+        prompt_cache: ion_ai::PromptCacheIntent::Reusable,
         controls: controls(),
     }
 }
