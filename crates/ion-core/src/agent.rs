@@ -990,7 +990,7 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CodingSession, LocalTools, ToolDefinition};
+    use crate::{CodingSession, ToolActivityKind, ToolDefinition, ToolPresentation};
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
         ScriptedModelService, ToolCall, ToolSpec, Usage,
@@ -1006,13 +1006,137 @@ mod tests {
         .unwrap()
     }
 
+    /// Minimal concrete host used only to exercise the core Turn/tool protocol.
+    /// Native filesystem/process edge cases belong to ion-host::LocalTools tests.
+    struct TestTools {
+        root: std::path::PathBuf,
+    }
+
+    impl TestTools {
+        fn new(root: impl AsRef<std::path::Path>) -> Self {
+            Self {
+                root: root.as_ref().canonicalize().unwrap(),
+            }
+        }
+    }
+
+    impl ToolHost for TestTools {
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![
+                ToolDefinition {
+                    spec: ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                },
+                ToolDefinition {
+                    spec: ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Edit, "path"),
+                },
+                ToolDefinition {
+                    spec: ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Write, "path"),
+                },
+                ToolDefinition {
+                    spec: ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Command, "command"),
+                },
+            ]
+        }
+
+        fn execute<'a>(
+            &'a self,
+            call: &'a ToolCall,
+            stop: CancellationToken,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async move {
+                if stop.is_cancelled() {
+                    return ToolOutput {
+                        value: serde_json::json!({"error":"cancelled before tool start"}),
+                        images: Vec::new(),
+                        is_error: true,
+                    };
+                }
+                match call.name.as_str() {
+                    "read" => {
+                        let Some(path) = call.arguments.get("path").and_then(Value::as_str) else {
+                            return ToolOutput {
+                                value: serde_json::json!({"error":"invalid read arguments"}),
+                                images: Vec::new(),
+                                is_error: true,
+                            };
+                        };
+                        match std::fs::read_to_string(self.root.join(path)) {
+                            Ok(content) => ToolOutput {
+                                value: serde_json::json!({"path":path,"content":content}),
+                                images: Vec::new(),
+                                is_error: false,
+                            },
+                            Err(error) => ToolOutput {
+                                value: serde_json::json!({"error":error.to_string()}),
+                                images: Vec::new(),
+                                is_error: true,
+                            },
+                        }
+                    }
+                    "write" => {
+                        let path = call.arguments.get("path").and_then(Value::as_str);
+                        let content = call.arguments.get("content").and_then(Value::as_str);
+                        let (Some(path), Some(content)) = (path, content) else {
+                            return ToolOutput {
+                                value: serde_json::json!({"error":"invalid write arguments"}),
+                                images: Vec::new(),
+                                is_error: true,
+                            };
+                        };
+                        let path = self.root.join(path);
+                        if let Some(parent) = path.parent()
+                            && let Err(error) = std::fs::create_dir_all(parent)
+                        {
+                            return ToolOutput {
+                                value: serde_json::json!({"error":error.to_string()}),
+                                images: Vec::new(),
+                                is_error: true,
+                            };
+                        }
+                        match std::fs::write(&path, content) {
+                            Ok(()) => ToolOutput {
+                                value: serde_json::json!({"path":path.to_string_lossy(),"written":content.len()}),
+                                images: Vec::new(),
+                                is_error: false,
+                            },
+                            Err(error) => ToolOutput {
+                                value: serde_json::json!({"error":error.to_string()}),
+                                images: Vec::new(),
+                                is_error: true,
+                            },
+                        }
+                    }
+                    "exec" => ToolOutput {
+                        value: serde_json::json!({"command":call.arguments.get("command"),"exit_code":0}),
+                        images: Vec::new(),
+                        is_error: false,
+                    },
+                    "edit" => ToolOutput {
+                        value: serde_json::json!({"error":"edit is not exercised by core agent tests"}),
+                        images: Vec::new(),
+                        is_error: true,
+                    },
+                    _ => ToolOutput {
+                        value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
+                        images: Vec::new(),
+                        is_error: true,
+                    },
+                }
+            })
+        }
+    }
+
     #[test]
     fn coding_output_budget_uses_model_ceiling_and_remaining_context() {
         let root = std::env::temp_dir().join(format!("ion-budget-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let agent = Agent::new(
             Arc::new(ScriptedModelService::new([])),
-            Arc::new(LocalTools::new(&root).unwrap()),
+            Arc::new(TestTools::new(&root)),
         )
         .with_limits(AgentLimits {
             max_output_tokens: 128_000,
@@ -1035,7 +1159,7 @@ mod tests {
             response(vec![Content::Text("first".into())]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 max_output_tokens: 128_000,
                 context_window_tokens: Some(200_000),
@@ -1101,7 +1225,7 @@ mod tests {
             }),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let request = ModelRequest {
             model: model(),
             instructions: None,
@@ -1137,7 +1261,7 @@ mod tests {
             Script::Stream(vec![ModelStreamEvent::TextDelta("partial".into())]),
             response(vec![Content::Text("should not be used".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let mut visible = String::new();
         let error = generate_with_retry(
             &agent.model,
@@ -1163,7 +1287,7 @@ mod tests {
             }),
             response(vec![Content::Text("should not be used".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let error = generate_with_retry(
             &agent.model,
             request,
@@ -1206,7 +1330,7 @@ mod tests {
             }),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let mut rebases = 0;
         assert_eq!(
             agent
@@ -1271,7 +1395,7 @@ mod tests {
                 retry_after_ms: None,
             }),
         ]));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let error = agent
             .submit(
                 &session,
@@ -1324,7 +1448,7 @@ mod tests {
             ]),
             response(vec![Content::Text("created and checked".into())]),
         ]));
-        let tools = Arc::new(LocalTools::new(&root).unwrap());
+        let tools = Arc::new(TestTools::new(&root));
         let agent = Agent::new(scripts, tools.clone());
         let answer = agent
             .submit(
@@ -1467,7 +1591,7 @@ mod tests {
             .collect::<Vec<_>>();
         scripts.push(response(vec![Content::Text("done".into())]));
         let service = Arc::new(ScriptedModelService::new(scripts));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let answer = agent
             .submit(
                 &session,
@@ -1503,7 +1627,7 @@ mod tests {
             })
             .collect::<Vec<_>>();
         let service = Arc::new(ScriptedModelService::new(scripts));
-        let agent = Agent::new(service.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let stop = CancellationToken::new();
         let mut trigger = Some(stop.clone());
         let result = agent
@@ -1540,7 +1664,7 @@ mod tests {
             response(vec![Content::Text(" \n".into())]),
             response(vec![Content::Text("working again".into())]),
         ]));
-        let agent = Agent::new(service, Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(service, Arc::new(TestTools::new(&root)));
         for prompt in ["empty", "blank"] {
             let error = agent
                 .submit(
@@ -1621,7 +1745,7 @@ mod tests {
             })]),
             response(vec![Content::Text("done".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         let mut rejected = Vec::new();
         assert_eq!(
             agent
@@ -1684,7 +1808,7 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "done".into(),
         )])]));
-        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap())).with_limits(
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(
             AgentLimits {
                 max_request_bytes: 80 * 1024 * 1024,
                 ..AgentLimits::default()
@@ -1730,7 +1854,7 @@ mod tests {
                 returned_model: Some("test".into()),
             }),
         ])]));
-        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap())).with_limits(
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root))).with_limits(
             AgentLimits {
                 max_request_bytes: 80 * 1024 * 1024,
                 ..AgentLimits::default()
@@ -1800,7 +1924,7 @@ mod tests {
             ]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         let steering = SteeringInbox::default();
         let answer = agent
             .submit_with_steering(
@@ -1873,7 +1997,7 @@ mod tests {
             ]),
             response(vec![Content::Text("second".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 image_input: true,
                 ..AgentLimits::default()
@@ -1970,7 +2094,7 @@ mod tests {
             response(vec![Content::Text("done".into())]),
         ]));
         std::fs::write(root.join("file.txt"), "content").unwrap();
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         let steering = Arc::new(SteeringInbox::default());
         let sender = steering.clone();
         agent
@@ -2027,7 +2151,7 @@ mod tests {
             response(vec![Content::Text("First task is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         agent
             .submit(
                 &session,
@@ -2080,7 +2204,7 @@ mod tests {
             response(vec![Content::Text("First result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         for prompt in ["first task", "next task"] {
             agent
                 .submit(
@@ -2124,7 +2248,7 @@ mod tests {
             response(vec![Content::Text("Earlier result is complete.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 context_window_tokens: Some(50_000),
                 ..AgentLimits::default()
@@ -2181,7 +2305,7 @@ mod tests {
             response(vec![Content::Text("Earlier work summarized.".into())]),
             response(vec![Content::Text("complete answer".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         agent
             .submit(
                 &session,
@@ -2249,7 +2373,7 @@ mod tests {
             })]),
             response(vec![Content::Text("unexpected retry".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 max_output_tokens: limit as u32,
                 ..AgentLimits::default()
@@ -2297,7 +2421,7 @@ mod tests {
             })]),
             response(vec![Content::Text("I can use read instead.".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         let answer = agent
             .submit(
                 &session,
@@ -2394,7 +2518,7 @@ mod tests {
                 retry_after_ms: None,
             })
         })));
-        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)));
         assert!(
             agent
                 .compact(&session, model(), CancellationToken::new(), |_| {})
@@ -2457,7 +2581,7 @@ mod tests {
         let stop = CancellationToken::new();
         let agent = Agent::new(
             Arc::new(CancelOnCompletion(stop.clone())),
-            Arc::new(LocalTools::new(&root).unwrap()),
+            Arc::new(TestTools::new(&root)),
         );
         assert!(matches!(
             agent.compact(&session, model(), stop, |_| {}).await,
@@ -2480,7 +2604,7 @@ mod tests {
             response(vec![Content::Text("First task completed.".into())]),
             response(vec![Content::Text("continued".into())]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 // Leave room for the built-in tool schemas; the second Turn
                 // still has to compact the first Turn's long answer.
@@ -2539,7 +2663,7 @@ mod tests {
                 "Summary through chunk {index}"
             ))])
         })));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 max_request_bytes: 2_000,
                 ..AgentLimits::default()
@@ -2605,7 +2729,7 @@ mod tests {
             .unwrap();
         let before = session.view().unwrap().entries;
         let scripts = Arc::new(ScriptedModelService::new([]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
             .with_limits(AgentLimits {
                 max_request_bytes: 2_000,
                 ..AgentLimits::default()
@@ -2643,7 +2767,7 @@ mod tests {
                 }),
             ]),
         ]));
-        let agent = Agent::new(scripts.clone(), Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         agent
             .submit(
                 &session,
@@ -2704,7 +2828,7 @@ mod tests {
         let scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
             "inspected".into(),
         )])]));
-        let agent = Agent::new(scripts, Arc::new(LocalTools::new(&root).unwrap()));
+        let agent = Agent::new(scripts, Arc::new(TestTools::new(&root)));
         let mut interrupted = 0;
         agent
             .submit(
