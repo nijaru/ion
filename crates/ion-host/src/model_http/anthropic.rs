@@ -36,6 +36,7 @@ pub(super) fn validated_anthropic_replay(
     content: &[Content],
     request: &ModelRequest,
     preceding: &[Value],
+    digest_context: Option<&ModelContextState>,
 ) -> Result<Vec<Value>, ProviderError> {
     let blocks = data["blocks"]
         .as_array()
@@ -85,12 +86,16 @@ pub(super) fn validated_anthropic_replay(
     if visible.next().is_some() {
         return Err(invalid("Anthropic replay omitted visible content"));
     }
+    let prefix_digest = match digest_context {
+        Some(context) => anthropic_prefix_digest_for(context, preceding)?,
+        None => anthropic_prefix_digest(request, preceding)?,
+    };
     if blocks.iter().any(|block| {
         matches!(
             block["type"].as_str(),
             Some("thinking" | "redacted_thinking")
         )
-    }) && anthropic_prefix_digest(request, preceding)? != digest
+    }) && prefix_digest != digest
     {
         return Err(error(
             ProviderErrorKind::ReplayContextChanged,
@@ -100,21 +105,33 @@ pub(super) fn validated_anthropic_replay(
     Ok(blocks.clone())
 }
 
-fn anthropic_context_fields(request: &ModelRequest) -> (Option<Value>, Option<Value>) {
-    let system = request
+fn anthropic_context_state(request: &ModelRequest) -> ModelContextState {
+    ModelContextState {
+        instructions: request.instructions.clone(),
+        tools: request.tools.clone(),
+    }
+}
+
+fn anthropic_tool_definition(tool: &ToolSpec) -> Value {
+    json!({
+        "name": tool.name,
+        "description": tool.description,
+        "input_schema": tool.input_schema,
+    })
+}
+
+fn anthropic_context_fields(context: &ModelContextState) -> (Option<Value>, Option<Value>) {
+    let system = context
         .instructions
         .as_deref()
         .filter(|instructions| !instructions.is_empty())
         .map(|instructions| json!(instructions));
-    let tools = (!request.tools.is_empty()).then(|| {
+    let tools = (!context.tools.is_empty()).then(|| {
         Value::Array(
-            request
+            context
                 .tools
                 .iter()
-                .map(|tool| {
-                    json!({"name":tool.name,"description":tool.description,
-                        "input_schema":tool.input_schema})
-                })
+                .map(anthropic_tool_definition)
                 .collect(),
         )
     });
@@ -125,8 +142,105 @@ fn anthropic_prefix_digest(
     request: &ModelRequest,
     preceding: &[Value],
 ) -> Result<String, ProviderError> {
-    let (system, tools) = anthropic_context_fields(request);
+    anthropic_prefix_digest_for(&anthropic_context_state(request), preceding)
+}
+
+fn anthropic_prefix_digest_for(
+    context: &ModelContextState,
+    preceding: &[Value],
+) -> Result<String, ProviderError> {
+    let (system, tools) = anthropic_context_fields(context);
     digest_anthropic_prefix(system.as_ref(), tools.as_ref(), preceding)
+}
+
+fn anthropic_tool_delta(previous: &[ToolSpec], next: &[ToolSpec]) -> Vec<Value> {
+    let previous_by_name = previous
+        .iter()
+        .map(|tool| (tool.name.as_str(), tool))
+        .collect::<BTreeMap<_, _>>();
+    let next_by_name = next
+        .iter()
+        .map(|tool| (tool.name.as_str(), tool))
+        .collect::<BTreeMap<_, _>>();
+    let mut blocks = Vec::new();
+
+    for name in previous_by_name.keys() {
+        if !next_by_name.contains_key(name) {
+            blocks.push(json!({
+                "type": "tool_removal",
+                "tool": {"type": "tool_reference", "name": name},
+            }));
+        }
+    }
+    for tool in next {
+        if previous_by_name
+            .get(tool.name.as_str())
+            .is_none_or(|previous| **previous != *tool)
+        {
+            blocks.push(json!({
+                "type": "tool_addition",
+                "tool": {
+                    "type": "tool_definition",
+                    "definition": anthropic_tool_definition(tool),
+                },
+            }));
+        }
+    }
+    blocks
+}
+
+fn anthropic_context_plan(
+    request: &ModelRequest,
+    inline_tools_supported: bool,
+) -> Result<Option<AnthropicTimelinePlan>, ProviderError> {
+    if !inline_tools_supported {
+        return Ok(None);
+    }
+    let Some(timeline) = &request.context_timeline else {
+        return Ok(None);
+    };
+    if timeline.initial.instructions != request.instructions
+        || timeline
+            .changes
+            .iter()
+            .any(|change| change.context.instructions != timeline.initial.instructions)
+    {
+        return Ok(None);
+    }
+
+    let mut previous = &timeline.initial;
+    let mut changes = BTreeMap::<usize, Vec<Value>>::new();
+    for change in &timeline.changes {
+        let blocks = anthropic_tool_delta(&previous.tools, &change.context.tools);
+        previous = &change.context;
+        if blocks.is_empty() {
+            continue;
+        }
+        let previous_message = request
+            .messages
+            .get(change.after_message.saturating_sub(1))
+            .map(|message| message.role);
+        let next_message = request
+            .messages
+            .get(change.after_message)
+            .map(|message| message.role);
+        if !matches!(previous_message, Some(Role::User | Role::Tool))
+            || next_message.is_some_and(|role| role != Role::Assistant)
+        {
+            return Ok(None);
+        }
+        changes
+            .entry(change.after_message)
+            .or_default()
+            .extend(blocks);
+    }
+    if changes.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(AnthropicTimelinePlan {
+        initial: timeline.initial.clone(),
+        changes,
+    }))
 }
 
 pub(super) fn anthropic_body_prefix_digest(body: &Value) -> Result<String, ProviderError> {
@@ -150,6 +264,14 @@ pub(super) fn anthropic_body(
     request: &ModelRequest,
     native_api: bool,
 ) -> Result<Value, ProviderError> {
+    anthropic_body_for_route(request, native_api, false)
+}
+
+pub(super) fn anthropic_body_for_route(
+    request: &ModelRequest,
+    native_api: bool,
+    inline_tools_supported: bool,
+) -> Result<Value, ProviderError> {
     validate_request(request)?;
     if native_api
         && managed_anthropic_thinking(&request.model.model)
@@ -168,14 +290,28 @@ pub(super) fn anthropic_body(
             "explicit reasoning and sampling controls are unsupported by Messages",
         ));
     }
-    let messages = wire_messages(request, HttpWire::AnthropicMessages)?;
+
+    let context_plan = anthropic_context_plan(
+        request,
+        native_api && inline_tools_supported,
+    )?;
+    let messages = wire_messages_with_anthropic_context(
+        request,
+        HttpWire::AnthropicMessages,
+        context_plan.as_ref(),
+    )?;
     let mut body = json!({"model":request.model.model,"messages":messages,"stream":true,
         "max_tokens":request.controls.max_output_tokens});
     if native_api && managed_anthropic_thinking(&request.model.model) {
         body["thinking"] = json!({"type":"adaptive","block_binding":{
             "prefix_mismatch_behavior":"error"}});
     }
-    let (system, tools) = anthropic_context_fields(request);
+
+    let current_context = anthropic_context_state(request);
+    let top_level_context = context_plan
+        .as_ref()
+        .map_or(&current_context, |plan| &plan.initial);
+    let (system, tools) = anthropic_context_fields(top_level_context);
     if let Some(system) = system {
         body["system"] = system;
     }
@@ -193,6 +329,21 @@ pub(super) fn anthropic_body(
         body["tool_choice"] = choice;
     }
     Ok(body)
+}
+
+pub(super) fn anthropic_body_uses_inline_tools(body: &Value) -> bool {
+    body["messages"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|message| message["role"] == "system")
+        .flat_map(|message| message["content"].as_array().into_iter().flatten())
+        .any(|block| {
+            matches!(
+                block["type"].as_str(),
+                Some("tool_addition" | "tool_removal")
+            )
+        })
 }
 
 pub(super) fn managed_anthropic_thinking(model: &str) -> bool {
