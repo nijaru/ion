@@ -1028,6 +1028,7 @@ mod tests {
                 input_schema: json!({"type":"object"}),
             }],
             context_timeline: None,
+            prompt_cache: ion_ai::PromptCacheIntent::Reusable,
             controls: GenerationControls {
                 max_output_tokens: 1024,
                 temperature: None,
