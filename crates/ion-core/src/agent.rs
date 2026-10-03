@@ -312,6 +312,7 @@ impl Agent {
                 }],
                 tools: Vec::new(),
                 context_timeline: None,
+                prompt_cache: ion_ai::PromptCacheIntent::Default,
                 controls: GenerationControls {
                     max_output_tokens: output_tokens,
                     temperature: None,
@@ -599,6 +600,7 @@ impl Agent {
                     messages: session.context_messages_for(&model)?,
                     tools: declared_tools.clone(),
                     context_timeline: session.context_timeline_for(&model, &context)?,
+                    prompt_cache: ion_ai::PromptCacheIntent::Reusable,
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
                         temperature: None,
@@ -1262,6 +1264,7 @@ mod tests {
             messages: Vec::new(),
             tools: Vec::new(),
             context_timeline: None,
+            prompt_cache: ion_ai::PromptCacheIntent::Default,
             controls: GenerationControls {
                 max_output_tokens: 128,
                 temperature: None,
