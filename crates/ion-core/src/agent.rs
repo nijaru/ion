@@ -5,7 +5,7 @@ use ion_ai::{
     ToolChoice, ToolResult,
 };
 use serde_json::Value;
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::{Arc, Mutex};
 use thiserror::Error;
 use tokio_util::sync::CancellationToken;
@@ -834,7 +834,9 @@ impl Agent {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
             }
-            for call in calls {
+            let call_count = calls.len();
+            let mut activate_tools = BTreeSet::new();
+            for (index, call) in calls.into_iter().enumerate() {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
@@ -845,15 +847,20 @@ impl Agent {
                     arguments: call.arguments.clone(),
                     activity: activity.clone(),
                 });
-                let mut output = if call.raw_arguments.is_some() {
-                    ToolOutput {
-                        value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
-                        images: Vec::new(),
-                        is_error: true,
-                    }
+                let (mut output, activate) = if call.raw_arguments.is_some() {
+                    (
+                        ToolOutput {
+                            value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
+                            images: Vec::new(),
+                            is_error: true,
+                        },
+                        Vec::new(),
+                    )
                 } else {
-                    tool_catalog.execute_declared(&call, stop.clone()).await
+                    let execution = tool_catalog.execute_model_call(&call, stop.clone()).await;
+                    (execution.output, execution.activate)
                 };
+                activate_tools.extend(activate);
                 if !self.limits.image_input && !output.images.is_empty() {
                     output = ToolOutput {
                         value: serde_json::json!({"error":"selected model route does not support image tool results; choose an image-capable model and read the file again"}),
@@ -871,7 +878,13 @@ impl Agent {
                         is_error: true,
                     };
                 }
-                session.record_tool_result(
+                let next_context = (index + 1 == call_count && !activate_tools.is_empty()).then(
+                    || ModelContextSnapshot {
+                        instructions: instructions.clone(),
+                        tools: tool_catalog.declared_specs_with(&activate_tools),
+                    },
+                );
+                session.record_tool_result_with_context(
                     turn,
                     ToolResult {
                         call_id: call.id.clone(),
@@ -880,6 +893,7 @@ impl Agent {
                         images: output.images.clone(),
                         is_error: output.is_error,
                     },
+                    next_context,
                 )?;
                 observe(AgentEvent::ToolFinished {
                     call_id: call.id,
