@@ -72,15 +72,18 @@ six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
 After settled history is published, an expanded live band shrinks back to the
 rows the active composer/status actually need. Related tool calls are rendered
-as semantic activity groups with a
-compact tree (`●`, `├`, `└`) instead of raw tool-call/result protocol
-rows. Repeated successful observation work can coalesce, while edits, writes,
-commands and exceptional outcomes remain explicit. The live band grows only
-when needed and does not re-own already-settled history on resize. File/model/
-session pickers and Ctrl-O tool detail use temporary alternate-screen views and
-return to the inline surface afterward. Working-directory, Session, model and
-context metadata are no longer permanent footer rows; `/session` exposes
-Session/context detail on demand.
+as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of
+raw tool-call/result protocol rows. Repeated successful observation work can
+coalesce, while edits, writes, commands and exceptional outcomes remain
+explicit.
+
+Inline remains the default, but persistent fullscreen is also available with
+`--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
+inside chat. Fullscreen owns the transcript viewport and scrolling while using
+the same Session, agent loop and semantic transcript projection. File/model/
+session pickers and Ctrl-O tool detail use alternate-screen views in either
+mode. Working-directory, Session, model and context metadata are no longer
+permanent footer rows; `/session` exposes Session/context detail on demand.
 Cloning copies committed conversation and context into a new session with
 independent future turns. Both sessions still use the same live working
 directory; cloning does not copy or restore files.
@@ -159,9 +162,9 @@ recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
 earlier prompts when the cursor reaches the first or last editor line. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.
-Ctrl-O opens the latest complete tool result in a transient full-screen detail
-view; `/tools` lists results and `/tool N` opens a selected one. Esc or
-Ctrl-O closes the result view and restores the inline terminal surface. Input
+Ctrl-O opens the latest complete tool result in a full-screen detail view;
+`/tools` lists results and `/tool N` opens a selected one. Esc or Ctrl-O
+closes the result view and restores the selected chat renderer. Input
 that has not reached the model returns to the editor if the turn fails or is
 cancelled.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
@@ -321,10 +324,10 @@ save an empty assistant message that would break later provider replay.
 
 The required CI gate now includes a Linux PTY workflow for the terminal client
 in addition to format, strict Clippy and workspace tests. It exercises inline
-startup, grouped tool activity, temporary full-screen views, resize,
-Session/model controls, masked login, copy and terminal restoration. This is an
-automated PTY qualification, not a substitute for manual checks in every
-supported terminal.
+startup, grouped tool activity, temporary full-screen views, persistent
+fullscreen startup, inline/fullscreen mode switching, resize, Session/model
+controls, masked login, copy and terminal restoration. This is an automated PTY
+qualification, not a substitute for manual checks in every supported terminal.
 
 Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
 OpenRouter DeepSeek Flash, custom OpenRouter routes for
