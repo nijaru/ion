@@ -1660,13 +1660,13 @@ mod tests {
             &scripts.requests()[1].messages[3].content[0],
             Content::ToolResult(result) if result.is_error && result.call_id == "partial-2"
         ));
-        assert!(matches!(
-            &session.view().unwrap().entries[1],
+        assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
+            entry,
             crate::session::SessionEntry::Assistant {
                 termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
                 ..
             }
-        ));
+        )));
         drop(session);
         let reopened = CodingSession::open(&path).unwrap();
         assert!(reopened.view().unwrap().unfinished_turn.is_none());
@@ -1756,11 +1756,22 @@ mod tests {
         assert!(matches!(result, Err(AgentError::Session(_))));
         assert_eq!(steering.take_uncommitted(), vec![user_text(prompt)]);
         let entries = session.view().unwrap().entries;
-        assert_eq!(entries.len(), 1);
-        assert!(matches!(
-            entries[0],
-            crate::session::SessionEntry::TurnStarted { .. }
-        ));
+        assert_eq!(
+            entries
+                .iter()
+                .filter(|entry| matches!(
+                    entry,
+                    crate::session::SessionEntry::TurnStarted { .. }
+                        | crate::session::SessionEntry::ModelContextChanged { .. }
+                ))
+                .count(),
+            2
+        );
+        assert!(!entries.iter().any(|entry| matches!(
+            entry,
+            crate::session::SessionEntry::Assistant { .. }
+                | crate::session::SessionEntry::Steering { .. }
+        )));
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
@@ -1811,22 +1822,28 @@ mod tests {
         assert!(steering.take_uncommitted().is_empty());
         assert_eq!(scripts.requests().len(), 2);
         let entries = session.view().unwrap().entries;
-        assert!(matches!(
-            entries[1],
-            crate::session::SessionEntry::Assistant { .. }
-        ));
-        assert!(matches!(
-            entries[2],
-            crate::session::SessionEntry::Steering { .. }
-        ));
-        assert!(matches!(
-            entries[3],
-            crate::session::SessionEntry::Assistant { .. }
-        ));
-        assert!(matches!(
-            entries[4],
-            crate::session::SessionEntry::TurnEnded { .. }
-        ));
+        let kinds = entries
+            .iter()
+            .map(|entry| match entry {
+                crate::session::SessionEntry::TurnStarted { .. } => "turn_started",
+                crate::session::SessionEntry::ModelContextChanged { .. } => "model_context",
+                crate::session::SessionEntry::Assistant { .. } => "assistant",
+                crate::session::SessionEntry::Steering { .. } => "steering",
+                crate::session::SessionEntry::TurnEnded { .. } => "turn_ended",
+                _ => "other",
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            kinds,
+            [
+                "turn_started",
+                "model_context",
+                "assistant",
+                "steering",
+                "assistant",
+                "turn_ended"
+            ]
+        );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
     }
