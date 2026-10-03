@@ -37,6 +37,7 @@ fn request() -> ModelRequest {
                 "required": ["path"]
             }),
         }],
+        context_timeline: None,
         controls: controls(),
     }
 }
