@@ -19,6 +19,118 @@ pub enum CatalogWire {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromptCacheLifetime {
+    /// The route may cache, but Ion has no verified retention contract for it.
+    Unknown,
+    /// The provider manages retention and the exact lifetime is not a stable
+    /// route contract Ion should assume.
+    ProviderManaged,
+    /// Verified minimum/default cache lifetimes for this model route.
+    Fixed {
+        default_seconds: u32,
+        extended_seconds: Option<u32>,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptCacheCapabilities {
+    /// Whether this route is expected to report cache read/write token detail.
+    pub usage_details: bool,
+    pub lifetime: PromptCacheLifetime,
+    /// A provider-native no-output prewarm operation is available on this
+    /// exact route/endpoint family.
+    pub native_prewarm: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ContextMutationCapabilities {
+    pub mid_conversation_system: bool,
+    pub mid_conversation_tools: bool,
+    pub inline_tool_definitions: bool,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ModelCapabilities {
+    pub prompt_cache: PromptCacheCapabilities,
+    pub context_mutation: ContextMutationCapabilities,
+}
+
+impl ModelCapabilities {
+    pub const fn conservative() -> Self {
+        Self {
+            prompt_cache: PromptCacheCapabilities {
+                usage_details: false,
+                lifetime: PromptCacheLifetime::Unknown,
+                native_prewarm: false,
+            },
+            context_mutation: ContextMutationCapabilities {
+                mid_conversation_system: false,
+                mid_conversation_tools: false,
+                inline_tool_definitions: false,
+            },
+        }
+    }
+}
+
+const OPENAI_MANAGED_CACHE: ModelCapabilities = ModelCapabilities {
+    prompt_cache: PromptCacheCapabilities {
+        usage_details: true,
+        lifetime: PromptCacheLifetime::ProviderManaged,
+        native_prewarm: false,
+    },
+    context_mutation: ContextMutationCapabilities {
+        mid_conversation_system: false,
+        mid_conversation_tools: false,
+        inline_tool_definitions: false,
+    },
+};
+
+const OPENROUTER_PROVIDER_CACHE: ModelCapabilities = ModelCapabilities {
+    prompt_cache: PromptCacheCapabilities {
+        usage_details: true,
+        lifetime: PromptCacheLifetime::ProviderManaged,
+        native_prewarm: false,
+    },
+    context_mutation: ContextMutationCapabilities {
+        mid_conversation_system: false,
+        mid_conversation_tools: false,
+        inline_tool_definitions: false,
+    },
+};
+
+const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
+    prompt_cache: PromptCacheCapabilities {
+        usage_details: true,
+        lifetime: PromptCacheLifetime::Fixed {
+            default_seconds: 300,
+            extended_seconds: Some(3600),
+        },
+        native_prewarm: false,
+    },
+    context_mutation: ContextMutationCapabilities {
+        mid_conversation_system: false,
+        mid_conversation_tools: false,
+        inline_tool_definitions: false,
+    },
+};
+
+const ANTHROPIC_INLINE_CONTEXT: ModelCapabilities = ModelCapabilities {
+    prompt_cache: PromptCacheCapabilities {
+        usage_details: true,
+        lifetime: PromptCacheLifetime::Fixed {
+            default_seconds: 300,
+            extended_seconds: Some(3600),
+        },
+        native_prewarm: false,
+    },
+    context_mutation: ContextMutationCapabilities {
+        mid_conversation_system: true,
+        mid_conversation_tools: true,
+        inline_tool_definitions: true,
+    },
+};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CatalogModel {
     pub provider: &'static str,
     pub id: &'static str,
@@ -32,6 +144,7 @@ pub struct CatalogModel {
     pub max_output_tokens: u32,
     /// Whether the current model page declares image input on this route.
     pub image_input: bool,
+    pub capabilities: ModelCapabilities,
     pub source_url: &'static str,
     pub checked_on: &'static str,
 }
@@ -55,6 +168,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_048_576,
         max_output_tokens: 384_000,
         image_input: true,
+        capabilities: ModelCapabilities::conservative(),
         source_url: "https://api-docs.deepseek.com/quick_start/pricing/",
         checked_on: CHECKED_ON,
     },
@@ -68,6 +182,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 131_072,
         image_input: true,
+        capabilities: ModelCapabilities::conservative(),
         source_url: "https://mimo.mi.com/models/en-US/mimo-v2.6-flash",
         checked_on: CHECKED_ON,
     },
@@ -81,6 +196,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_048_576,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: OPENROUTER_PROVIDER_CACHE,
         source_url: "https://openrouter.ai/deepseek/deepseek-v4.1-flash/providers",
         checked_on: CHECKED_ON,
     },
@@ -94,6 +210,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_050_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: OPENAI_MANAGED_CACHE,
         source_url: "https://developers.openai.com/api/docs/models/gpt-5.5",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -107,6 +224,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 400_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: OPENAI_MANAGED_CACHE,
         source_url: "https://developers.openai.com/api/docs/models/gpt-5.4-mini",
         checked_on: CHECKED_ON,
     },
@@ -120,6 +238,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_050_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: OPENAI_MANAGED_CACHE,
         source_url: "https://developers.openai.com/api/docs/models/gpt-5.4",
         checked_on: CHECKED_ON,
     },
@@ -133,6 +252,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_050_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: OPENROUTER_PROVIDER_CACHE,
         source_url: "https://openrouter.ai/openai/gpt-5.4",
         checked_on: CHECKED_ON,
     },
@@ -146,6 +266,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: ANTHROPIC_INLINE_CONTEXT,
         source_url: "https://platform.claude.com/docs/en/models/opus-5-5/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -159,6 +280,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: ANTHROPIC_INLINE_CONTEXT,
         source_url: "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -172,6 +294,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: ANTHROPIC_INLINE_CONTEXT,
         source_url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -185,6 +308,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: ANTHROPIC_CACHE_ONLY,
         source_url: "https://platform.claude.com/docs/en/models/opus-4-6/overview",
         checked_on: CHECKED_ON,
     },
@@ -198,6 +322,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
+        capabilities: ANTHROPIC_CACHE_ONLY,
         source_url: "https://platform.claude.com/docs/en/models/sonnet-4-6/overview",
         checked_on: CHECKED_ON,
     },
@@ -211,6 +336,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 200_000,
         max_output_tokens: 64_000,
         image_input: true,
+        capabilities: ANTHROPIC_CACHE_ONLY,
         source_url: "https://platform.claude.com/docs/en/models/overview",
         checked_on: CHECKED_ON,
     },
