@@ -2547,6 +2547,7 @@ mod tests {
             context_window_tokens: None,
             requires_key: false,
             image_input: true,
+            capabilities: ion_host::catalog::ModelCapabilities::conservative(),
         };
         let mut ui = Frontend::default();
         let prepared = prepare_clipboard(
