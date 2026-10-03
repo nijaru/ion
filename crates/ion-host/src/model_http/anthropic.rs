@@ -716,7 +716,6 @@ impl AnthropicState {
     }
 }
 
-
 #[cfg(test)]
 mod cache_usage_tests {
     use super::*;
