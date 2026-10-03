@@ -286,7 +286,12 @@ impl AnthropicState {
             .checked_add(self.cache_creation)
             .and_then(|v| v.checked_add(self.cache_read))
             .ok_or_else(|| invalid("usage token count overflow"))?;
-        Ok(Usage::known(input, self.output))
+        Ok(Usage::known_with_cache(
+            input,
+            self.output,
+            self.cache_read,
+            self.cache_creation,
+        ))
     }
     fn update_usage(&mut self, value: &Value, initial: bool) -> Result<(), ProviderError> {
         if !initial && value.is_null() {
