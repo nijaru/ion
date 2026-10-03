@@ -707,15 +707,15 @@ mod tests {
         }
 
         let catalog = ToolSet::new([Arc::new(Mixed) as Arc<dyn ToolHost>]).snapshot();
-        assert_eq!(catalog.specs().len(), 2);
         assert_eq!(
             catalog
                 .declared_specs()
                 .iter()
                 .map(|spec| spec.name.as_str())
                 .collect::<Vec<_>>(),
-            ["direct"]
+            ["direct", TOOL_SEARCH_NAME]
         );
+        assert!(!catalog.is_declared("deferred"));
 
         let call = ToolCall {
             id: "1".into(),
@@ -728,13 +728,41 @@ mod tests {
             json!("deferred")
         );
         let model_result = catalog
-            .execute_declared(&call, CancellationToken::new())
-            .await;
+            .execute_model_call(&call, CancellationToken::new())
+            .await
+            .output;
         assert!(model_result.is_error);
         assert_eq!(
             model_result.value["error"],
             "tool was not declared for this request: deferred"
         );
+    }
+
+    #[tokio::test]
+    async fn tool_search_loads_matching_deferred_capabilities_for_next_request() {
+        let catalog = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolHost>]).snapshot();
+        let execution = catalog
+            .execute_model_call(
+                &ToolCall {
+                    id: "search".into(),
+                    name: TOOL_SEARCH_NAME.into(),
+                    arguments: json!({"query":"deferred"}),
+                    raw_arguments: None,
+                },
+                CancellationToken::new(),
+            )
+            .await;
+        assert!(!execution.output.is_error);
+        assert_eq!(execution.activate, ["deferred"]);
+        assert_eq!(execution.output.value["count"], 1);
+
+        let activate = execution.activate.into_iter().collect();
+        let names = catalog
+            .declared_specs_with(&activate)
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect::<Vec<_>>();
+        assert_eq!(names, ["direct", "deferred", TOOL_SEARCH_NAME]);
     }
 
     #[test]
