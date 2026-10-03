@@ -201,11 +201,25 @@ results but omits opaque reasoning from earlier model epochs in later model
 requests. Switching back does not revive those older blocks.
 The catalog includes current Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 on the
 native Anthropic Messages route. Its signed thinking is retained across tool
-and later Turn continuation. When project instructions, tools or summarized
-history change the signed prefix, Ion records a one-time reasoning reset
-before the next Turn's request. Ion avoids compaction during a signed tool
-continuation; if its prefix changes or cannot fit, the Turn fails without
-repeating a tool effect.
+and later Turn continuation. For reusable coding requests, these cataloged
+native routes opt into Anthropic prompt caching and retain cache-read/cache-write
+token counts separately from total input usage. Compatible tool-loadout changes
+are encoded as native inline tool additions/removals/redefinitions so the
+initial top-level tool prefix and signed-thinking prefix can remain stable;
+instruction changes deliberately fall back to the latest leading context.
+When a prefix cannot be preserved safely, Ion records the existing one-time
+reasoning reset rather than altering signed history.
+
+During a long active tool batch, current priced native Anthropic routes also
+use economical streaming cache warming: shortly before the verified cache
+lifetime expires, Ion may replay the exact last model request with a one-token
+output ceiling when the expected avoided cache miss is at least $0.05. The
+timer starts from that request's dispatch time, stops when the tool batch or
+context advances, and is capped to one hour of active work. Refresh usage is
+stored as a cache_warm Session accounting fact but never enters model context
+or normal transcript/export output. Idle cache warming is not implemented.
+Ion avoids compaction during a signed tool continuation; if its prefix changes
+or cannot fit, the Turn fails without repeating a tool effect.
 For a llama.cpp server whose model emits unreplayable reasoning, use
 `--wire llama-cpp-no-thinking` to disable it on each request. Custom HTTP or
 HTTPS endpoints can run without a key. Pass `--api-key-env NAME` or run
