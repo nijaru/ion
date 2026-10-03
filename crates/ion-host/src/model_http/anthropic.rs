@@ -234,8 +234,8 @@ pub(super) struct AnthropicState {
     input_transformations: Option<Value>,
     input: u64,
     output: u64,
-    cache_creation: u64,
-    cache_read: u64,
+    cache_creation: Option<u64>,
+    cache_read: Option<u64>,
 }
 
 pub(super) fn anthropic_replay_notices(transformations: Option<&Value>) -> Vec<ModelStreamEvent> {
@@ -283,16 +283,17 @@ impl AnthropicState {
     pub(super) fn usage(&self) -> Result<Usage, ProviderError> {
         let input = self
             .input
-            .checked_add(self.cache_creation)
-            .and_then(|v| v.checked_add(self.cache_read))
+            .checked_add(self.cache_creation.unwrap_or(0))
+            .and_then(|v| v.checked_add(self.cache_read.unwrap_or(0)))
             .ok_or_else(|| invalid("usage token count overflow"))?;
-        Ok(Usage::known_with_cache(
-            input,
-            self.output,
-            self.cache_read,
-            self.cache_creation,
-        ))
+        Ok(Usage {
+            input_tokens: Some(input),
+            output_tokens: Some(self.output),
+            cache_read_input_tokens: self.cache_read,
+            cache_write_input_tokens: self.cache_creation,
+        })
     }
+
     fn update_usage(&mut self, value: &Value, initial: bool) -> Result<(), ProviderError> {
         if !initial && value.is_null() {
             return Ok(());
@@ -303,8 +304,6 @@ impl AnthropicState {
         for (key, current) in [
             ("input_tokens", &mut self.input),
             ("output_tokens", &mut self.output),
-            ("cache_creation_input_tokens", &mut self.cache_creation),
-            ("cache_read_input_tokens", &mut self.cache_read),
         ] {
             if let Some(value) = fields.get(key) {
                 let count = value
@@ -314,8 +313,22 @@ impl AnthropicState {
                     return Err(invalid("cumulative usage regressed"));
                 }
                 *current = count;
-            } else if initial && (key == "input_tokens" || key == "output_tokens") {
+            } else if initial {
                 return Err(invalid("missing required token usage"));
+            }
+        }
+        for (key, current) in [
+            ("cache_creation_input_tokens", &mut self.cache_creation),
+            ("cache_read_input_tokens", &mut self.cache_read),
+        ] {
+            if let Some(value) = fields.get(key) {
+                let count = value
+                    .as_u64()
+                    .ok_or_else(|| invalid("invalid usage token count"))?;
+                if current.is_some_and(|previous| count < previous) {
+                    return Err(invalid("cumulative usage regressed"));
+                }
+                *current = Some(count);
             }
         }
         self.usage()?;
