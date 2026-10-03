@@ -140,10 +140,11 @@ impl Host {
         let resolver = self
             .credentials
             .resolver(&selected.provider, selected.api_key_env.as_deref())?;
-        let service = Arc::new(HttpModelService::new(
+        let service = Arc::new(HttpModelService::new_with_capabilities(
             &selected.endpoint,
             selected.wire,
             resolver,
+            selected.capabilities,
         )?);
         Ok(Arc::new(
             CodingAgent::with_tool_set(service, tools).with_limits(AgentLimits {
