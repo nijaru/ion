@@ -433,12 +433,16 @@ pub(super) fn empty_post_finish_delta(delta: &Value) -> bool {
 pub(super) struct UsageState {
     input: Option<u64>,
     output: Option<u64>,
+    cache_read: Option<u64>,
+    cache_write: Option<u64>,
 }
 impl UsageState {
     pub(super) fn value(&self) -> Usage {
         Usage {
             input_tokens: self.input,
             output_tokens: self.output,
+            cache_read_input_tokens: self.cache_read,
+            cache_write_input_tokens: self.cache_write,
         }
     }
     pub(super) fn set_chat(&mut self, value: &Value) -> Result<(), ProviderError> {
@@ -458,6 +462,31 @@ impl UsageState {
                     .as_u64()
                     .ok_or_else(|| invalid("invalid completion token count"))?,
             );
+        }
+        if let Some(details) = fields.get("prompt_tokens_details").filter(|value| !value.is_null()) {
+            let details = details
+                .as_object()
+                .ok_or_else(|| invalid("invalid prompt token details"))?;
+            if let Some(value) = details.get("cached_tokens") {
+                self.cache_read = Some(
+                    value
+                        .as_u64()
+                        .ok_or_else(|| invalid("invalid cached token count"))?,
+                );
+            }
+            if let Some(value) = details.get("cache_write_tokens") {
+                self.cache_write = Some(
+                    value
+                        .as_u64()
+                        .ok_or_else(|| invalid("invalid cache write token count"))?,
+                );
+            }
+        }
+        if let (Some(total), Some(read), Some(write)) =
+            (self.input, self.cache_read, self.cache_write)
+            && read.checked_add(write).is_none_or(|cached| cached > total)
+        {
+            return Err(invalid("cache token counts exceed prompt token count"));
         }
         Ok(())
     }
