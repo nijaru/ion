@@ -463,7 +463,10 @@ impl UsageState {
                     .ok_or_else(|| invalid("invalid completion token count"))?,
             );
         }
-        if let Some(details) = fields.get("prompt_tokens_details").filter(|value| !value.is_null()) {
+        if let Some(details) = fields
+            .get("prompt_tokens_details")
+            .filter(|value| !value.is_null())
+        {
             let details = details
                 .as_object()
                 .ok_or_else(|| invalid("invalid prompt token details"))?;
@@ -491,7 +494,6 @@ impl UsageState {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod cache_usage_tests {
