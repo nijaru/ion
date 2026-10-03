@@ -1516,6 +1516,125 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn deferred_tool_search_activates_next_request_and_survives_reopen() {
+        struct DeferredTool;
+
+        impl ToolHost for DeferredTool {
+            fn definitions(&self) -> Vec<ToolDefinition> {
+                vec![
+                    ToolDefinition::external(ToolSpec {
+                        name: "special_lookup".into(),
+                        description: "Look up specialized project metadata".into(),
+                        input_schema: serde_json::json!({
+                            "type":"object",
+                            "additionalProperties":false,
+                            "properties":{}
+                        }),
+                    })
+                    .deferred(),
+                ]
+            }
+
+            fn execute<'a>(
+                &'a self,
+                call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async move {
+                    ToolOutput {
+                        value: serde_json::json!({"tool":call.name,"value":"found"}),
+                        images: Vec::new(),
+                        is_error: false,
+                    }
+                })
+            }
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("ion-deferred-tool-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::ToolCall(ToolCall {
+                id: "search".into(),
+                name: "tool_search".into(),
+                arguments: serde_json::json!({"query":"specialized metadata"}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::ToolCall(ToolCall {
+                id: "use-special".into(),
+                name: "special_lookup".into(),
+                arguments: serde_json::json!({}),
+                raw_arguments: None,
+            })]),
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(DeferredTool));
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "find the metadata".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+
+        let requests = scripts.requests();
+        assert_eq!(
+            requests[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["tool_search"]
+        );
+        assert_eq!(
+            requests[1]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
+        assert_eq!(
+            requests[2]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
+        assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
+            entry,
+            crate::session::SessionEntry::ModelContextChanged { context, .. }
+                if context.tools.iter().any(|tool| tool.name == "special_lookup")
+        )));
+        drop(session);
+
+        let reopened = CodingSession::open(&path).unwrap();
+        assert_eq!(
+            reopened
+                .model_context()
+                .unwrap()
+                .unwrap()
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
+        drop(reopened);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn tool_images_are_committed_replayed_and_rejected_on_a_text_only_route() {
         struct ImageTool;
         impl ToolHost for ImageTool {
