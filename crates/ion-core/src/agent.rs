@@ -1608,6 +1608,27 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["special_lookup"]
         );
+        let timeline = requests[1].context_timeline.as_ref().unwrap();
+        assert_eq!(
+            timeline
+                .initial
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["tool_search"]
+        );
+        assert_eq!(timeline.changes.len(), 1);
+        assert_eq!(timeline.changes[0].after_message, 3);
+        assert_eq!(
+            timeline.changes[0]
+                .context
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
         assert_eq!(
             requests[2]
                 .tools
