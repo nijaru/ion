@@ -871,11 +871,7 @@ impl Session {
         }))
     }
 
-    pub(crate) fn record_cache_warm(
-        &self,
-        turn: u64,
-        usage: Usage,
-    ) -> Result<(), SessionError> {
+    pub(crate) fn record_cache_warm(&self, turn: u64, usage: Usage) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &[SessionEntry::CacheWarm { turn, usage }])
     }
