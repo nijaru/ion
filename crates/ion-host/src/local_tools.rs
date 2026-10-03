@@ -24,7 +24,7 @@ use tokio_util::sync::CancellationToken;
 
 use ion_core::{
     CodingToolHost as ToolHost, CodingToolOutput as ToolOutput, ToolActivityKind, ToolDefinition,
-    ToolPresentation,
+    ToolExposure, ToolPresentation,
 };
 
 const MAX_FILE_BYTES: usize = 8 * 1024 * 1024;
@@ -70,7 +70,11 @@ impl ToolHost for LocalTools {
                     "exec" => ToolPresentation::argument(ToolActivityKind::Command, "command"),
                     _ => ToolPresentation::external(),
                 };
-                ToolDefinition { spec, presentation }
+                ToolDefinition {
+                    spec,
+                    presentation,
+                    exposure: ToolExposure::Direct,
+                }
             })
             .collect()
     }
