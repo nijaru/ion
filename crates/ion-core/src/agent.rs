@@ -576,7 +576,12 @@ impl Agent {
                 if stop.is_cancelled() {
                     return Err(AgentError::Cancelled);
                 }
-                let tool_catalog = self.tools.snapshot();
+                let previous_context = session.model_context()?;
+                let tool_catalog = self.tools.snapshot_with_previous(
+                    previous_context
+                        .as_ref()
+                        .map_or(&[], |context| context.tools.as_slice()),
+                );
                 let declared_tools = tool_catalog.declared_specs();
                 let mut request = ModelRequest {
                     model: model.clone(),
