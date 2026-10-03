@@ -1413,6 +1413,123 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn streaming_cache_warm_replays_request_without_entering_model_context() {
+        struct SlowRead;
+
+        impl ToolHost for SlowRead {
+            fn definitions(&self) -> Vec<ToolDefinition> {
+                vec![ToolDefinition {
+                    spec: ToolSpec {
+                        name: "read".into(),
+                        description: "slow read".into(),
+                        input_schema: serde_json::json!({
+                            "type":"object",
+                            "additionalProperties":false,
+                            "properties":{}
+                        }),
+                    },
+                    presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                    exposure: ToolExposure::Direct,
+                }]
+            }
+
+            fn execute<'a>(
+                &'a self,
+                _call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async {
+                    tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+                    ToolOutput {
+                        value: serde_json::json!({"content":"ok"}),
+                        images: Vec::new(),
+                        is_error: false,
+                    }
+                })
+            }
+        }
+
+        let root =
+            std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+        let first = Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall(ToolCall {
+                    id: "read-1".into(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: None,
+                })],
+                provider_replay: None,
+            },
+            usage: Usage::known_with_cache(100_000, 4, 100_000, 0),
+            termination: ResponseTermination::Completed,
+            returned_model: Some("test".into()),
+        })]);
+        let warm = Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
+            message: Message {
+                role: Role::Assistant,
+                content: vec![Content::Text("ignored refresh output".into())],
+                provider_replay: None,
+            },
+            usage: Usage::known(100_000, 1),
+            termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+            returned_model: Some("test".into()),
+        })]);
+        let service = Arc::new(ScriptedModelService::new([
+            first,
+            warm,
+            response(vec![Content::Text("done".into())]),
+        ]));
+        let agent = Agent::new(service.clone(), Arc::new(SlowRead)).with_limits(AgentLimits {
+            prompt_cache_warming: Some(PromptCacheWarmingPolicy {
+                lifetime_seconds: 0,
+                cache_write_microusd_per_million: 5_000_000,
+                cache_read_microusd_per_million: 200_000,
+                output_microusd_per_million: 20_000_000,
+                minimum_savings_microusd: 0,
+            }),
+            ..AgentLimits::default()
+        });
+
+        assert_eq!(
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "inspect".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap(),
+            "done"
+        );
+
+        let requests = service.requests();
+        assert_eq!(requests.len(), 3);
+        assert_eq!(requests[1].controls.max_output_tokens, 1);
+        assert_eq!(requests[2].messages.len(), 3);
+        assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
+            entry,
+            crate::session::SessionEntry::CacheWarm {
+                usage: Usage {
+                    output_tokens: Some(1),
+                    ..
+                },
+                ..
+            }
+        )));
+        assert_eq!(session.context_messages().unwrap().len(), 4);
+
+        drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
     async fn transient_provider_error_retries_only_before_stream_output() {
         let root = std::env::temp_dir().join(format!("ion-retry-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
