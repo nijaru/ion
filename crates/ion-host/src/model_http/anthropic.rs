@@ -715,3 +715,28 @@ impl AnthropicState {
         }
     }
 }
+
+
+#[cfg(test)]
+mod cache_usage_tests {
+    use super::*;
+
+    #[test]
+    fn anthropic_usage_preserves_cache_read_and_write_buckets() {
+        let mut state = AnthropicState::default();
+        state
+            .update_usage(
+                &json!({
+                    "input_tokens": 100,
+                    "output_tokens": 50,
+                    "cache_creation_input_tokens": 200,
+                    "cache_read_input_tokens": 700
+                }),
+                true,
+            )
+            .unwrap();
+        let usage = state.usage().unwrap();
+        assert_eq!(usage, Usage::known_with_cache(1_000, 50, 700, 200));
+        assert_eq!(usage.uncached_input_tokens(), Some(100));
+    }
+}
