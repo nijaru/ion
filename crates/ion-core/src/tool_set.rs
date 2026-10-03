@@ -129,6 +129,53 @@ pub struct ToolOutput {
     pub is_error: bool,
 }
 
+#[derive(Debug, Clone)]
+pub struct ToolExecution {
+    pub output: ToolOutput,
+    /// Deferred capabilities to add to the next request's declared loadout.
+    pub activate: Vec<String>,
+}
+
+impl ToolExecution {
+    fn output(output: ToolOutput) -> Self {
+        Self {
+            output,
+            activate: Vec::new(),
+        }
+    }
+}
+
+const TOOL_SEARCH_NAME: &str = "tool_search";
+const DEFAULT_TOOL_SEARCH_LIMIT: usize = 5;
+const MAX_TOOL_SEARCH_LIMIT: usize = 10;
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ToolSearchInput {
+    query: String,
+    limit: Option<usize>,
+}
+
+fn tool_search_definition() -> ToolDefinition {
+    ToolDefinition {
+        spec: ToolSpec {
+            name: TOOL_SEARCH_NAME.into(),
+            description: "Search tools that are callable by the harness but not declared in this request. Matching tools are loaded into the next model request.".into(),
+            input_schema: serde_json::json!({
+                "type":"object",
+                "additionalProperties":false,
+                "required":["query"],
+                "properties":{
+                    "query":{"type":"string","minLength":1},
+                    "limit":{"type":"integer","minimum":1,"maximum":MAX_TOOL_SEARCH_LIMIT}
+                }
+            }),
+        },
+        presentation: ToolPresentation::argument(ToolActivityKind::Search, "query"),
+        exposure: ToolExposure::Direct,
+    }
+}
+
 /// One owner of one or more tools. A host's definitions must remain coherent
 /// until the next explicit refresh boundary.
 pub trait ToolHost: Send + Sync {
@@ -185,7 +232,7 @@ impl ToolSet {
                 let name = definition.spec.name.clone();
                 let routed = RoutedTool {
                     definition,
-                    host: host.clone(),
+                    route: ToolRoute::Host(host.clone()),
                 };
                 match positions.get(&name).copied() {
                     Some(index) => entries[index] = routed,
@@ -200,7 +247,7 @@ impl ToolSet {
             .iter()
             .map(|spec| (spec.name.as_str(), spec))
             .collect::<HashMap<_, _>>();
-        let declared = entries
+        let mut declared = entries
             .iter()
             .filter(|entry| {
                 entry.definition.exposure == ToolExposure::Direct
@@ -209,7 +256,28 @@ impl ToolSet {
                         .is_some_and(|spec| **spec == entry.definition.spec)
             })
             .map(|entry| entry.definition.spec.name.clone())
-            .collect();
+            .collect::<HashSet<_>>();
+
+        if entries.iter().any(|entry| {
+            entry.definition.exposure == ToolExposure::Deferred
+                && !declared.contains(&entry.definition.spec.name)
+        }) {
+            let definition = tool_search_definition();
+            let name = definition.spec.name.clone();
+            let routed = RoutedTool {
+                definition,
+                route: ToolRoute::Search,
+            };
+            match positions.get(&name).copied() {
+                Some(index) => entries[index] = routed,
+                None => {
+                    positions.insert(name.clone(), entries.len());
+                    entries.push(routed);
+                }
+            }
+            declared.insert(name);
+        }
+
         ToolCatalog {
             entries,
             positions,
@@ -219,9 +287,15 @@ impl ToolSet {
 }
 
 #[derive(Clone)]
+enum ToolRoute {
+    Host(Arc<dyn ToolHost>),
+    Search,
+}
+
+#[derive(Clone)]
 struct RoutedTool {
     definition: ToolDefinition,
-    host: Arc<dyn ToolHost>,
+    route: ToolRoute,
 }
 
 /// Immutable tool schema/presentation/route view used by one model request and
@@ -262,6 +336,23 @@ impl ToolCatalog {
             .map(|entry| &entry.definition)
     }
 
+    /// Declared specs after additionally activating names returned by the
+    /// intrinsic discovery tool. Unknown/non-deferred names are ignored.
+    pub fn declared_specs_with(
+        &self,
+        additional: &std::collections::BTreeSet<String>,
+    ) -> Vec<ToolSpec> {
+        self.entries
+            .iter()
+            .filter(|entry| {
+                self.declared.contains(&entry.definition.spec.name)
+                    || (entry.definition.exposure == ToolExposure::Deferred
+                        && additional.contains(&entry.definition.spec.name))
+            })
+            .map(|entry| entry.definition.spec.clone())
+            .collect()
+    }
+
     pub fn activity(&self, call: &ToolCall) -> ToolActivity {
         self.definition(&call.name).map_or_else(
             || ToolActivity::external(&call.name),
@@ -281,7 +372,17 @@ impl ToolCatalog {
             .get(&call.name)
             .and_then(|index| self.entries.get(*index))
         {
-            Some(entry) => entry.host.execute(call, stop),
+            Some(RoutedTool {
+                route: ToolRoute::Host(host),
+                ..
+            }) => host.execute(call, stop),
+            Some(RoutedTool {
+                route: ToolRoute::Search,
+                ..
+            }) => {
+                let execution = self.search_deferred(call);
+                Box::pin(async move { execution.output })
+            }
             None => Box::pin(async move {
                 ToolOutput {
                     value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
@@ -294,23 +395,148 @@ impl ToolCatalog {
 
     /// Execute a model-issued call only when its definition was part of this
     /// request's declared loadout.
-    pub fn execute_declared<'a>(
+    pub fn execute_model_call<'a>(
         &'a self,
         call: &'a ToolCall,
         stop: CancellationToken,
-    ) -> BoxFuture<'a, ToolOutput> {
-        if self.is_declared(&call.name) {
-            return self.execute(call, stop);
+    ) -> BoxFuture<'a, ToolExecution> {
+        if !self.is_declared(&call.name) {
+            return Box::pin(async move {
+                ToolExecution::output(ToolOutput {
+                    value: serde_json::json!({
+                        "error": format!("tool was not declared for this request: {}", call.name)
+                    }),
+                    images: Vec::new(),
+                    is_error: true,
+                })
+            });
         }
-        Box::pin(async move {
-            ToolOutput {
+        match self
+            .positions
+            .get(&call.name)
+            .and_then(|index| self.entries.get(*index))
+        {
+            Some(RoutedTool {
+                route: ToolRoute::Search,
+                ..
+            }) => {
+                let execution = self.search_deferred(call);
+                Box::pin(async move { execution })
+            }
+            Some(RoutedTool {
+                route: ToolRoute::Host(host),
+                ..
+            }) => {
+                let future = host.execute(call, stop);
+                Box::pin(async move { ToolExecution::output(future.await) })
+            }
+            None => Box::pin(async move {
+                ToolExecution::output(ToolOutput {
+                    value: serde_json::json!({"error":format!("unknown tool: {}",call.name)}),
+                    images: Vec::new(),
+                    is_error: true,
+                })
+            }),
+        }
+    }
+
+    fn search_deferred(&self, call: &ToolCall) -> ToolExecution {
+        let input: ToolSearchInput = match serde_json::from_value(call.arguments.clone()) {
+            Ok(input) => input,
+            Err(error) => {
+                return ToolExecution::output(ToolOutput {
+                    value: serde_json::json!({
+                        "error": format!("invalid tool_search arguments: {error}")
+                    }),
+                    images: Vec::new(),
+                    is_error: true,
+                });
+            }
+        };
+        let query = input.query.trim().to_ascii_lowercase();
+        if query.is_empty() {
+            return ToolExecution::output(ToolOutput {
+                value: serde_json::json!({"error":"tool_search query is empty"}),
+                images: Vec::new(),
+                is_error: true,
+            });
+        }
+        let limit = input.limit.unwrap_or(DEFAULT_TOOL_SEARCH_LIMIT);
+        if !(1..=MAX_TOOL_SEARCH_LIMIT).contains(&limit) {
+            return ToolExecution::output(ToolOutput {
                 value: serde_json::json!({
-                    "error": format!("tool was not declared for this request: {}", call.name)
+                    "error": format!("tool_search limit must be between 1 and {MAX_TOOL_SEARCH_LIMIT}")
                 }),
                 images: Vec::new(),
                 is_error: true,
-            }
-        })
+            });
+        }
+
+        let tokens = query.split_whitespace().collect::<Vec<_>>();
+        let mut matches = self
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.definition.exposure == ToolExposure::Deferred
+                    && !self.declared.contains(&entry.definition.spec.name)
+            })
+            .filter_map(|entry| {
+                let name = entry.definition.spec.name.to_ascii_lowercase();
+                let description = entry.definition.spec.description.to_ascii_lowercase();
+                let mut score = 0usize;
+                if name == query {
+                    score += 10_000;
+                } else if name.contains(&query) {
+                    score += 2_000;
+                }
+                if description.contains(&query) {
+                    score += 500;
+                }
+                for token in &tokens {
+                    if name == *token {
+                        score += 1_000;
+                    } else if name.contains(token) {
+                        score += 250;
+                    }
+                    if description.contains(token) {
+                        score += 50;
+                    }
+                }
+                (score > 0).then_some((score, entry))
+            })
+            .collect::<Vec<_>>();
+        matches.sort_by(|(left_score, left), (right_score, right)| {
+            right_score
+                .cmp(left_score)
+                .then_with(|| left.definition.spec.name.cmp(&right.definition.spec.name))
+        });
+        matches.truncate(limit);
+
+        let activate = matches
+            .iter()
+            .map(|(_, entry)| entry.definition.spec.name.clone())
+            .collect::<Vec<_>>();
+        let tools = matches
+            .iter()
+            .map(|(_, entry)| {
+                serde_json::json!({
+                    "name": entry.definition.spec.name,
+                    "description": entry.definition.spec.description,
+                })
+            })
+            .collect::<Vec<_>>();
+        ToolExecution {
+            output: ToolOutput {
+                value: serde_json::json!({
+                    "loaded": tools,
+                    "count": tools.len(),
+                    "message": "Matching tools are declared in the next model request."
+                }),
+                images: Vec::new(),
+                is_error: false,
+            },
+            activate,
+        }
     }
 }
 
