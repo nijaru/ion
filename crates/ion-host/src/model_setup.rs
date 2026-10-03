@@ -68,6 +68,7 @@ pub struct Selection {
     pub context_window_tokens: Option<u32>,
     pub requires_key: bool,
     pub image_input: bool,
+    pub capabilities: catalog::ModelCapabilities,
 }
 
 impl Selection {
@@ -270,6 +271,7 @@ impl ModelStore {
                 context_window_tokens: Some(model.context_window),
                 requires_key: true,
                 image_input: model.image_input,
+                capabilities: model.capabilities,
             });
         }
         let endpoint = saved
@@ -300,6 +302,7 @@ impl ModelStore {
             context_window_tokens: None,
             requires_key: false,
             image_input: saved.image_input,
+            capabilities: catalog::ModelCapabilities::conservative(),
         })
     }
 }
@@ -387,6 +390,47 @@ mod tests {
         assert!(!store.resolve_saved(&route).unwrap().requires_key);
         route.endpoint = Some("https://example.com/v1/chat/completions?token=hidden".into());
         assert!(store.resolve_saved(&route).is_err());
+    }
+
+    #[test]
+    fn catalog_capabilities_are_explicit_and_custom_routes_are_conservative() {
+        let root =
+            std::env::temp_dir().join(format!("ion-model-capabilities-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        let store = ModelStore::new(root.clone());
+
+        let claude = store
+            .resolve_identity(&ModelRef {
+                provider: "anthropic".into(),
+                model: "claude-opus-5-5".into(),
+            })
+            .unwrap();
+        assert!(claude.capabilities.context_mutation.mid_conversation_system);
+        assert!(claude.capabilities.context_mutation.mid_conversation_tools);
+        assert_eq!(
+            claude.capabilities.prompt_cache.lifetime,
+            catalog::PromptCacheLifetime::Fixed {
+                default_seconds: 300,
+                extended_seconds: Some(3600),
+            }
+        );
+
+        let custom = store
+            .resolve_saved(&SavedSelection {
+                provider: "custom".into(),
+                model: "unknown".into(),
+                endpoint: Some("https://example.com/v1/chat/completions".into()),
+                wire: Some(Wire::ChatCompletions),
+                api_key_env: None,
+                image_input: false,
+            })
+            .unwrap();
+        assert_eq!(
+            custom.capabilities,
+            catalog::ModelCapabilities::conservative()
+        );
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
