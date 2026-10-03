@@ -72,12 +72,19 @@ user input -> model stream -> final answer
 ```
 
 One Turn starts from an accepted user message. Each model request uses one
-coherent selection of model, instructions, context and a **tool catalog
-snapshot**. One snapshot binds every advertised tool schema to the same
-semantic presentation identity and execution route for that model step.
-Dynamic tool discovery may replace the snapshot at a later request boundary,
-but it cannot change the meaning or owner of a call already advertised to the
-model. The loop
+coherent selection of model, instructions, context and a frozen **executable
+tool catalog**. That catalog binds every callable tool definition to its
+semantic presentation identity and exact execution route. The
+**declared loadout** is a subset of that catalog and is the only set advertised
+to the model for that request.
+
+Direct tools enter the loadout automatically. A deferred capability remains
+callable by the harness but is omitted until a declared `tool_search` call
+selects it. Search activation changes only the next request's loadout; it never
+changes the route of a call already advertised. A previously activated
+deferred tool is restored after reopen/fork/refresh only when its
+provider-neutral definition is still identical. Dynamic host/MCP refresh can
+replace the executable catalog only at a later request boundary. The loop
 builds model input, streams a response,
 dispatches complete tool calls in order, records their results and continues
 until a final response, cancellation or an explicit failure. There is no
@@ -102,9 +109,19 @@ history in SQLite. It admits at most one executing coding Turn. One writer
 holds an advisory lock for that Session, serializes submissions and append
 transactions, then explicitly releases the lock after the store closes. A
 briefly inherited file description cannot keep the Session locked after its
-writer exits. Turn acceptance and its user message commit
-together; record the nonsecret context needed to interpret the history without
-duplicating a full request manifest. Save a complete assistant message containing tool calls durably before
+writer exits. Turn acceptance and its user message commit together.
+
+Immediately before a model request, a changed provider-neutral
+`ModelContextSnapshot` records the effective instructions and declared tool
+schemas. Identical consecutive snapshots are elided. Concrete tool routes,
+credentials, HTTP clients and MCP connections remain host/process state and
+are never persisted as model context. When a deferred-tool search closes the
+current pending tool batch, its observed result and the resulting next
+model-context snapshot commit atomically. Clone/fork/reopen therefore follow
+the same context history as the conversation rather than reconstructing it
+from today's filesystem or tool configuration.
+
+Save a complete assistant message containing tool calls durably before
 executing those calls. The same atomic assistant entry retains the semantic
 activity metadata resolved from that model request's frozen tool catalog, so
 later transcript replay does not reinterpret an old call through a different
@@ -164,8 +181,12 @@ conversation or clutter the normal Session list.
 ## Context, tools and trust
 
 Project instructions, the current request and useful Session history form a
-bounded model input. Raw history and the model-context view are distinct;
-context changes must leave the recorded conversation inspectable. Keep tool
+bounded model input. Raw history, model-visible configuration and the
+model-context message projection are distinct. Changes to instructions or the
+declared tool loadout are durable Session facts at request boundaries; provider
+adapters may encode that timeline efficiently, but cannot make it depend on
+volatile provider cache state. Context changes must leave the recorded
+conversation inspectable. Keep tool
 calls and results intelligible together. If a request is too large, show an
 actionable capacity error without hiding or dropping history. Daily use also
 needs an explicit, recoverable way to reduce model context. A summary must
@@ -341,17 +362,24 @@ reported as incomplete rather than silently replayed. A valid provider retry
 delay takes precedence over local backoff, up to a bounded automatic wait;
 longer requested waits are surfaced as errors rather than held open.
 
-The TUI is shell-like by default: completed conversation content becomes
-native terminal scrollback, while Ion owns only the mutable live interaction
-region needed for the current prompt, progress and transient notices. Ordinary
-chat must not require a permanent fullscreen viewport. A resumed or switched
-Session publishes only a bounded recent semantic tail into fresh native
-scrollback; earlier durable history remains inspectable rather than flooding
-the terminal. The mutable live band may grow for active work but returns to the
-smallest safe size after a settled-history publication or temporary fullscreen
-reset. Fullscreen or alternate-screen rendering is reserved for temporary
-views that benefit from owning the screen, such as full detail, search and
-pickers, and must return to the inline shell without corrupting scrollback.
+The TUI is shell-like and inline by default: completed conversation content
+becomes native terminal scrollback, while Ion owns only the mutable live
+interaction region needed for the current prompt, progress and transient
+notices. A resumed or switched Session publishes only a bounded recent
+semantic tail into fresh native scrollback; earlier durable history remains
+inspectable rather than flooding the terminal. The mutable live band may grow
+for active work but returns to the smallest safe size after settled history is
+published.
+
+Persistent fullscreen is an alternate renderer policy over the same
+`TranscriptProjection`, not a second conversation/runtime model. It owns the
+transcript viewport and scroll position while active, keeps the composer/status
+region stable and preserves a scrolled-up viewport as new rows stream.
+`--tui-mode inline` remains the default; `--tui-mode fullscreen` and the
+in-session `/tui` command select the alternate policy. Pickers and full tool
+detail may use alternate-screen modal views from either policy. Switching
+policies, resizing, normal exit and panic restoration must not corrupt native
+terminal state or alter Session/Turn semantics.
 
 Default transcript presentation is for a human, not a dump of the internal
 agent protocol. Tool activity may be summarized semantically in the normal
