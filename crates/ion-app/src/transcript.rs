@@ -71,7 +71,7 @@ pub fn render(view: &SessionView) -> String {
             SessionEntry::ProviderReplayRebased { .. } => {
                 let _ = writeln!(text, "\nProvider reasoning context reset");
             }
-            SessionEntry::ModelSelected { .. } => {}
+            SessionEntry::ModelContextChanged { .. } | SessionEntry::ModelSelected { .. } => {}
         }
     }
     text.chars()
@@ -179,6 +179,7 @@ mod tests {
             unfinished_turn: None,
             last_end: None,
             last_model: None,
+            last_context: None,
             compacted_through: None,
             last_usage: None,
         };
