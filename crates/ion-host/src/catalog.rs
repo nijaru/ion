@@ -41,6 +41,13 @@ pub struct PromptCachePricing {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PromptCacheRefresh {
+    None,
+    /// Replay the exact last request with a one-token output ceiling.
+    ReplayOneToken,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptCacheCapabilities {
     /// Whether this route is expected to report cache read/write token detail.
     pub usage_details: bool,
@@ -48,9 +55,8 @@ pub struct PromptCacheCapabilities {
     /// Whether the adapter must explicitly opt reusable requests into
     /// provider prompt caching.
     pub automatic_request: bool,
-    /// A provider-native no-output prewarm operation is available on this
-    /// exact route/endpoint family.
-    pub native_prewarm: bool,
+    /// Verified refresh mechanism for keeping the active prefix alive.
+    pub refresh: PromptCacheRefresh,
     /// Current direct-route prices used only for economic warming decisions.
     pub pricing: Option<PromptCachePricing>,
 }
@@ -75,7 +81,7 @@ impl ModelCapabilities {
                 usage_details: false,
                 lifetime: PromptCacheLifetime::Unknown,
                 automatic_request: false,
-                native_prewarm: false,
+                refresh: PromptCacheRefresh::None,
                 pricing: None,
             },
             context_mutation: ContextMutationCapabilities {
@@ -92,7 +98,7 @@ const OPENAI_MANAGED_CACHE: ModelCapabilities = ModelCapabilities {
         usage_details: true,
         lifetime: PromptCacheLifetime::ProviderManaged,
         automatic_request: false,
-        native_prewarm: false,
+        refresh: PromptCacheRefresh::None,
         pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
@@ -107,7 +113,7 @@ const OPENROUTER_PROVIDER_CACHE: ModelCapabilities = ModelCapabilities {
         usage_details: true,
         lifetime: PromptCacheLifetime::ProviderManaged,
         automatic_request: false,
-        native_prewarm: false,
+        refresh: PromptCacheRefresh::None,
         pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
@@ -125,7 +131,7 @@ const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
             extended_seconds: Some(3600),
         },
         automatic_request: true,
-        native_prewarm: true,
+        refresh: PromptCacheRefresh::ReplayOneToken,
         pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
@@ -144,7 +150,7 @@ const fn anthropic_inline_context(pricing: PromptCachePricing) -> ModelCapabilit
                 extended_seconds: Some(3600),
             },
             automatic_request: true,
-            native_prewarm: true,
+            refresh: PromptCacheRefresh::ReplayOneToken,
             pricing: Some(pricing),
         },
         context_mutation: ContextMutationCapabilities {
