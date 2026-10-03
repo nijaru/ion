@@ -940,6 +940,7 @@ mod tests {
                 description: "read".into(),
                 input_schema: json!({"type":"object"}),
             }],
+            context_timeline: None,
             controls: GenerationControls {
                 max_output_tokens: 1024,
                 temperature: None,
