@@ -11,8 +11,8 @@ use std::{
 
 use crate::tool_set::ToolActivity;
 use ion_ai::{
-    Content, IncompleteReason, Message, ModelRef, ResponseTermination, Role, ToolCall, ToolResult,
-    ToolSpec, Usage,
+    Content, IncompleteReason, Message, ModelContextChange, ModelContextState, ModelContextTimeline,
+    ModelRef, ResponseTermination, Role, ToolCall, ToolResult, ToolSpec, Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
@@ -664,6 +664,60 @@ impl Session {
             .clone())
     }
 
+    /// Return a full provider-neutral context timeline only while the raw
+    /// message projection is still byte-for-byte comparable to Session history.
+    /// Compaction or a replay epoch change deliberately falls back to the
+    /// latest leading context instead of guessing at provider prefix semantics.
+    pub(crate) fn context_timeline_for(
+        &self,
+        model: &ModelRef,
+        current: &ModelContextSnapshot,
+    ) -> Result<Option<ModelContextTimeline>, SessionError> {
+        let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store.state.compaction.is_some()
+            || store.state.replay_epoch_start != 0
+            || store.state.last_model.as_ref() != Some(model)
+        {
+            return Ok(None);
+        }
+
+        let mut message_count = 0usize;
+        let mut initial = None;
+        let mut changes = Vec::new();
+        let mut last = None;
+        for entry in read_entries(&store.connection)? {
+            match entry {
+                SessionEntry::ModelContextChanged { context, .. } => {
+                    let state = model_context_state(&context);
+                    if initial.is_none() {
+                        initial = Some(state.clone());
+                    } else if last.as_ref() != Some(&state) {
+                        changes.push(ModelContextChange {
+                            after_message: message_count,
+                            context: state.clone(),
+                        });
+                    }
+                    last = Some(state);
+                }
+                other => {
+                    if message_from_entry(&other).is_some() {
+                        message_count = message_count.saturating_add(1);
+                    }
+                }
+            }
+        }
+
+        let current = model_context_state(current);
+        let initial = initial.unwrap_or_else(|| current.clone());
+        if last.as_ref().is_some_and(|last| last != &current) {
+            changes.push(ModelContextChange {
+                after_message: message_count,
+                context: current.clone(),
+            });
+        }
+        Ok(Some(ModelContextTimeline { initial, changes }))
+    }
+
     /// Project a request for one model without reviving opaque replay from a
     /// previous model epoch. The raw Session keeps every original message.
     pub(crate) fn context_messages_for(
@@ -1222,6 +1276,13 @@ fn validate_tool_activities(
         return Err(SessionError::InvalidHistory);
     }
     Ok(())
+}
+
+fn model_context_state(context: &ModelContextSnapshot) -> ModelContextState {
+    ModelContextState {
+        instructions: Some(context.instructions.clone()),
+        tools: context.tools.clone(),
+    }
 }
 
 fn valid_model_context(context: &ModelContextSnapshot) -> bool {
