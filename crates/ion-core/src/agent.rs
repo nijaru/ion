@@ -2575,7 +2575,7 @@ mod tests {
         assert_eq!(scripts.requests().len(), 2);
         let result = &scripts.requests()[1].messages[2].content[0];
         assert!(
-            matches!(result, Content::ToolResult(result) if result.result["error"] == "unknown tool: not_a_tool")
+            matches!(result, Content::ToolResult(result) if result.result["error"] == "tool was not declared for this request: not_a_tool")
         );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();
