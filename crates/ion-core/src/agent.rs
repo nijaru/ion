@@ -2873,8 +2873,8 @@ mod tests {
             .unwrap();
         let before = session.view().unwrap().entries;
         let scripts = Arc::new(ScriptedModelService::new([]));
-        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)))
-            .with_limits(AgentLimits {
+        let agent =
+            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
                 max_request_bytes: 2_000,
                 ..AgentLimits::default()
             });
