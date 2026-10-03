@@ -654,6 +654,16 @@ impl Session {
         context_projection(&store, store.state.last_model.as_ref())
     }
 
+    pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
+        Ok(self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .state
+            .last_context
+            .clone())
+    }
+
     /// Project a request for one model without reviving opaque replay from a
     /// previous model epoch. The raw Session keeps every original message.
     pub(crate) fn context_messages_for(
