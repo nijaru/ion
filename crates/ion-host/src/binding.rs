@@ -9,11 +9,9 @@ use std::{
 
 use anyhow::{Context, Result, ensure};
 use ion_ai::ModelRef;
-use ion_core::{
-    CodingAgent, CodingSession, CodingToolHost, CodingToolOutput, ForkPoint, LocalTools,
-};
+use ion_core::{CodingAgent, CodingSession, CodingToolHost, CodingToolOutput, ForkPoint};
 
-use crate::{Host, Resources, Selection, SessionCatalog};
+use crate::{Host, LocalTools, Resources, Selection, SessionCatalog};
 use tokio_util::sync::CancellationToken;
 
 pub struct SessionBinding {
