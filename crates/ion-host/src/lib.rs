@@ -7,6 +7,7 @@ pub mod catalog;
 mod credentials;
 pub mod image_input;
 pub mod mcp;
+mod local_tools;
 mod model_http;
 pub mod model_setup;
 pub mod project_instructions;
@@ -19,11 +20,12 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{AgentLimits, CodingAgent, CodingToolHost, LocalTools, ToolSet};
+use ion_core::{AgentLimits, CodingAgent, CodingToolHost, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
 pub use credentials::{CredentialResolutionError, CredentialResolver};
+pub use local_tools::LocalTools;
 pub use mcp::{McpConfig, McpHttpServer, McpServer, McpStartup, McpStdioServer, McpTools};
 pub use model_http::{HttpModelService, HttpWire};
 pub use model_setup::{ModelChoice, ModelStore, SavedSelection, Selection, Wire};
