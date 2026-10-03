@@ -224,7 +224,12 @@ impl Agent {
     }
 
     fn request_footprint(request: &ModelRequest) -> Result<(usize, u64), serde_json::Error> {
-        let bytes = serde_json::to_vec(request)?.len();
+        // The timeline is an adapter optimization input. Unsupported adapters
+        // send only the latest instructions/tools, so do not double-count full
+        // historical snapshots in the provider-neutral request estimate.
+        let mut encoded = request.clone();
+        encoded.context_timeline = None;
+        let bytes = serde_json::to_vec(&encoded)?.len();
         let (encoded_images, image_count) = request
             .messages
             .iter()
@@ -584,12 +589,16 @@ impl Agent {
                         .map_or(&[], |context| context.tools.as_slice()),
                 );
                 let declared_tools = tool_catalog.declared_specs();
+                let context = ModelContextSnapshot {
+                    instructions: instructions.clone(),
+                    tools: declared_tools.clone(),
+                };
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages_for(&model)?,
                     tools: declared_tools.clone(),
-                    context_timeline: None,
+                    context_timeline: session.context_timeline_for(&model, &context)?,
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
                         temperature: None,
@@ -626,13 +635,7 @@ impl Agent {
                     return Err(AgentError::ContextTooLarge);
                 };
                 request.controls.max_output_tokens = output_budget;
-                session.record_model_context(
-                    turn,
-                    ModelContextSnapshot {
-                        instructions: instructions.clone(),
-                        tools: declared_tools,
-                    },
-                )?;
+                session.record_model_context(turn, context)?;
                 let mut emitted_text = false;
                 let generated = generate_with_retry(&self.model, request, stop, &mut |event| {
                     if matches!(event, AgentEvent::TextDelta(_)) {
