@@ -2509,6 +2509,86 @@ mod tests {
     }
 
     #[test]
+    fn clone_and_fork_follow_model_context_history() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let model = ModelRef {
+            provider: "test".into(),
+            model: "test".into(),
+        };
+        let context = |instructions: &str| ModelContextSnapshot {
+            instructions: instructions.into(),
+            tools: vec![ToolSpec {
+                name: "read".into(),
+                description: "Read".into(),
+                input_schema: serde_json::json!({"type":"object"}),
+            }],
+        };
+
+        let (first, _) = session.begin_turn("first".into(), model.clone()).unwrap();
+        session
+            .record_model_context(first, context("first context"))
+            .unwrap();
+        session
+            .record_assistant(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+
+        let (second, _) = session.begin_turn("second".into(), model).unwrap();
+        session
+            .record_model_context(second, context("second context"))
+            .unwrap();
+        session
+            .record_assistant(
+                second,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("second done".into())],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+
+        let clone = session.clone_to(root.join("clone-context.sqlite")).unwrap();
+        assert_eq!(
+            clone.model_context().unwrap().unwrap().instructions,
+            "second context"
+        );
+
+        let before = session
+            .fork_to(root.join("before-context.sqlite"), ForkPoint::BeforeTurn(second))
+            .unwrap();
+        assert_eq!(
+            before.model_context().unwrap().unwrap().instructions,
+            "first context"
+        );
+
+        let after = session
+            .fork_to(root.join("after-context.sqlite"), ForkPoint::AfterTurn(second))
+            .unwrap();
+        assert_eq!(
+            after.model_context().unwrap().unwrap().instructions,
+            "second context"
+        );
+
+        drop(after);
+        drop(before);
+        drop(clone);
+        drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn cloned_session_preserves_context_but_diverges_independently() {
         let (root, path) = fixture();
         let clone_path = root.join("clone.sqlite");
