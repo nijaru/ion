@@ -29,8 +29,6 @@ thiserror.workspace = true
 tokio.workspace = true
 tokio-util.workspace = true
 url = "2.5.8"
-
-[dev-dependencies]
 uuid = { version = "1.24.1", features = ["v7"] }
 
 [lints]
