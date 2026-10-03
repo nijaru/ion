@@ -19,7 +19,9 @@ pub use image_input::{
 };
 pub use message::{Message, ProviderReplay, Role};
 pub use model::ModelRef;
-pub use request::{ModelContextChange, ModelContextState, ModelContextTimeline, ModelRequest};
+pub use request::{
+    ModelContextChange, ModelContextState, ModelContextTimeline, ModelRequest, PromptCacheIntent,
+};
 pub use response::{IncompleteReason, ModelResponse, ModelStreamEvent, ResponseTermination};
 pub use scripted::{Script, ScriptedModelService};
 pub use service::{BoxFuture, ModelService, ModelStream};
