@@ -291,10 +291,7 @@ pub(super) fn anthropic_body_for_route(
         ));
     }
 
-    let context_plan = anthropic_context_plan(
-        request,
-        native_api && inline_tools_supported,
-    )?;
+    let context_plan = anthropic_context_plan(request, native_api && inline_tools_supported)?;
     let messages = wire_messages_with_anthropic_context(
         request,
         HttpWire::AnthropicMessages,
