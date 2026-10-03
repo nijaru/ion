@@ -830,6 +830,7 @@ impl Session {
                 SessionEntry::ModelSelected { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
+                | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. }
                 | SessionEntry::TurnEnded { .. } => false,
             });
