@@ -101,6 +101,32 @@ where
     }
 }
 
+pub(crate) async fn refresh_prompt_cache(
+    model: &Arc<dyn ModelService>,
+    mut request: ModelRequest,
+    stop: &CancellationToken,
+) -> Option<ion_ai::Usage> {
+    request.controls.max_output_tokens = 1;
+    let stream = tokio::select! {
+        result = model.stream(request) => result.ok()?,
+        () = stop.cancelled() => return None,
+    };
+    tokio::pin!(stream);
+    let mut usage = None;
+    loop {
+        let event = tokio::select! {
+            event = stream.next() => event,
+            () = stop.cancelled() => return None,
+        };
+        match event {
+            Some(Ok(ModelStreamEvent::Usage(current))) => usage = Some(current),
+            Some(Ok(ModelStreamEvent::Completed(response))) => return Some(response.usage),
+            Some(Ok(_)) => {}
+            Some(Err(_)) | None => return None,
+        }
+    }
+}
+
 fn retryable_provider_error(error: &ProviderError) -> bool {
     matches!(
         error.kind,
