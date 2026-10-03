@@ -11,12 +11,12 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    generation::generate_with_retry,
+    generation::{generate_with_retry, refresh_prompt_cache},
     session::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
         valid_user_message,
     },
-    tool_set::{ToolActivity, ToolHost, ToolOutput, ToolSet},
+    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolHost, ToolOutput, ToolSet},
 };
 
 fn user_text(prompt: String) -> Message {
@@ -142,9 +142,13 @@ pub struct PromptCacheWarmingPolicy {
 
 impl PromptCacheWarmingPolicy {
     fn cached_prefix_tokens(self, usage: ion_ai::Usage) -> Option<u64> {
+        if usage.cache_read_input_tokens.is_none() && usage.cache_write_input_tokens.is_none() {
+            return None;
+        }
         let tokens = usage
-            .cache_read_input_tokens?
-            .checked_add(usage.cache_write_input_tokens?)?;
+            .cache_read_input_tokens
+            .unwrap_or(0)
+            .checked_add(usage.cache_write_input_tokens.unwrap_or(0))?;
         (tokens > 0).then_some(tokens)
     }
 
@@ -173,6 +177,44 @@ impl PromptCacheWarmingPolicy {
         let ninety_percent = self.lifetime_seconds.saturating_mul(9) / 10;
         let ten_second_margin = self.lifetime_seconds.saturating_sub(10);
         std::time::Duration::from_secs(ninety_percent.min(ten_second_margin))
+    }
+}
+
+const ACTIVE_CACHE_WARMING_LIMIT: std::time::Duration = std::time::Duration::from_secs(60 * 60);
+
+struct PromptCacheWarmer {
+    request: ModelRequest,
+    policy: PromptCacheWarmingPolicy,
+    next_refresh: tokio::time::Instant,
+    stop_at: tokio::time::Instant,
+}
+
+impl PromptCacheWarmer {
+    fn new(
+        policy: PromptCacheWarmingPolicy,
+        request: ModelRequest,
+        usage: ion_ai::Usage,
+        request_started: tokio::time::Instant,
+    ) -> Option<Self> {
+        if !policy.should_warm(usage) {
+            return None;
+        }
+        let next_refresh = request_started + policy.refresh_after();
+        let stop_at = request_started + ACTIVE_CACHE_WARMING_LIMIT;
+        (next_refresh < stop_at).then_some(Self {
+            request,
+            policy,
+            next_refresh,
+            stop_at,
+        })
+    }
+
+    fn reschedule(&mut self, usage: ion_ai::Usage, refresh_started: tokio::time::Instant) -> bool {
+        if !self.policy.should_warm(usage) {
+            return false;
+        }
+        self.next_refresh = refresh_started + self.policy.refresh_after();
+        self.next_refresh < self.stop_at
     }
 }
 
@@ -223,6 +265,61 @@ impl Agent {
 
     pub fn tool_catalog(&self) -> crate::tool_set::ToolCatalog {
         self.tools.snapshot()
+    }
+
+    async fn execute_tool_with_cache_warming(
+        &self,
+        session: &Session,
+        turn: u64,
+        catalog: &ToolCatalog,
+        call: &ion_ai::ToolCall,
+        stop: &CancellationToken,
+        warmer: &mut Option<PromptCacheWarmer>,
+    ) -> Result<ToolExecution, AgentError> {
+        let tool = catalog.execute_model_call(call, stop.clone());
+        tokio::pin!(tool);
+        loop {
+            let Some(state) = warmer.as_ref() else {
+                return tokio::select! {
+                    output = &mut tool => Ok(output),
+                    () = stop.cancelled() => Err(AgentError::Cancelled),
+                };
+            };
+            if state.next_refresh >= state.stop_at {
+                *warmer = None;
+                continue;
+            }
+            let deadline = state.next_refresh;
+            let request = state.request.clone();
+            let refresh = async {
+                tokio::time::sleep_until(deadline).await;
+                let started = tokio::time::Instant::now();
+                let usage = refresh_prompt_cache(&self.model, request, stop).await;
+                (started, usage)
+            };
+            tokio::pin!(refresh);
+            tokio::select! {
+                output = &mut tool => return Ok(output),
+                refreshed = &mut refresh => {
+                    let (started, Some(usage)) = refreshed else {
+                        *warmer = None;
+                        continue;
+                    };
+                    // Cache warming is an optimization. A failure to publish
+                    // its accounting fact must not interrupt an in-flight
+                    // workspace effect; the next correctness-critical Session
+                    // write will still surface storage failure.
+                    let _ = session.record_cache_warm(turn, usage);
+                    let keep_warming = warmer
+                        .as_mut()
+                        .is_some_and(|state| state.reschedule(usage, started));
+                    if !keep_warming {
+                        *warmer = None;
+                    }
+                }
+                () = stop.cancelled() => return Err(AgentError::Cancelled),
+            }
+        }
     }
 
     /// Summarize a settled prefix while retaining the complete raw Session.
@@ -624,7 +721,7 @@ impl Agent {
                 inbox.record_pending(session, turn, self.limits)?;
             }
             let mut recovered_overflow = false;
-            let (response, tool_catalog) = loop {
+            let (response, tool_catalog, warm_request, warm_request_started) = loop {
                 for diagnostic in self.tools.refresh(stop.clone()).await {
                     observe(AgentEvent::ToolCatalogWarning(diagnostic));
                 }
@@ -687,7 +784,8 @@ impl Agent {
                 request.controls.max_output_tokens = output_budget;
                 session.record_model_context(turn, context)?;
                 let mut emitted_text = false;
-                let generated = generate_with_retry(&self.model, request, stop, &mut |event| {
+                let request_started = tokio::time::Instant::now();
+                let generated = generate_with_retry(&self.model, request.clone(), stop, &mut |event| {
                     if matches!(event, AgentEvent::TextDelta(_)) {
                         emitted_text = true;
                     }
@@ -763,7 +861,7 @@ impl Agent {
                     }
                     continue;
                 }
-                break (generated?, tool_catalog);
+                break (generated?, tool_catalog, request, request_started);
             };
             let truncated_calls = matches!(
                 response.termination,
@@ -891,6 +989,18 @@ impl Agent {
                 return Ok(final_text);
             }
             let call_count = calls.len();
+            let mut cache_warmer = if call_count == 0 {
+                None
+            } else {
+                self.limits.prompt_cache_warming.and_then(|policy| {
+                    PromptCacheWarmer::new(
+                        policy,
+                        warm_request,
+                        response.usage,
+                        warm_request_started,
+                    )
+                })
+            };
             let mut activate_tools = BTreeSet::new();
             for (index, call) in calls.into_iter().enumerate() {
                 if stop.is_cancelled() {
@@ -913,7 +1023,16 @@ impl Agent {
                         Vec::new(),
                     )
                 } else {
-                    let execution = tool_catalog.execute_model_call(&call, stop.clone()).await;
+                    let execution = self
+                        .execute_tool_with_cache_warming(
+                            session,
+                            turn,
+                            &tool_catalog,
+                            &call,
+                            stop,
+                            &mut cache_warmer,
+                        )
+                        .await?;
                     (execution.output, execution.activate)
                 };
                 activate_tools.extend(activate);
