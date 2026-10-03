@@ -89,10 +89,19 @@ impl ToolActivity {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolExposure {
+    /// Declared directly to the model for this request.
+    Direct,
+    /// Callable by the harness but omitted from the default model loadout.
+    Deferred,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ToolDefinition {
     pub spec: ToolSpec,
     pub presentation: ToolPresentation,
+    pub exposure: ToolExposure,
 }
 
 impl ToolDefinition {
@@ -100,7 +109,13 @@ impl ToolDefinition {
         Self {
             spec,
             presentation: ToolPresentation::external(),
+            exposure: ToolExposure::Direct,
         }
+    }
+
+    pub fn deferred(mut self) -> Self {
+        self.exposure = ToolExposure::Deferred;
+        self
     }
 }
 
@@ -190,11 +205,27 @@ pub struct ToolCatalog {
 }
 
 impl ToolCatalog {
+    /// Every callable definition in this frozen catalog, including deferred
+    /// capabilities that are not declared directly to the model.
     pub fn specs(&self) -> Vec<ToolSpec> {
         self.entries
             .iter()
             .map(|entry| entry.definition.spec.clone())
             .collect()
+    }
+
+    /// Provider-facing loadout for this request.
+    pub fn declared_specs(&self) -> Vec<ToolSpec> {
+        self.entries
+            .iter()
+            .filter(|entry| entry.definition.exposure == ToolExposure::Direct)
+            .map(|entry| entry.definition.spec.clone())
+            .collect()
+    }
+
+    pub fn is_declared(&self, name: &str) -> bool {
+        self.definition(name)
+            .is_some_and(|definition| definition.exposure == ToolExposure::Direct)
     }
 
     pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
@@ -211,6 +242,8 @@ impl ToolCatalog {
         )
     }
 
+    /// Execute any callable capability in this frozen catalog. Harness-side
+    /// discovery/orchestration may use this for deferred tools.
     pub fn execute<'a>(
         &'a self,
         call: &'a ToolCall,
@@ -230,6 +263,27 @@ impl ToolCatalog {
                 }
             }),
         }
+    }
+
+    /// Execute a model-issued call only when its definition was part of this
+    /// request's declared loadout.
+    pub fn execute_declared<'a>(
+        &'a self,
+        call: &'a ToolCall,
+        stop: CancellationToken,
+    ) -> BoxFuture<'a, ToolOutput> {
+        if self.is_declared(&call.name) {
+            return self.execute(call, stop);
+        }
+        Box::pin(async move {
+            ToolOutput {
+                value: serde_json::json!({
+                    "error": format!("tool was not declared for this request: {}", call.name)
+                }),
+                images: Vec::new(),
+                is_error: true,
+            }
+        })
     }
 }
 
@@ -360,6 +414,76 @@ mod tests {
                 .await
                 .value,
             json!("builtin")
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_capability_is_callable_but_not_model_declared() {
+        struct Mixed;
+
+        impl ToolHost for Mixed {
+            fn definitions(&self) -> Vec<ToolDefinition> {
+                vec![
+                    ToolDefinition::external(ToolSpec {
+                        name: "direct".into(),
+                        description: "direct".into(),
+                        input_schema: json!({"type":"object"}),
+                    }),
+                    ToolDefinition::external(ToolSpec {
+                        name: "deferred".into(),
+                        description: "deferred".into(),
+                        input_schema: json!({"type":"object"}),
+                    })
+                    .deferred(),
+                ]
+            }
+
+            fn execute<'a>(
+                &'a self,
+                call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async move {
+                    ToolOutput {
+                        value: json!(call.name),
+                        images: Vec::new(),
+                        is_error: false,
+                    }
+                })
+            }
+        }
+
+        let catalog = ToolSet::new([Arc::new(Mixed) as Arc<dyn ToolHost>]).snapshot();
+        assert_eq!(catalog.specs().len(), 2);
+        assert_eq!(
+            catalog
+                .declared_specs()
+                .iter()
+                .map(|spec| spec.name.as_str())
+                .collect::<Vec<_>>(),
+            ["direct"]
+        );
+
+        let call = ToolCall {
+            id: "1".into(),
+            name: "deferred".into(),
+            arguments: json!({}),
+            raw_arguments: None,
+        };
+        assert_eq!(
+            catalog
+                .execute(&call, CancellationToken::new())
+                .await
+                .value,
+            json!("deferred")
+        );
+        let model_result = catalog
+            .execute_declared(&call, CancellationToken::new())
+            .await;
+        assert!(model_result.is_error);
+        assert_eq!(
+            model_result.value["error"],
+            "tool was not declared for this request: deferred"
         );
     }
 
