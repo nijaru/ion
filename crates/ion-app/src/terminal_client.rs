@@ -2469,6 +2469,7 @@ mod tests {
             unfinished_turn: Some(2),
             last_end: None,
             last_model: None,
+            last_context: None,
             compacted_through: None,
             last_usage: None,
         };
