@@ -975,7 +975,10 @@ fn valid_openrouter_details(value: &Value) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_ai::{GenerationControls, ModelRef, ToolResult, ToolSpec};
+    use ion_ai::{
+        GenerationControls, ModelContextChange, ModelContextState, ModelContextTimeline, ModelRef,
+        ToolResult, ToolSpec,
+    };
     use tokio::{
         io::{AsyncReadExt, AsyncWriteExt},
         net::TcpListener,
@@ -1032,6 +1035,234 @@ mod tests {
                 parallel_tool_calls: false,
             },
         }
+    }
+
+    #[test]
+    fn anthropic_inline_tool_deltas_keep_the_initial_top_level_prefix() {
+        let search = ToolSpec {
+            name: "tool_search".into(),
+            description: "search available tools".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let special = ToolSpec {
+            name: "special_lookup".into(),
+            description: "specialized lookup".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let mut request = request();
+        request.model.provider = "anthropic".into();
+        request.model.model = "claude-opus-5-5".into();
+        request.tools = vec![special.clone()];
+        request.messages = vec![
+            Message::user_input("find a tool".into(), []),
+            Message {
+                role: Role::Assistant,
+                content: vec![Content::ToolCall(ToolCall {
+                    id: "search".into(),
+                    name: "tool_search".into(),
+                    arguments: json!({"query":"special"}),
+                    raw_arguments: None,
+                })],
+                provider_replay: None,
+            },
+            Message {
+                role: Role::Tool,
+                content: vec![Content::ToolResult(ToolResult {
+                    call_id: "search".into(),
+                    name: "tool_search".into(),
+                    result: json!({"loaded":["special_lookup"]}),
+                    images: Vec::new(),
+                    is_error: false,
+                })],
+                provider_replay: None,
+            },
+        ];
+        request.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: request.instructions.clone(),
+                tools: vec![search.clone()],
+            },
+            changes: vec![ModelContextChange {
+                after_message: 3,
+                context: ModelContextState {
+                    instructions: request.instructions.clone(),
+                    tools: vec![special.clone()],
+                },
+            }],
+        });
+
+        let body = anthropic_body_for_route(&request, true, true).unwrap();
+        assert_eq!(body["tools"], json!([{
+            "name":"tool_search",
+            "description":"search available tools",
+            "input_schema":{"type":"object"}
+        }]));
+        let system = body["messages"].as_array().unwrap().last().unwrap();
+        assert_eq!(system["role"], "system");
+        assert_eq!(
+            system["content"],
+            json!([
+                {
+                    "type":"tool_removal",
+                    "tool":{"type":"tool_reference","name":"tool_search"}
+                },
+                {
+                    "type":"tool_addition",
+                    "tool":{
+                        "type":"tool_definition",
+                        "definition":{
+                            "name":"special_lookup",
+                            "description":"specialized lookup",
+                            "input_schema":{"type":"object"}
+                        }
+                    }
+                }
+            ])
+        );
+        assert!(anthropic_body_uses_inline_tools(&body));
+    }
+
+    #[test]
+    fn anthropic_inline_tool_definition_replaces_same_name_schema() {
+        let old = ToolSpec {
+            name: "read".into(),
+            description: "old".into(),
+            input_schema: json!({"type":"object","properties":{"path":{"type":"string"}}}),
+        };
+        let new = ToolSpec {
+            name: "read".into(),
+            description: "new".into(),
+            input_schema: json!({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer"}}}),
+        };
+        let mut request = request();
+        request.model.provider = "anthropic".into();
+        request.model.model = "claude-opus-5-5".into();
+        request.tools = vec![new.clone()];
+        request.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: request.instructions.clone(),
+                tools: vec![old],
+            },
+            changes: vec![ModelContextChange {
+                after_message: 1,
+                context: ModelContextState {
+                    instructions: request.instructions.clone(),
+                    tools: vec![new],
+                },
+            }],
+        });
+        let body = anthropic_body_for_route(&request, true, true).unwrap();
+        let blocks = body["messages"][1]["content"].as_array().unwrap();
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0]["type"], "tool_addition");
+        assert_eq!(blocks[0]["tool"]["definition"]["description"], "new");
+        assert_eq!(blocks[0]["tool"]["definition"]["name"], "read");
+    }
+
+    #[test]
+    fn anthropic_instruction_change_falls_back_to_latest_leading_context() {
+        let mut request = request();
+        request.model.provider = "anthropic".into();
+        request.model.model = "claude-opus-5-5".into();
+        let current = request.tools.clone();
+        request.instructions = Some("new instructions".into());
+        request.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: Some("old instructions".into()),
+                tools: current.clone(),
+            },
+            changes: vec![ModelContextChange {
+                after_message: 1,
+                context: ModelContextState {
+                    instructions: request.instructions.clone(),
+                    tools: current,
+                },
+            }],
+        });
+        let body = anthropic_body_for_route(&request, true, true).unwrap();
+        assert_eq!(body["system"], "new instructions");
+        assert!(!anthropic_body_uses_inline_tools(&body));
+        assert!(body["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|message| message["role"] != "system"));
+    }
+
+    #[test]
+    fn anthropic_tool_delta_preserves_signed_replay_prefix() {
+        let old_tool = ToolSpec {
+            name: "read".into(),
+            description: "read".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let new_tool = ToolSpec {
+            name: "write".into(),
+            description: "write".into(),
+            input_schema: json!({"type":"object"}),
+        };
+        let mut initial = request();
+        initial.model.provider = "anthropic".into();
+        initial.model.model = "claude-opus-5-5".into();
+        initial.tools = vec![old_tool.clone()];
+        let initial_body = anthropic_body(&initial, true).unwrap();
+        let prefix = anthropic_body_prefix_digest(&initial_body).unwrap();
+
+        let call = ToolCall {
+            id: "tool_1".into(),
+            name: "read".into(),
+            arguments: json!({"path":"x"}),
+            raw_arguments: None,
+        };
+        let replay = ProviderReplay::new(
+            "anthropic",
+            ANTHROPIC_CONTENT_REPLAY,
+            json!({
+                "blocks":[
+                    {"type":"thinking","thinking":"","signature":"signature"},
+                    {"type":"tool_use","id":"tool_1","name":"read","input":{"path":"x"}}
+                ],
+                "prefix_sha256":prefix
+            }),
+        )
+        .with_prefix_binding(true);
+
+        let mut continuation = initial.clone();
+        continuation.messages.push(Message {
+            role: Role::Assistant,
+            content: vec![Content::ToolCall(call)],
+            provider_replay: Some(replay),
+        });
+        continuation.messages.push(Message {
+            role: Role::Tool,
+            content: vec![Content::ToolResult(ToolResult {
+                call_id: "tool_1".into(),
+                name: "read".into(),
+                result: json!({"text":"ok"}),
+                images: Vec::new(),
+                is_error: false,
+            })],
+            provider_replay: None,
+        });
+        continuation.tools = vec![new_tool.clone()];
+        continuation.context_timeline = Some(ModelContextTimeline {
+            initial: ModelContextState {
+                instructions: initial.instructions.clone(),
+                tools: vec![old_tool],
+            },
+            changes: vec![ModelContextChange {
+                after_message: 3,
+                context: ModelContextState {
+                    instructions: continuation.instructions.clone(),
+                    tools: vec![new_tool],
+                },
+            }],
+        });
+
+        let body = anthropic_body_for_route(&continuation, true, true).unwrap();
+        assert_eq!(body["messages"][1]["content"][0]["type"], "thinking");
+        assert_eq!(body["messages"][3]["role"], "system");
+        assert!(anthropic_body_uses_inline_tools(&body));
     }
 
     #[test]
