@@ -2,7 +2,6 @@
 
 mod agent;
 mod generation;
-mod local_tools;
 mod session;
 mod tool_set;
 mod transcript;
@@ -11,7 +10,6 @@ pub use agent::{
     Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
     AgentLimits, SteeringInbox,
 };
-pub use local_tools::LocalTools;
 pub use session::{
     ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
     SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
