@@ -306,6 +306,7 @@ impl Agent {
                     provider_replay: None,
                 }],
                 tools: Vec::new(),
+                context_timeline: None,
                 controls: GenerationControls {
                     max_output_tokens: output_tokens,
                     temperature: None,
@@ -588,6 +589,7 @@ impl Agent {
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages_for(&model)?,
                     tools: declared_tools.clone(),
+                    context_timeline: None,
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
                         temperature: None,
@@ -1256,6 +1258,7 @@ mod tests {
             instructions: None,
             messages: Vec::new(),
             tools: Vec::new(),
+            context_timeline: None,
             controls: GenerationControls {
                 max_output_tokens: 128,
                 temperature: None,
