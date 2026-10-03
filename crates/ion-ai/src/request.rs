@@ -29,6 +29,17 @@ pub struct ModelContextTimeline {
     pub changes: Vec<ModelContextChange>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptCacheIntent {
+    /// Do not add provider-specific opt-in caching controls. A provider may
+    /// still apply its own transparent caching behavior.
+    Default,
+    /// This request belongs to a reusable coding conversation; a provider
+    /// adapter may opt into prompt caching when the resolved route supports it.
+    Reusable,
+}
+
 /// One provider call assembled for the current model step.
 ///
 /// The agent selects instructions, messages, tools and controls before sending
@@ -48,5 +59,6 @@ pub struct ModelRequest {
     /// a second source of conversation truth.
     #[serde(default)]
     pub context_timeline: Option<ModelContextTimeline>,
+    pub prompt_cache: PromptCacheIntent,
     pub controls: GenerationControls,
 }
