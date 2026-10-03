@@ -349,7 +349,7 @@ impl ToolCatalog {
         });
         self.entries
             .iter()
-            .filter(|entry| match entry.route {
+            .filter(|entry| match &entry.route {
                 ToolRoute::Search => search_needed,
                 ToolRoute::Host(_) => {
                     self.declared.contains(&entry.definition.spec.name)
