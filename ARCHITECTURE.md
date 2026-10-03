@@ -186,7 +186,32 @@ model-context message projection are distinct. Changes to instructions or the
 declared tool loadout are durable Session facts at request boundaries; provider
 adapters may encode that timeline efficiently, but cannot make it depend on
 volatile provider cache state. Context changes must leave the recorded
-conversation inspectable. Keep tool
+conversation inspectable.
+
+Prompt caching is a provider optimization, not conversation truth.
+Provider-neutral usage retains total input/output plus optional cache-read and
+cache-write subcounts when the route reports them. Cache lifetime, pricing and
+refresh mechanisms belong to resolved route capabilities, never Session
+correctness. A reusable coding request may opt into caching only on a route
+whose behavior is explicitly supported. On current native Anthropic routes,
+Ion can preserve the initial top-level tool prefix by deriving later
+tool-addition/removal/redefinition messages from durable full context
+snapshots. If the instruction snapshot changes or the historical timeline
+cannot be represented exactly, the adapter falls back to the latest leading
+context rather than inventing replacement semantics.
+
+Active cache warming is allowed only as a best-effort optimization around the
+exact request whose prefix is being protected. The current streaming policy
+may replay that request with a one-token output ceiling while its tool batch is
+still running, only when verified route pricing/lifetime metadata predicts a
+minimum economic benefit. It stops when the batch/context advances and is
+bounded even during long work. Refresh usage is a durable accounting fact but
+is excluded from model context and normal transcript projection. Refresh
+failure cannot change the outcome of the coding Turn or justify replaying a
+workspace effect. Idle warming is a separate policy decision, not implied by
+streaming warming.
+
+Keep tool
 calls and results intelligible together. If a request is too large, show an
 actionable capacity error without hiding or dropping history. Daily use also
 needs an explicit, recoverable way to reduce model context. A summary must
