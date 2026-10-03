@@ -1,5 +1,8 @@
 //! Model-visible tool definitions, semantic presentation, and request-bound routing.
-use std::{collections::HashMap, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    sync::Arc,
+};
 
 use ion_ai::{BoxFuture, ToolCall, ToolSpec};
 use serde::{Deserialize, Serialize};
@@ -166,9 +169,15 @@ impl ToolSet {
         diagnostics
     }
 
-    /// Freeze one coherent model-request view. The returned catalog owns the
-    /// exact host route selected for every advertised definition.
+    /// Freeze one coherent executable catalog using only directly exposed tools
+    /// in the model loadout.
     pub fn snapshot(&self) -> ToolCatalog {
+        self.snapshot_with_previous(&[])
+    }
+
+    /// Freeze one coherent executable catalog and restore previously declared
+    /// deferred tools only when their provider-neutral definition is unchanged.
+    pub fn snapshot_with_previous(&self, previous: &[ToolSpec]) -> ToolCatalog {
         let mut entries: Vec<RoutedTool> = Vec::new();
         let mut positions = HashMap::new();
         for host in &self.hosts {
@@ -187,7 +196,25 @@ impl ToolSet {
                 }
             }
         }
-        ToolCatalog { entries, positions }
+        let previous = previous
+            .iter()
+            .map(|spec| (spec.name.as_str(), spec))
+            .collect::<HashMap<_, _>>();
+        let declared = entries
+            .iter()
+            .filter(|entry| {
+                entry.definition.exposure == ToolExposure::Direct
+                    || previous
+                        .get(entry.definition.spec.name.as_str())
+                        .is_some_and(|spec| **spec == entry.definition.spec)
+            })
+            .map(|entry| entry.definition.spec.name.clone())
+            .collect();
+        ToolCatalog {
+            entries,
+            positions,
+            declared,
+        }
     }
 }
 
@@ -202,6 +229,7 @@ struct RoutedTool {
 pub struct ToolCatalog {
     entries: Vec<RoutedTool>,
     positions: HashMap<String, usize>,
+    declared: HashSet<String>,
 }
 
 impl ToolCatalog {
@@ -218,14 +246,13 @@ impl ToolCatalog {
     pub fn declared_specs(&self) -> Vec<ToolSpec> {
         self.entries
             .iter()
-            .filter(|entry| entry.definition.exposure == ToolExposure::Direct)
+            .filter(|entry| self.declared.contains(&entry.definition.spec.name))
             .map(|entry| entry.definition.spec.clone())
             .collect()
     }
 
     pub fn is_declared(&self, name: &str) -> bool {
-        self.definition(name)
-            .is_some_and(|definition| definition.exposure == ToolExposure::Direct)
+        self.declared.contains(name)
     }
 
     pub fn definition(&self, name: &str) -> Option<&ToolDefinition> {
@@ -482,6 +509,61 @@ mod tests {
             model_result.value["error"],
             "tool was not declared for this request: deferred"
         );
+    }
+
+    #[test]
+    fn compatible_deferred_loadout_restores_but_redefinition_does_not() {
+        let tools = ToolSet::new([Arc::new(MixedForRestore) as Arc<dyn ToolHost>]);
+        let initial = tools.snapshot();
+        let deferred = initial
+            .specs()
+            .into_iter()
+            .find(|spec| spec.name == "deferred")
+            .unwrap();
+
+        let restored = tools.snapshot_with_previous(std::slice::from_ref(&deferred));
+        assert!(restored.is_declared("direct"));
+        assert!(restored.is_declared("deferred"));
+
+        let mut changed = deferred;
+        changed.description.push_str(" changed");
+        let incompatible = tools.snapshot_with_previous(&[changed]);
+        assert!(incompatible.is_declared("direct"));
+        assert!(!incompatible.is_declared("deferred"));
+    }
+
+    struct MixedForRestore;
+
+    impl ToolHost for MixedForRestore {
+        fn definitions(&self) -> Vec<ToolDefinition> {
+            vec![
+                ToolDefinition::external(ToolSpec {
+                    name: "direct".into(),
+                    description: "direct".into(),
+                    input_schema: json!({"type":"object"}),
+                }),
+                ToolDefinition::external(ToolSpec {
+                    name: "deferred".into(),
+                    description: "deferred".into(),
+                    input_schema: json!({"type":"object"}),
+                })
+                .deferred(),
+            ]
+        }
+
+        fn execute<'a>(
+            &'a self,
+            call: &'a ToolCall,
+            _stop: CancellationToken,
+        ) -> BoxFuture<'a, ToolOutput> {
+            Box::pin(async move {
+                ToolOutput {
+                    value: json!(call.name),
+                    images: Vec::new(),
+                    is_error: false,
+                }
+            })
+        }
     }
 
     #[test]
