@@ -577,7 +577,7 @@ impl Agent {
                     return Err(AgentError::Cancelled);
                 }
                 let tool_catalog = self.tools.snapshot();
-                let declared_tools = tool_catalog.specs();
+                let declared_tools = tool_catalog.declared_specs();
                 let mut request = ModelRequest {
                     model: model.clone(),
                     instructions: Some(instructions.clone()),
@@ -847,7 +847,7 @@ impl Agent {
                         is_error: true,
                     }
                 } else {
-                    tool_catalog.execute(&call, stop.clone()).await
+                    tool_catalog.execute_declared(&call, stop.clone()).await
                 };
                 if !self.limits.image_input && !output.images.is_empty() {
                     output = ToolOutput {
@@ -990,7 +990,9 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CodingSession, ToolActivityKind, ToolDefinition, ToolPresentation};
+    use crate::{
+        CodingSession, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation,
+    };
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
         ScriptedModelService, ToolCall, ToolSpec, Usage,
@@ -1026,18 +1028,22 @@ mod tests {
                 ToolDefinition {
                     spec: ToolSpec { name: "read".into(), description: "Read UTF-8 text or a supported image (JPEG, PNG, GIF, WebP) from the live working directory. Images are attached to the result. Paths may be relative or absolute. Large text files can be read in byte ranges; use returned next_offset to continue at a UTF-8 boundary. A complete text-file digest is provided when available.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}}}) },
                     presentation: ToolPresentation::argument(ToolActivityKind::Read, "path"),
+                    exposure: ToolExposure::Direct,
                 },
                 ToolDefinition {
                     spec: ToolSpec { name: "edit".into(), description: "Apply one or more disjoint exact text replacements to a UTF-8 file in one write. Each old_text must occur exactly once in the original file; overlapping edits are rejected. Optionally reject changes since base_digest. Operates with the host user's permissions.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","edits"],"properties":{"path":{"type":"string"},"edits":{"type":"array","minItems":1,"items":{"type":"object","additionalProperties":false,"required":["old_text","new_text"],"properties":{"old_text":{"type":"string","minLength":1},"new_text":{"type":"string"}}}},"base_digest":{"type":"string"}}}) },
                     presentation: ToolPresentation::argument(ToolActivityKind::Edit, "path"),
+                    exposure: ToolExposure::Direct,
                 },
                 ToolDefinition {
                     spec: ToolSpec { name: "write".into(), description: "Create or replace a UTF-8 file in the live working directory. Missing parent directories are created.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["path","content"],"properties":{"path":{"type":"string"},"content":{"type":"string"}}}) },
                     presentation: ToolPresentation::argument(ToolActivityKind::Write, "path"),
+                    exposure: ToolExposure::Direct,
                 },
                 ToolDefinition {
                     spec: ToolSpec { name: "exec".into(), description: "Run a Bash command (or POSIX sh when Bash is unavailable) in the live working directory with the host user's permissions; this is not sandboxed. Timeout is optional. Returns direct command exit and the final 64 KiB of each output stream, with omitted byte counts when truncated. For complete truncated captures, stdout_full_path and stderr_full_path name private temporary files containing the full observed streams; inspect them instead of rerunning a command. Cancellation is best effort.".into(), input_schema: serde_json::json!({"type":"object","additionalProperties":false,"required":["command"],"properties":{"command":{"type":"string"},"timeout_ms":{"type":"integer","minimum":1}}}) },
                     presentation: ToolPresentation::argument(ToolActivityKind::Command, "command"),
+                    exposure: ToolExposure::Direct,
                 },
             ]
         }
