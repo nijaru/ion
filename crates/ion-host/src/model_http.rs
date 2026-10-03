@@ -8,9 +8,9 @@ use std::{
 use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, IncompleteReason, Message, ModelRequest, ModelResponse, ModelService,
-    ModelStream, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
-    ResponseTermination, Role, ToolCall, ToolChoice, Usage,
+    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRequest, ModelResponse,
+    ModelService, ModelStream, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay,
+    Reasoning, ResponseTermination, Role, ToolCall, ToolChoice, ToolSpec, Usage,
 };
 use reqwest::{
     Client, Url,
@@ -19,15 +19,15 @@ use reqwest::{
 use serde_json::{Value, json};
 use tokio_util::sync::CancellationToken;
 
-use crate::CredentialResolver;
+use crate::{CredentialResolver, catalog::ModelCapabilities};
 
 mod anthropic;
 mod chat;
 #[cfg(test)]
 use anthropic::anthropic_replay_notices;
 use anthropic::{
-    AnthropicState, anthropic_body, anthropic_body_prefix_digest, managed_anthropic_thinking,
-    validated_anthropic_replay,
+    AnthropicState, anthropic_body, anthropic_body_for_route, anthropic_body_prefix_digest,
+    anthropic_body_uses_inline_tools, managed_anthropic_thinking, validated_anthropic_replay,
 };
 use chat::{ChatState, chat_body};
 
@@ -39,6 +39,7 @@ const OPENROUTER_PLAIN_REASONING_REPLAY: &str = "openrouter_plain_reasoning";
 const OPENROUTER_DETAILS_REPLAY: &str = "openrouter_reasoning_details";
 const ANTHROPIC_CONTENT_REPLAY: &str = "anthropic_content_blocks";
 const ANTHROPIC_BINDING_BETA: &str = "thinking-binding-controls-2026-08-01";
+const ANTHROPIC_INLINE_TOOLS_BETA: &str = "inline-tools-2026-09-15";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HttpWire {
@@ -61,6 +62,7 @@ pub struct HttpModelService {
     endpoint: Url,
     wire: HttpWire,
     credentials: Arc<dyn CredentialResolver>,
+    capabilities: ModelCapabilities,
 }
 
 impl HttpModelService {
@@ -106,6 +108,20 @@ impl HttpModelService {
         wire: HttpWire,
         credentials: Arc<dyn CredentialResolver>,
     ) -> Result<Self, ProviderError> {
+        Self::new_with_capabilities(
+            endpoint,
+            wire,
+            credentials,
+            ModelCapabilities::conservative(),
+        )
+    }
+
+    pub fn new_with_capabilities(
+        endpoint: &str,
+        wire: HttpWire,
+        credentials: Arc<dyn CredentialResolver>,
+        capabilities: ModelCapabilities,
+    ) -> Result<Self, ProviderError> {
         let endpoint = parse_endpoint(endpoint)?;
         let client = Client::builder()
             .redirect(reqwest::redirect::Policy::none())
@@ -118,6 +134,7 @@ impl HttpModelService {
             endpoint,
             wire,
             credentials,
+            capabilities,
         })
     }
 }
@@ -146,14 +163,19 @@ impl ModelService for HttpModelService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             request.controls.validate()?;
+            let native_anthropic =
+                self.wire == HttpWire::AnthropicMessages
+                    && self.endpoint.host_str() == Some("api.anthropic.com");
             let body = if self.wire.is_chat() {
                 chat_body(&request, self.wire)?
             } else {
-                anthropic_body(
+                anthropic_body_for_route(
                     &request,
-                    self.endpoint.host_str() == Some("api.anthropic.com"),
+                    native_anthropic,
+                    self.capabilities.context_mutation.inline_tool_definitions,
                 )?
             };
+            let inline_tools = anthropic_body_uses_inline_tools(&body);
             let anthropic_prefix = (self.wire == HttpWire::AnthropicMessages)
                 .then(|| anthropic_body_prefix_digest(&body))
                 .transpose()?;
@@ -201,10 +223,15 @@ impl ModelService for HttpModelService {
             }
             if self.wire == HttpWire::AnthropicMessages {
                 post = post.header("anthropic-version", "2023-06-01");
-                if self.endpoint.host_str() == Some("api.anthropic.com")
-                    && managed_anthropic_thinking(&request.model.model)
-                {
-                    post = post.header("anthropic-beta", ANTHROPIC_BINDING_BETA);
+                let mut betas = Vec::new();
+                if native_anthropic && managed_anthropic_thinking(&request.model.model) {
+                    betas.push(ANTHROPIC_BINDING_BETA);
+                }
+                if native_anthropic && inline_tools {
+                    betas.push(ANTHROPIC_INLINE_TOOLS_BETA);
+                }
+                if !betas.is_empty() {
+                    post = post.header("anthropic-beta", betas.join(","));
                 }
             }
             let mut response = tokio::time::timeout(PROVIDER_IDLE_TIMEOUT, post.send())
@@ -547,19 +574,45 @@ fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
     {
         return Err(invalid("required tool choice has no tools"));
     }
+    validate_tool_specs(&request.tools)?;
+    if let ToolChoice::Named(name) = &request.controls.tool_choice
+        && !request.tools.iter().any(|tool| &tool.name == name)
+    {
+        return Err(invalid("named tool is not in the loadout"));
+    }
+    if let Some(timeline) = &request.context_timeline {
+        validate_tool_specs(&timeline.initial.tools)?;
+        let mut previous_boundary = 0usize;
+        for change in &timeline.changes {
+            if change.after_message == 0
+                || change.after_message > request.messages.len()
+                || change.after_message < previous_boundary
+            {
+                return Err(invalid("invalid model context timeline boundary"));
+            }
+            previous_boundary = change.after_message;
+            validate_tool_specs(&change.context.tools)?;
+        }
+        let effective = timeline
+            .changes
+            .last()
+            .map_or(&timeline.initial, |change| &change.context);
+        if effective.instructions != request.instructions || effective.tools != request.tools {
+            return Err(invalid("model context timeline does not match effective request context"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_tool_specs(tools: &[ToolSpec]) -> Result<(), ProviderError> {
     let mut names = BTreeSet::new();
-    for tool in &request.tools {
+    for tool in tools {
         if !valid_name(&tool.name)
             || !names.insert(&tool.name)
             || tool.input_schema.get("type").and_then(Value::as_str) != Some("object")
         {
             return Err(invalid("invalid or duplicate tool specification"));
         }
-    }
-    if let ToolChoice::Named(name) = &request.controls.tool_choice
-        && !names.contains(name)
-    {
-        return Err(invalid("named tool is not in the loadout"));
     }
     Ok(())
 }
@@ -572,14 +625,28 @@ fn valid_name(name: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
+#[derive(Debug, Clone)]
+struct AnthropicTimelinePlan {
+    initial: ModelContextState,
+    changes: BTreeMap<usize, Vec<Value>>,
+}
+
 /// Keep provider call IDs alongside their results. Some reasoning signatures
 /// bind to the original function-call identity during continuation.
 fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, ProviderError> {
+    wire_messages_with_anthropic_context(request, wire, None)
+}
+
+fn wire_messages_with_anthropic_context(
+    request: &ModelRequest,
+    wire: HttpWire,
+    context_plan: Option<&AnthropicTimelinePlan>,
+) -> Result<Vec<Value>, ProviderError> {
     let anthropic = !wire.is_chat();
     let mut messages = Vec::new();
     let mut pending = BTreeMap::<String, String>::new();
     let mut tool_images = Vec::new();
-    for message in &request.messages {
+    for (message_index, message) in request.messages.iter().enumerate() {
         let reasoning_content = match &message.provider_replay {
             Some(_) if message.role != Role::Assistant => {
                 return Err(invalid("provider replay requires an assistant message"));
@@ -720,8 +787,13 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
         }
         if anthropic {
             if let Some(replay) = &message.provider_replay {
-                blocks =
-                    validated_anthropic_replay(&replay.data, &message.content, request, &messages)?;
+                blocks = validated_anthropic_replay(
+                    &replay.data,
+                    &message.content,
+                    request,
+                    &messages,
+                    context_plan.map(|plan| &plan.initial),
+                )?;
             }
             if blocks.is_empty() {
                 return Err(invalid("empty Anthropic message"));
@@ -741,6 +813,12 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
                     .extend(blocks);
             } else {
                 messages.push(json!({"role":role,"content":blocks}));
+            }
+            if let Some(change_blocks) = context_plan
+                .and_then(|plan| plan.changes.get(&(message_index + 1)))
+                .filter(|blocks| !blocks.is_empty())
+            {
+                messages.push(json!({"role":"system","content":change_blocks}));
             }
         } else if message.role == Role::Tool {
             messages.extend(results);
@@ -789,7 +867,8 @@ fn wire_messages(request: &ModelRequest, wire: HttpWire) -> Result<Vec<Value>, P
         return Err(invalid("unanswered tool calls"));
     }
     if anthropic
-        && (messages[0]["role"] != "user" || messages.last().is_some_and(|m| m["role"] != "user"))
+        && (messages[0]["role"] != "user"
+            || messages.last().is_some_and(|message| message["role"] == "assistant"))
     {
         return Err(unsupported("Anthropic assistant prefill is unsupported"));
     }
