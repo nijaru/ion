@@ -1056,6 +1056,7 @@ impl Session {
         append(&mut store, &entries)
     }
 
+    #[cfg(test)]
     pub(crate) fn record_tool_result(
         &self,
         turn: u64,
