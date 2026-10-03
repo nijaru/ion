@@ -1092,11 +1092,14 @@ mod tests {
         });
 
         let body = anthropic_body_for_route(&request, true, true).unwrap();
-        assert_eq!(body["tools"], json!([{
-            "name":"tool_search",
-            "description":"search available tools",
-            "input_schema":{"type":"object"}
-        }]));
+        assert_eq!(
+            body["tools"],
+            json!([{
+                "name":"tool_search",
+                "description":"search available tools",
+                "input_schema":{"type":"object"}
+            }])
+        );
         let system = body["messages"].as_array().unwrap().last().unwrap();
         assert_eq!(system["role"], "system");
         assert_eq!(
@@ -1182,11 +1185,13 @@ mod tests {
         let body = anthropic_body_for_route(&request, true, true).unwrap();
         assert_eq!(body["system"], "new instructions");
         assert!(!anthropic_body_uses_inline_tools(&body));
-        assert!(body["messages"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|message| message["role"] != "system"));
+        assert!(
+            body["messages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|message| message["role"] != "system")
+        );
     }
 
     #[test]
