@@ -2566,7 +2566,10 @@ mod tests {
         );
 
         let before = session
-            .fork_to(root.join("before-context.sqlite"), ForkPoint::BeforeTurn(second))
+            .fork_to(
+                root.join("before-context.sqlite"),
+                ForkPoint::BeforeTurn(second),
+            )
             .unwrap();
         assert_eq!(
             before.model_context().unwrap().unwrap().instructions,
