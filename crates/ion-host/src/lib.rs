@@ -166,7 +166,7 @@ fn prompt_cache_warming(selected: &Selection) -> Option<PromptCacheWarmingPolicy
     else {
         return None;
     };
-    if !cache.native_prewarm {
+    if cache.refresh != catalog::PromptCacheRefresh::ReplayOneToken {
         return None;
     }
     let pricing = cache.pricing?;
