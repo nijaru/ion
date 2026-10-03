@@ -471,10 +471,7 @@ mod tests {
             raw_arguments: None,
         };
         assert_eq!(
-            catalog
-                .execute(&call, CancellationToken::new())
-                .await
-                .value,
+            catalog.execute(&call, CancellationToken::new()).await.value,
             json!("deferred")
         );
         let model_result = catalog
