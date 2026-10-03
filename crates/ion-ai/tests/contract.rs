@@ -148,10 +148,20 @@ fn unknown_usage_is_distinct_from_reported_zero() {
     let encoded = serde_json::to_value(unknown).expect("serialize");
     assert_eq!(
         encoded,
-        serde_json::json!({"input_tokens": null, "output_tokens": null})
+        serde_json::json!({
+            "input_tokens": null,
+            "output_tokens": null,
+            "cache_read_input_tokens": null,
+            "cache_write_input_tokens": null
+        })
     );
     let decoded: Usage = serde_json::from_value(encoded).expect("deserialize");
     assert_eq!(decoded, unknown);
+
+    let cached = Usage::known_with_cache(1_000, 50, 700, 200);
+    assert_eq!(cached.uncached_input_tokens(), Some(100));
+    assert_eq!(cached.cache_read_input_tokens, Some(700));
+    assert_eq!(cached.cache_write_input_tokens, Some(200));
 }
 
 #[tokio::test]
