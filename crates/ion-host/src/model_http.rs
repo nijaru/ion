@@ -24,9 +24,9 @@ use crate::{CredentialResolver, catalog::ModelCapabilities};
 mod anthropic;
 mod chat;
 #[cfg(test)]
-use anthropic::anthropic_replay_notices;
-#[cfg(test)]
 use anthropic::anthropic_body;
+#[cfg(test)]
+use anthropic::anthropic_replay_notices;
 use anthropic::{
     AnthropicState, anthropic_body_for_route, anthropic_body_prefix_digest,
     anthropic_body_uses_inline_tools, managed_anthropic_thinking, validated_anthropic_replay,
