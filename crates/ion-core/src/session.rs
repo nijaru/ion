@@ -11,8 +11,9 @@ use std::{
 
 use crate::tool_set::ToolActivity;
 use ion_ai::{
-    Content, IncompleteReason, Message, ModelContextChange, ModelContextState, ModelContextTimeline,
-    ModelRef, ResponseTermination, Role, ToolCall, ToolResult, ToolSpec, Usage,
+    Content, IncompleteReason, Message, ModelContextChange, ModelContextState,
+    ModelContextTimeline, ModelRef, ResponseTermination, Role, ToolCall, ToolResult, ToolSpec,
+    Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
