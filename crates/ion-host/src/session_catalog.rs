@@ -216,7 +216,9 @@ mod tests {
         Content, Message, ModelResponse, ModelStreamEvent, ResponseTermination, Role, Script,
         ScriptedModelService, Usage,
     };
-    use ion_core::{CodingAgent, LocalTools};
+    use ion_core::CodingAgent;
+
+    use crate::LocalTools;
     use tokio_util::sync::CancellationToken;
 
     #[tokio::test]
