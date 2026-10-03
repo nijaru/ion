@@ -2574,7 +2574,10 @@ mod tests {
         );
 
         let after = session
-            .fork_to(root.join("after-context.sqlite"), ForkPoint::AfterTurn(second))
+            .fork_to(
+                root.join("after-context.sqlite"),
+                ForkPoint::AfterTurn(second),
+            )
             .unwrap();
         assert_eq!(
             after.model_context().unwrap().unwrap().instructions,
