@@ -16,8 +16,9 @@ pub use session::{
     TurnSummary, UserShellPermit,
 };
 pub use tool_set::{
-    ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolHost as CodingToolHost,
-    ToolOutput as CodingToolOutput, ToolPresentation, ToolPresentationTarget, ToolSet,
+    ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExposure,
+    ToolHost as CodingToolHost, ToolOutput as CodingToolOutput, ToolPresentation,
+    ToolPresentationTarget, ToolSet,
 };
 
 pub use transcript::{
