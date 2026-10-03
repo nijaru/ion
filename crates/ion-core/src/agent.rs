@@ -672,6 +672,7 @@ impl Agent {
                             usage: ion_ai::Usage {
                                 output_tokens: Some(0),
                                 input_tokens: Some(input),
+                                ..
                             },
                             ..
                         }) if self.limits.context_window_tokens.is_some_and(|window| {
