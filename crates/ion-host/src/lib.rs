@@ -20,9 +20,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, ensure};
-use ion_core::{
-    AgentLimits, CodingAgent, CodingToolHost, PromptCacheWarmingPolicy, ToolSet,
-};
+use ion_core::{AgentLimits, CodingAgent, CodingToolHost, PromptCacheWarmingPolicy, ToolSet};
 
 pub use auth::{CredentialStatus, CredentialStore};
 pub use binding::SessionBinding;
