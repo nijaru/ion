@@ -785,13 +785,14 @@ impl Agent {
                 session.record_model_context(turn, context)?;
                 let mut emitted_text = false;
                 let request_started = tokio::time::Instant::now();
-                let generated = generate_with_retry(&self.model, request.clone(), stop, &mut |event| {
-                    if matches!(event, AgentEvent::TextDelta(_)) {
-                        emitted_text = true;
-                    }
-                    observe(event);
-                })
-                .await;
+                let generated =
+                    generate_with_retry(&self.model, request.clone(), stop, &mut |event| {
+                        if matches!(event, AgentEvent::TextDelta(_)) {
+                            emitted_text = true;
+                        }
+                        observe(event);
+                    })
+                    .await;
                 if !assistant_seen_in_turn
                     && !replay_rebased
                     && matches!(&generated, Err(AgentError::ReplayContextChanged))
@@ -1449,8 +1450,7 @@ mod tests {
             }
         }
 
-        let root =
-            std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
+        let root = std::env::temp_dir().join(format!("ion-cache-warm-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
         let first = Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
