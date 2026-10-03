@@ -1061,8 +1061,23 @@ impl Session {
         turn: u64,
         result: ToolResult,
     ) -> Result<(), SessionError> {
+        self.record_tool_result_with_context(turn, result, None)
+    }
+
+    /// Publish one observed tool result and, when this closes the assistant's
+    /// pending calls, the next model-visible context in the same transaction.
+    pub(crate) fn record_tool_result_with_context(
+        &self,
+        turn: u64,
+        result: ToolResult,
+        context: Option<ModelContextSnapshot>,
+    ) -> Result<(), SessionError> {
+        let mut entries = vec![SessionEntry::ToolResult { turn, result }];
+        if let Some(context) = context {
+            entries.push(SessionEntry::ModelContextChanged { turn, context });
+        }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &[SessionEntry::ToolResult { turn, result }])
+        append(&mut store, &entries)
     }
 
     pub(crate) fn end_turn(&self, turn: u64, reason: TurnEndReason) -> Result<(), SessionError> {
