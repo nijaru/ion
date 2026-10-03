@@ -1730,6 +1730,7 @@ mod tests {
             Usage {
                 input_tokens: Some(12),
                 output_tokens: None,
+                ..Usage::unknown()
             }
         );
 
