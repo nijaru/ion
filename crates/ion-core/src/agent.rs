@@ -149,18 +149,12 @@ impl PromptCacheWarmingPolicy {
     }
 
     fn token_cost_microusd(tokens: u64, rate_microusd_per_million: u64) -> u128 {
-        u128::from(tokens)
-            .saturating_mul(u128::from(rate_microusd_per_million))
-            / 1_000_000
+        u128::from(tokens).saturating_mul(u128::from(rate_microusd_per_million)) / 1_000_000
     }
 
     fn net_refresh_savings_microusd(self, prefix_tokens: u64) -> Option<u64> {
-        let miss = Self::token_cost_microusd(
-            prefix_tokens,
-            self.cache_write_microusd_per_million,
-        );
-        let hit =
-            Self::token_cost_microusd(prefix_tokens, self.cache_read_microusd_per_million);
+        let miss = Self::token_cost_microusd(prefix_tokens, self.cache_write_microusd_per_million);
+        let hit = Self::token_cost_microusd(prefix_tokens, self.cache_read_microusd_per_million);
         let refresh = hit.saturating_add(Self::token_cost_microusd(
             1,
             self.output_microusd_per_million,
