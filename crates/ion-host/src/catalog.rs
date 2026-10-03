@@ -33,6 +33,14 @@ pub enum PromptCacheLifetime {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PromptCachePricing {
+    /// Micro-US-dollars per million tokens.
+    pub write_5m_microusd_per_million: u64,
+    pub read_microusd_per_million: u64,
+    pub output_microusd_per_million: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct PromptCacheCapabilities {
     /// Whether this route is expected to report cache read/write token detail.
     pub usage_details: bool,
@@ -43,6 +51,8 @@ pub struct PromptCacheCapabilities {
     /// A provider-native no-output prewarm operation is available on this
     /// exact route/endpoint family.
     pub native_prewarm: bool,
+    /// Current direct-route prices used only for economic warming decisions.
+    pub pricing: Option<PromptCachePricing>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,6 +76,7 @@ impl ModelCapabilities {
                 lifetime: PromptCacheLifetime::Unknown,
                 automatic_request: false,
                 native_prewarm: false,
+                pricing: None,
             },
             context_mutation: ContextMutationCapabilities {
                 mid_conversation_system: false,
@@ -82,6 +93,7 @@ const OPENAI_MANAGED_CACHE: ModelCapabilities = ModelCapabilities {
         lifetime: PromptCacheLifetime::ProviderManaged,
         automatic_request: false,
         native_prewarm: false,
+        pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
         mid_conversation_system: false,
@@ -96,6 +108,7 @@ const OPENROUTER_PROVIDER_CACHE: ModelCapabilities = ModelCapabilities {
         lifetime: PromptCacheLifetime::ProviderManaged,
         automatic_request: false,
         native_prewarm: false,
+        pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
         mid_conversation_system: false,
@@ -113,6 +126,7 @@ const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
         },
         automatic_request: true,
         native_prewarm: true,
+        pricing: None,
     },
     context_mutation: ContextMutationCapabilities {
         mid_conversation_system: false,
@@ -121,22 +135,41 @@ const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
     },
 };
 
-const ANTHROPIC_INLINE_CONTEXT: ModelCapabilities = ModelCapabilities {
-    prompt_cache: PromptCacheCapabilities {
-        usage_details: true,
-        lifetime: PromptCacheLifetime::Fixed {
-            default_seconds: 300,
-            extended_seconds: Some(3600),
+const fn anthropic_inline_context(pricing: PromptCachePricing) -> ModelCapabilities {
+    ModelCapabilities {
+        prompt_cache: PromptCacheCapabilities {
+            usage_details: true,
+            lifetime: PromptCacheLifetime::Fixed {
+                default_seconds: 300,
+                extended_seconds: Some(3600),
+            },
+            automatic_request: true,
+            native_prewarm: true,
+            pricing: Some(pricing),
         },
-        automatic_request: true,
-        native_prewarm: true,
-    },
-    context_mutation: ContextMutationCapabilities {
-        mid_conversation_system: true,
-        mid_conversation_tools: true,
-        inline_tool_definitions: true,
-    },
-};
+        context_mutation: ContextMutationCapabilities {
+            mid_conversation_system: true,
+            mid_conversation_tools: true,
+            inline_tool_definitions: true,
+        },
+    }
+}
+
+const ANTHROPIC_OPUS_5_5: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
+    write_5m_microusd_per_million: 5_000_000,
+    read_microusd_per_million: 200_000,
+    output_microusd_per_million: 20_000_000,
+});
+const ANTHROPIC_SONNET_5_5: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
+    write_5m_microusd_per_million: 2_500_000,
+    read_microusd_per_million: 200_000,
+    output_microusd_per_million: 10_000_000,
+});
+const ANTHROPIC_FABLE_5_1: ModelCapabilities = anthropic_inline_context(PromptCachePricing {
+    write_5m_microusd_per_million: 12_500_000,
+    read_microusd_per_million: 250_000,
+    output_microusd_per_million: 50_000_000,
+});
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct CatalogModel {
@@ -274,7 +307,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
-        capabilities: ANTHROPIC_INLINE_CONTEXT,
+        capabilities: ANTHROPIC_OPUS_5_5,
         source_url: "https://platform.claude.com/docs/en/models/opus-5-5/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -288,7 +321,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
-        capabilities: ANTHROPIC_INLINE_CONTEXT,
+        capabilities: ANTHROPIC_SONNET_5_5,
         source_url: "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
@@ -302,7 +335,7 @@ const MODELS: &[CatalogModel] = &[
         context_window: 1_000_000,
         max_output_tokens: 128_000,
         image_input: true,
-        capabilities: ANTHROPIC_INLINE_CONTEXT,
+        capabilities: ANTHROPIC_FABLE_5_1,
         source_url: "https://platform.claude.com/docs/en/models/fable-5-1/overview",
         checked_on: CURRENT_CHECKED_ON,
     },
