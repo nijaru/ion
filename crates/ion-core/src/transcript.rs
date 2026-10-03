@@ -202,6 +202,7 @@ impl TranscriptProjection {
                 SessionEntry::ModelSelected { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
+                | SessionEntry::CacheWarm { .. }
                 | SessionEntry::Compacted { .. } => {}
             }
         }
