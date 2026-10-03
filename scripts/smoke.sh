@@ -1,184 +1,158 @@
 #!/usr/bin/env bash
-# Daily-driver smoke checklist (tk-670r): the flows a maintainer hits on
-# every real session, driven through a real terminal (tmux) against the
-# built binary with an isolated data root. Run this before any
-# readiness claim; green unit gates alone are not readiness evidence.
-#
-# Usage: scripts/smoke.sh [--release]
-# Requires: tmux, python3 (sqlite3 module), cargo.
-set -uo pipefail
+# Offline executable check of the real headless coding and reopen path.
+set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BIN="${ION_SMOKE_BIN:-$ROOT/target/debug/ion}"
-SESSION="ion-smoke"
-STEP=0
-
-if [[ "${1:-}" == "--release" ]]; then
-    BIN="$ROOT/target/release/ion"
+PROFILE=debug
+if [[ "${1:-}" == --release ]]; then PROFILE=release; shift; fi
+[[ $# == 0 ]] || { echo 'usage: scripts/smoke.sh [--release]' >&2; exit 2; }
+BIN="${ION_SMOKE_BIN:-$ROOT/target/$PROFILE/ion}"
+if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
+    if [[ "$PROFILE" == release ]]; then
+        cargo build --quiet --locked --release -p ion
+    else
+        cargo build --quiet --locked -p ion
+    fi
 fi
 
-WORK="$(mktemp -d /tmp/ion-smoke.XXXXXX)"
-mkdir -p "$WORK/data/ion"
-printf '' > "$WORK/settings.toml"
-
+WORK="$(mktemp -d "${ION_SMOKE_TMPDIR:-/tmp}/ion-smoke.XXXXXX")"
+server_pid=
 cleanup() {
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Kill only the ion this script launched (child of our panes).
-    [[ -n "${SMOKE_PID:-}" ]] && pkill -9 -P "$SMOKE_PID" 2>/dev/null
-    rm -rf "$WORK"
+    if [[ -n "$server_pid" ]]; then kill "$server_pid" 2>/dev/null || true; wait "$server_pid" 2>/dev/null || true; fi
+    if [[ "${ION_SMOKE_KEEP:-0}" == 1 ]]; then echo "smoke files: $WORK" >&2; else rm -rf "$WORK"; fi
 }
 trap cleanup EXIT
-
-pass() { STEP=$((STEP + 1)); echo "ok $STEP - $1"; }
-fail() { STEP=$((STEP + 1)); echo "FAIL $STEP - $1"; tmux capture-pane -t "$SESSION" -p 2>/dev/null | tail -20; exit 1; }
-
-capture() { tmux capture-pane -t "$SESSION" -p "$@" 2>/dev/null; }
-
-wait_for() { # $1 needle, $2 timeout seconds, remaining args passed to capture
-    local deadline=$((SECONDS + ${2:-15}))
-    until capture "${@:3}" | grep -q "$1"; do
-        (( SECONDS > deadline )) && return 1
-        sleep 0.2
-    done
-}
-
-wait_for_idle() { # $1 timeout seconds
-    local deadline=$((SECONDS + ${1:-15}))
-    local screen
-    while (( SECONDS <= deadline )); do
-        screen="$(capture)"
-        # The footer is the PTY-visible completion boundary. It is
-        # current-screen state, unlike streamed response text, which
-        # may already be present while OperationFinished is pending.
-        if grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]*$' <<<"$screen" \
-            && ! grep -Eq '^[[:space:]]+.* \([^)]*\)[[:space:]]+●[[:space:]]' <<<"$screen"
-        then
-            return 0
-        fi
-        sleep 0.2
-    done
-    return 1
-}
-
-launch() { # $@ = ion args
-    tmux kill-session -t "$SESSION" 2>/dev/null
-    # Explicit bash: tmux default-shell may be fish, where "$?" aborts.
-    # Keep-alive keeps the exit code visible after ion exits.
-    tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-        "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data $BIN $* 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-    SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-}
-
-ion_child_pid() {
-    # Pane pid is the tmux shell wrapper; ion is its child or grandchild.
-    local pid parent grandparent
-    for pid in $(pgrep -x ion); do
-        parent="$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ')"
-        if [[ "$parent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-        grandparent="$(ps -o ppid= -p "$parent" 2>/dev/null | tr -d ' ')"
-        if [[ "$grandparent" == "$SMOKE_PID" ]]; then echo "$pid"; return 0; fi
-    done
-}
-
-quit_and_check_exit_code() { # $1 = description
-    wait_for_idle 10 || fail "$1: ion did not reach an idle footer"
-    tmux send-keys -t "$SESSION" C-d
-    local deadline=$((SECONDS + 10))
-    until capture | grep -q "SMOKE_EXIT="; do
-        (( SECONDS > deadline )) && fail "$1: ion did not exit after ctrl+d"
-        sleep 0.2
-    done
-    capture | grep -q "SMOKE_EXIT=0" || fail "$1: exit code was not 0: $(capture | grep SMOKE_EXIT)"
-}
-
-type_line() { tmux send-keys -t "$SESSION" -l "$1"; tmux send-keys -t "$SESSION" Enter; }
-
-if [[ -z "${ION_SMOKE_BIN:-}" ]]; then
-    echo "== building =="
-    cargo build -q -p ion || { echo "build failed"; exit 1; }
+mkdir -p "$WORK/workspace" "$WORK/config" "$WORK/state"
+printf 'sample data\nsecond token\n' > "$WORK/workspace/data.txt"
+export XDG_CONFIG_HOME="$WORK/config" XDG_STATE_HOME="$WORK/state"
+if "$BIN" --cwd "$WORK/workspace" inspect > "$WORK/missing.out" 2> "$WORK/missing.err"; then
+    echo 'inspect accepted a nonexistent session' >&2; exit 1
 fi
-[[ -x "$BIN" ]] || { echo "binary missing at $BIN"; exit 1; }
+[[ ! -e "$WORK/state/ion" ]] || { echo 'read-only inspect created session state' >&2; exit 1; }
+python3 "$ROOT/scripts/smoke_provider.py" "$WORK/port" "$WORK/requests" > "$WORK/server.out" 2> "$WORK/server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/port" ]] || { cat "$WORK/server.err" >&2; echo 'mock provider did not start' >&2; exit 1; }
+port="$(cat "$WORK/port")"
 
-echo "== 1. fresh start =="
-launch
-wait_for "ion v" 15 || fail "fresh start: no quiet startup banner"
-pass "idle banner renders"
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$port/v1" --wire chat-completions > "$WORK/use.out"
+ION_CUSTOM_API_KEY=unrelated-key "$BIN" --cwd "$WORK/workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/first.out" 2> "$WORK/first.err"
+[[ "$(cat "$WORK/workspace/data.txt")" == $'sample data updated\nsecond token updated' ]]
+[[ "$(cat "$WORK/workspace/created.txt")" == 'created by ion' ]]
+grep -q 'TASK_COMPLETE' "$WORK/first.out"
+"$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/first.json"
 
-echo "== 2. submit a turn =="
-type_line "hello"
-wait_for "scripted provider" 15 || fail "turn: no scripted response"
-first_count=$(capture | grep -c "scripted provider")
-sleep 1
-second_count=$(capture | grep -c "scripted provider")
-[[ "$first_count" == "$second_count" ]] || fail "turn: response duplicated ($first_count -> $second_count)"
-pass "turn committed exactly once"
+"$BIN" --cwd "$WORK/workspace" --continue run 'What did we finish previously?' > "$WORK/second.out" 2> "$WORK/second.err"
+grep -q 'RESUMED' "$WORK/second.out"
+"$BIN" --cwd "$WORK/workspace" --continue inspect > "$WORK/second.json"
+python3 - "$WORK/first.json" "$WORK/second.json" "$WORK/requests" <<'PY'
+import json, sys
+first, second = (json.load(open(path)) for path in sys.argv[1:3])
+assert first['unfinished_turn'] is None and second['unfinished_turn'] is None
+assert len(first['entries']) == 11, first['entries']
+assert len(second['entries']) == 14, second['entries']
+assert [entry['kind'] for entry in first['entries']].count('tool_result') == 4
+assert [entry['kind'] for entry in second['entries']].count('turn_ended') == 2
+requests = [json.loads(line) for line in open(sys.argv[3])]
+assert len(requests) == 6, len(requests)
+assert len([m for m in requests[-1]['messages'] if m['role'] == 'user']) == 2
+PY
 
-echo "== 3. clean exit =="
-quit_and_check_exit_code "clean exit"
-pass "ctrl+d quits with code 0"
-
-echo "== 4. resume shows persisted history =="
-launch "--resume"
-wait_for "resumed" 15 || fail "resume: no resumed banner"
-capture | grep -qE "(> hello|hello)" || fail "resume: previous turn missing"
-pass "resume restores history"
-
-echo "== 5. kill -9 mid-operation recovers =="
-# Relaunch with the scripted provider held open so the operation is
-# deterministically in flight when the process dies.
-tmux kill-session -t "$SESSION" 2>/dev/null
-tmux new-session -d -s "$SESSION" -x 100 -y 30 \
-    "bash -c 'cd \"$WORK\" && env ION_SETTINGS=$WORK/settings.toml XDG_DATA_HOME=$WORK/data ION_TEST_PROVIDER_DELAY_MS=8000 $BIN --resume 2>$WORK/stderr.log; printf \"SMOKE_EXIT=%s\\n\" \$?; sleep 60'"
-SMOKE_PID="$(tmux display-message -p -t "$SESSION" '#{pane_pid}')"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner"
-type_line "interruptible"
-wait_for "> interruptible" 10 || fail "kill -9: submission not accepted"
-CHILD="$(ion_child_pid)"
-[[ -n "$CHILD" ]] && kill -9 "$CHILD" || fail "kill -9: no ion child found"
-launch "--resume"
-wait_for "resumed" 15 || fail "kill -9: no resumed banner after crash"
-# Valid recoveries: the open model step either surfaces as
-# indeterminate/cancelled, or replays safely against the fresh provider
-# and completes. Either way nothing is lost and the session is usable.
-if ! capture | grep -qE "indeterminate|cancelled"; then
-    capture | grep -q "scripted provider:" \
-        || fail "kill -9: interrupted op neither surfaced nor replayed"
+# An explicit session owns its original working directory. A conflicting
+# --cwd must fail before model or tool work instead of silently targeting it.
+mkdir "$WORK/other-workspace"
+session_db="$(find "$WORK/state/ion/sessions" -name '*.sqlite' -print -quit)"
+[[ -n "$session_db" ]]
+if "$BIN" --cwd "$WORK/other-workspace" --session "$session_db" run 'Do not run this' \
+    > "$WORK/wrong-cwd.out" 2> "$WORK/wrong-cwd.err"; then
+    echo 'conflicting --cwd was accepted for an existing session' >&2; exit 1
 fi
-type_line "/help"
-# Help may exceed the viewport; verify committed terminal history.
-wait_for "/compact" 10 -S - || fail "kill -9: composer unusable after recovery"
-pass "interrupted operation settles and session stays usable"
+grep -q -- '--cwd does not match the session' "$WORK/wrong-cwd.err"
+if "$BIN" --cwd "$WORK/other-workspace" --session "$session_db" inspect \
+    > "$WORK/wrong-inspect.out" 2> "$WORK/wrong-inspect.err"; then
+    echo 'conflicting --cwd was accepted for inspect' >&2; exit 1
+fi
+grep -q -- '--cwd does not match the session' "$WORK/wrong-inspect.err"
+"$BIN" --session "$session_db" inspect > "$WORK/after-wrong-cwd.json"
+cmp "$WORK/second.json" "$WORK/after-wrong-cwd.json"
+"$BIN" --cwd "$WORK/workspace" --session "$session_db" clone > "$WORK/clone.out"
+clone_id="$(awk '{print $NF}' "$WORK/clone.out")"
+"$BIN" --cwd "$WORK/workspace" --session "$clone_id" inspect > "$WORK/clone.json"
+python3 - "$WORK/second.json" "$WORK/clone.json" <<'PY'
+import json, sys
+source, clone = (json.load(open(path)) for path in sys.argv[1:])
+assert source['entries'] == clone['entries']
+assert clone['cwd'] == source['cwd']
+PY
+"$BIN" --session "$session_db" inspect > "$WORK/source-after-clone.json"
+cmp "$WORK/second.json" "$WORK/source-after-clone.json"
 
-echo "== 6. older schema store archives instead of refusing =="
-tmux kill-session -t "$SESSION" 2>/dev/null
-python3 - <<PYEOF || { echo "python3/sqlite3 unavailable"; exit 1; }
-import sqlite3
-conn = sqlite3.connect("$WORK/data/ion/sessions.db")
-conn.execute("CREATE TABLE IF NOT EXISTS sessions (id TEXT)")
-conn.execute("PRAGMA user_version = 6")
-conn.commit()
-conn.close()
-PYEOF
-launch
-wait_for "archived your old session store" 15 || fail "schema bump: archive notice not shown"
-wait_for "ion v" 15 || fail "schema bump: session did not start"
-ls "$WORK/data/ion" | grep -q "\.v6\..*\.bak" || fail "schema bump: no .bak archive created"
-pass "old store archived, notice shown, session starts"
-
-echo "== 7. resize storm stays interactive =="
-for _ in 1 2 3 4; do
-    tmux resize-window -t "$SESSION" -x 40 -y 15
-    sleep 0.05
-    tmux resize-window -t "$SESSION" -x 100 -y 30
-    sleep 0.05
-done
-type_line "still here"
-wait_for "still here" 10 || fail "resize storm: input lost"
-pass "composer survives resize storm"
-
-echo "== 8. final clean exit =="
-quit_and_check_exit_code "post-storm exit"
-pass "clean exit after storm"
-
-echo
-echo "ALL $STEP CHECKS PASSED — safe to ask for maintainer dogfood."
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+python3 "$ROOT/scripts/smoke_provider.py" "$WORK/json-port" "$WORK/json-requests" > "$WORK/json-server.out" 2> "$WORK/json-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/json-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/json-port" ]] || { cat "$WORK/json-server.err" >&2; echo 'JSON mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/json-port")/v1/chat/completions" --wire chat-completions > "$WORK/json-use.out"
+printf 'sample data\nsecond token\n' > "$WORK/other-workspace/data.txt"
+"$BIN" --json --cwd "$WORK/other-workspace" run 'Read data.txt, edit it, create created.txt, then verify both files with shell.' > "$WORK/events.jsonl" 2> "$WORK/events.err"
+python3 - "$WORK/events.jsonl" "$WORK/other-workspace" <<'PY'
+import json, pathlib, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[0]['type'] == 'session' and pathlib.Path(events[0]['cwd']) == pathlib.Path(sys.argv[2]).resolve()
+assert events[-1] == {'type': 'run_end', 'status': 'completed'}
+started = [event['call_id'] for event in events if event['type'] == 'tool_started']
+finished = [event['call_id'] for event in events if event['type'] == 'tool_finished']
+assert len(started) == 4 and started == finished
+assert next(event['text'] for event in events if event['type'] == 'final') == 'TASK_COMPLETE'
+assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\nsecond token updated\n'
+assert pathlib.Path(sys.argv[2], 'created.txt').read_text() == 'created by ion\n'
+PY
+printf 'PIPED_CONTEXT_MARKER\n' | "$BIN" --json --cwd "$WORK/other-workspace" --continue run 'What did we finish previously?' > "$WORK/piped-events.jsonl" 2> "$WORK/piped-events.err"
+python3 - "$WORK/piped-events.jsonl" "$WORK/json-requests" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[-1] == {'type': 'run_end', 'status': 'completed'}
+assert next(event['text'] for event in events if event['type'] == 'final') == 'RESUMED'
+requests = [json.loads(line) for line in open(sys.argv[2])]
+assert 'PIPED_CONTEXT_MARKER\n\nWhat did we finish previously?' in requests[-1]['messages'][-1]['content']
+PY
+mkdir "$WORK/error-workspace"
+if "$BIN" --json --cwd "$WORK/error-workspace" run 'Unexpected prompt' > "$WORK/error-events.jsonl" 2> "$WORK/error-events.err"; then
+    echo 'JSON mode accepted a failed model request' >&2; exit 1
+fi
+python3 - "$WORK/error-events.jsonl" <<'PY'
+import json, sys
+events = [json.loads(line) for line in open(sys.argv[1])]
+assert events[0]['type'] == 'session'
+assert events[-1]['type'] == 'run_end' and events[-1]['status'] == 'failed'
+assert 'provider returned HTTP 500' in events[-1]['error']
+PY
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+ION_SMOKE_PARTIAL_FAILURE=1 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/partial-port" "$WORK/partial-requests" > "$WORK/partial-server.out" 2> "$WORK/partial-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/partial-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/partial-port" ]] || { cat "$WORK/partial-server.err" >&2; echo 'partial mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/partial-port")/v1/chat/completions" --wire chat-completions > "$WORK/partial-use.out"
+if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/partial.out" 2> "$WORK/partial.err"; then
+    echo 'headless text mode accepted an unfinished model stream' >&2; exit 1
+fi
+[[ ! -s "$WORK/partial.out" ]] || { echo 'headless text mode published an uncommitted answer' >&2; exit 1; }
+grep -q 'finish_reason' "$WORK/partial.err"
+kill "$server_pid" 2>/dev/null || true
+wait "$server_pid" 2>/dev/null || true
+server_pid=
+ION_SMOKE_STREAM_ERROR=1 python3 "$ROOT/scripts/smoke_provider.py" "$WORK/stream-error-port" "$WORK/stream-error-requests" > "$WORK/stream-error-server.out" 2> "$WORK/stream-error-server.err" &
+server_pid=$!
+for _ in {1..100}; do [[ -s "$WORK/stream-error-port" ]] && break; sleep 0.05; done
+[[ -s "$WORK/stream-error-port" ]] || { cat "$WORK/stream-error-server.err" >&2; echo 'stream-error mock provider did not start' >&2; exit 1; }
+"$BIN" use smoke smoke-model --endpoint "http://127.0.0.1:$(cat "$WORK/stream-error-port")/v1/chat/completions" --wire chat-completions > "$WORK/stream-error-use.out"
+if "$BIN" --cwd "$WORK/workspace" run 'Return a final answer.' > "$WORK/stream-error.out" 2> "$WORK/stream-error.err"; then
+    echo 'headless text mode accepted a provider stream error' >&2; exit 1
+fi
+[[ ! -s "$WORK/stream-error.out" ]] || { echo 'headless text mode published an uncommitted stream answer' >&2; exit 1; }
+grep -q 'upstream disconnected' "$WORK/stream-error.err"
+echo 'Ion offline headless coding and session reopen: OK'

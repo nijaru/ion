@@ -4,9 +4,8 @@ use std::path::{Path, PathBuf};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
-    DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
-    EnableFocusChange, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::terminal::{EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{SynchronizedUpdate, execute, terminal};
@@ -79,7 +78,6 @@ pub struct TerminalSession {
     capabilities: TerminalCapabilities,
     restored: bool,
     keyboard_enhancement_enabled: bool,
-    focus_reporting_enabled: bool,
     mouse_enabled: bool,
     /// True while the fullscreen frontend owns the alternate screen.
     /// Every restore path must leave it, or the user's terminal is
@@ -100,7 +98,6 @@ impl TerminalSession {
             capabilities: TerminalCapabilities::default(),
             restored: true,
             keyboard_enhancement_enabled: false,
-            focus_reporting_enabled: false,
             mouse_enabled: false,
             alt_screen: false,
         };
@@ -112,7 +109,7 @@ impl TerminalSession {
         &mut self.output
     }
 
-    pub fn input(&self) -> InputStream {
+    pub fn input(&self) -> io::Result<InputStream> {
         InputStream::new()
     }
 
@@ -121,6 +118,9 @@ impl TerminalSession {
     /// alt screen preserves native scrollback verbatim — leaving it
     /// restores the inline frontend's exact prior surface.
     pub fn enter_alt_screen(&mut self) -> io::Result<()> {
+        if self.alt_screen {
+            return Ok(());
+        }
         execute!(self.output, EnterAlternateScreen, EnableMouseCapture)?;
         self.mouse_enabled = true;
         self.alt_screen = true;
@@ -133,10 +133,18 @@ impl TerminalSession {
     /// fullscreen viewport survives into scrollback unless the caller
     /// prints it.
     pub fn leave_alt_screen(&mut self) -> io::Result<()> {
+        if !self.alt_screen {
+            return Ok(());
+        }
         execute!(self.output, DisableMouseCapture, LeaveAlternateScreen)?;
         self.mouse_enabled = false;
         self.alt_screen = false;
         Ok(())
+    }
+
+    #[must_use]
+    pub fn is_alt_screen(&self) -> bool {
+        self.alt_screen
     }
 
     pub fn size(&self) -> io::Result<(u16, u16)> {
@@ -198,13 +206,6 @@ impl TerminalSession {
                 Err(_) => {}
             }
         }
-        if self.focus_reporting_enabled {
-            match execute!(self.output, DisableFocusChange) {
-                Ok(()) => self.focus_reporting_enabled = false,
-                Err(err) if first_error.is_none() => first_error = Some(err),
-                Err(_) => {}
-            }
-        }
         if self.requirements.bracketed_paste
             && let Err(err) = execute!(self.output, DisableBracketedPaste)
             && first_error.is_none()
@@ -245,17 +246,6 @@ impl TerminalSession {
             self.capabilities.bracketed_paste = CapabilitySupport::Supported;
         } else {
             self.capabilities.bracketed_paste = CapabilitySupport::Unsupported;
-        }
-
-        if self.requirements.focus_reporting {
-            if let Err(err) = execute!(self.output, EnableFocusChange) {
-                let _ = self.restore();
-                return Err(err);
-            }
-            self.focus_reporting_enabled = true;
-            self.capabilities.focus_reporting = CapabilitySupport::Supported;
-        } else {
-            self.capabilities.focus_reporting = CapabilitySupport::Unsupported;
         }
 
         if self.requirements.mouse {
@@ -300,15 +290,26 @@ impl Drop for TerminalSession {
     }
 }
 
+fn write_emergency_restore(out: &mut impl Write) -> io::Result<()> {
+    execute!(
+        out,
+        DisableMouseCapture,
+        PopKeyboardEnhancementFlags,
+        DisableBracketedPaste,
+        LeaveAlternateScreen,
+        Show
+    )?;
+    out.write_all(b"\x1b[0m")?;
+    out.flush()
+}
+
 /// Install a panic hook that restores the process terminal before the
 /// previous hook prints its diagnostic.
 pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = terminal::disable_raw_mode();
-        let _ = execute!(io::stdout(), DisableBracketedPaste, Show);
-        let _ = io::stdout().write_all(b"\x1b[0m");
-        let _ = io::stdout().flush();
+        let _ = write_emergency_restore(&mut io::stdout());
         previous(info);
     }));
 }
@@ -316,6 +317,17 @@ pub fn install_panic_hook() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn emergency_restore_leaves_temporary_terminal_modes() {
+        let mut output = Vec::new();
+        write_emergency_restore(&mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("\x1b[?1049l"), "{text:?}");
+        assert!(text.contains("\x1b[?2004l"), "{text:?}");
+        assert!(text.contains("\x1b[?25h"), "{text:?}");
+        assert!(text.ends_with("\x1b[0m"), "{text:?}");
+    }
 
     #[test]
     fn default_requirements_enable_paste_and_keyboard() {

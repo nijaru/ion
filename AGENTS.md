@@ -1,52 +1,53 @@
 # Working on Ion
 
-## Direction and ownership
+## Direction
 
-- `ARCHITECTURE.md` owns the accepted turn-engine contracts. `README.md` describes
-  what currently works. Target, implemented and validated are different states.
-- The 2026-09-15 design replaced the former generic task runtime. The 2026-09-18
-  review deliberately reopens the *external-boundary internals* while keeping the coding
-  Turn as continuation owner. The accepted target now includes a stable TurnEnvironment,
-  frozen provider/tool bindings, versioned request manifests, effect-gated dispatch,
-  logical tool invocations with immutable physical ToolAttempts, execution evidence
-  separate from transcript settlement, durable outcome staging for compatible parallel
-  tool calls, typed drive exits, atomic commit update batches, ContextEpoch continuity and
-  a host-owned workspace registry. Worker context/lifetime/workspace inheritance are
-  separate axes. The current Rust is **rewrite input, not an implementation shape to
-  migrate forward**: replace/refactor maintained production modules directly and delete
-  obsolete representations rather than adapting them. Do not reintroduce a generic
-  task/plan graph, resident semantic mirror or undo journal.
-- Replace obsolete production paths directly. Ion is unreleased v0: no compatibility
-  shims, parallel runtimes or unused public surfaces kept for hypothetical consumers.
-  Git preserves old code and documents; retain useful failure scenarios as new tests.
-- Keep the product a Pi-like terminal coding agent with the same headless/library
-  path. Workers are optional and follow a measured single-agent baseline. Memory,
-  gateways, schedules and general workflow authoring are outside current scope.
-- Keep provider contracts independent of sessions/storage/TUI. Give each module one
-  semantic owner; avoid generic manager/helper buckets and crate-per-noun scaffolding.
+- `ARCHITECTURE.md` holds the current coding-agent design target;
+  `README.md` describes implemented and validated behavior.
+- Build one cohesive local coding loop for TUI, headless and library hosts:
+  read, edit, write, native shell, project instructions, model catalog,
+  automatic environment keys, optional masked API-key entry and resumable
+  sessions. Use current Pi as a primary reference for mature coding-agent
+  workflows and fx as a primary reference for shell-like terminal
+  presentation; neither is a template to clone. Ion keeps its own Rust
+  Session/Turn/host architecture. OAuth is not a first-use gate.
+- Ion is unreleased v0 with no backward-compatibility or stability
+  guarantees. Replace obsolete representations, APIs and development storage
+  formats directly. Do not add migrations, deprecated aliases, compatibility
+  facades or parallel old/new paths unless the current coding contract itself
+  requires them. Do not keep a generic task graph, second runtime, private
+  importer/registry or attempt ledger simply because it existed before.
+  Retain a mechanism only when the coding contract or a reproduced failure
+  warrants it.
+- Tools act in the live working directory with host permissions. There is
+  no implicit sandbox or VM. Report cancellation and external effects only
+  as observed; never silently rerun an incomplete tool call on reopen.
+- Keep provider transports and credentials independent of Session storage
+  and terminal rendering. Give each rule one semantic owner.
+- Workers, personal memory, gateways, schedules and workflow authoring are
+  outside the first usable coding-agent scope.
 
 ## Changes
 
-- Before a slice, identify observable behavior, semantic owner, failure/recovery
-  boundary and acceptance test. Read affected code and current Git status first.
-- Decide consequential boundaries before implementing them. Update the architecture
-  when evidence changes a contract; do not conceal a disagreement with an adapter.
-  Keep research, working rationale and rewrite tracking with their knowledge owner.
-- Add the boundary regression before marking a defect repaired. During the v0 rewrite,
-  test the new owner/invariant first rather than patching races into superseded modules.
-  Rewrite checkpoints may be staged as commits for review, but no checkpoint is a
-  compatibility/migration layer and no old+new production runtime may coexist. Preserve
-  uncertainty, immutable attempt evidence, effect-admission
-  fencing, durable admission and bounded resources when deleting APIs.
-- Do not equate declared capabilities with confinement, future cancellation with stopped
-  external effects, or green scripted tests with a working live coding agent.
-- Keep this as the only repository agent-instruction file. Add a project skill only
-  for a demonstrated recurring workflow; do not recreate design/research directories
-  as agent context. Public documentation must remain self-contained.
+- Before a substantial coding-path slice, trace affected Ion code and Git
+  status, then inspect the current reference that actually matches the
+  concern: Pi for coding-agent workflow semantics, fx for terminal
+  presentation, or another harness when a distinct boundary needs it. Record
+  moving revisions. Start from the user workflow and Ion's semantic owner: a
+  reference difference alone is not a requirement. Reconcile the accepted
+  contract before changing implementation, and verify the failure boundary.
+- Preserve user work and secrets. Delete obsolete production paths once the
+  replacement owns the behavior; Git retains historical source. Update
+  public documentation when behavior or a maintainer contract changes.
+- Test the actual headless and terminal surfaces for changes that affect
+  them. Scripted provider tests do not establish live coding ability.
+- Keep this the only repository agent-instruction file. Research, decisions
+  and rewrite tracking belong in the knowledge repository rather than a
+  new documentation scaffold here.
 
 ## Validation
 
-Use the checked-in Rust 1.98.0 toolchain and run:
+Use the checked-in Rust 1.98.0 toolchain:
 
 ```sh
 cargo fmt --all -- --check
@@ -54,12 +55,14 @@ cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
 ```
 
-Run targeted tests during iteration. Crash, cancellation, storage and provider changes
-need deterministic fault tests; overflow-sensitive changes also need release checks.
-Terminal changes need reducer/PTY checks and real-terminal smoke, not only golden frames.
-The current `scripts/smoke.sh` targets the excluded legacy application and is not a
-working fresh-workspace gate; replace it when the executable returns, not with a shim.
-Turn-engine regressions live in `crates/ion-core/tests/c1_*.rs` and in the crate's own
-`#[cfg(test)]` modules where a durable pre-state or a storage fault is required.
-For documentation-only work, verify links, authority/status consistency and preservation;
-do not claim runtime or live-model validation that was not performed.
+Run targeted tests during implementation and `scripts/smoke.sh` for the
+headless offline submit/reopen path. Add focused fault tests for changed
+storage, provider or cancellation behavior. Terminal changes need PTY and
+real-terminal checks. Run `python3 scripts/smoke_resources.py` for resource
+changes and `python3 scripts/smoke_images.py` for image changes. Run
+`python3 scripts/smoke_rpc.py` for sustained-control changes and
+`python3 scripts/smoke_mcp.py` for external-tool changes. Run
+`python3 scripts/smoke_fork.py` for navigation changes. Re-run relevant gates
+after the last code edit. For
+documentation-only work, verify links, authority and status consistency;
+do not claim runtime validation.

@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/ion-ai", "crates/ion-core", "crates/ion-terminal"]
+members = ["crates/ion-ai", "crates/ion-core", "crates/ion-host", "crates/ion-terminal", "crates/ion-app"]
 
 [workspace.package]
 version = "0.0.0"
@@ -16,9 +16,10 @@ unsafe_code = "deny"
 clap = { version = "4.6.6", features = ["derive"] }
 ion-ai = { path = "crates/ion-ai" }
 ion-core = { path = "crates/ion-core" }
+ion-host = { path = "crates/ion-host" }
 ion-terminal = { path = "crates/ion-terminal" }
 thiserror = "2.0.20"
-tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "sync", "time"] }
+tokio = { version = "1.53.1", features = ["fs", "io-std", "io-util", "macros", "process", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-util = { version = "0.7.19", features = ["rt"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

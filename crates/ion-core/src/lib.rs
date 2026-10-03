@@ -1,56 +1,27 @@
-//! Ion durable session kernel: a provider-neutral coding turn engine.
-//!
-//! The durable nouns are a session, its conversations, immutable entries,
-//! accepted inputs and the turns that answer them. A turn owns model-step
-//! continuation, tool invocation, resource accounting, cancellation and its
-//! terminal outcome. There is no generic task graph, no resident state mirror
-//! and no second runtime.
+//! Ion's local coding loop, typed Session history, and abstract model/tool contracts.
 
-mod attempt;
-mod config;
-mod conversation;
-mod entry;
-mod error;
-mod id;
-mod input;
-mod invocation;
-mod limits;
-mod request;
+mod agent;
+mod generation;
 mod session;
-mod store;
-mod tool;
-mod turn;
-mod view;
-mod workspace;
+mod tool_set;
+mod transcript;
 
-pub use attempt::{AttemptState, ModelAttempt, ModelStep};
-pub use config::{
-    ConfigError, ContextPolicy, ConversationConfig, InstalledConfig, MAX_ATTEMPTS_PER_STEP,
-    RunLimits,
+pub use agent::{
+    Agent as CodingAgent, AgentError as CodingAgentError, AgentEvent as CodingAgentEvent,
+    AgentLimits, PromptCacheWarmingPolicy, SteeringInbox,
 };
-pub use conversation::{Conversation, HistoryParent};
-pub use entry::{ASSISTANT_ENTRY, Entry, EntryKind, EntryKindError, INPUT_ENTRY, TOOL_ENTRY};
-pub use error::{Error, Result};
-pub use id::{
-    AttemptId, CommitSeq, ConversationId, EntryId, IdError, InputId, InvocationId, SessionId,
-    StepId, TurnId,
-};
-pub use input::{
-    EntryPlacement, Input, InputBody, InputDisposition, InputMode, InputPlacement, InputSender,
-    RequestKey, RequestKeyError,
-};
-pub use invocation::{InvocationOutcome, InvocationState, Resolution, ToolInvocation};
-pub use limits::{LimitsError, SessionLimits};
-pub use request::{AssembledRequest, RequestError};
 pub use session::{
-    AdmissionReceipt, CancelReceipt, CloseOutcome, ConfigureRequest, EntryQuery, ResolveRequest,
-    Services, Session, SessionEvent, SessionHandle, SessionSpec, SessionWatch, SubmitRequest,
-    WatchError,
+    ForkPoint, ModelContextSnapshot, Session as CodingSession, SessionEntry,
+    SessionError as CodingSessionError, SessionView, StoredToolActivity, TurnEndReason,
+    TurnSummary, UserShellPermit,
 };
-pub use tool::{ScriptedTool, Stop, Tool, ToolOutcome, ToolRegistry};
-pub use turn::{Cancellation, PendingOutcome, Turn, TurnFailure, TurnOutcome, TurnPhase};
-pub use view::{EntryPage, TurnView};
-pub use workspace::{Workspace, WorkspaceError};
+pub use tool_set::{
+    ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExposure,
+    ToolHost as CodingToolHost, ToolOutput as CodingToolOutput, ToolPresentation,
+    ToolPresentationTarget, ToolSet,
+};
 
-/// The oldest page size this build will serve. Larger requests are clamped.
-pub const MAX_ENTRY_PAGE: u32 = store::sqlite::entry::MAX_ENTRY_PAGE;
+pub use transcript::{
+    ActivityGroup, ActivityOutcome, ActivityResult, LiveTranscript, TranscriptActivity,
+    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
+};

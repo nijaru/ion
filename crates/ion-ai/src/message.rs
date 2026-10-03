@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::Content;
+use crate::{Content, LoadedImage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Role {
@@ -22,6 +22,20 @@ pub struct Message {
     pub provider_replay: Option<ProviderReplay>,
 }
 
+impl Message {
+    /// Build the user message shared by terminal, headless and RPC clients.
+    #[must_use]
+    pub fn user_input(prompt: String, images: impl IntoIterator<Item = LoadedImage>) -> Self {
+        Self {
+            role: Role::User,
+            content: std::iter::once(Content::Text(prompt))
+                .chain(images.into_iter().flat_map(LoadedImage::into_parts))
+                .collect(),
+            provider_replay: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProviderReplay {
     /// Provider that produced this material. An adapter must not reuse it when
@@ -30,6 +44,10 @@ pub struct ProviderReplay {
     /// Adapter-defined discriminator, for example `reasoning` or `thinking`.
     pub kind: String,
     pub data: Value,
+    /// A tool continuation must keep the producing request prefix stable
+    /// while this assistant response and its tool results are in flight.
+    #[serde(default)]
+    pub prefix_bound: bool,
 }
 
 impl ProviderReplay {
@@ -39,7 +57,14 @@ impl ProviderReplay {
             provider: provider.into(),
             kind: kind.into(),
             data,
+            prefix_bound: false,
         }
+    }
+
+    #[must_use]
+    pub fn with_prefix_binding(mut self, enabled: bool) -> Self {
+        self.prefix_bound = enabled;
+        self
     }
 
     #[must_use]

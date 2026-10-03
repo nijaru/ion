@@ -1,12 +1,10 @@
-//! Line-diff screen renderer: committed scrollback and
-//! the live composer/footer region form one growing line array; each
-//! frame diffs against the previous visible window and rewrites only
-//! changed rows. Physical scrolling happens only when committed
-//! history advances: the live region is a fixed-height band rebuilt
-//! every frame, so reversible edits can never leak into terminal
-//! scrollback. The window occupies the bottom `height` rows of the
-//! physical screen; the host reserves those rows before the first draw
-//! (`reserve_rows`).
+//! Line-diff renderer for Ion's mutable terminal surface.
+//!
+//! Normal inline chat owns only a live band. Settled transcript rows can be
+//! appended once with `commit_text_lines`, after which the physical terminal
+//! owns their scrollback/reflow. `draw` still supports a monotonically growing
+//! committed slice for callers that need it, but normal chat does not have to
+//! re-own historical rows. Fullscreen rendering is a separate transient surface.
 
 use std::io::{self, Write};
 
@@ -145,6 +143,43 @@ impl Screen {
         (self.width, self.avail())
     }
 
+    #[must_use]
+    pub fn live_height(&self) -> usize {
+        self.live_height.unwrap_or(1)
+    }
+
+    /// Grow the mutable inline band without ever scrolling mutable content
+    /// into native history. The band only grows during one inline session.
+    pub fn ensure_live_height(&mut self, out: &mut impl Write, rows: usize) -> io::Result<()> {
+        let rows = rows.max(1).min(self.screen_height as usize);
+        if rows <= self.live_height() {
+            return Ok(());
+        }
+
+        let available = self.avail() as usize;
+        if available < rows {
+            // Erase the mutable surface before scrolling. Only terminal-owned
+            // content above the band may move into scrollback.
+            write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+            let grow = rows - available;
+            for _ in 0..grow {
+                write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
+            }
+            out.flush()?;
+            self.origin = self
+                .origin
+                .saturating_sub(grow.min(u16::MAX as usize) as u16);
+        }
+
+        self.live_height = Some(rows);
+        self.current = None;
+        self.fullscreen = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+        self.live_height_bias = 0;
+        Ok(())
+    }
+
     /// Visible rows of the region: origin to screen bottom. Follows
     /// terminal growth and shrinkage.
     fn avail(&self) -> u16 {
@@ -166,6 +201,7 @@ impl Screen {
             self.origin = height.saturating_sub(2);
         }
         self.current = None;
+        self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
         self.live_height_bias = 0;
@@ -209,9 +245,41 @@ impl Screen {
     /// is no longer what this Screen believes it is.
     pub fn invalidate(&mut self) {
         self.current = None;
+        self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
         self.live_height_bias = 0;
+    }
+
+    /// Append settled plain-text rows exactly once above the mutable live band.
+    ///
+    /// The current live surface is discarded, the rows are printed from the
+    /// band's anchor with explicit CRLFs, and ordinary terminal scrolling moves
+    /// older content into native scrollback. The anchor advances to the cursor's
+    /// resulting physical row. Already committed rows are never re-rendered on
+    /// resize; a subsequent `draw` repaints only the live band.
+    pub fn commit_text_lines(&mut self, out: &mut impl Write, lines: &[String]) -> io::Result<()> {
+        if lines.is_empty() {
+            return Ok(());
+        }
+
+        write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+        for line in lines {
+            // Put one settled row at the top edge of the mutable band, then
+            // scroll the physical terminal exactly once from its bottom row.
+            // The settled row moves above the band while the band itself stays
+            // anchored and blank for the next live repaint.
+            write!(out, "\x1b[{};1H\x1b[2K{line}", self.origin + 1)?;
+            write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
+        }
+        out.flush()?;
+
+        self.current = None;
+        self.fullscreen = None;
+        self.cursor_shown = false;
+        self.cursor_at = None;
+        self.live_height_bias = 0;
+        Ok(())
     }
 
     /// Render one frame. Lines must already be wrapped to `width`;
@@ -394,7 +462,7 @@ impl Screen {
             next.render_line(line.clone(), row as u16);
         }
         let mut painted = false;
-        for r in 0..h.min(rows.len()) as u16 {
+        for r in 0..h as u16 {
             let comparable = previous
                 .as_ref()
                 .is_some_and(|prev| r < prev.buffer.area.height);
@@ -563,6 +631,45 @@ mod tests {
 
     fn line(text: &str) -> Line<'static> {
         Line::from(text.to_owned())
+    }
+
+    #[test]
+    fn growing_live_band_scrolls_only_after_clearing_mutable_rows() {
+        let mut screen = Screen::with_live_height(80, 22, 24, 1);
+        let mut output = Vec::new();
+        screen.ensure_live_height(&mut output, 4).unwrap();
+        assert_eq!(screen.origin, 20);
+        assert_eq!(screen.live_height(), 4);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("\x1b[23;1H\x1b[J"));
+        assert_eq!(text.matches("\x1b[24;1H\r\n").count(), 2);
+
+        output = Vec::new();
+        screen.ensure_live_height(&mut output, 2).unwrap();
+        assert!(output.is_empty(), "the live band never shrinks during chat");
+        assert_eq!(screen.origin, 20);
+        assert_eq!(screen.live_height(), 4);
+    }
+
+    #[test]
+    fn settled_rows_advance_anchor_without_reowning_history() {
+        let mut screen = Screen::with_live_height(80, 5, 24, 4);
+        let mut output = Vec::new();
+        screen
+            .commit_text_lines(
+                &mut output,
+                &["first".into(), "second".into(), "third".into()],
+            )
+            .unwrap();
+        assert_eq!(screen.origin, 5);
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.starts_with("\x1b[6;1H\x1b[J"));
+        assert!(text.contains("\x1b[6;1H\x1b[2Kfirst"));
+        assert!(text.contains("\x1b[24;1H\r\n"));
+        assert!(text.contains("\x1b[6;1H\x1b[2Kthird"));
+
+        screen.resize(100, 30);
+        assert_eq!(screen.origin, 5);
     }
 
     #[test]
@@ -928,6 +1035,53 @@ mod tests {
     }
 
     #[test]
+    fn settled_commit_allows_live_band_to_shrink_fresh() {
+        let mut out = Vec::new();
+        let mut screen = Screen::with_live_height(40, 0, 8, 6);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[],
+                    live: &[
+                        line("one"),
+                        line("two"),
+                        line("three"),
+                        line("four"),
+                        line("five"),
+                        line("composer"),
+                    ],
+                    cursor: Some((5, 8)),
+                },
+            )
+            .expect("initial draw");
+        screen
+            .commit_text_lines(&mut out, &[String::from("settled")])
+            .expect("commit");
+        out.clear();
+
+        screen.set_live_height(1);
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    committed: &[],
+                    live: &[line("› ")],
+                    cursor: Some((0, 2)),
+                },
+            )
+            .expect("shrunk draw");
+
+        assert_eq!(screen.live_height(), 1);
+        let rendered = String::from_utf8(out).expect("utf8");
+        assert!(rendered.contains("› "), "{rendered:?}");
+        assert!(
+            !rendered.contains("\x1b[8;1H\r\n"),
+            "fresh shrink must not scroll history: {rendered:?}"
+        );
+    }
+
+    #[test]
     fn cursor_hidden_when_outside_the_window() {
         let committed: Vec<Line> = (0..10).map(|i| line(&format!("c{i}"))).collect();
         let out = render(vec![(&committed, &[line("s")], Some((1, 0)))]);
@@ -985,6 +1139,67 @@ mod tests {
         let s = String::from_utf8(out).expect("utf8");
         // invalidation repaints even rows whose content did not change
         assert_eq!(s.matches("history").count(), 2, "{s}");
+    }
+
+    #[test]
+    fn shorter_fullscreen_frame_clears_old_rows() {
+        let mut screen = Screen::new(12, 0, 3);
+        let mut terminal = vt100::Parser::new(3, 12, 0);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(
+                &mut out,
+                &[line("first"), line("second"), line("third")],
+                None,
+            )
+            .unwrap();
+        terminal.process(&out);
+        out.clear();
+        screen
+            .draw_fullscreen(&mut out, &[line("new")], None)
+            .unwrap();
+        terminal.process(&out);
+        let rows = terminal
+            .screen()
+            .rows(0, 12)
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, vec!["new", "", ""]);
+    }
+
+    #[test]
+    fn fullscreen_resize_repaints_at_new_dimensions() {
+        let mut screen = Screen::new(4, 0, 3);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(&mut out, &[line("old")], None)
+            .unwrap();
+        screen.resize(8, 3);
+        out.clear();
+        screen
+            .draw_fullscreen(&mut out, &[line("new")], None)
+            .unwrap();
+        let mut terminal = vt100::Parser::new(3, 8, 0);
+        terminal.process(&out);
+        assert_eq!(
+            terminal.screen().rows(0, 8).next().unwrap().trim_end(),
+            "new"
+        );
+    }
+
+    #[test]
+    fn invalidate_repaints_fullscreen() {
+        let mut screen = Screen::new(8, 0, 3);
+        let mut out = Vec::new();
+        screen
+            .draw_fullscreen(&mut out, &[line("hello")], None)
+            .unwrap();
+        out.clear();
+        screen.invalidate();
+        screen
+            .draw_fullscreen(&mut out, &[line("hello")], None)
+            .unwrap();
+        assert!(String::from_utf8(out).unwrap().contains("hello"));
     }
 
     #[test]

@@ -37,6 +37,8 @@ fn request() -> ModelRequest {
                 "required": ["path"]
             }),
         }],
+        context_timeline: None,
+        prompt_cache: ion_ai::PromptCacheIntent::Reusable,
         controls: controls(),
     }
 }
@@ -46,6 +48,7 @@ fn response(message: Message, usage: Usage, termination: ResponseTermination) ->
         message,
         usage,
         termination,
+        returned_model: None,
     }
 }
 
@@ -56,6 +59,7 @@ async fn scripted_service_streams_provider_neutral_events() {
         id: "call-1".to_owned(),
         name: "read".to_owned(),
         arguments: serde_json::json!({"path": "src/lib.rs"}),
+        raw_arguments: None,
     };
     let response = response(
         Message {
@@ -146,10 +150,20 @@ fn unknown_usage_is_distinct_from_reported_zero() {
     let encoded = serde_json::to_value(unknown).expect("serialize");
     assert_eq!(
         encoded,
-        serde_json::json!({"input_tokens": null, "output_tokens": null})
+        serde_json::json!({
+            "input_tokens": null,
+            "output_tokens": null,
+            "cache_read_input_tokens": null,
+            "cache_write_input_tokens": null
+        })
     );
     let decoded: Usage = serde_json::from_value(encoded).expect("deserialize");
     assert_eq!(decoded, unknown);
+
+    let cached = Usage::known_with_cache(1_000, 50, 700, 200);
+    assert_eq!(cached.uncached_input_tokens(), Some(100));
+    assert_eq!(cached.cache_read_input_tokens, Some(700));
+    assert_eq!(cached.cache_write_input_tokens, Some(200));
 }
 
 #[tokio::test]
@@ -157,6 +171,7 @@ async fn typed_open_failure_has_no_hidden_retry() {
     let service = ScriptedModelService::new([Script::OpenError(ProviderError {
         kind: ProviderErrorKind::RateLimited,
         message: "try later".to_owned(),
+        retry_after_ms: None,
     })]);
 
     let error = match service.stream(request()).await {

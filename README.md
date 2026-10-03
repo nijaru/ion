@@ -1,103 +1,379 @@
 # Ion
 
-Ion is building a provider-neutral Rust coding agent with a first-class terminal
-interface. It runs one primary conversation by default, with optional cooperating
-worker conversations. Pi/Pico and Codex are engineering references, not
-compatibility targets.
+Ion is an unreleased Rust coding agent for a local working directory. It has
+one coding loop for terminal chat, headless prompts and Rust library hosts. The
+agent can read, edit and write files and run a native shell command. Sessions
+are saved in SQLite and continue across launches. Ion is usable for short
+coding tasks; its session and model controls are still simpler than Pi's.
 
-## Current status
+## Start
 
-The workspace builds three libraries:
-
-- `ion-core`: the durable turn engine. A session owns conversations, immutable
-  entries, accepted inputs and the turns that answer them, backed by per-session
-  SQLite storage on a dedicated database thread.
-- `ion-ai`: provider-neutral model contracts and a scripted model service.
-- `ion-terminal`: low-level terminal components.
-
-The current engine implements the first durable-turn slice: request-key replay,
-frozen per-step request bases, response-ready crash recovery, sequential scripted tool
-execution, conservative unknown outcomes, supervised stop/join behavior, exclusive
-session ownership and bounded pages/content. A scripted model/tool exchange runs end to
-end through the headless API.
-
-The accepted [architecture](ARCHITECTURE.md) was deliberately refined before real
-providers and native tools made the early v0 boundaries expensive to change. The current
-Rust is now treated as a **prototype to mine and replace**, not a migration base. The
-maintained runtime will be fully rewritten/refactored in place around the accepted coding
-Turn design: frozen per-turn provider/tool/execution bindings, versioned semantic request
-manifests, explicit effect admission and backend receipts, logical ToolInvocations with
-immutable physical ToolAttempts, durable outcome staging for safe read-only parallelism,
-external execution truth separate from model-visible settlement, typed drive/session
-health and atomic commit-addressed updates. Context is anchored by immutable
-ContextBoundary entries, workspace coordination moves to a host-owned cross-process
-registry, and worker context/lifetime/workspace remain separate axes.
-
-There is no compatibility bridge or hybrid old/new runtime. Useful leaf algorithms and
-failure regressions may be retained; obsolete production representations, SQLite schema
-and APIs are deleted/replaced as part of the rewrite.
-
-The current source also has an opt-in workspace wrapper,
-`Workspace::open(root)?.bind(tool)`, backed by `.ion/claims.sqlite`. It conservatively
-retains a mutation claim across uncertainty, panic and process loss. The revised target
-keeps that safety property but moves claims/reconciliation behind the structured host
-execution boundary so a ToolAttempt records the execution receipt explicitly instead of
-hiding it inside a Tool wrapper. There is no automatic expiry or force-clear policy.
-
-This is **unconfined coordination**, not approval or sandbox enforcement. Hosts
-must use the same canonical root and bind tools to that actual environment.
-Opening a root nested below an already-coordinated workspace is refused, because
-two coordinators over one tree would each serialize only their own writers; a
-coordinator created after an outer workspace was opened is still not discovered,
-so keep one root per tree. External writers and tools that delete the
-coordinator can bypass it. Preserve the coordinator files across restarts.
-Approval/revocation and evidence-based reconciliation are not implemented.
-
-Closing interrupts active work without itself cancelling the unfinished turn.
-After reopening, explicit resume continues the turn; uncertain tool outcomes still
-require resolution rather than automatic repetition.
-
-Still missing: real provider adapters, a runnable `ion` binary, workspace tools
-(read/edit/exec), context compaction and forking, the terminal UI, and workers.
-No live-provider effectiveness has been measured.
-
-**There is no runnable `ion` binary in the current workspace.** The legacy
-`crates/ion/` application source is reference material outside the workspace; its
-CLI, provider configuration and usage instructions do not describe the new core.
-`cargo run -p ion` is not supported at this revision.
-
-## Development
-
-The checked-in toolchain pins Rust 1.98.0 and the required components.
+Build with the checked-in Rust 1.98.0 toolchain:
 
 ```sh
-cargo fmt --all -- --check
-cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
-cargo test --locked --workspace
+cargo build --locked -p ion
+target/debug/ion models
 ```
 
-The turn-engine regressions are grouped by boundary:
+Use `target/debug/ion` in the commands below, or install the binary on your
+`PATH` with `cargo install --locked --path crates/ion-app`.
+
+Ion picks a catalog model automatically when its provider key is present in
+`DEEPSEEK_API_KEY`, `XIAOMI_API_KEY`, `OPENROUTER_API_KEY`, `OPENAI_API_KEY` or
+`ANTHROPIC_API_KEY`. The default preference starts with DeepSeek Flash, then
+MiMo Flash, then DeepSeek Flash through OpenRouter. To select one explicitly,
+run `ion use PROVIDER MODEL` with the exact ID shown by `ion models`.
+`ion login PROVIDER` accepts a key at a masked terminal prompt when no
+environment key is available. `ion auth` shows which credential source is
+active, and `ion logout PROVIDER` removes a saved key. Environment keys take
+precedence.
+With the existing Pi FNOX profile, for example:
 
 ```sh
-cargo test --locked -p ion-core --test c1_turn          # admission, steps, tools, queues
-cargo test --locked -p ion-core --test c1_cancellation  # cancellation precedence, uncertainty
-cargo test --locked -p ion-core --test c1_storage       # ownership, schema, corruption, pages
-cargo test --locked -p ion-core --test c2_execution     # stop, join, close, late evidence
-cargo test --locked -p ion-core --test c2_workspace     # claims, cross-session conflict, process loss
-cargo test --locked -p ion-core --lib                   # commit faults, recovery boundaries
+fnox -c ~/.config/fnox/config.toml --profile pi exec -- target/debug/ion --provider openrouter --model deepseek/deepseek-v4.1-flash
 ```
 
-These exercise the libraries against scripted services; they are not evidence of
-live-provider effectiveness or a usable terminal application.
+From the project directory:
 
-## Project documentation
+```sh
+ion                        # terminal chat
+ion run 'Inspect and fix the failing test'
+ion -p 'Summarize the changes'
+ion --json run 'Inspect and fix the failing test' > events.jsonl
+ion rpc                    # persistent JSONL control on stdin/stdout
+git diff | ion -p 'Review this change'
+ion --continue             # reopen the latest session in this directory
+ion sessions               # list saved sessions and their IDs
+ion --session ID inspect   # committed history for a selected session as JSON
+ion --continue clone       # copy the latest conversation to a new session
+ion --continue turns       # list Turn numbers and prompt previews
+ion --continue fork 2      # new session before Turn 2, preserving the source
+ion --continue fork 2 --after # new session after settled Turn 2
+ion --continue compact     # summarize old context; retain the raw Session
+```
 
-- [ARCHITECTURE.md](ARCHITECTURE.md): target contracts, ownership and failure semantics.
-- [AGENTS.md](AGENTS.md): repository working instructions.
+`--cwd PATH` chooses a working directory. By default, a run starts a new
+session; `--continue` reopens the most recently active one in that directory.
+`--session ID` selects a listed session, and `--session PATH` can create or
+open an exact SQLite path for scripts. Opening and quitting an empty chat does
+not displace the latest conversation in `--continue` or `sessions`. An
+existing session uses its recorded directory, and an explicit `--cwd` must
+match it. Headless runs print the
+session ID to stderr. In the TUI, `/new`, `/clone`, `/fork`, `/fork-after TURN`, `/resume`, `/name`, `/session`,
+`/model` and `/compact` manage the conversation; `/login PROVIDER` and `/logout PROVIDER`
+manage saved keys. The TUI model picker searches catalog and configured
+custom routes. A resumed session restores its model; `ion use` sets the
+default for new sessions.
 
-Earlier architectures and implementation history remain in Git. They are not
-compatibility targets. Research notes and development planning are not public
-architecture contracts.
+Terminal chat is inline-first. Settled transcript rows are appended once to
+native terminal scrollback; Ion keeps only the active composer/progress region
+mutable. Resuming or switching to a saved Session bootstraps at most the latest
+six turns into scrollback and labels omitted earlier history as retained; the
+complete Session remains available through inspect/export and tool detail.
+After settled history is published, an expanded live band shrinks back to the
+rows the active composer/status actually need. Related tool calls are rendered
+as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of
+raw tool-call/result protocol rows. Repeated successful observation work can
+coalesce, while edits, writes, commands and exceptional outcomes remain
+explicit.
+
+Inline remains the default, but persistent fullscreen is also available with
+`--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
+inside chat. Fullscreen owns the transcript viewport and scrolling while using
+the same Session, agent loop and semantic transcript projection. File/model/
+session pickers and Ctrl-O tool detail use alternate-screen views in either
+mode. Working-directory, Session, model and context metadata are no longer
+permanent footer rows; `/session` exposes Session/context detail on demand.
+Cloning copies committed conversation and context into a new session with
+independent future turns. Both sessions still use the same live working
+directory; cloning does not copy or restore files.
+`/fork` opens a searchable Turn picker and restores the selected user input
+to the editor in a new Session; `/fork TURN` selects directly. `/fork-after
+TURN` continues after that Turn's recorded end. CLI `fork` prints the new
+Session ID. The source retains all later history. These operations copy
+conversation facts, not working files, and an unfinished Turn cannot be an
+after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
+optional `after: true`.
+This unreleased branch uses Session format 5; earlier development Session
+files are not reopened. Tool activity classification used by the transcript is
+stored with each assistant tool-call batch, so resumed history is not
+reinterpreted through the currently installed tool catalog.
+For headless integrations, `--json` works with `run PROMPT` or `--print PROMPT`.
+Headless prompts prepend UTF-8 data piped through stdin, up to 8 MiB. The
+selected model's context window and Ion's encoded request bound can reject
+large input even when it fits that raw input limit.
+Plain text mode writes the committed final answer to stdout after a successful
+turn. Tool progress and errors go to stderr; a failed turn does not print a
+provisional answer as if it had completed.
+In JSONL mode, stdout contains one JSON object per line: a `session` record with the ID and
+directory, ordered `text_delta`, tool lifecycle, recovery and final records,
+then a `run_end` record with `completed`, `cancelled` or `failed` status.
+`tool_started` and `tool_finished` share a `call_id` and include a semantic
+`activity` object (kind plus bounded subject when available);
+`tool_rejected` reports a call that was never dispatched because the model
+response was truncated.
+`response_restarted` means earlier text deltas from that incomplete attempt
+were replaced after context compaction; consumers should discard those deltas.
+`provider_replay_rebased` means a changed request prefix caused Ion to omit
+older opaque reasoning before dispatch while retaining the raw Session facts.
+`provider_replay_notice` reports a provider's count and reason for dropped or
+allowed-mismatch reasoning blocks.
+Diagnostics stay on stderr, and failure also sets a nonzero exit status. The `final` record is
+the committed assistant answer; earlier text deltas are for live display.
+
+`ion rpc` keeps a Session open for a subprocess client. It emits a `ready`
+record, then accepts one LF-terminated JSON command per stdin line. Commands
+can carry a string `id`; each response repeats it. For example, send
+`{"id":"1","type":"prompt","message":"Inspect this project"}`. A successful
+prompt response includes a Turn ID and confirms that the input entered the
+Session. Keep reading progress records with that Turn ID until `turn_end`
+reports `completed`, `cancelled` or `failed`; a response alone is not the
+answer. `final` is the committed answer. Other commands are `steer`,
+`follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
+`list_resources`, `reload_resources`, `compact`, `set_model`, `new_session`,
+`fork`, `switch_session` and `set_name`.
+`prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
+Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
+objects. Ion validates and normalizes both before accepting the input.
+`steer` queues typed input for the active Turn. `follow_up` queues a separate
+Turn while one is active; its acknowledgement means only that Ion holds the
+prepared input. A later `follow_up_started` record gives its committed Turn ID.
+`clear_queue` returns uncommitted steering and follow-ups; `abort` alone leaves
+follow-ups queued. Queued input is process-local and bounded to 32 MiB of
+encoded messages. Closing stdin cancels active work and returns pending
+follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
+image payloads, so clients should handle them as their own input data.
+Session, resource, model and manual-compaction changes require an idle Turn.
+`compact` acknowledges that the operation started, can be cancelled with
+`abort`, and later emits `compact_end` with completed/cancelled/failed status
+and whether the model-context projection changed. `steer` and `follow_up`
+remain valid only for a coding Turn. `set_model` saves the idle selection for that Session; `new_session` selects the current global
+default, and `switch_session` restores the selected Session's model. Starting,
+forking or switching Sessions refreshes project resources; use
+`reload_resources` to refresh them within the current Session.
+Malformed commands receive a failed response, commands over 8 MiB are
+rejected, and an incomplete final line is left unexecuted with a framing
+error. Stdout is reserved for protocol records, stderr for diagnostics.
+Uncommitted steering is returned as a typed `input` message if a Turn ends
+before the Session accepts it.
+While a turn runs, the editor remains available: Enter steers the next model
+step, Alt-Enter queues a separate follow-up turn, Alt-Up returns the most
+recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
+earlier prompts when the cursor reaches the first or last editor line. Type
+`@` to pick a project file, or use Tab after a partial `@path`; the picker
+inserts a path reference for the model to read, not the file's contents.
+Ctrl-O opens the latest complete tool result in a full-screen detail view;
+`/tools` lists results and `/tool N` opens a selected one. Esc or Ctrl-O
+closes the result view and restores the selected chat renderer. Input
+that has not reached the model returns to the editor if the turn fails or is
+cancelled.
+Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
+`vi`; Ion keeps the original draft if the editor fails. Ctrl-X or `/copy`
+copies the last committed assistant answer to the system clipboard when one
+is available. On remote or displayless terminals, Ion sends an OSC 52
+clipboard request, whose support depends on the terminal. `/export PATH`
+saves a readable transcript to a new file; `ion --continue export` prints it
+to stdout, and `ion --continue export PATH` saves it. Export includes prompts,
+shell commands and tool output, so review it before sharing. Image inputs are
+shown as markers rather than inline bytes; an existing target file is not
+overwritten.
+In the terminal, `!command` runs a shell command in the live working
+directory and includes its observed result in later model context.
+`!!command` runs it without sharing the result with the model. Both commands
+remain visible in the saved Session. The host executes the command while the
+Session holds an exclusive direct-shell permit, then publishes the observed
+result before releasing that permit. Ctrl-C requests cancellation of a running
+command; a command that started can still have external effects.
+
+Ion loads `AGENTS.md` instructions found along the working directory's
+ancestor path. A nested linked worktree's copy shadows the main checkout's
+copy of the same file. `ion use` also accepts a custom model with
+`--endpoint URL --wire chat-completions` or `--wire anthropic-messages`.
+`URL` may be a compatible API base such as `http://desktop:8080/v1` or the
+complete `http://desktop:8080/v1/chat/completions` request URL. Ion appends
+the standard wire path only when the URL is a base.
+For a custom OpenRouter model, use `--wire openrouter-chat`. This route retains
+plain reasoning or ordered structured `reasoning_details` across tool calls;
+the generic `chat-completions` route does not assume that contract. Qualify a
+new model with a tool-using turn before relying on it for coding.
+When switching models between Turns, Ion keeps the saved transcript and tool
+results but omits opaque reasoning from earlier model epochs in later model
+requests. Switching back does not revive those older blocks.
+The catalog includes current Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 on the
+native Anthropic Messages route. Its signed thinking is retained across tool
+and later Turn continuation. For reusable coding requests, these cataloged
+native routes opt into Anthropic prompt caching and retain cache-read/cache-write
+token counts separately from total input usage. Compatible tool-loadout changes
+are encoded as native inline tool additions/removals/redefinitions so the
+initial top-level tool prefix and signed-thinking prefix can remain stable;
+instruction changes deliberately fall back to the latest leading context.
+When a prefix cannot be preserved safely, Ion records the existing one-time
+reasoning reset rather than altering signed history.
+
+During a long active tool batch, current priced native Anthropic routes also
+use economical streaming cache warming: shortly before the verified cache
+lifetime expires, Ion may replay the exact last model request with a one-token
+output ceiling when the expected avoided cache miss is at least $0.05. The
+timer starts from that request's dispatch time, stops when the tool batch or
+context advances, and is capped to one hour of active work. Refresh usage is
+stored as a cache_warm Session accounting fact but never enters model context
+or normal transcript/export output. Idle cache warming is not implemented.
+Ion avoids compaction during a signed tool continuation; if its prefix changes
+or cannot fit, the Turn fails without repeating a tool effect.
+For a llama.cpp server whose model emits unreplayable reasoning, use
+`--wire llama-cpp-no-thinking` to disable it on each request. Custom HTTP or
+HTTPS endpoints can run without a key. Pass `--api-key-env NAME` or run
+`ion login PROVIDER` when the endpoint needs one. An HTTP endpoint sends any
+configured key in cleartext; use HTTPS when the endpoint offers it.
+
+Attach JPEG, PNG, GIF or WebP files with `ion --image PATH run "PROMPT"` or
+`ion --image PATH chat`; repeat `--image` for several images. In chat,
+`/image PATH` attaches a file to the next prompt. Ctrl-V reads the clipboard
+on the host running Ion: copied files enter as paths, copied image pixels
+attach to the prompt, and otherwise text is pasted. Enter steers attached
+images during a running Turn; Alt-Enter queues a separate follow-up. A terminal's
+ordinary text paste still works. Relative paths resolve in
+the Session's working directory. Ion decodes and checks the file, applies
+image orientation and resizes large images before accepting the Turn. Source
+files are limited to 32 MiB, and each inline image to 5 MiB within the
+current 8 MiB request bound. A resize note gives the model the sent dimensions.
+Image bytes are stored in the Session so follow-up requests can still see
+them after the source file changes; `ion inspect` shows an image marker
+instead of printing base64. A custom endpoint needs `ion use ... --images`
+to declare that its model accepts image input.
+The model's `read` tool can also open a workspace image and return it as a
+typed attachment. It uses the same normalization and size bounds as a user
+attachment. Tool images remain in Session history for replay; text-only model
+routes receive an explicit tool error instead of an unseen image.
+
+Ion also discovers Agent Skills from `~/.agents/skills/`,
+`~/.config/ion/skills/` (or `$XDG_CONFIG_HOME/ion/skills/`) and project
+`.agents/skills/` directories from the working directory up to its Git root.
+Each skill is a directory with `SKILL.md` and valid Agent Skills frontmatter.
+Only its name, description and path enter the standing model instructions;
+the model can read the full file when relevant. Use `/skill:NAME [request]` to
+load it explicitly. Prompt templates are direct `.md` files in
+`~/.config/ion/prompts/` or project `.ion/prompts/`; `/NAME [arguments]`
+expands one before submitting it. Templates support `$1`, `$@`,
+`${1:-default}` and `${@:N:L}` argument forms; quote an argument containing
+spaces. `ion resources` lists both, and the TUI has
+`/skills`, `/prompts` and `/reload`. Starting, cloning, forking or switching a
+Session refreshes resources; `/reload` refreshes the current Session. Personal
+resources take precedence over same-named project resources; nearer project
+directories take precedence over ancestors. Invalid resources are skipped with
+a diagnostic. Project resources are treated as lower-trust repository text
+under the same live-directory tool permissions as `AGENTS.md`; review
+unfamiliar resources before using them.
+
+Add local MCP tool servers explicitly with `ion mcp add NAME COMMAND [ARGS...]`.
+Use `ion mcp add-http NAME URL` for a Streamable HTTP server; add
+`--bearer-token-env VARIABLE` when it requires a bearer token already set in
+the environment. `ion mcp list` and `ion mcp remove NAME` manage the saved
+user configuration.
+Ion starts configured servers when a coding client starts, discovers their
+tools, and exposes each as `mcp__NAME__TOOL` alongside read, edit, write and
+exec. MCP tool names that need normalization or shortening receive a stable
+hash suffix in the model-facing name; Ion calls the server with its original
+tool name. Headless, TUI and RPC use the same tool set. Local server processes inherit
+the user's environment and permissions and run in the Session's working
+directory. A repository file does not launch an MCP server merely because
+Ion opened that directory. A failing server is reported at startup while
+healthy servers and the coding client remain available; a failed
+tool call becomes an error result visible to the model. Current MCP support
+handles text, structured data and normalized image tool results; audio and
+embedded resource content report an explicit unsupported-content error.
+Large text or structured results include a bounded preview and a
+`full_output_path` to a private JSON file containing the complete result;
+`read` can inspect it in ranges.
+When a server announces a changed tool list, Ion refreshes that server before
+the next model request. A failed refresh reports a warning and keeps its last
+known list. Remote MCP OAuth login is not yet supported.
+For Rust embedders, `Host::agent_with_tools` takes the working directory,
+selected route and a custom `CodingToolHost`; it composes that host with the
+built-ins, and a same-name custom tool replaces that one built-in.
+
+Tools act directly in the working directory with the host user's permissions.
+There is no implicit sandbox. If a process stops during a tool call, Ion
+records its effect as unknown when the next prompt begins; it does not rerun
+the call automatically. `ion --continue inspect` reads the existing log
+without making that repair. `exec` retains the final 64 KiB observed from each
+output stream. A complete truncated stream also has a private temporary file
+at `stdout_full_path` or `stderr_full_path` so earlier output can be inspected
+without rerunning the command. These files may expire across launches. Ion
+reports omitted bytes when capture completes and marks a capture incomplete
+if an inherited pipe remains open after output goes idle; an incomplete
+capture has no full-output path.
+Commands use Bash when available, then fall back to POSIX sh. Commands have
+no default timeout; pass
+`timeout_ms` when a deadline is needed. `read` uses byte offsets and returns a
+UTF-8-safe `next_offset`. For files within its 8 MiB text-edit bound,
+`read.base_digest` covers the full file and can guard a later `edit`;
+`edit` takes an `edits` array of `{old_text, new_text}` replacements against one
+original file snapshot. It rejects ambiguous or overlapping matches before
+writing, accepts ordinary LF or CRLF text, and preserves the file's BOM and
+unaffected line endings. A damaged Session file is skipped
+by `sessions` and `--continue`, while opening its exact path reports the
+error. Ion summarizes settled history when its request
+nears a known model's context window or exceeds its transport bound, and can
+retry one model request after a provider reports context overflow. The raw
+conversation remains inspectable; `compact` and `/compact` also trigger this
+explicitly. Longer saved histories are summarized in bounded steps when one
+summary request cannot fit. A single oversized prompt or tool result may
+still exceed the context limit when no settled group can be summarized.
+Transient provider failures can trigger up to two cancellable retries before
+stream output; retry events appear in the TUI and JSONL output. A response that
+stops after producing partial output is not replayed silently.
+If an output-token limit cuts off identifiable tool calls, Ion records them
+as skipped errors and lets the model reissue complete calls. No tool from the
+truncated response runs.
+When observed output use is below the selected model's ceiling, Ion first makes one
+compact-and-retry attempt if a settled history prefix is available. It drops
+the incomplete attempt and reports the restart to streaming clients.
+Coding requests use the catalog model's output ceiling, reduced when the
+current context leaves less estimated room; there is no separate 16k app cap.
+A completed response with no answer or tool call fails the Turn; it does not
+save an empty assistant message that would break later provider replay.
+
+## Current limits
+
+The required CI gate now includes a Linux PTY workflow for the terminal client
+in addition to format, strict Clippy and workspace tests. It exercises inline
+startup, grouped tool activity, temporary full-screen views, persistent
+fullscreen startup, inline/fullscreen mode switching, resize, Session/model
+controls, masked login, copy and terminal restoration. This is an automated PTY
+qualification, not a substitute for manual checks in every supported terminal.
+
+Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
+OpenRouter DeepSeek Flash, custom OpenRouter routes for
+`stealth/space-bunny-alpha` and Gemini 3 Flash Preview, and a custom llama.cpp
+route. OpenRouter and local llama.cpp tasks also passed on Linux. The cataloged
+OpenRouter DeepSeek route passed user-image and workspace-image tasks,
+resource use, MCP tool use and Session continuation. These checks cover
+selected tasks and routes. A separate OpenRouter DeepSeek Flash task used one
+two-replacement `edit` call with a `read.base_digest` guard and verified the
+result with shell. Anthropic and
+direct OpenAI have not been live-qualified.
+
+Direct DeepSeek and MiMo and the qualified OpenRouter routes retain the
+reasoning needed for tool-call continuation across saved Turns. The Gemini
+route completed a signed tool continuation and another Turn after cross-process
+resume. An offline headless Anthropic Messages check completed signed tool
+continuation, cross-process resume and durable reasoning resets after
+compaction and project instructions changed. The native route still needs a
+live Anthropic credential and account qualification; thinking on custom
+llama.cpp routes remains unsupported. Context pressure uses an approximate
+token estimate; custom routes without a known context window use only the
+encoded request bound. See [ARCHITECTURE.md](ARCHITECTURE.md) for the design
+contract and [AGENTS.md](AGENTS.md) for repository checks.
+
+For Rust embedding, `ion-host::Host` composes the same model catalog,
+credentials, project instructions and Session discovery used by the CLI.
+`ion-core::CodingAgent` and `CodingSession` own the coding loop and committed
+conversation; `Host::agent_with_tools` accepts a custom `CodingToolHost`.
+`Host::resources` loads project skills and prompt templates. For a long-lived
+Rust client, `ion-host::SessionBinding` owns the active Session, model, agent
+and resources and handles idle model and Session changes. `ion rpc` provides
+long-lived subprocess control.
 
 ## License
 

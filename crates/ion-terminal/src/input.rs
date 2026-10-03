@@ -1,7 +1,17 @@
+use std::collections::VecDeque;
+use std::fs::File;
 use std::io;
+use std::os::fd::AsFd;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
-use crossterm::event::{self, Event, EventStream};
-use futures_util::StreamExt;
+use crossterm::terminal;
+use rustix::fs::{OFlags, fcntl_getfl, fcntl_setfl};
+use termwiz::input::{self as term_input, InputParser};
+use tokio::signal::unix::{Signal, SignalKind, signal};
+use tokio::sync::mpsc;
 
 /// Terminal dimensions in columns and rows.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,16 +94,11 @@ impl KeyEvent {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FocusEvent {
-    pub gained: bool,
-}
-
 /// Mouse input, typed at the boundary; the raw event stays private to
 /// this crate. Fullscreen frontends decode scroll steps and clicks from
 /// this vocabulary only.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MouseEvent(event::MouseEvent);
+pub struct MouseEvent(term_input::MouseEvent);
 
 /// The application-owned mouse vocabulary a frontend needs: wheel
 /// steps and button presses with their cell position. Coordinates are
@@ -113,37 +118,43 @@ impl MouseEvent {
     /// What happened, in frontend terms.
     #[must_use]
     pub fn kind(&self) -> MouseKind {
-        use crossterm::event::MouseButton as Button;
-        use crossterm::event::MouseEventKind as Kind;
-        match self.0.kind {
-            Kind::ScrollUp => MouseKind::ScrollUp,
-            Kind::ScrollDown => MouseKind::ScrollDown,
-            Kind::ScrollLeft => MouseKind::ScrollLeft,
-            Kind::ScrollRight => MouseKind::ScrollRight,
-            Kind::Down(button) => MouseKind::Press(match button {
-                Button::Left => 0,
-                Button::Right => 1,
-                Button::Middle => 2,
-            }),
-            Kind::Up(button) => MouseKind::Release(match button {
-                Button::Left => 0,
-                Button::Right => 1,
-                Button::Middle => 2,
-            }),
-            Kind::Drag(_) | Kind::Moved => MouseKind::Move,
+        use term_input::MouseButtons as Button;
+        let buttons = &self.0.mouse_buttons;
+        if buttons.contains(Button::VERT_WHEEL) {
+            return if buttons.contains(Button::WHEEL_POSITIVE) {
+                MouseKind::ScrollUp
+            } else {
+                MouseKind::ScrollDown
+            };
+        }
+        if buttons.contains(Button::HORZ_WHEEL) {
+            return if buttons.contains(Button::WHEEL_POSITIVE) {
+                MouseKind::ScrollRight
+            } else {
+                MouseKind::ScrollLeft
+            };
+        }
+        if buttons.contains(Button::LEFT) {
+            MouseKind::Press(0)
+        } else if buttons.contains(Button::RIGHT) {
+            MouseKind::Press(1)
+        } else if buttons.contains(Button::MIDDLE) {
+            MouseKind::Press(2)
+        } else {
+            MouseKind::Move
         }
     }
 
     /// 0-based cell column of the event.
     #[must_use]
     pub fn column(&self) -> u16 {
-        self.0.column
+        self.0.x.saturating_sub(1)
     }
 
     /// 0-based cell row of the event.
     #[must_use]
     pub fn row(&self) -> u16 {
-        self.0.row
+        self.0.y.saturating_sub(1)
     }
 }
 
@@ -154,79 +165,295 @@ pub enum InputEvent {
     Key(KeyEvent),
     Paste(String),
     Mouse(MouseEvent),
-    Focus(FocusEvent),
     Resize(Size),
 }
 
 /// The single terminal input reader for a live frontend.
 #[derive(Debug)]
 pub struct InputStream {
-    stream: EventStream,
+    reader: Option<JoinHandle<()>>,
+    stop: Arc<AtomicBool>,
+    chunks: mpsc::Receiver<io::Result<Vec<u8>>>,
+    resize: Signal,
+    parser: InputParser,
+    replies: TerminalReplyFilter,
+    pending: VecDeque<InputEvent>,
+    waiting: bool,
+    eof: bool,
+    escape_grace: Duration,
 }
 
 impl InputStream {
-    pub(crate) fn new() -> Self {
-        Self {
-            stream: EventStream::new(),
+    pub(crate) fn new() -> io::Result<Self> {
+        let resize = signal(SignalKind::window_change())?;
+        // A separate open file description keeps O_NONBLOCK off stdout and
+        // the synchronous stdin used by masked credential prompts.
+        let stdin = File::open("/dev/tty")?;
+        let original_flags = fcntl_getfl(stdin.as_fd())?;
+        fcntl_setfl(stdin.as_fd(), original_flags | OFlags::NONBLOCK)?;
+        let (sender, chunks) = mpsc::channel(32);
+        let stop = Arc::new(AtomicBool::new(false));
+        let reader_stop = Arc::clone(&stop);
+        let reader = thread::Builder::new()
+            .name("ion-terminal-input".into())
+            .spawn(move || read_chunks(stdin, sender, &reader_stop))?;
+        let remote =
+            std::env::var_os("SSH_CONNECTION").is_some() || std::env::var_os("SSH_TTY").is_some();
+        Ok(Self {
+            reader: Some(reader),
+            stop,
+            chunks,
+            resize,
+            parser: InputParser::new(),
+            replies: TerminalReplyFilter::default(),
+            pending: VecDeque::new(),
+            waiting: false,
+            eof: false,
+            escape_grace: Duration::from_millis(if remote { 100 } else { 10 }),
+        })
+    }
+
+    /// Release stdin before a synchronous credential prompt takes it.
+    pub fn suspend(&mut self) -> io::Result<()> {
+        self.stop.store(true, Ordering::Release);
+        if let Some(reader) = self.reader.take() {
+            reader
+                .join()
+                .map_err(|_| io::Error::other("terminal reader panicked"))?;
         }
+        Ok(())
     }
 
     /// Read the next decoded event, preserving stream termination and I/O
     /// errors for the owning runtime to handle explicitly.
     pub async fn next(&mut self) -> Option<io::Result<InputEvent>> {
-        self.stream
-            .next()
-            .await
-            .map(|result| result.map(Self::decode))
+        loop {
+            if let Some(event) = self.pending.pop_front() {
+                return Some(Ok(event));
+            }
+            if self.eof {
+                return None;
+            }
+            tokio::select! {
+                result = self.chunks.recv() => match result {
+                    None => {
+                        self.eof = true;
+                        self.parse(&[], false);
+                    }
+                    Some(Ok(bytes)) => self.parse(&bytes, true),
+                    Some(Err(error)) => return Some(Err(error)),
+                },
+                resize = self.resize.recv() => {
+                    if resize.is_none() {
+                        return Some(Err(io::Error::other("terminal resize signal closed")));
+                    }
+                    match terminal::size() {
+                        Ok((columns, rows)) => return Some(Ok(InputEvent::Resize(Size { columns, rows }))),
+                        Err(error) => return Some(Err(error)),
+                    }
+                },
+                () = tokio::time::sleep(self.escape_grace), if self.waiting => self.parse(&[], false),
+            }
+        }
     }
 
-    fn decode(event: Event) -> InputEvent {
+    fn parse(&mut self, bytes: &[u8], maybe_more: bool) {
+        let bytes = self.replies.feed(bytes, !maybe_more);
+        self.parser.parse(
+            &bytes,
+            |event| {
+                if let Some(decoded) = Self::decode(event) {
+                    self.pending.push_back(decoded);
+                }
+            },
+            maybe_more,
+        );
+        self.waiting = maybe_more;
+    }
+
+    fn decode(event: term_input::InputEvent) -> Option<InputEvent> {
         match event {
-            Event::Key(key) => InputEvent::Key(KeyEvent {
-                code: decode_code(key.code),
-                modifiers: decode_modifiers(key.modifiers),
-            }),
-            Event::Paste(text) => InputEvent::Paste(text),
-            Event::Mouse(mouse) => InputEvent::Mouse(MouseEvent(mouse)),
-            Event::FocusGained => InputEvent::Focus(FocusEvent { gained: true }),
-            Event::FocusLost => InputEvent::Focus(FocusEvent { gained: false }),
-            Event::Resize(columns, rows) => InputEvent::Resize(Size { columns, rows }),
+            term_input::InputEvent::Key(key) => {
+                let modifiers = decode_modifiers(key.modifiers);
+                let code = if key.key == term_input::KeyCode::Tab
+                    && modifiers.contains(Modifiers::SHIFT)
+                {
+                    KeyCode::BackTab
+                } else {
+                    decode_code(key.key)
+                };
+                Some(InputEvent::Key(KeyEvent { code, modifiers }))
+            }
+            term_input::InputEvent::Paste(text) => Some(InputEvent::Paste(text)),
+            term_input::InputEvent::Mouse(mouse) => Some(InputEvent::Mouse(MouseEvent(mouse))),
+            term_input::InputEvent::Resized { cols, rows } => Some(InputEvent::Resize(Size {
+                columns: cols.try_into().unwrap_or(u16::MAX),
+                rows: rows.try_into().unwrap_or(u16::MAX),
+            })),
+            term_input::InputEvent::PixelMouse(_) | term_input::InputEvent::Wake => None,
         }
     }
 }
 
-fn decode_code(code: event::KeyCode) -> KeyCode {
+/// Crossterm's startup query can leave a late private CSI reply in the tty.
+/// Termwiz decodes keys but treats these replies as Alt+[ followed by text.
+#[derive(Debug, Default)]
+struct TerminalReplyFilter {
+    state: ReplyState,
+}
+
+#[derive(Debug, Default)]
+enum ReplyState {
+    #[default]
+    Ground,
+    Esc,
+    Csi,
+    Private(Vec<u8>),
+}
+
+impl TerminalReplyFilter {
+    fn feed(&mut self, bytes: &[u8], flush: bool) -> Vec<u8> {
+        let mut output = Vec::with_capacity(bytes.len());
+        for &byte in bytes {
+            let state = std::mem::take(&mut self.state);
+            self.state = match state {
+                ReplyState::Ground if byte == b'\x1b' => ReplyState::Esc,
+                ReplyState::Ground => {
+                    output.push(byte);
+                    ReplyState::Ground
+                }
+                ReplyState::Esc if byte == b'[' => ReplyState::Csi,
+                ReplyState::Esc => {
+                    output.push(b'\x1b');
+                    if byte == b'\x1b' {
+                        ReplyState::Esc
+                    } else {
+                        output.push(byte);
+                        ReplyState::Ground
+                    }
+                }
+                ReplyState::Csi if byte == b'?' => ReplyState::Private(Vec::new()),
+                ReplyState::Csi => {
+                    output.extend_from_slice(b"\x1b[");
+                    if byte == b'\x1b' {
+                        ReplyState::Esc
+                    } else {
+                        output.push(byte);
+                        ReplyState::Ground
+                    }
+                }
+                ReplyState::Private(_) if byte == b'\x1b' => ReplyState::Esc,
+                ReplyState::Private(mut body) => {
+                    body.push(byte);
+                    if (0x40..=0x7e).contains(&byte) || body.len() >= 128 {
+                        if !matches!(body.last(), Some(b'u' | b'c'))
+                            || !body[..body.len() - 1]
+                                .iter()
+                                .all(|value| value.is_ascii_digit() || *value == b';')
+                        {
+                            output.extend_from_slice(b"\x1b[?");
+                            output.extend_from_slice(&body);
+                        }
+                        ReplyState::Ground
+                    } else {
+                        ReplyState::Private(body)
+                    }
+                }
+            };
+        }
+        if flush {
+            match std::mem::take(&mut self.state) {
+                ReplyState::Esc => output.push(b'\x1b'),
+                ReplyState::Csi => output.extend_from_slice(b"\x1b["),
+                ReplyState::Private(body) => {
+                    output.extend_from_slice(b"\x1b[?");
+                    output.extend_from_slice(&body);
+                }
+                ReplyState::Ground => {}
+            }
+        }
+        output
+    }
+}
+
+impl Drop for InputStream {
+    fn drop(&mut self) {
+        let _ = self.suspend();
+    }
+}
+
+fn read_chunks(file: File, sender: mpsc::Sender<io::Result<Vec<u8>>>, stop: &AtomicBool) {
+    let mut buffer = [0u8; 8192];
+    while !stop.load(Ordering::Acquire) {
+        match rustix::io::read(&file, &mut buffer) {
+            Ok(0) => break,
+            Ok(size) => {
+                if !send_chunk(&sender, Ok(buffer[..size].to_vec()), stop) {
+                    return;
+                }
+            }
+            Err(error) if error == rustix::io::Errno::AGAIN => {
+                thread::sleep(Duration::from_millis(5));
+            }
+            Err(error) => {
+                let _ = send_chunk(&sender, Err(error.into()), stop);
+                return;
+            }
+        }
+    }
+}
+
+fn send_chunk(
+    sender: &mpsc::Sender<io::Result<Vec<u8>>>,
+    mut item: io::Result<Vec<u8>>,
+    stop: &AtomicBool,
+) -> bool {
+    loop {
+        match sender.try_send(item) {
+            Ok(()) => return true,
+            Err(mpsc::error::TrySendError::Closed(_)) => return false,
+            Err(mpsc::error::TrySendError::Full(unsent)) => item = unsent,
+        }
+        if stop.load(Ordering::Acquire) {
+            return false;
+        }
+        thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn decode_code(code: term_input::KeyCode) -> KeyCode {
     match code {
-        event::KeyCode::Backspace => KeyCode::Backspace,
-        event::KeyCode::Enter => KeyCode::Enter,
-        event::KeyCode::Left => KeyCode::Left,
-        event::KeyCode::Right => KeyCode::Right,
-        event::KeyCode::Up => KeyCode::Up,
-        event::KeyCode::Down => KeyCode::Down,
-        event::KeyCode::Home => KeyCode::Home,
-        event::KeyCode::End => KeyCode::End,
-        event::KeyCode::PageUp => KeyCode::PageUp,
-        event::KeyCode::PageDown => KeyCode::PageDown,
-        event::KeyCode::Tab => KeyCode::Tab,
-        event::KeyCode::BackTab => KeyCode::BackTab,
-        event::KeyCode::Delete => KeyCode::Delete,
-        event::KeyCode::Insert => KeyCode::Insert,
-        event::KeyCode::F(number) => KeyCode::F(number),
-        event::KeyCode::Char(ch) => KeyCode::Char(ch),
-        event::KeyCode::Esc => KeyCode::Esc,
+        term_input::KeyCode::Backspace => KeyCode::Backspace,
+        term_input::KeyCode::Enter => KeyCode::Enter,
+        term_input::KeyCode::LeftArrow => KeyCode::Left,
+        term_input::KeyCode::RightArrow => KeyCode::Right,
+        term_input::KeyCode::UpArrow => KeyCode::Up,
+        term_input::KeyCode::DownArrow => KeyCode::Down,
+        term_input::KeyCode::Home => KeyCode::Home,
+        term_input::KeyCode::End => KeyCode::End,
+        term_input::KeyCode::PageUp => KeyCode::PageUp,
+        term_input::KeyCode::PageDown => KeyCode::PageDown,
+        term_input::KeyCode::Tab => KeyCode::Tab,
+        term_input::KeyCode::Delete => KeyCode::Delete,
+        term_input::KeyCode::Insert => KeyCode::Insert,
+        term_input::KeyCode::Function(number) => KeyCode::F(number),
+        term_input::KeyCode::Char('\r' | '\n') => KeyCode::Enter,
+        term_input::KeyCode::Char('\t') => KeyCode::Tab,
+        term_input::KeyCode::Char(ch) => KeyCode::Char(ch),
+        term_input::KeyCode::Escape => KeyCode::Esc,
         _ => KeyCode::Other,
     }
 }
 
-fn decode_modifiers(modifiers: event::KeyModifiers) -> Modifiers {
+fn decode_modifiers(modifiers: term_input::Modifiers) -> Modifiers {
     let mut decoded = Modifiers::NONE;
-    if modifiers.contains(event::KeyModifiers::SHIFT) {
+    if modifiers.contains(term_input::Modifiers::SHIFT) {
         decoded |= Modifiers::SHIFT;
     }
-    if modifiers.contains(event::KeyModifiers::CONTROL) {
+    if modifiers.contains(term_input::Modifiers::CTRL) {
         decoded |= Modifiers::CONTROL;
     }
-    if modifiers.contains(event::KeyModifiers::ALT) {
+    if modifiers.contains(term_input::Modifiers::ALT) {
         decoded |= Modifiers::ALT;
     }
     decoded
@@ -245,19 +472,69 @@ mod tests {
 
     #[test]
     fn decoding_preserves_shift_enter_as_a_typed_event() {
-        let decoded = InputStream::decode(Event::Key(event::KeyEvent::new(
-            event::KeyCode::Enter,
-            event::KeyModifiers::SHIFT,
-        )));
+        let decoded = InputStream::decode(term_input::InputEvent::Key(term_input::KeyEvent {
+            key: term_input::KeyCode::Enter,
+            modifiers: term_input::Modifiers::SHIFT,
+        }));
         assert_eq!(
             decoded,
-            InputEvent::Key(KeyEvent::new(KeyCode::Enter, Modifiers::SHIFT))
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Enter,
+                Modifiers::SHIFT
+            )))
         );
     }
 
     #[test]
     fn decoding_keeps_paste_as_one_semantic_event() {
-        let decoded = InputStream::decode(Event::Paste("one\ntwo".to_owned()));
-        assert_eq!(decoded, InputEvent::Paste("one\ntwo".to_owned()));
+        let decoded = InputStream::decode(term_input::InputEvent::Paste("one\ntwo".to_owned()));
+        assert_eq!(decoded, Some(InputEvent::Paste("one\ntwo".to_owned())));
+    }
+
+    #[test]
+    fn split_kitty_alt_enter_is_one_key() {
+        let mut parser = InputParser::new();
+        let first = parser.parse_as_vec(b"\x1b", true);
+        assert!(first.is_empty());
+        let rest = parser.parse_as_vec(b"[13;3u", true);
+        assert_eq!(rest.len(), 1);
+        assert_eq!(
+            InputStream::decode(rest[0].clone()),
+            Some(InputEvent::Key(KeyEvent::new(
+                KeyCode::Enter,
+                Modifiers::ALT
+            )))
+        );
+    }
+
+    #[test]
+    fn enabled_mouse_and_private_replies_do_not_become_draft_text() {
+        let mut parser = InputParser::new();
+        let mut replies = TerminalReplyFilter::default();
+        for sequence in [
+            b"\x1b[<64;3;4M".as_slice(),
+            b"\x1b[200~pasted\x1b[201~",
+            b"\x1b[?1u",
+        ] {
+            let bytes = replies.feed(sequence, true);
+            let events = parser.parse_as_vec(&bytes, false);
+            assert!(
+                !events.iter().any(|event| matches!(
+                    event,
+                    term_input::InputEvent::Key(term_input::KeyEvent {
+                        key: term_input::KeyCode::Char(_),
+                        ..
+                    })
+                )),
+                "sequence {sequence:?} leaked as text: {events:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn split_private_reply_is_consumed_without_losing_following_key() {
+        let mut replies = TerminalReplyFilter::default();
+        assert!(replies.feed(b"\x1b[?1;", false).is_empty());
+        assert_eq!(replies.feed(b"2cA", false), b"A");
     }
 }

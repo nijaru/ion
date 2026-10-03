@@ -1,0 +1,30 @@
+[package]
+name = "ion"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow = "1.0"
+arboard = { version = "3.6.1", features = ["wayland-data-control"] }
+base64 = "0.22.1"
+clap.workspace = true
+ignore = "0.4.33"
+ion-ai.workspace = true
+ion-core.workspace = true
+ion-host.workspace = true
+ion-terminal.workspace = true
+ratatui = "0.30.2"
+rpassword = "7.5.4"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+shlex = "2.0.1"
+tokio.workspace = true
+tokio-util.workspace = true
+unicode-segmentation = "1.13.3"
+unicode-width = "0.2.2"
+uuid = { version = "1.25.0", features = ["v7"] }
+
+[lints]
+workspace = true
