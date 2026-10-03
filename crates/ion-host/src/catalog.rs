@@ -37,6 +37,9 @@ pub struct PromptCacheCapabilities {
     /// Whether this route is expected to report cache read/write token detail.
     pub usage_details: bool,
     pub lifetime: PromptCacheLifetime,
+    /// Whether the adapter must explicitly opt reusable requests into
+    /// provider prompt caching.
+    pub automatic_request: bool,
     /// A provider-native no-output prewarm operation is available on this
     /// exact route/endpoint family.
     pub native_prewarm: bool,
@@ -61,6 +64,7 @@ impl ModelCapabilities {
             prompt_cache: PromptCacheCapabilities {
                 usage_details: false,
                 lifetime: PromptCacheLifetime::Unknown,
+                automatic_request: false,
                 native_prewarm: false,
             },
             context_mutation: ContextMutationCapabilities {
@@ -76,6 +80,7 @@ const OPENAI_MANAGED_CACHE: ModelCapabilities = ModelCapabilities {
     prompt_cache: PromptCacheCapabilities {
         usage_details: true,
         lifetime: PromptCacheLifetime::ProviderManaged,
+        automatic_request: false,
         native_prewarm: false,
     },
     context_mutation: ContextMutationCapabilities {
@@ -89,6 +94,7 @@ const OPENROUTER_PROVIDER_CACHE: ModelCapabilities = ModelCapabilities {
     prompt_cache: PromptCacheCapabilities {
         usage_details: true,
         lifetime: PromptCacheLifetime::ProviderManaged,
+        automatic_request: false,
         native_prewarm: false,
     },
     context_mutation: ContextMutationCapabilities {
@@ -105,7 +111,8 @@ const ANTHROPIC_CACHE_ONLY: ModelCapabilities = ModelCapabilities {
             default_seconds: 300,
             extended_seconds: Some(3600),
         },
-        native_prewarm: false,
+        automatic_request: true,
+        native_prewarm: true,
     },
     context_mutation: ContextMutationCapabilities {
         mid_conversation_system: false,
@@ -121,7 +128,8 @@ const ANTHROPIC_INLINE_CONTEXT: ModelCapabilities = ModelCapabilities {
             default_seconds: 300,
             extended_seconds: Some(3600),
         },
-        native_prewarm: false,
+        automatic_request: true,
+        native_prewarm: true,
     },
     context_mutation: ContextMutationCapabilities {
         mid_conversation_system: true,
