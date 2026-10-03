@@ -17,7 +17,8 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use futures_util::future::join_all;
 use ion_ai::{BoxFuture, ImageMime, MAX_SOURCE_BYTES, ToolCall, ToolSpec, normalize_image};
 use ion_core::{
-    CodingToolHost, CodingToolOutput, ToolActivityKind, ToolDefinition, ToolPresentation,
+    CodingToolHost, CodingToolOutput, ToolActivityKind, ToolDefinition, ToolExposure,
+    ToolPresentation,
 };
 use rmcp::{
     ClientHandler, RoleClient,
@@ -450,6 +451,7 @@ impl CodingToolHost for McpTools {
                         ToolActivityKind::External,
                         original.clone(),
                     ),
+                    exposure: ToolExposure::Direct,
                 })
             })
             .collect()
