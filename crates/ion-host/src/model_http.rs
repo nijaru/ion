@@ -163,9 +163,8 @@ impl ModelService for HttpModelService {
     ) -> BoxFuture<'a, Result<ModelStream, ProviderError>> {
         Box::pin(async move {
             request.controls.validate()?;
-            let native_anthropic =
-                self.wire == HttpWire::AnthropicMessages
-                    && self.endpoint.host_str() == Some("api.anthropic.com");
+            let native_anthropic = self.wire == HttpWire::AnthropicMessages
+                && self.endpoint.host_str() == Some("api.anthropic.com");
             let body = if self.wire.is_chat() {
                 chat_body(&request, self.wire)?
             } else {
@@ -598,7 +597,9 @@ fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
             .last()
             .map_or(&timeline.initial, |change| &change.context);
         if effective.instructions != request.instructions || effective.tools != request.tools {
-            return Err(invalid("model context timeline does not match effective request context"));
+            return Err(invalid(
+                "model context timeline does not match effective request context",
+            ));
         }
     }
     Ok(())
@@ -868,7 +869,9 @@ fn wire_messages_with_anthropic_context(
     }
     if anthropic
         && (messages[0]["role"] != "user"
-            || messages.last().is_some_and(|message| message["role"] == "assistant"))
+            || messages
+                .last()
+                .is_some_and(|message| message["role"] == "assistant"))
     {
         return Err(unsupported("Anthropic assistant prefill is unsupported"));
     }
