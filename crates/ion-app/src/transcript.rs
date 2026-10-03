@@ -71,7 +71,9 @@ pub fn render(view: &SessionView) -> String {
             SessionEntry::ProviderReplayRebased { .. } => {
                 let _ = writeln!(text, "\nProvider reasoning context reset");
             }
-            SessionEntry::ModelContextChanged { .. } | SessionEntry::ModelSelected { .. } => {}
+            SessionEntry::CacheWarm { .. }
+            | SessionEntry::ModelContextChanged { .. }
+            | SessionEntry::ModelSelected { .. } => {}
         }
     }
     text.chars()
