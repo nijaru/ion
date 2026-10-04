@@ -81,7 +81,7 @@ class Provider(BaseHTTPRequestHandler):
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         elif len(requests) == 11:
-            assert body["messages"][-1]["role"] == "tool" and "unknown tool" in body["messages"][-1]["content"], body
+            assert body["messages"][-1]["role"] == "tool" and "tool was not declared for this request" in body["messages"][-1]["content"], body
             changes = [
                 {"id": "mcp", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "call-second", "type": "function", "function": {"name": "mcp__changing__second", "arguments": "{}"}}]}, "finish_reason": None}]},
                 {"id": "mcp", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
