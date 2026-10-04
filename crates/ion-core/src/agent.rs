@@ -909,7 +909,9 @@ impl Agent {
                 .message
                 .provider_replay
                 .as_ref()
-                .is_some_and(|replay| !replay.is_compatible_with(&execution.route.effective.provider))
+                .is_some_and(|replay| {
+                    !replay.is_compatible_with(&execution.route.effective.provider)
+                })
             {
                 return Err(AgentError::InvalidProviderReplay);
             }
