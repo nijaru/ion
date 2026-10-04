@@ -96,7 +96,10 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
                 if readable:
-                    data = os.read(master, 65536)
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError:
+                        data = b""
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
