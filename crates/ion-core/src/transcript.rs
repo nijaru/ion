@@ -581,7 +581,9 @@ impl LiveTranscript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_ai::{ModelExecution, ModelRef, ModelRoute, ModelRouteReason, Role, ToolCall, ToolResult, Usage};
+    use ion_ai::{
+        ModelExecution, ModelRef, ModelRoute, ModelRouteReason, Role, ToolCall, ToolResult, Usage,
+    };
 
     use crate::{ToolActivityKind, TurnEndReason};
 
