@@ -307,12 +307,8 @@ impl State {
                 turn, execution, ..
             } => {
                 if self.active != Some(*turn)
-                    || execution.route.logical != self.last_model.clone().unwrap_or_else(|| execution.route.logical.clone())
-                    || execution.route.effective
-                        != self
-                            .last_effective_model
-                            .clone()
-                            .unwrap_or_else(|| execution.route.effective.clone())
+                    || self.last_model.as_ref() != Some(&execution.route.logical)
+                    || self.last_effective_model.as_ref() != Some(&execution.route.effective)
                 {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -368,9 +364,15 @@ impl State {
                     || !self.pending.is_empty()
                     || message.role != Role::Assistant
                     || self.last_model.as_ref() != Some(&execution.route.logical)
-                    || self.last_effective_model.as_ref() != Some(&execution.route.effective)
+                    || self
+                        .last_effective_model
+                        .as_ref()
+                        .is_some_and(|model| model != &execution.route.effective)
                 {
                     return Err(SessionError::InvalidHistory);
+                }
+                if self.last_effective_model.is_none() {
+                    self.last_effective_model = Some(execution.route.effective.clone());
                 }
                 if matches!(termination, ResponseTermination::Incomplete(_))
                     && (!matches!(
@@ -796,14 +798,17 @@ impl Session {
         model: ModelRef,
     ) -> Result<bool, SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        if store.state.last_effective_model.as_ref() == Some(&model) {
-            return Ok(false);
+        match store.state.last_effective_model.as_ref() {
+            None => Ok(false),
+            Some(previous) if previous == &model => Ok(false),
+            Some(_) => {
+                append(
+                    &mut store,
+                    &[SessionEntry::EffectiveModelChanged { turn, model }],
+                )?;
+                Ok(true)
+            }
         }
-        append(
-            &mut store,
-            &[SessionEntry::EffectiveModelChanged { turn, model }],
-        )?;
-        Ok(true)
     }
 
     /// Permanently omit prior opaque replay from future model requests after
@@ -1070,7 +1075,35 @@ impl Session {
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
         let activities = default_tool_activities(&message);
-        self.record_assistant_with_activities(turn, message, activities, usage, continue_turn)
+        let (logical, effective) = {
+            let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+            let logical = store
+                .state
+                .last_model
+                .clone()
+                .ok_or(SessionError::InvalidHistory)?;
+            let effective = store
+                .state
+                .last_effective_model
+                .clone()
+                .unwrap_or_else(|| logical.clone());
+            (logical, effective)
+        };
+        self.record_assistant_with_activities(
+            turn,
+            message,
+            activities,
+            ModelExecution {
+                route: ion_ai::ModelRoute {
+                    logical,
+                    effective,
+                    reason: ion_ai::ModelRouteReason::UserRequest,
+                },
+                returned_model: None,
+            },
+            usage,
+            continue_turn,
+        )
     }
 
     pub(crate) fn record_assistant_with_activities(
