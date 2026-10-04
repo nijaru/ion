@@ -2455,6 +2455,16 @@ mod tests {
                 provider_replay: None,
             },
             tool_activities: Vec::new(),
+            execution: ion_ai::ModelExecution {
+                route: ion_ai::ModelRoute::direct(
+                    ModelRef {
+                        provider: "test".into(),
+                        model: "test".into(),
+                    },
+                    ion_ai::ModelRouteReason::UserRequest,
+                ),
+                returned_model: None,
+            },
             usage: ion_ai::Usage::unknown(),
             termination: ion_ai::ResponseTermination::Completed,
         };
@@ -2473,8 +2483,10 @@ mod tests {
             unfinished_turn: Some(2),
             last_end: None,
             last_model: None,
+            last_effective_model: None,
             last_context: None,
             compacted_through: None,
+            last_execution: None,
             last_usage: None,
         };
         assert_eq!(last_committed_answer(&view).unwrap(), "finished");
