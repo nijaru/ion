@@ -28,10 +28,6 @@ jobs:
       - run: cargo test --locked --workspace
       - name: Build terminal smoke binary
         run: cargo build --locked -p ion
-      - name: Startup measurement (temporary)
-        run: python3 scripts/measure_startup.py
-      - name: Runtime measurement (temporary)
-        run: cargo run --locked -p ion --example runtime_measure --release
       - name: Terminal PTY smoke
         run: python3 scripts/smoke_terminal.py
       - name: RPC smoke
