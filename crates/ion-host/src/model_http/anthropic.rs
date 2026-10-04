@@ -275,7 +275,7 @@ pub(super) fn anthropic_body_for_route(
 ) -> Result<Value, ProviderError> {
     validate_request(request)?;
     if native_api
-        && managed_anthropic_thinking(&request.model.model)
+        && managed_anthropic_thinking(&request.route.effective.model)
         && matches!(
             request.controls.tool_choice,
             ToolChoice::Required | ToolChoice::Named(_)
@@ -298,9 +298,9 @@ pub(super) fn anthropic_body_for_route(
         HttpWire::AnthropicMessages,
         context_plan.as_ref(),
     )?;
-    let mut body = json!({"model":request.model.model,"messages":messages,"stream":true,
+    let mut body = json!({"model":request.route.effective.model,"messages":messages,"stream":true,
         "max_tokens":request.controls.max_output_tokens});
-    if native_api && managed_anthropic_thinking(&request.model.model) {
+    if native_api && managed_anthropic_thinking(&request.route.effective.model) {
         body["thinking"] = json!({"type":"adaptive","block_binding":{
             "prefix_mismatch_behavior":"error"}});
     }
@@ -848,7 +848,7 @@ impl AnthropicState {
                         content,
                         provider_replay: Some(
                             ProviderReplay::new(
-                                &request.model.provider,
+                                &request.route.effective.provider,
                                 ANTHROPIC_CONTENT_REPLAY,
                                 json!({"blocks":wire_blocks,"prefix_sha256":
                                 match &self.prefix_digest {
