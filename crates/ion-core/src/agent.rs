@@ -1583,7 +1583,7 @@ mod tests {
         ]));
         let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let request = ModelRequest {
-            model: model(),
+            route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
             instructions: None,
             messages: Vec::new(),
             tools: Vec::new(),
@@ -1599,7 +1599,7 @@ mod tests {
             },
         };
         let mut retry_delay = None;
-        generate_with_retry(
+        let generated = generate_with_retry(
             &agent.model,
             request.clone(),
             &CancellationToken::new(),
@@ -1612,7 +1612,10 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(retry_delay, Some(10));
-        assert_eq!(service.requests(), vec![request.clone(), request.clone()]);
+        assert_eq!(generated.route.reason, ModelRouteReason::Retry);
+        let mut retry_request = request.clone();
+        retry_request.route.reason = ModelRouteReason::Retry;
+        assert_eq!(service.requests(), vec![request.clone(), retry_request]);
         assert_eq!(service.requests().len(), 2);
 
         let service = Arc::new(ScriptedModelService::new([
