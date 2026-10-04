@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{GenerationControls, Message, ModelRef, ToolSpec};
+use crate::{GenerationControls, Message, ModelRoute, ToolSpec};
 
 /// Provider-neutral model-visible state associated with one request boundary.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -46,7 +46,9 @@ pub enum PromptCacheIntent {
 /// this value to an adapter. The Session records committed conversation facts.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelRequest {
-    pub model: ModelRef,
+    /// Logical selection, effective physical target and why this request exists.
+    /// Direct models use the same identity for logical and effective.
+    pub route: ModelRoute,
     /// The instruction text selected for this call.
     /// `None` means no instruction channel was configured, which is different
     /// from an empty instruction string.
