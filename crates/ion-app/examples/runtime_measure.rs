@@ -46,10 +46,7 @@ fn stats(mut samples: Vec<Duration>) -> Stats {
     }
 }
 
-fn measure_sync<T>(
-    iterations: usize,
-    mut operation: impl FnMut() -> Result<T>,
-) -> Result<Stats> {
+fn measure_sync<T>(iterations: usize, mut operation: impl FnMut() -> Result<T>) -> Result<Stats> {
     let mut samples = Vec::with_capacity(iterations);
     for _ in 0..iterations {
         let started = Instant::now();
@@ -370,12 +367,7 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
 
     let compaction_started = Instant::now();
     let compacted = long_agent
-        .compact(
-            &long,
-            model(),
-            CancellationToken::new(),
-            |_| {},
-        )
+        .compact(&long, model(), CancellationToken::new(), |_| {})
         .await?;
     println!(
         "compaction_long: changed={} elapsed_us={} entries_after={}",
