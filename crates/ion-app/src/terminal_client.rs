@@ -227,6 +227,10 @@ pub async fn chat(init: ChatInit) -> Result<()> {
             &runtime.selected().identity(),
             false,
         )?;
+        #[cfg(debug_assertions)]
+        if std::env::var_os("ION_SMOKE_PANIC_AFTER_FIRST_DRAW").is_some() {
+            panic!("ION smoke panic after first terminal draw");
+        }
         let Some(event) = input.next().await else {
             break;
         };
