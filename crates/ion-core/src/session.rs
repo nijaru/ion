@@ -12,8 +12,8 @@ use std::{
 use crate::tool_set::ToolActivity;
 use ion_ai::{
     Content, IncompleteReason, Message, ModelContextChange, ModelContextState,
-    ModelContextTimeline, ModelRef, ResponseTermination, Role, ToolCall, ToolResult, ToolSpec,
-    Usage,
+    ModelContextTimeline, ModelExecution, ModelRef, ResponseTermination, Role, ToolCall,
+    ToolResult, ToolSpec, Usage,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use rustix::fs::{FlockOperation, flock};
@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 5;
+const FORMAT_VERSION: u32 = 6;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -43,6 +43,13 @@ struct Header {
 #[serde(tag = "kind", content = "data", rename_all = "snake_case")]
 pub enum SessionEntry {
     ModelSelected {
+        model: ModelRef,
+    },
+    /// Effective physical model selected for the next coding request. This is
+    /// distinct from the logical Session selection and advances provider replay
+    /// epochs when the physical model changes.
+    EffectiveModelChanged {
+        turn: u64,
         model: ModelRef,
     },
     /// The selected provider could not safely reuse older opaque continuation
@@ -71,12 +78,14 @@ pub enum SessionEntry {
     /// accounting fact only and never enters model context.
     CacheWarm {
         turn: u64,
+        execution: ModelExecution,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
     },
     Compacted {
         through_entry: u64,
         summary: String,
+        execution: ModelExecution,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
     },
@@ -89,6 +98,7 @@ pub enum SessionEntry {
         turn: u64,
         message: Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         #[serde(default = "Usage::unknown")]
         usage: Usage,
         #[serde(default = "completed_termination")]
@@ -140,8 +150,10 @@ pub struct SessionView {
     pub unfinished_turn: Option<u64>,
     pub last_end: Option<(u64, TurnEndReason)>,
     pub last_model: Option<ModelRef>,
+    pub last_effective_model: Option<ModelRef>,
     pub last_context: Option<ModelContextSnapshot>,
     pub compacted_through: Option<u64>,
+    pub last_execution: Option<ModelExecution>,
     pub last_usage: Option<Usage>,
 }
 
@@ -208,20 +220,31 @@ struct State {
     last_id: u64,
     last_end: Option<(u64, TurnEndReason)>,
     last_model: Option<ModelRef>,
+    last_effective_model: Option<ModelRef>,
     last_context: Option<ModelContextSnapshot>,
-    // Derived from model-selection entries; older opaque replay stays in raw history.
+    // Derived from effective-model transitions/rebases; older opaque replay stays
+    // in raw history and is never revived by switching a route back.
     replay_epoch_start: u64,
     sequence: u64,
     compaction: Option<(u64, String)>,
+    last_execution: Option<ModelExecution>,
     last_usage: Option<Usage>,
 }
 
 impl State {
     fn select_model(&mut self, model: &ModelRef) {
-        if self.last_model.as_ref().is_some_and(|prior| prior != model) {
+        self.last_model = Some(model.clone());
+    }
+
+    fn select_effective_model(&mut self, model: &ModelRef) {
+        if self
+            .last_effective_model
+            .as_ref()
+            .is_some_and(|prior| prior != model)
+        {
             self.replay_epoch_start = self.sequence + 1;
         }
-        self.last_model = Some(model.clone());
+        self.last_effective_model = Some(model.clone());
     }
 
     fn apply(
@@ -237,6 +260,15 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.select_model(model);
+            }
+            SessionEntry::EffectiveModelChanged { turn, model } => {
+                if self.active != Some(*turn)
+                    || !self.pending.is_empty()
+                    || self.last_effective_model.as_ref() == Some(model)
+                {
+                    return Err(SessionError::InvalidHistory);
+                }
+                self.select_effective_model(model);
             }
             SessionEntry::ProviderReplayRebased { turn } => {
                 if self.active != Some(*turn)
@@ -271,8 +303,17 @@ impl State {
                 }
                 new_settled.push(self.sequence + 1);
             }
-            SessionEntry::CacheWarm { turn, .. } => {
-                if self.active != Some(*turn) {
+            SessionEntry::CacheWarm {
+                turn, execution, ..
+            } => {
+                if self.active != Some(*turn)
+                    || execution.route.logical != self.last_model.clone().unwrap_or_else(|| execution.route.logical.clone())
+                    || execution.route.effective
+                        != self
+                            .last_effective_model
+                            .clone()
+                            .unwrap_or_else(|| execution.route.effective.clone())
+                {
                     return Err(SessionError::InvalidHistory);
                 }
             }
@@ -319,12 +360,15 @@ impl State {
                 turn,
                 message,
                 tool_activities,
+                execution,
                 usage,
                 termination,
             } => {
                 if self.active != Some(*turn)
                     || !self.pending.is_empty()
                     || message.role != Role::Assistant
+                    || self.last_model.as_ref() != Some(&execution.route.logical)
+                    || self.last_effective_model.as_ref() != Some(&execution.route.effective)
                 {
                     return Err(SessionError::InvalidHistory);
                 }
@@ -366,6 +410,7 @@ impl State {
                 }
                 messages.push(message.clone());
                 self.assistant_seen_in_turn = true;
+                self.last_execution = Some(execution.clone());
                 self.last_usage = Some(*usage);
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
@@ -590,8 +635,10 @@ impl Session {
             unfinished_turn: state.active,
             last_end: state.last_end,
             last_model: state.last_model,
+            last_effective_model: state.last_effective_model,
             last_context: state.last_context,
             compacted_through: state.compaction.map(|(through, _)| through),
+            last_execution: state.last_execution,
             last_usage: state.last_usage,
         })
     }
@@ -664,7 +711,7 @@ impl Session {
     /// The model-facing projection. Inspect and export still use raw history.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        context_projection(&store, store.state.last_model.as_ref())
+        context_projection(&store, store.state.last_effective_model.as_ref())
     }
 
     pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
@@ -689,7 +736,7 @@ impl Session {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         if store.state.compaction.is_some()
             || store.state.replay_epoch_start != 0
-            || store.state.last_model.as_ref() != Some(model)
+            || store.state.last_effective_model.as_ref() != Some(model)
         {
             return Ok(None);
         }
@@ -739,6 +786,24 @@ impl Session {
     ) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         context_projection(&store, Some(model))
+    }
+
+    /// Record the effective physical model selected for the next coding request.
+    /// Repeated direct requests on the same physical model are elided.
+    pub(crate) fn record_effective_model(
+        &self,
+        turn: u64,
+        model: ModelRef,
+    ) -> Result<bool, SessionError> {
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        if store.state.last_effective_model.as_ref() == Some(&model) {
+            return Ok(false);
+        }
+        append(
+            &mut store,
+            &[SessionEntry::EffectiveModelChanged { turn, model }],
+        )?;
+        Ok(true)
     }
 
     /// Permanently omit prior opaque replay from future model requests after
@@ -828,6 +893,7 @@ impl Session {
                 | SessionEntry::Assistant { .. }
                 | SessionEntry::ToolResult { .. } => true,
                 SessionEntry::ModelSelected { .. }
+                | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::CacheWarm { .. }
@@ -872,15 +938,28 @@ impl Session {
         }))
     }
 
-    pub(crate) fn record_cache_warm(&self, turn: u64, usage: Usage) -> Result<(), SessionError> {
+    pub(crate) fn record_cache_warm(
+        &self,
+        turn: u64,
+        execution: ModelExecution,
+        usage: Usage,
+    ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        append(&mut store, &[SessionEntry::CacheWarm { turn, usage }])
+        append(
+            &mut store,
+            &[SessionEntry::CacheWarm {
+                turn,
+                execution,
+                usage,
+            }],
+        )
     }
 
     pub(crate) fn record_compaction(
         &self,
         through_entry: u64,
         summary: String,
+        execution: ModelExecution,
         usage: Usage,
     ) -> Result<(), SessionError> {
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
@@ -889,6 +968,7 @@ impl Session {
             &[SessionEntry::Compacted {
                 through_entry,
                 summary,
+                execution,
                 usage,
             }],
         )
@@ -905,8 +985,10 @@ impl Session {
             unfinished_turn: store.state.active,
             last_end: store.state.last_end.clone(),
             last_model: store.state.last_model.clone(),
+            last_effective_model: store.state.last_effective_model.clone(),
             last_context: store.state.last_context.clone(),
             compacted_through: store.state.compaction.as_ref().map(|(through, _)| *through),
+            last_execution: store.state.last_execution.clone(),
             last_usage: store.state.last_usage,
         })
     }
@@ -996,6 +1078,7 @@ impl Session {
         turn: u64,
         message: Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         usage: Usage,
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
@@ -1003,6 +1086,7 @@ impl Session {
             turn,
             message,
             tool_activities,
+            execution,
             usage,
             continue_turn,
             Vec::new(),
@@ -1016,6 +1100,7 @@ impl Session {
         turn: u64,
         message: Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         usage: Usage,
         steering: Vec<Message>,
     ) -> Result<bool, SessionError> {
@@ -1024,6 +1109,7 @@ impl Session {
             turn,
             message,
             tool_activities,
+            execution,
             usage,
             continue_turn,
             steering,
@@ -1035,6 +1121,7 @@ impl Session {
         turn: u64,
         message: Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         usage: Usage,
         continue_turn: bool,
         steering: Vec<Message>,
@@ -1048,6 +1135,7 @@ impl Session {
             turn,
             message,
             tool_activities,
+            execution,
             usage,
             termination: ResponseTermination::Completed,
         }];
@@ -1075,6 +1163,7 @@ impl Session {
         turn: u64,
         message: Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         usage: Usage,
     ) -> Result<Vec<ToolResult>, SessionError> {
         let results = message
@@ -1099,6 +1188,7 @@ impl Session {
             turn,
             message,
             tool_activities,
+            execution,
             usage,
             termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
         }];
