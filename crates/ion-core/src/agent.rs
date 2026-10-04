@@ -1,8 +1,8 @@
 //! One coding loop for library, headless and terminal clients.
 use ion_ai::{
-    Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
-    ModelService, ProviderError, ProviderErrorKind, Reasoning, ResponseTermination, Role,
-    ToolChoice, ToolResult,
+    Content, GenerationControls, IncompleteReason, Message, ModelExecution, ModelRef, ModelRequest,
+    ModelResponse, ModelRoute, ModelRouteReason, ModelService, ProviderError, ProviderErrorKind,
+    Reasoning, ResponseTermination, Role, ToolChoice, ToolResult,
 };
 use serde_json::Value;
 use std::collections::{BTreeSet, VecDeque};
@@ -11,7 +11,7 @@ use thiserror::Error;
 use tokio_util::sync::CancellationToken;
 
 use crate::{
-    generation::{generate_with_retry, refresh_prompt_cache},
+    generation::{GeneratedResponse, generate_with_retry, refresh_prompt_cache},
     session::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
         valid_user_message,
@@ -90,6 +90,7 @@ impl SteeringInbox {
         turn: u64,
         message: ion_ai::Message,
         tool_activities: Vec<StoredToolActivity>,
+        execution: ModelExecution,
         usage: ion_ai::Usage,
         limits: AgentLimits,
     ) -> Result<bool, AgentError> {
@@ -102,6 +103,7 @@ impl SteeringInbox {
             turn,
             message,
             tool_activities,
+            execution,
             usage,
             pending.iter().cloned().collect(),
         )?;
@@ -294,14 +296,14 @@ impl Agent {
             let refresh = async {
                 tokio::time::sleep_until(deadline).await;
                 let started = tokio::time::Instant::now();
-                let usage = refresh_prompt_cache(&self.model, request, stop).await;
-                (started, usage)
+                let refreshed = refresh_prompt_cache(&self.model, request, stop).await;
+                (started, refreshed)
             };
             tokio::pin!(refresh);
             tokio::select! {
                 output = &mut tool => return Ok(output),
                 refreshed = &mut refresh => {
-                    let (started, Some(usage)) = refreshed else {
+                    let (started, Some((execution, usage))) = refreshed else {
                         *warmer = None;
                         continue;
                     };
@@ -309,7 +311,7 @@ impl Agent {
                     // its accounting fact must not interrupt an in-flight
                     // workspace effect; the next correctness-critical Session
                     // write will still surface storage failure.
-                    let _ = session.record_cache_warm(turn, usage);
+                    let _ = session.record_cache_warm(turn, execution, usage);
                     let keep_warming = warmer
                         .as_mut()
                         .is_some_and(|state| state.reschedule(usage, started));
@@ -445,7 +447,7 @@ impl Agent {
                 message.provider_replay = None;
             }
             let request = ModelRequest {
-                model: model.clone(),
+                route: ModelRoute::direct(model.clone(), ModelRouteReason::Auxiliary),
                 instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
                 messages: vec![ion_ai::Message {
                     role: Role::User,
@@ -475,7 +477,8 @@ impl Agent {
                 return Err(AgentError::ContextTooLarge);
             }
         };
-        let response = generate_with_retry(&self.model, request, stop, &mut |_| {}).await?;
+        let GeneratedResponse { response, route } =
+            generate_with_retry(&self.model, request, stop, &mut |_| {}).await?;
         if !matches!(response.termination, ResponseTermination::Completed)
             || response.message.role != Role::Assistant
             || response
@@ -502,7 +505,11 @@ impl Agent {
         if stop.is_cancelled() {
             return Err(AgentError::Cancelled);
         }
-        session.record_compaction(through_entry, summary, response.usage)?;
+        let execution = ModelExecution {
+            route,
+            returned_model: response.returned_model,
+        };
+        session.record_compaction(through_entry, summary, execution, response.usage)?;
         observe(AgentEvent::ContextCompacted { through_entry });
         Ok(Some(chunked))
     }
@@ -710,6 +717,7 @@ impl Agent {
         let mut assistant_seen_in_turn = false;
         let mut prefix_bound_continuation = false;
         let mut replay_rebased = false;
+        let mut route_reason = ModelRouteReason::UserRequest;
         loop {
             // Keep a fast in-process model from starving terminal input and
             // cancellation during a long tool sequence.
@@ -739,12 +747,14 @@ impl Agent {
                     instructions: instructions.clone(),
                     tools: declared_tools.clone(),
                 };
+                let route = ModelRoute::direct(model.clone(), route_reason);
+                session.record_effective_model(turn, route.effective.clone())?;
                 let mut request = ModelRequest {
-                    model: model.clone(),
+                    route: route.clone(),
                     instructions: Some(instructions.clone()),
-                    messages: session.context_messages_for(&model)?,
+                    messages: session.context_messages_for(&route.effective)?,
                     tools: declared_tools.clone(),
-                    context_timeline: session.context_timeline_for(&model, &context)?,
+                    context_timeline: session.context_timeline_for(&route.effective, &context)?,
                     prompt_cache: ion_ai::PromptCacheIntent::Reusable,
                     controls: GenerationControls {
                         max_output_tokens: self.limits.max_output_tokens,
@@ -816,7 +826,7 @@ impl Agent {
                         ),
                         ..
                     })
-                ) || (model.provider == "xiaomi"
+                ) || (request.route.effective.provider == "xiaomi"
                     && matches!(
                         &generated,
                         Ok(ModelResponse {
@@ -862,7 +872,15 @@ impl Agent {
                     }
                     continue;
                 }
-                break (generated?, tool_catalog, request, request_started);
+                let generated = generated?;
+                let mut warm_request = request;
+                warm_request.route = generated.route.clone();
+                break (generated, tool_catalog, warm_request, request_started);
+            };
+            let GeneratedResponse { response, route } = generated;
+            let execution = ModelExecution {
+                route,
+                returned_model: response.returned_model.clone(),
             };
             let truncated_calls = matches!(
                 response.termination,
@@ -882,7 +900,7 @@ impl Agent {
                 .message
                 .provider_replay
                 .as_ref()
-                .is_some_and(|replay| !replay.is_compatible_with(&model.provider))
+                .is_some_and(|replay| !replay.is_compatible_with(&execution.route.effective.provider))
             {
                 return Err(AgentError::InvalidProviderReplay);
             }
@@ -914,6 +932,7 @@ impl Agent {
                     turn,
                     response.message,
                     tool_activities.clone(),
+                    execution.clone(),
                     response.usage,
                 )?;
                 for result in results {
@@ -963,6 +982,7 @@ impl Agent {
                         turn,
                         response.message,
                         tool_activities.clone(),
+                        execution.clone(),
                         response.usage,
                         self.limits,
                     )?
@@ -971,6 +991,7 @@ impl Agent {
                         turn,
                         response.message,
                         tool_activities.clone(),
+                        execution.clone(),
                         response.usage,
                         false,
                     )?
@@ -980,6 +1001,7 @@ impl Agent {
                     turn,
                     response.message,
                     tool_activities.clone(),
+                    execution.clone(),
                     response.usage,
                     false,
                 )?
@@ -989,6 +1011,11 @@ impl Agent {
                 observe(AgentEvent::Final(final_text.clone()));
                 return Ok(final_text);
             }
+            route_reason = if calls.is_empty() {
+                ModelRouteReason::Steering
+            } else {
+                ModelRouteReason::ToolContinuation
+            };
             let call_count = calls.len();
             let mut cache_warmer = if call_count == 0 {
                 None
