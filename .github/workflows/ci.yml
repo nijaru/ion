@@ -32,6 +32,10 @@ jobs:
         run: python3 scripts/smoke_terminal.py
       - name: RPC smoke
         run: python3 scripts/smoke_rpc.py
+      - name: MCP refresh smoke
+        run: python3 scripts/smoke_mcp.py
+      - name: Selected-point fork smoke
+        run: python3 scripts/smoke_fork.py
 
   audit:
     if: github.event_name == 'schedule'
