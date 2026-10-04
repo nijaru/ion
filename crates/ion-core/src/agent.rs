@@ -752,7 +752,6 @@ impl Agent {
                     tools: declared_tools.clone(),
                 };
                 let route = ModelRoute::direct(model.clone(), route_reason);
-                session.record_effective_model(turn, route.effective.clone())?;
                 let mut request = ModelRequest {
                     route: route.clone(),
                     instructions: Some(instructions.clone()),
@@ -796,6 +795,7 @@ impl Agent {
                     return Err(AgentError::ContextTooLarge);
                 };
                 request.controls.max_output_tokens = output_budget;
+                session.record_effective_model(turn, route.effective.clone())?;
                 session.record_model_context(turn, context)?;
                 let mut emitted_text = false;
                 let request_started = tokio::time::Instant::now();
