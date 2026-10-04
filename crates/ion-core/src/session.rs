@@ -2373,6 +2373,159 @@ mod tests {
     }
 
     #[test]
+    fn effective_model_route_changes_do_not_revive_old_replay_under_one_logical_model() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let logical = ModelRef {
+            provider: "virtual".into(),
+            model: "coding".into(),
+        };
+        let physical_a = ModelRef {
+            provider: "anthropic".into(),
+            model: "claude-a".into(),
+        };
+        let physical_b = ModelRef {
+            provider: "openrouter".into(),
+            model: "provider/model-b".into(),
+        };
+        let execution = |effective: ModelRef, returned_model: &str| ModelExecution {
+            route: ion_ai::ModelRoute {
+                logical: logical.clone(),
+                effective,
+                reason: ion_ai::ModelRouteReason::UserRequest,
+            },
+            returned_model: Some(returned_model.into()),
+        };
+
+        let (first, _) = session.begin_turn("first".into(), logical.clone()).unwrap();
+        assert!(
+            !session
+                .record_effective_model(first, physical_a.clone())
+                .unwrap()
+        );
+        session
+            .record_assistant_with_activities(
+                first,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("first answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "anthropic",
+                        "anthropic_content_blocks",
+                        serde_json::json!({"opaque":"a"}),
+                    )),
+                },
+                Vec::new(),
+                execution(physical_a.clone(), "claude-a-20261004"),
+                Usage::known(10, 2),
+                false,
+            )
+            .unwrap();
+
+        let (second, _) = session.begin_turn("second".into(), logical.clone()).unwrap();
+        assert!(
+            session
+                .record_effective_model(second, physical_b.clone())
+                .unwrap()
+        );
+        assert!(
+            session
+                .context_messages_for(&physical_b)
+                .unwrap()
+                .iter()
+                .all(|message| message.provider_replay.is_none())
+        );
+        session
+            .record_assistant_with_activities(
+                second,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("second answer".into())],
+                    provider_replay: Some(ProviderReplay::new(
+                        "openrouter",
+                        "openrouter_plain_reasoning",
+                        serde_json::json!("b"),
+                    )),
+                },
+                Vec::new(),
+                execution(physical_b.clone(), "provider/model-b-20261004"),
+                Usage::known(12, 3),
+                false,
+            )
+            .unwrap();
+
+        let (third, _) = session.begin_turn("third".into(), logical.clone()).unwrap();
+        assert!(
+            session
+                .record_effective_model(third, physical_a.clone())
+                .unwrap()
+        );
+        let third_context = session.context_messages_for(&physical_a).unwrap();
+        assert!(
+            third_context
+                .iter()
+                .all(|message| message.provider_replay.is_none())
+        );
+        session
+            .record_assistant_with_activities(
+                third,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::Text("third answer".into())],
+                    provider_replay: None,
+                },
+                Vec::new(),
+                execution(physical_a.clone(), "claude-a-20261004"),
+                Usage::known(14, 4),
+                false,
+            )
+            .unwrap();
+
+        let view = session.view().unwrap();
+        assert_eq!(view.last_model, Some(logical.clone()));
+        assert_eq!(view.last_effective_model, Some(physical_a.clone()));
+        assert_eq!(
+            view.last_execution
+                .as_ref()
+                .map(|execution| &execution.route.effective),
+            Some(&physical_a)
+        );
+        assert_eq!(
+            view.messages
+                .iter()
+                .filter(|message| message.provider_replay.is_some())
+                .count(),
+            2
+        );
+        drop(session);
+
+        let reopened = Session::open(&path).unwrap();
+        assert_eq!(reopened.view().unwrap().last_model, Some(logical));
+        assert_eq!(
+            reopened.view().unwrap().last_effective_model,
+            Some(physical_a.clone())
+        );
+        assert!(
+            reopened
+                .context_messages_for(&physical_a)
+                .unwrap()
+                .iter()
+                .all(|message| message.provider_replay.is_none())
+        );
+        assert_eq!(
+            reopened
+                .messages()
+                .unwrap()
+                .iter()
+                .filter(|message| message.provider_replay.is_some())
+                .count(),
+            2
+        );
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn provider_rebase_is_durable_and_keeps_raw_assistant_history() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
