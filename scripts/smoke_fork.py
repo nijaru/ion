@@ -119,7 +119,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     os.write(master, b"/fork 2\r")
                     sent = True
                 if sent and b"Forked as" in output and not quit_sent:
-                    os.write(master, b"\x03")
+                    os.write(master, b"\x03\x03")
                     quit_sent = True
                 if child.poll() is not None:
                     break
