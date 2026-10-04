@@ -300,10 +300,17 @@ operate on host-owned credentials. Do not silently
 switch identities after a saved login fails. The exact initial provider list
 is an implementation recommendation to verify, not a product requirement.
 
-The host resolves a model identity to its endpoint, wire behavior and
-credential source. Each Turn records the selected nonsecret identity. A
-custom route is validated by the transport's URL rule when selected; model
-setup must not maintain a second URL policy. A compatible API base URL resolves
+The host resolves the user's logical model selection to an effective physical
+provider/model, endpoint, wire behavior and credential source for each model
+request. `ModelRoute` carries the logical identity, effective identity and a
+request reason; direct models are the trivial `logical == effective` case.
+Provider adapters encode only the effective identity. Usage-bearing assistant,
+compaction and cache-refresh facts retain a `ModelExecution` containing that
+route plus any provider-returned model identifier, so accounting and replay can
+name what physically ran without changing the Session's logical selection.
+Each Turn records the selected nonsecret logical identity. A custom route is
+validated by the transport's URL rule when selected; model setup must not
+maintain a second URL policy. A compatible API base URL resolves
 to the wire's standard request path once; an already complete standard request
 URL stays complete. Explicit HTTP and HTTPS custom endpoints may be anonymous
 or use an explicitly named environment key or saved provider credential;
@@ -314,9 +321,14 @@ resumed Session restores that model when its route is available and reports a
 missing route clearly; a global default applies to new Sessions. A custom
 route stays resolvable after another model becomes the default. Explicit
 per-invocation selection overrides the resumed choice for that invocation.
-Model and provider transport remain stable while a Turn runs.
-An explicit model switch starts a new model-facing replay epoch. Preserve raw
-assistant history, but omit opaque replay from earlier model epochs in later
+Current direct model/provider transport remains stable while a Turn runs.
+Future routing may choose another effective physical model only at an explicit
+request boundary and must preserve the same Session/Turn loop. Effective-model
+changes are durable replay-epoch boundaries; the initial direct/effective model
+is established by the first assistant execution fact and later changes append
+`EffectiveModelChanged` before dispatch. An explicit logical model switch also
+changes the direct effective model on its next request. Preserve raw assistant
+history, but omit opaque replay from earlier effective-model epochs in later
 requests, including after switching back. Do not turn private reasoning into
 assistant text or alter tool-call/result pairs. Same-model tool continuation
 retains its replay. Anthropic signed thinking needs its own adapter policy.
@@ -383,7 +395,11 @@ fields when a provider omits them. Anthropic may send several `message_delta`
 events; keep their cumulative usage and require a consistent terminal reason
 before `message_stop`.
 Retry only before any streamed event is observed; a partial response is
-reported as incomplete rather than silently replayed. A valid provider retry
+reported as incomplete rather than silently replayed. A retry is a distinct
+`ModelRouteReason::Retry`; tool continuation, steering and direct auxiliary
+work likewise carry explicit reasons instead of masquerading as the original
+user request. Do not persist router-specific state until an actual router needs
+state that cannot be reconstructed from Session facts. A valid provider retry
 delay takes precedence over local backoff, up to a bounded automatic wait;
 longer requested waits are surfaced as errors rather than held open.
 
