@@ -2422,7 +2422,9 @@ mod tests {
             )
             .unwrap();
 
-        let (second, _) = session.begin_turn("second".into(), logical.clone()).unwrap();
+        let (second, _) = session
+            .begin_turn("second".into(), logical.clone())
+            .unwrap();
         assert!(
             session
                 .record_effective_model(second, physical_b.clone())
