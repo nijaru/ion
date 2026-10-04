@@ -200,6 +200,7 @@ impl TranscriptProjection {
                 }
                 SessionEntry::TurnEnded { .. } => active_group = None,
                 SessionEntry::ModelSelected { .. }
+                | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
                 | SessionEntry::ModelContextChanged { .. }
                 | SessionEntry::CacheWarm { .. }
@@ -580,7 +581,7 @@ impl LiveTranscript {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ion_ai::{ModelRef, Role, ToolCall, ToolResult, Usage};
+    use ion_ai::{ModelExecution, ModelRef, ModelRoute, ModelRouteReason, Role, ToolCall, ToolResult, Usage};
 
     use crate::{ToolActivityKind, TurnEndReason};
 
@@ -617,6 +618,16 @@ mod tests {
                 provider_replay: None,
             },
             tool_activities,
+            execution: ModelExecution {
+                route: ModelRoute::direct(
+                    ModelRef {
+                        provider: "test".into(),
+                        model: "model".into(),
+                    },
+                    ModelRouteReason::UserRequest,
+                ),
+                returned_model: None,
+            },
             usage: Usage::unknown(),
             termination: ResponseTermination::Completed,
         }
@@ -701,8 +712,10 @@ mod tests {
             unfinished_turn: None,
             last_end: None,
             last_model: None,
+            last_effective_model: None,
             last_context: None,
             compacted_through: None,
+            last_execution: None,
             last_usage: None,
         };
 
