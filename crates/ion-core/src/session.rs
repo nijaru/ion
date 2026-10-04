@@ -1145,6 +1145,10 @@ impl Session {
         )
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "one atomic assistant/steering commit carries its complete durable facts"
+    )]
     fn record_assistant_entries(
         &self,
         turn: u64,
@@ -1667,6 +1671,19 @@ mod tests {
     use super::*;
     use ion_ai::{ProviderReplay, ToolCall};
 
+    fn test_execution() -> ModelExecution {
+        ModelExecution {
+            route: ion_ai::ModelRoute::direct(
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test".into(),
+                },
+                ion_ai::ModelRouteReason::Auxiliary,
+            ),
+            returned_model: None,
+        }
+    }
+
     #[tokio::test]
     async fn user_shell_permit_waits_for_turn_gate_and_commits_before_release() {
         let (root, path) = fixture();
@@ -1782,6 +1799,7 @@ mod tests {
             .record_compaction(
                 reopened.entry_count().unwrap(),
                 "visible command was run".into(),
+                test_execution(),
                 Usage::unknown(),
             )
             .unwrap();
@@ -1821,6 +1839,7 @@ mod tests {
                     .record_compaction(
                         source.entry_count().unwrap(),
                         "summary".into(),
+                        test_execution(),
                         Usage::unknown(),
                     )
                     .unwrap();
@@ -2206,13 +2225,14 @@ mod tests {
         assert_eq!(plan.messages.len(), 2);
         assert!(
             session
-                .record_compaction(1, "invalid".into(), Usage::unknown())
+                .record_compaction(1, "invalid".into(), test_execution(), Usage::unknown())
                 .is_err()
         );
         session
             .record_compaction(
                 plan.through_entry,
                 "first task done".into(),
+                test_execution(),
                 Usage::unknown(),
             )
             .unwrap();
@@ -2294,7 +2314,12 @@ mod tests {
             )
             .unwrap();
         session
-            .record_compaction(3, "first turn done".into(), Usage::unknown())
+            .record_compaction(
+                3,
+                "first turn done".into(),
+                test_execution(),
+                Usage::unknown(),
+            )
             .unwrap();
         let (third, _) = session.begin_turn("third".into(), gemini.clone()).unwrap();
         let third_context = session.context_messages_for(&gemini).unwrap();
@@ -2558,7 +2583,12 @@ mod tests {
         assert_eq!(plan.through_entry, 3);
         assert_eq!(plan.messages.len(), 2);
         session
-            .record_compaction(plan.through_entry, "old task done".into(), Usage::unknown())
+            .record_compaction(
+                plan.through_entry,
+                "old task done".into(),
+                test_execution(),
+                Usage::unknown(),
+            )
             .unwrap();
         let context = session.context_messages().unwrap();
         assert_eq!(context.len(), 4);
@@ -2832,7 +2862,12 @@ mod tests {
             )
             .unwrap();
         source
-            .record_compaction(3, "first is done".into(), Usage::unknown())
+            .record_compaction(
+                3,
+                "first is done".into(),
+                test_execution(),
+                Usage::unknown(),
+            )
             .unwrap();
         let (second, _) = source.begin_turn("second".into(), model.clone()).unwrap();
         let original = source.view().unwrap();
