@@ -337,9 +337,9 @@ save an empty assistant message that would break later provider replay.
 
 ## Current limits
 
-The required CI gate now includes Linux PTY, RPC, MCP refresh/withdrawal and
-selected-point fork workflows in addition to format, strict Clippy and workspace
-tests. The terminal workflow exercises inline startup, grouped tool activity,
+The required CI gate now includes Linux PTY, RPC, MCP refresh/withdrawal,
+selected-point fork and resource-reload workflows in addition to format, strict
+Clippy and workspace tests. The terminal workflow exercises inline startup, grouped tool activity,
 temporary full-screen views, persistent fullscreen startup, inline/fullscreen
 mode switching, resize, Session/model controls, masked login, copy, clean
 restoration and an explicit process panic after fullscreen ownership has begun.
