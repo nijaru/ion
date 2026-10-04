@@ -84,6 +84,10 @@ impl SteeringInbox {
         Ok(())
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "assistant execution metadata is committed atomically with steering"
+    )]
     fn record_assistant(
         &self,
         session: &Session,
