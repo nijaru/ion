@@ -88,7 +88,7 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
         os.close(slave)
         output = bytearray()
         sent = False
-        sent_new = False
+        sent_reload = False
         sent_prompts = False
         quit_sent = False
         deadline = time.monotonic() + 10
@@ -100,24 +100,25 @@ with tempfile.TemporaryDirectory(prefix="ion-resources-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\x1b[?1049h" in output and not sent:
+                if b"\xe2\x80\xba " in output and not sent:
+                    assert b"\x1b[?1049h" not in output, "resource smoke entered alternate screen at inline startup"
                     os.write(master, b"/check TUI\r")
                     sent = True
-                if sent and b"RESOURCE_OK" in output and not sent_new:
+                if sent and b"RESOURCE_OK" in output and not sent_reload:
                     (prompts / "late.md").write_text("A later prompt.\n")
-                    os.write(master, b"/new\r")
-                    sent_new = True
-                if sent_new and b"Started a new session" in output and not sent_prompts:
+                    os.write(master, b"/reload\r")
+                    sent_reload = True
+                if sent_reload and b"Reloaded resources" in output and not sent_prompts:
                     os.write(master, b"/prompts\r")
                     sent_prompts = True
                 if sent_prompts and b"/late" in output and not quit_sent:
                     os.write(master, b"\x03")
                     quit_sent = True
-                if quit_sent and b"\x1b[?1049l" in output:
+                if child.poll() is not None:
                     break
             child.wait(timeout=5)
             assert child.returncode == 0, output[-1000:]
-            assert sent and sent_new and sent_prompts and b"/late" in output and b"\x1b[?1049l" in output
+            assert sent and sent_reload and sent_prompts and b"/late" in output
             assert len(requests) == 3, requests
             assert requests[2]["messages"][-1]["content"].strip() == "Check TUI; scope all."
         finally:
