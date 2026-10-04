@@ -1,8 +1,9 @@
 use futures_util::StreamExt;
 use ion_ai::{
     Content, GenerationControls, IncompleteReason, Message, ModelRef, ModelRequest, ModelResponse,
-    ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
-    ResponseTermination, Role, Script, ScriptedModelService, ToolCall, ToolChoice, ToolSpec, Usage,
+    ModelRoute, ModelRouteReason, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind,
+    ProviderReplay, Reasoning, ResponseTermination, Role, Script, ScriptedModelService, ToolCall,
+    ToolChoice, ToolSpec, Usage,
 };
 
 fn controls() -> GenerationControls {
@@ -18,10 +19,13 @@ fn controls() -> GenerationControls {
 
 fn request() -> ModelRequest {
     ModelRequest {
-        model: ModelRef {
-            provider: "scripted".to_owned(),
-            model: "test-model".to_owned(),
-        },
+        route: ModelRoute::direct(
+            ModelRef {
+                provider: "scripted".to_owned(),
+                model: "test-model".to_owned(),
+            },
+            ModelRouteReason::UserRequest,
+        ),
         instructions: Some("be careful".to_owned()),
         messages: vec![Message {
             role: Role::User,
