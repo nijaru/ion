@@ -10,6 +10,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::agent::{AgentError, AgentEvent};
 
+#[derive(Debug)]
 pub(crate) struct GeneratedResponse {
     pub response: ModelResponse,
     pub route: ModelRoute,
