@@ -1075,20 +1075,16 @@ impl Session {
         continue_turn: bool,
     ) -> Result<bool, SessionError> {
         let activities = default_tool_activities(&message);
-        let (logical, effective) = {
-            let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-            let logical = store
-                .state
-                .last_model
-                .clone()
-                .ok_or(SessionError::InvalidHistory)?;
-            let effective = store
-                .state
-                .last_effective_model
-                .clone()
-                .unwrap_or_else(|| logical.clone());
-            (logical, effective)
-        };
+        let logical = self
+            .store
+            .lock()
+            .map_err(|_| SessionError::Poisoned)?
+            .state
+            .last_model
+            .clone()
+            .ok_or(SessionError::InvalidHistory)?;
+        let effective = logical.clone();
+        self.record_effective_model(turn, effective.clone())?;
         self.record_assistant_with_activities(
             turn,
             message,
