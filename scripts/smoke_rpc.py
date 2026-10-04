@@ -213,6 +213,23 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         send(child, {"id": "model-inspect", "type": "inspect"})
         inspected = read(child)
         assert inspected["success"] and inspected["data"]["last_model"]["provider"] == "rpc-alt", inspected
+        source_before_clone = inspected["data"]
+
+        send(child, {"id": "clone", "type": "clone_session"})
+        cloned = read(child)
+        assert cloned["success"] and cloned["data"]["session"] != session, cloned
+        assert cloned["data"]["model"]["provider"] == "rpc-alt", cloned
+        send(child, {"id": "clone-inspect", "type": "inspect"})
+        clone_view = read(child)
+        assert clone_view["success"], clone_view
+        assert clone_view["data"]["entries"] == source_before_clone["entries"], clone_view
+        assert clone_view["data"]["cwd"] == source_before_clone["cwd"], clone_view
+        assert clone_view["data"]["last_model"]["provider"] == "rpc-alt", clone_view
+        send(child, {"id": "clone-source", "type": "switch_session", "session": session})
+        source_again = read(child)
+        assert source_again["success"] and source_again["data"]["session"] == session, source_again
+        assert source_again["data"]["model"]["provider"] == "rpc-alt", source_again
+
         (prompts / "late.md").write_text("A later prompt.\n")
         send(child, {"id": "new", "type": "new_session"})
         fresh = read(child)
@@ -278,7 +295,7 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         records = [json.loads(line) for line in incomplete.stdout.splitlines()]
         assert [record["type"] for record in records] == ["ready", "response"], records
         assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
-        print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, abort and session control: OK")
+        print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, abort and session clone/control: OK")
     finally:
         if child and child.poll() is None:
             child.kill()
