@@ -73,7 +73,8 @@ pub fn render(view: &SessionView) -> String {
             }
             SessionEntry::CacheWarm { .. }
             | SessionEntry::ModelContextChanged { .. }
-            | SessionEntry::ModelSelected { .. } => {}
+            | SessionEntry::ModelSelected { .. }
+            | SessionEntry::EffectiveModelChanged { .. } => {}
         }
     }
     text.chars()
@@ -181,8 +182,10 @@ mod tests {
             unfinished_turn: None,
             last_end: None,
             last_model: None,
+            last_effective_model: None,
             last_context: None,
             compacted_through: None,
+            last_execution: None,
             last_usage: None,
         };
         let rendered = render(&view);
