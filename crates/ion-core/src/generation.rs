@@ -3,23 +3,34 @@ use std::{sync::Arc, time::Duration};
 
 use futures_util::StreamExt;
 use ion_ai::{
-    ModelRequest, ModelResponse, ModelService, ModelStreamEvent, ProviderError, ProviderErrorKind,
+    ModelExecution, ModelRequest, ModelResponse, ModelRoute, ModelRouteReason, ModelService,
+    ModelStreamEvent, ProviderError, ProviderErrorKind, Usage,
 };
 use tokio_util::sync::CancellationToken;
 
 use crate::agent::{AgentError, AgentEvent};
+
+pub(crate) struct GeneratedResponse {
+    pub response: ModelResponse,
+    pub route: ModelRoute,
+}
 
 pub(crate) async fn generate_with_retry<F>(
     model: &Arc<dyn ModelService>,
     request: ModelRequest,
     stop: &CancellationToken,
     observe: &mut F,
-) -> Result<ModelResponse, AgentError>
+) -> Result<GeneratedResponse, AgentError>
 where
     F: FnMut(AgentEvent) + Send,
 {
     for attempt in 0..=2 {
-        let (result, observed) = generate_once(model, request.clone(), stop, observe).await;
+        let mut attempt_request = request.clone();
+        if attempt > 0 {
+            attempt_request.route.reason = ModelRouteReason::Retry;
+        }
+        let route = attempt_request.route.clone();
+        let (result, observed) = generate_once(model, attempt_request, stop, observe).await;
         match result {
             Err(AgentError::Provider(error))
                 if !observed && attempt < 2 && retryable_provider_error(&error) =>
@@ -42,7 +53,8 @@ where
                     () = stop.cancelled() => return Err(AgentError::Cancelled),
                 }
             }
-            other => return other,
+            Ok(response) => return Ok(GeneratedResponse { response, route }),
+            Err(error) => return Err(error),
         }
     }
     unreachable!("bounded retry loop returns on its final attempt")
@@ -105,8 +117,10 @@ pub(crate) async fn refresh_prompt_cache(
     model: &Arc<dyn ModelService>,
     mut request: ModelRequest,
     stop: &CancellationToken,
-) -> Option<ion_ai::Usage> {
+) -> Option<(ModelExecution, Usage)> {
     request.controls.max_output_tokens = 1;
+    request.route.reason = ModelRouteReason::Auxiliary;
+    let route = request.route.clone();
     let stream = tokio::select! {
         result = model.stream(request) => result.ok()?,
         () = stop.cancelled() => return None,
@@ -118,7 +132,13 @@ pub(crate) async fn refresh_prompt_cache(
             () = stop.cancelled() => return None,
         };
         match event {
-            Some(Ok(ModelStreamEvent::Completed(response))) => return Some(response.usage),
+            Some(Ok(ModelStreamEvent::Completed(response))) => {
+                let execution = ModelExecution {
+                    route,
+                    returned_model: response.returned_model,
+                };
+                return Some((execution, response.usage));
+            }
             Some(Ok(_)) => {}
             Some(Err(_)) | None => return None,
         }
