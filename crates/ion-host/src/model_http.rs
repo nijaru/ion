@@ -8,11 +8,13 @@ use std::{
 use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRef, ModelRequest,
-    ModelResponse, ModelRoute, ModelRouteReason, ModelService, ModelStream, ModelStreamEvent,
-    PromptCacheIntent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
-    ResponseTermination, Role, ToolCall, ToolChoice, ToolSpec, Usage,
+    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRequest, ModelResponse,
+    ModelService, ModelStream, ModelStreamEvent, PromptCacheIntent, ProviderError,
+    ProviderErrorKind, ProviderReplay, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice,
+    ToolSpec, Usage,
 };
+#[cfg(test)]
+use ion_ai::{ModelRef, ModelRoute, ModelRouteReason};
 use reqwest::{
     Client, Url,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
