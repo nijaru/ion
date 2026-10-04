@@ -14,7 +14,7 @@ use ion_ai::{
     ToolSpec, Usage,
 };
 #[cfg(test)]
-use ion_ai::{ModelRef, ModelRoute, ModelRouteReason};
+use ion_ai::{ModelRoute, ModelRouteReason};
 use reqwest::{
     Client, Url,
     header::{AUTHORIZATION, HeaderMap, HeaderValue},
