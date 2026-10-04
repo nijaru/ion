@@ -287,10 +287,13 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
         "transcript_projection_long",
         &measure_sync(100, || Ok(TranscriptProjection::from_session(&long_view)))?,
     );
-    print_stats("session_view_long", &measure_sync(50, || long.view())?);
+    print_stats(
+        "session_view_long",
+        &measure_sync(50, || Ok(long.view()?))?,
+    );
     print_stats(
         "context_projection_long",
-        &measure_sync(100, || long.context_messages())?,
+        &measure_sync(100, || Ok(long.context_messages()?))?,
     );
     print_stats(
         "request_build_encode_long",
