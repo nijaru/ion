@@ -94,7 +94,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 5; earlier development Session
+This unreleased branch uses Session format 6; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -199,7 +199,14 @@ the generic `chat-completions` route does not assume that contract. Qualify a
 new model with a tool-using turn before relying on it for coding.
 When switching models between Turns, Ion keeps the saved transcript and tool
 results but omits opaque reasoning from earlier model epochs in later model
-requests. Switching back does not revive those older blocks.
+requests. Switching back does not revive those older blocks. Model requests
+now carry an explicit logical selection, effective physical provider/model and
+route reason. Current direct routes use the same logical and effective model;
+assistant, compaction and cache-warm usage facts retain the effective execution
+identity and any provider-returned model identifier. Effective physical model
+changes advance replay epochs independently of logical selection, so a future
+virtual route cannot switch A → B → A and accidentally revive stale opaque
+reasoning. Ion does not yet provide a virtual-model registry or router.
 The catalog includes current Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 on the
 native Anthropic Messages route. Its signed thinking is retained across tool
 and later Turn continuation. For reusable coding requests, these cataloged
