@@ -253,6 +253,11 @@ impl Control {
                     self.binding.new_session()?;
                     Ok(json!({"session":self.session_id(),"model":self.binding.selected().identity()}))
                 }
+                "clone_session" => {
+                    self.idle()?;
+                    let session = self.binding.clone_session()?;
+                    Ok(json!({"session":session,"model":self.binding.selected().identity()}))
+                }
                 "fork" => {
                     self.idle()?;
                     let turn = value.get("turn").and_then(Value::as_u64).context("turn must be an unsigned integer")?;
