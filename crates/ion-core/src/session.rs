@@ -1457,6 +1457,7 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         }),
         SessionEntry::UserShell { .. }
         | SessionEntry::ModelSelected { .. }
+        | SessionEntry::EffectiveModelChanged { .. }
         | SessionEntry::ProviderReplayRebased { .. }
         | SessionEntry::ModelContextChanged { .. }
         | SessionEntry::CacheWarm { .. }
@@ -2107,6 +2108,16 @@ mod tests {
                             turn,
                             message: answer.clone(),
                             tool_activities: Vec::new(),
+                            execution: ModelExecution {
+                                route: ion_ai::ModelRoute::direct(
+                                    ModelRef {
+                                        provider: "test".into(),
+                                        model: "test".into(),
+                                    },
+                                    ion_ai::ModelRouteReason::UserRequest,
+                                ),
+                                returned_model: None,
+                            },
                             usage: Usage::unknown(),
                             termination: ResponseTermination::Completed,
                         },
