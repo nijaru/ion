@@ -114,16 +114,17 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
-                if b"\x1b[?1049h" in output and not sent:
+                if b"\xe2\x80\xba " in output and not sent:
+                    assert b"\x1b[?1049h" not in output, "fork smoke entered alternate screen at inline startup"
                     os.write(master, b"/fork 2\r")
                     sent = True
                 if sent and b"Forked as" in output and not quit_sent:
-                    os.write(master, b"\x03\x03")
+                    os.write(master, b"\x03")
                     quit_sent = True
-                if quit_sent and b"\x1b[?1049l" in output:
+                if child.poll() is not None:
                     break
             child.wait(timeout=5)
-            assert child.returncode == 0 and b"Forked as" in output and b"\x1b[?1049l" in output, output[-1200:]
+            assert child.returncode == 0 and b"Forked as" in output, output[-1200:]
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
