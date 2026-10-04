@@ -18,7 +18,7 @@ pub use image_input::{
     ImagePreparationError, LoadedImage, MAX_SOURCE_BYTES, normalize_image, normalize_rgba,
 };
 pub use message::{Message, ProviderReplay, Role};
-pub use model::ModelRef;
+pub use model::{ModelExecution, ModelRef, ModelRoute, ModelRouteReason};
 pub use request::{
     ModelContextChange, ModelContextState, ModelContextTimeline, ModelRequest, PromptCacheIntent,
 };
