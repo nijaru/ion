@@ -233,7 +233,63 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     fullscreen.wait()
                 os.close(fullscreen_master)
 
-            print("Ion inline/fullscreen terminal, grouped activity, modals and restoration: OK")
+            panic_master, panic_slave = pty.openpty()
+            fcntl.ioctl(panic_slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+
+            def attach_panic_terminal():
+                os.setsid()
+                fcntl.ioctl(panic_slave, termios.TIOCSCTTY, 0)
+
+            panic = subprocess.Popen(
+                [binary, "--cwd", workspace, "--tui-mode", "fullscreen", "chat"],
+                env={
+                    **env,
+                    "ION_SMOKE_PANIC_AFTER_FIRST_DRAW": "1",
+                    "RUST_BACKTRACE": "0",
+                },
+                stdin=panic_slave,
+                stdout=panic_slave,
+                stderr=panic_slave,
+                preexec_fn=attach_panic_terminal,
+            )
+            os.close(panic_slave)
+            panic_output = bytearray()
+            panic_deadline = time.monotonic() + 8
+            try:
+                while time.monotonic() < panic_deadline:
+                    readable, _, _ = select.select([panic_master], [], [], 0.05)
+                    if readable:
+                        try:
+                            data = os.read(panic_master, 65536)
+                        except OSError:
+                            data = b""
+                        panic_output.extend(data)
+                        if b"\x1b[6n" in data:
+                            os.write(panic_master, b"\x1b[2;1R")
+                    if panic.poll() is not None:
+                        break
+                status = panic.wait(timeout=2)
+                assert status != 0, "panic probe unexpectedly exited successfully"
+                assert b"ION smoke panic after first terminal draw" in panic_output, panic_output[-2000:]
+                for sequence, label in (
+                    (b"\x1b[?1049h", "alternate screen enter"),
+                    (b"\x1b[?1049l", "alternate screen leave"),
+                    (b"\x1b[?2004l", "bracketed paste disable"),
+                    (b"\x1b[?1000l", "mouse capture disable"),
+                    (b"\x1b[?25h", "cursor show"),
+                    (b"\x1b[0m", "terminal style reset"),
+                ):
+                    assert sequence in panic_output, f"missing {label}: {panic_output[-2000:]!r}"
+                attrs = termios.tcgetattr(panic_master)
+                assert attrs[3] & termios.ECHO, attrs
+                assert attrs[3] & termios.ICANON, attrs
+            finally:
+                if panic.poll() is None:
+                    panic.send_signal(signal.SIGKILL)
+                    panic.wait()
+                os.close(panic_master)
+
+            print("Ion inline/fullscreen terminal, grouped activity, panic restoration, modals and restoration: OK")
         finally:
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
