@@ -1555,17 +1555,27 @@ mod tests {
 
         let requests = service.requests();
         assert_eq!(requests.len(), 3);
+        assert_eq!(requests[0].route.reason, ModelRouteReason::UserRequest);
+        assert_eq!(requests[1].route.reason, ModelRouteReason::Auxiliary);
         assert_eq!(requests[1].controls.max_output_tokens, 1);
+        assert_eq!(requests[2].route.reason, ModelRouteReason::ToolContinuation);
         assert_eq!(requests[2].messages.len(), 3);
         assert!(session.view().unwrap().entries.iter().any(|entry| matches!(
             entry,
             crate::session::SessionEntry::CacheWarm {
+                execution: ModelExecution {
+                    route: ModelRoute {
+                        reason: ModelRouteReason::Auxiliary,
+                        ..
+                    },
+                    returned_model: Some(returned),
+                },
                 usage: Usage {
                     output_tokens: Some(1),
                     ..
                 },
                 ..
-            }
+            } if returned == "test"
         )));
         assert_eq!(session.context_messages().unwrap().len(), 4);
 
