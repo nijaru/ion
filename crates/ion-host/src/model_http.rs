@@ -8,8 +8,9 @@ use std::{
 use async_stream::try_stream;
 use futures_util::StreamExt;
 use ion_ai::{
-    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRequest, ModelResponse,
-    ModelService, ModelStream, ModelStreamEvent, PromptCacheIntent, ProviderError,
+    BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRef, ModelRequest,
+    ModelResponse, ModelRoute, ModelRouteReason, ModelService, ModelStream, ModelStreamEvent,
+    PromptCacheIntent, ProviderError,
     ProviderErrorKind, ProviderReplay, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice,
     ToolSpec, Usage,
 };
@@ -232,7 +233,7 @@ impl ModelService for HttpModelService {
             if self.wire == HttpWire::AnthropicMessages {
                 post = post.header("anthropic-version", "2023-06-01");
                 let mut betas = Vec::new();
-                if native_anthropic && managed_anthropic_thinking(&request.model.model) {
+                if native_anthropic && managed_anthropic_thinking(&request.route.effective.model) {
                     betas.push(ANTHROPIC_BINDING_BETA);
                 }
                 if native_anthropic && inline_tools {
@@ -571,7 +572,7 @@ fn has_sse_event_boundary(frame: &[u8]) -> bool {
 }
 
 fn validate_request(request: &ModelRequest) -> Result<(), ProviderError> {
-    if request.model.model.is_empty() || request.messages.is_empty() {
+    if request.route.effective.model.is_empty() || request.messages.is_empty() {
         return Err(invalid("model and conversation must be nonempty"));
     }
     if request.tools.is_empty()
@@ -661,7 +662,7 @@ fn wire_messages_with_anthropic_context(
             Some(_) if message.role != Role::Assistant => {
                 return Err(invalid("provider replay requires an assistant message"));
             }
-            Some(replay) if !replay.is_compatible_with(&request.model.provider) => {
+            Some(replay) if !replay.is_compatible_with(&request.route.effective.provider) => {
                 return Err(unsupported(
                     "provider replay belongs to a different provider",
                 ));
@@ -1019,10 +1020,13 @@ mod tests {
 
     fn request() -> ModelRequest {
         ModelRequest {
-            model: ModelRef {
-                provider: "test".into(),
-                model: "test-model".into(),
-            },
+            route: ModelRoute::direct(
+                ModelRef {
+                    provider: "test".into(),
+                    model: "test-model".into(),
+                },
+                ModelRouteReason::UserRequest,
+            ),
             instructions: Some("instructions".into()),
             messages: vec![Message {
                 role: Role::User,
@@ -1060,8 +1064,8 @@ mod tests {
             input_schema: json!({"type":"object"}),
         };
         let mut request = request();
-        request.model.provider = "anthropic".into();
-        request.model.model = "claude-opus-5-5".into();
+        request.route.effective.provider = "anthropic".into();
+        request.route.effective.model = "claude-opus-5-5".into();
         request.tools = vec![special.clone()];
         request.messages = vec![
             Message::user_input("find a tool".into(), []),
@@ -1148,8 +1152,8 @@ mod tests {
             input_schema: json!({"type":"object","properties":{"path":{"type":"string"},"limit":{"type":"integer"}}}),
         };
         let mut request = request();
-        request.model.provider = "anthropic".into();
-        request.model.model = "claude-opus-5-5".into();
+        request.route.effective.provider = "anthropic".into();
+        request.route.effective.model = "claude-opus-5-5".into();
         request.tools = vec![new.clone()];
         request.context_timeline = Some(ModelContextTimeline {
             initial: ModelContextState {
@@ -1175,8 +1179,8 @@ mod tests {
     #[test]
     fn anthropic_instruction_change_falls_back_to_latest_leading_context() {
         let mut request = request();
-        request.model.provider = "anthropic".into();
-        request.model.model = "claude-opus-5-5".into();
+        request.route.effective.provider = "anthropic".into();
+        request.route.effective.model = "claude-opus-5-5".into();
         let current = request.tools.clone();
         request.instructions = Some("new instructions".into());
         request.context_timeline = Some(ModelContextTimeline {
@@ -1689,7 +1693,7 @@ mod tests {
     fn direct_reasoning_survives_streaming_and_later_tool_requests() {
         for wire in [HttpWire::DeepSeekChat, HttpWire::MiMoChat] {
             let mut request = request();
-            request.model.provider = match wire {
+            request.route.effective.provider = match wire {
                 HttpWire::DeepSeekChat => "deepseek",
                 HttpWire::MiMoChat => "xiaomi",
                 _ => unreachable!(),
@@ -1743,7 +1747,7 @@ mod tests {
     #[test]
     fn openrouter_replays_fragmented_plain_details() {
         let mut request = request();
-        request.model.provider = "openrouter".into();
+        request.route.effective.provider = "openrouter".into();
         let mut state = ChatState::new(HttpWire::OpenRouterChat);
         for text in ["plan ", "read"] {
             state.accept(&json!({"choices":[{"delta":{"reasoning":text,"reasoning_details":[{"type":"reasoning.text","text":text,"format":"unknown","index":0}]},"finish_reason":null}]})).unwrap();
@@ -1794,7 +1798,7 @@ mod tests {
     #[test]
     fn openrouter_replays_plain_reasoning_without_details() {
         let mut request = request();
-        request.model.provider = "openrouter".into();
+        request.route.effective.provider = "openrouter".into();
         let mut state = ChatState::new(HttpWire::OpenRouterChat);
         state
             .accept(
@@ -1827,7 +1831,7 @@ mod tests {
     #[test]
     fn openrouter_replays_signed_and_encrypted_details_in_order() {
         let mut request = request();
-        request.model.provider = "openrouter".into();
+        request.route.effective.provider = "openrouter".into();
         let mut state = ChatState::new(HttpWire::OpenRouterChat);
         state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"Need ","index":0}]},"finish_reason":null}]})).unwrap();
         state.accept(&json!({"choices":[{"delta":{"reasoning_details":[{"type":"reasoning.text","text":"read","index":0,"signature":"signed","format":"google-gemini-v1"},{"type":"reasoning.summary","summary":"First ","index":1}]},"finish_reason":null}]})).unwrap();
@@ -1879,7 +1883,7 @@ mod tests {
     #[test]
     fn openrouter_keeps_signature_only_text_detail() {
         let mut request = request();
-        request.model.provider = "openrouter".into();
+        request.route.effective.provider = "openrouter".into();
         let mut state = ChatState::new(HttpWire::OpenRouterChat);
         let detail = json!({"type":"reasoning.text","format":"google-gemini-v1","index":0,"signature":"opaque"});
         state
@@ -2433,8 +2437,8 @@ mod tests {
     #[test]
     fn current_claude_enforces_prefix_binding_only_on_native_api() {
         let mut request = request();
-        request.model.provider = "anthropic".into();
-        request.model.model = "claude-sonnet-5-5".into();
+        request.route.effective.provider = "anthropic".into();
+        request.route.effective.model = "claude-sonnet-5-5".into();
         assert_eq!(
             anthropic_body(&request, true).unwrap()["thinking"],
             json!({"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"error"}})
@@ -2451,7 +2455,7 @@ mod tests {
             ProviderErrorKind::Unsupported
         );
         request.controls.tool_choice = ToolChoice::Auto;
-        request.model.model = "claude-sonnet-4-6".into();
+        request.route.effective.model = "claude-sonnet-4-6".into();
         assert!(
             anthropic_body(&request, true)
                 .unwrap()
