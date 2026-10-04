@@ -1186,7 +1186,7 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CodingSession, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation};
+    use crate::{CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation};
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
         ScriptedModelService, ToolCall, ToolSpec, Usage,
@@ -1809,7 +1809,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn deferred_tool_search_activates_next_request_and_survives_reopen() {
+    async fn deferred_tool_search_activates_next_request_and_survives_reopen_and_fork() {
         struct DeferredTool;
 
         impl ToolHost for DeferredTool {
@@ -1943,6 +1943,65 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["special_lookup"]
         );
+        let fork_path = root.join("fork.sqlite");
+        let fork = reopened
+            .fork_to(&fork_path, ForkPoint::AfterTurn(1))
+            .unwrap();
+
+        let resumed_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "resumed".into(),
+        )])]));
+        let resumed_agent = Agent::new(resumed_scripts.clone(), Arc::new(DeferredTool));
+        assert_eq!(
+            resumed_agent
+                .submit(
+                    &reopened,
+                    model(),
+                    "continue after reopen".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap(),
+            "resumed"
+        );
+        assert_eq!(
+            resumed_scripts.requests()[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
+
+        let fork_scripts = Arc::new(ScriptedModelService::new([response(vec![Content::Text(
+            "forked".into(),
+        )])]));
+        let fork_agent = Agent::new(fork_scripts.clone(), Arc::new(DeferredTool));
+        assert_eq!(
+            fork_agent
+                .submit(
+                    &fork,
+                    model(),
+                    "continue from fork".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap(),
+            "forked"
+        );
+        assert_eq!(
+            fork_scripts.requests()[0]
+                .tools
+                .iter()
+                .map(|tool| tool.name.as_str())
+                .collect::<Vec<_>>(),
+            ["special_lookup"]
+        );
+        drop(fork);
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
