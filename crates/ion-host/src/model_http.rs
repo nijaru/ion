@@ -10,9 +10,8 @@ use futures_util::StreamExt;
 use ion_ai::{
     BoxFuture, Content, IncompleteReason, Message, ModelContextState, ModelRef, ModelRequest,
     ModelResponse, ModelRoute, ModelRouteReason, ModelService, ModelStream, ModelStreamEvent,
-    PromptCacheIntent, ProviderError,
-    ProviderErrorKind, ProviderReplay, Reasoning, ResponseTermination, Role, ToolCall, ToolChoice,
-    ToolSpec, Usage,
+    PromptCacheIntent, ProviderError, ProviderErrorKind, ProviderReplay, Reasoning,
+    ResponseTermination, Role, ToolCall, ToolChoice, ToolSpec, Usage,
 };
 use reqwest::{
     Client, Url,
