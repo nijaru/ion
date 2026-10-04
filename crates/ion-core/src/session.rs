@@ -1342,7 +1342,9 @@ fn context_projection(
         .compaction
         .as_ref()
         .map_or(0, |(through, _)| *through);
-    if store.state.replay_epoch_start <= through && model == store.state.last_effective_model.as_ref() {
+    if store.state.replay_epoch_start <= through
+        && model == store.state.last_effective_model.as_ref()
+    {
         return match &store.state.compaction {
             Some((through, summary)) => {
                 let entries = read_entries_after(&store.connection, *through)?;
