@@ -729,7 +729,7 @@ impl Agent {
                 inbox.record_pending(session, turn, self.limits)?;
             }
             let mut recovered_overflow = false;
-            let (response, tool_catalog, warm_request, warm_request_started) = loop {
+            let (generated, tool_catalog, warm_request, warm_request_started) = loop {
                 for diagnostic in self.tools.refresh(stop.clone()).await {
                     observe(AgentEvent::ToolCatalogWarning(diagnostic));
                 }
@@ -820,22 +820,28 @@ impl Agent {
                     }))
                 ) || matches!(
                     &generated,
-                    Ok(ModelResponse {
-                        termination: ResponseTermination::Incomplete(
-                            IncompleteReason::ContextLength
-                        ),
+                    Ok(GeneratedResponse {
+                        response: ModelResponse {
+                            termination: ResponseTermination::Incomplete(
+                                IncompleteReason::ContextLength
+                            ),
+                            ..
+                        },
                         ..
                     })
                 ) || (request.route.effective.provider == "xiaomi"
                     && matches!(
                         &generated,
-                        Ok(ModelResponse {
-                            termination: ResponseTermination::Incomplete(
-                                IncompleteReason::MaxOutputTokens
-                            ),
-                            usage: ion_ai::Usage {
-                                output_tokens: Some(0),
-                                input_tokens: Some(input),
+                        Ok(GeneratedResponse {
+                            response: ModelResponse {
+                                termination: ResponseTermination::Incomplete(
+                                    IncompleteReason::MaxOutputTokens
+                                ),
+                                usage: ion_ai::Usage {
+                                    output_tokens: Some(0),
+                                    input_tokens: Some(input),
+                                    ..
+                                },
                                 ..
                             },
                             ..
@@ -846,12 +852,15 @@ impl Agent {
                 let recoverable_length = !length_recovery_attempted
                     && matches!(
                         &generated,
-                        Ok(ModelResponse {
-                            termination: ResponseTermination::Incomplete(
-                                IncompleteReason::MaxOutputTokens
-                            ),
-                            usage: ion_ai::Usage {
-                                output_tokens: Some(output),
+                        Ok(GeneratedResponse {
+                            response: ModelResponse {
+                                termination: ResponseTermination::Incomplete(
+                                    IncompleteReason::MaxOutputTokens
+                                ),
+                                usage: ion_ai::Usage {
+                                    output_tokens: Some(output),
+                                    ..
+                                },
                                 ..
                             },
                             ..
