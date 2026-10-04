@@ -1220,8 +1220,8 @@ mod tests {
             input_schema: json!({"type":"object"}),
         };
         let mut initial = request();
-        initial.model.provider = "anthropic".into();
-        initial.model.model = "claude-opus-5-5".into();
+        initial.route.effective.provider = "anthropic".into();
+        initial.route.effective.model = "claude-opus-5-5".into();
         initial.tools = vec![old_tool.clone()];
         let initial_body = anthropic_body(&initial, true).unwrap();
         let prefix = anthropic_body_prefix_digest(&initial_body).unwrap();
@@ -1730,7 +1730,7 @@ mod tests {
             assert_eq!(body["messages"][2]["tool_calls"][0]["id"], "remote");
             assert_eq!(body["messages"][3]["tool_call_id"], "remote");
             let mut wrong_provider = request.clone();
-            wrong_provider.model.provider = "other".into();
+            wrong_provider.route.effective.provider = "other".into();
             assert_eq!(
                 chat_body(&wrong_provider, wire).unwrap_err().kind,
                 ProviderErrorKind::Unsupported
@@ -1862,7 +1862,7 @@ mod tests {
         assert_eq!(body["messages"][3]["tool_call_id"], "provider-call");
 
         let mut wrong_provider = request.clone();
-        wrong_provider.model.provider = "other".into();
+        wrong_provider.route.effective.provider = "other".into();
         assert_eq!(
             chat_body(&wrong_provider, HttpWire::OpenRouterChat)
                 .unwrap_err()
