@@ -131,7 +131,7 @@ reports `completed`, `cancelled` or `failed`; a response alone is not the
 answer. `final` is the committed answer. Other commands are `steer`,
 `follow_up`, `clear_queue`, `abort`, `get_state`, `inspect`, `list_sessions`, `list_turns`, `list_models`,
 `list_resources`, `reload_resources`, `compact`, `set_model`, `new_session`,
-`fork`, `switch_session` and `set_name`.
+`clone_session`, `fork`, `switch_session` and `set_name`.
 `prompt`, `steer` and `follow_up` accept `images` as an array of local paths (relative to the
 Session's working directory) or inline `{ "mime_type": "image/png", "data": "BASE64" }`
 objects. Ion validates and normalizes both before accepting the input.
@@ -148,8 +148,9 @@ Session, resource, model and manual-compaction changes require an idle Turn.
 `abort`, and later emits `compact_end` with completed/cancelled/failed status
 and whether the model-context projection changed. `steer` and `follow_up`
 remain valid only for a coding Turn. `set_model` saves the idle selection for that Session; `new_session` selects the current global
-default, and `switch_session` restores the selected Session's model. Starting,
-forking or switching Sessions refreshes project resources; use
+default, `clone_session` copies the current committed conversation into an
+independent active Session, and `switch_session` restores the selected Session's model. Starting,
+cloning, forking or switching Sessions refreshes project resources; use
 `reload_resources` to refresh them within the current Session.
 Malformed commands receive a failed response, commands over 8 MiB are
 rejected, and an incomplete final line is left unexecuted with a framing
@@ -336,12 +337,14 @@ save an empty assistant message that would break later provider replay.
 
 ## Current limits
 
-The required CI gate now includes a Linux PTY workflow for the terminal client
-in addition to format, strict Clippy and workspace tests. It exercises inline
-startup, grouped tool activity, temporary full-screen views, persistent
-fullscreen startup, inline/fullscreen mode switching, resize, Session/model
-controls, masked login, copy and terminal restoration. This is an automated PTY
-qualification, not a substitute for manual checks in every supported terminal.
+The required CI gate now includes Linux PTY, RPC, MCP refresh/withdrawal and
+selected-point fork workflows in addition to format, strict Clippy and workspace
+tests. The terminal workflow exercises inline startup, grouped tool activity,
+temporary full-screen views, persistent fullscreen startup, inline/fullscreen
+mode switching, resize, Session/model controls, masked login, copy, clean
+restoration and an explicit process panic after fullscreen ownership has begun.
+This is automated qualification, not a substitute for manual checks in every
+supported terminal.
 
 Short live coding tasks have passed on macOS with direct DeepSeek and MiMo,
 OpenRouter DeepSeek Flash, custom OpenRouter routes for
