@@ -349,9 +349,12 @@ with tempfile.TemporaryDirectory(prefix="ion-mcp-") as temporary:
         config = json.loads(config_path.read_text())
         config["servers"]["malformed"] = {"command": 7}
         config_path.write_text(json.dumps(config))
-        invalid_edit = subprocess.run([binary, "mcp", "remove", "demo"], env=env, capture_output=True, text=True)
-        assert invalid_edit.returncode != 0 and "malformed" in invalid_edit.stderr, invalid_edit
-        assert "demo" in config_path.read_text()
+        subprocess.run([binary, "mcp", "remove", "demo"], env=env, check=True, capture_output=True, text=True)
+        edited = json.loads(config_path.read_text())
+        assert "demo" not in edited["servers"] and "malformed" in edited["servers"], edited
+        subprocess.run([binary, "mcp", "add", "demo", sys.executable, str(server_script)], env=env, check=True, capture_output=True)
+        edited = json.loads(config_path.read_text())
+        assert "demo" in edited["servers"] and "malformed" in edited["servers"], edited
         response = subprocess.run([binary, "--cwd", workspace, "run", "Use the greet tool to greet Ion."], env=env, check=True, capture_output=True, text=True)
         assert response.stdout.strip() == "MCP_OK", response
         assert "malformed" in response.stderr and "invalid MCP server" in response.stderr, response
