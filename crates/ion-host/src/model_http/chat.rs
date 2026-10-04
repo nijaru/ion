@@ -13,7 +13,7 @@ pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value,
         messages.push(json!({"role":"system","content":instructions}));
     }
     messages.extend(wire_messages(request, wire)?);
-    let mut body = json!({"model":request.model.model,"messages":messages,"stream":true,
+    let mut body = json!({"model":request.route.effective.model,"messages":messages,"stream":true,
         "stream_options":{"include_usage":true},"max_completion_tokens":request.controls.max_output_tokens});
     if let Some(temperature) = request.controls.temperature {
         body["temperature"] = json!(temperature);
@@ -285,13 +285,13 @@ impl ChatState {
                 content,
                 provider_replay: if !self.reasoning_details.is_empty() {
                     Some(ProviderReplay::new(
-                        &request.model.provider,
+                        &request.route.effective.provider,
                         OPENROUTER_DETAILS_REPLAY,
                         Value::Array(self.reasoning_details),
                     ))
                 } else if !self.reasoning_content.is_empty() {
                     Some(ProviderReplay::new(
-                        &request.model.provider,
+                        &request.route.effective.provider,
                         if self.wire == HttpWire::OpenRouterChat {
                             OPENROUTER_PLAIN_REASONING_REPLAY
                         } else {
