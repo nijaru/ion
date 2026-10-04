@@ -710,10 +710,21 @@ impl Session {
             .sequence)
     }
 
-    /// The model-facing projection. Inspect and export still use raw history.
+    /// Provider-neutral context projection when no effective target is supplied.
+    /// Opaque provider replay is retained only for the direct-model case where
+    /// the logical selection and last effective physical model are identical.
+    /// Routed callers must use `context_messages_for` with the resolved
+    /// effective model before dispatch.
     pub fn context_messages(&self) -> Result<Vec<Message>, SessionError> {
         let store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        context_projection(&store, store.state.last_effective_model.as_ref())
+        let direct = match (
+            store.state.last_model.as_ref(),
+            store.state.last_effective_model.as_ref(),
+        ) {
+            (Some(logical), Some(effective)) if logical == effective => Some(effective),
+            _ => None,
+        };
+        context_projection(&store, direct)
     }
 
     pub fn model_context(&self) -> Result<Option<ModelContextSnapshot>, SessionError> {
