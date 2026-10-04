@@ -1186,7 +1186,9 @@ impl AgentError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation};
+    use crate::{
+        CodingSession, ForkPoint, ToolActivityKind, ToolDefinition, ToolExposure, ToolPresentation,
+    };
     use ion_ai::{
         BoxFuture, ImageContent, Message, ModelResponse, ModelStreamEvent, Script,
         ScriptedModelService, ToolCall, ToolSpec, Usage,
