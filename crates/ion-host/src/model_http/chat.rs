@@ -15,6 +15,16 @@ pub(super) fn chat_body(request: &ModelRequest, wire: HttpWire) -> Result<Value,
     messages.extend(wire_messages(request, wire)?);
     let mut body = json!({"model":request.route.effective.model,"messages":messages,"stream":true,
         "stream_options":{"include_usage":true},"max_completion_tokens":request.controls.max_output_tokens});
+    if wire == HttpWire::OpenRouterChat
+        && let Some(id) = &request.provider_session_id
+    {
+        if id.is_empty() || id.chars().count() > 256 {
+            return Err(invalid(
+                "OpenRouter session ID must contain 1 to 256 characters",
+            ));
+        }
+        body["session_id"] = json!(id);
+    }
     if let Some(temperature) = request.controls.temperature {
         body["temperature"] = json!(temperature);
     }

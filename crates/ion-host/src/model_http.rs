@@ -1028,6 +1028,7 @@ mod tests {
                 },
                 ModelRouteReason::UserRequest,
             ),
+            provider_session_id: None,
             instructions: Some("instructions".into()),
             messages: vec![Message {
                 role: Role::User,
@@ -1050,6 +1051,51 @@ mod tests {
                 parallel_tool_calls: false,
             },
         }
+    }
+
+    #[test]
+    fn openrouter_conversation_affinity_is_explicit_and_wire_scoped() {
+        let mut request = request();
+        request.provider_session_id = Some("018f7d1b-2391-7000-8000-000000000001".into());
+        let body = chat_body(&request, HttpWire::OpenRouterChat).unwrap();
+        assert_eq!(body["session_id"], "018f7d1b-2391-7000-8000-000000000001");
+        for wire in [
+            HttpWire::ChatCompletions,
+            HttpWire::DeepSeekChat,
+            HttpWire::MiMoChat,
+            HttpWire::LlamaCppNoThinking,
+        ] {
+            assert!(
+                chat_body(&request, wire)
+                    .unwrap()
+                    .get("session_id")
+                    .is_none()
+            );
+        }
+        assert!(
+            anthropic_body(&request, false)
+                .unwrap()
+                .get("session_id")
+                .is_none()
+        );
+        request.prompt_cache = PromptCacheIntent::Default;
+        assert_eq!(
+            chat_body(&request, HttpWire::OpenRouterChat).unwrap()["session_id"],
+            body["session_id"]
+        );
+        request.provider_session_id = None;
+        assert!(
+            chat_body(&request, HttpWire::OpenRouterChat)
+                .unwrap()
+                .get("session_id")
+                .is_none()
+        );
+        for id in [String::new(), "a".repeat(257)] {
+            request.provider_session_id = Some(id);
+            assert!(chat_body(&request, HttpWire::OpenRouterChat).is_err());
+        }
+        request.provider_session_id = Some("a".repeat(256));
+        assert!(chat_body(&request, HttpWire::OpenRouterChat).is_ok());
     }
 
     #[test]

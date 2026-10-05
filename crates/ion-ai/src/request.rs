@@ -49,6 +49,9 @@ pub struct ModelRequest {
     /// Logical selection, effective physical target and why this request exists.
     /// Direct models use the same identity for logical and effective.
     pub route: ModelRoute,
+    /// Opaque conversation identity for supported provider routing/cache affinity.
+    /// This is transport metadata, never model-visible content or replay state.
+    pub provider_session_id: Option<String>,
     /// The instruction text selected for this call.
     /// `None` means no instruction channel was configured, which is different
     /// from an empty instruction string.

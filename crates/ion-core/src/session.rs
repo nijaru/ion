@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 6;
+const FORMAT_VERSION: u32 = 7;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -34,6 +34,7 @@ fn completed_termination() -> ResponseTermination {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Header {
     version: u32,
+    provider_session_id: uuid::Uuid,
     cwd: PathBuf,
     #[serde(default)]
     name: Option<String>,
@@ -515,6 +516,7 @@ impl Session {
         initialize_new(&connection)?;
         let header = Header {
             version: FORMAT_VERSION,
+            provider_session_id: uuid::Uuid::now_v7(),
             cwd,
             name: None,
         };
@@ -650,6 +652,11 @@ impl Session {
     }
     pub fn cwd(&self) -> &Path {
         &self.header.cwd
+    }
+    /// Stable transport affinity identity. Conversation copies get a fresh ID
+    /// through `create`, while reopening reads the existing immutable header.
+    pub fn provider_session_id(&self) -> uuid::Uuid {
+        self.header.provider_session_id
     }
     pub fn messages(&self) -> Result<Vec<Message>, SessionError> {
         Ok(self
@@ -1595,11 +1602,17 @@ fn read_header(connection: &Connection) -> Result<Header, SessionError> {
         })
         .optional()?
         .ok_or(SessionError::InvalidDatabase)?;
-    let header: Header = serde_json::from_slice(&encoded)?;
-    if header.version != FORMAT_VERSION {
-        return Err(SessionError::UnsupportedFormat(header.version));
+    // Reject obsolete formats before interpreting the current header payload.
+    // In particular, never invent an affinity identity when opening old data.
+    #[derive(Deserialize)]
+    struct Format {
+        version: u32,
     }
-    Ok(header)
+    let format: Format = serde_json::from_slice(&encoded)?;
+    if format.version != FORMAT_VERSION {
+        return Err(SessionError::UnsupportedFormat(format.version));
+    }
+    Ok(serde_json::from_slice(&encoded)?)
 }
 
 fn configure_connection(connection: &Connection) -> Result<(), SessionError> {
@@ -1759,6 +1772,45 @@ mod tests {
     }
 
     #[test]
+    fn reopen_rejects_old_format_or_missing_affinity_without_backfill() {
+        let (root, path) = fixture();
+        drop(Session::create(&path, &root).unwrap());
+        let connection = Connection::open(&path).unwrap();
+        for version in [6, FORMAT_VERSION] {
+            let encoded = serde_json::to_vec(&serde_json::json!({
+                "version": version,
+                "cwd": root,
+                "name": null,
+            }))
+            .unwrap();
+            connection
+                .execute(
+                    "UPDATE session SET header = ?1 WHERE id=1",
+                    params![encoded],
+                )
+                .unwrap();
+            for result in [
+                Session::open(&path).map(|_| ()),
+                Session::inspect(&path).map(|_| ()),
+            ] {
+                if version == 6 {
+                    assert!(matches!(result, Err(SessionError::UnsupportedFormat(6))));
+                } else {
+                    assert!(result.is_err());
+                }
+            }
+            let stored: Vec<u8> = connection
+                .query_row("SELECT header FROM session WHERE id=1", [], |row| {
+                    row.get(0)
+                })
+                .unwrap();
+            assert_eq!(stored, encoded);
+        }
+        drop(connection);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn user_shell_context_choice_survives_reopen_and_compaction() {
         let (root, path) = fixture();
         let session = Session::create(&path, &root).unwrap();
@@ -1883,7 +1935,29 @@ mod tests {
                 .iter()
                 .any(|entry| matches!(entry, SessionEntry::TurnStarted { turn: 3, .. }))
         );
+        let source_id = source.provider_session_id();
+        let before_id = before.provider_session_id();
+        let after_id = after.provider_session_id();
+        assert_ne!(source_id, before_id);
+        assert_ne!(source_id, after_id);
+        assert_ne!(before_id, after_id);
         drop((source, before, after));
+        assert_eq!(
+            Session::open(&path).unwrap().provider_session_id(),
+            source_id
+        );
+        assert_eq!(
+            Session::open(root.join("before.sqlite"))
+                .unwrap()
+                .provider_session_id(),
+            before_id
+        );
+        assert_eq!(
+            Session::open(root.join("after.sqlite"))
+                .unwrap()
+                .provider_session_id(),
+            after_id
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -3038,6 +3112,9 @@ mod tests {
         let (second, _) = source.begin_turn("second".into(), model.clone()).unwrap();
         let original = source.view().unwrap();
         let cloned = source.clone_to(&clone_path).unwrap();
+        let source_id = source.provider_session_id();
+        let clone_id = cloned.provider_session_id();
+        assert_ne!(source_id, clone_id);
         assert_eq!(cloned.view().unwrap().entries, original.entries);
         assert_eq!(
             cloned.context_messages().unwrap(),
@@ -3050,6 +3127,14 @@ mod tests {
         assert_eq!(source.view().unwrap().entries, original.entries);
         drop(cloned);
         drop(source);
+        assert_eq!(
+            Session::open(&path).unwrap().provider_session_id(),
+            source_id
+        );
+        assert_eq!(
+            Session::open(&clone_path).unwrap().provider_session_id(),
+            clone_id
+        );
         assert_eq!(
             Session::inspect(&clone_path).unwrap().last_end,
             Some((second, TurnEndReason::Interrupted))

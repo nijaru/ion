@@ -26,6 +26,7 @@ fn request() -> ModelRequest {
             },
             ModelRouteReason::UserRequest,
         ),
+        provider_session_id: None,
         instructions: Some("be careful".to_owned()),
         messages: vec![Message {
             role: Role::User,

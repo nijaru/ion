@@ -94,7 +94,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 6; earlier development Session
+This unreleased branch uses Session format 7; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -207,6 +207,11 @@ identity and any provider-returned model identifier. Effective physical model
 changes advance replay epochs independently of logical selection, so a future
 virtual route cannot switch A → B → A and accidentally revive stale opaque
 reasoning. Ion does not yet provide a virtual-model registry or router.
+OpenRouter requests include a persisted opaque conversation ID for best-effort
+provider/cache affinity, independent of opening messages that resource reload or
+compaction may change. Reopen retains it; clone/fork gets a fresh ID. Other
+provider wires do not inherit OpenRouter's `session_id` field. Affinity does
+not guarantee cache hits or pin an unavailable provider.
 The catalog includes current Claude Fable 5.1, Opus 5.5 and Sonnet 5.5 on the
 native Anthropic Messages route. Its signed thinking is retained across tool
 and later Turn continuation. For reusable coding requests, these cataloged

@@ -452,6 +452,7 @@ impl Agent {
             }
             let request = ModelRequest {
                 route: ModelRoute::direct(model.clone(), ModelRouteReason::Auxiliary),
+                provider_session_id: Some(session.provider_session_id().to_string()),
                 instructions: Some("Summarize the coding conversation for continued work. Preserve the user's goal and constraints, current file changes and test results, important tool findings, unresolved errors, and precise next steps. Distinguish observations from guesses. Return only the summary.".into()),
                 messages: vec![ion_ai::Message {
                     role: Role::User,
@@ -754,6 +755,7 @@ impl Agent {
                 let route = ModelRoute::direct(model.clone(), route_reason);
                 let mut request = ModelRequest {
                     route: route.clone(),
+                    provider_session_id: Some(session.provider_session_id().to_string()),
                     instructions: Some(instructions.clone()),
                     messages: session.context_messages_for(&route.effective)?,
                     tools: declared_tools.clone(),
@@ -1555,6 +1557,10 @@ mod tests {
 
         let requests = service.requests();
         assert_eq!(requests.len(), 3);
+        let provider_id = session.provider_session_id().to_string();
+        assert!(requests.iter().all(|request| {
+            request.provider_session_id.as_deref() == Some(provider_id.as_str())
+        }));
         assert_eq!(requests[0].route.reason, ModelRouteReason::UserRequest);
         assert_eq!(requests[1].route.reason, ModelRouteReason::Auxiliary);
         assert_eq!(requests[1].controls.max_output_tokens, 1);
@@ -1598,6 +1604,7 @@ mod tests {
         let agent = Agent::new(service.clone(), Arc::new(TestTools::new(&root)));
         let request = ModelRequest {
             route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
+            provider_session_id: Some(uuid::Uuid::now_v7().to_string()),
             instructions: None,
             messages: Vec::new(),
             tools: Vec::new(),
@@ -2739,6 +2746,10 @@ mod tests {
                 .unwrap()
         );
         assert!(scripts.requests()[1].tools.is_empty());
+        let provider_id = session.provider_session_id().to_string();
+        drop(session);
+        let session = CodingSession::open(&path).unwrap();
+        assert_eq!(session.provider_session_id().to_string(), provider_id);
         assert_eq!(session.messages().unwrap().len(), 2);
         assert_eq!(session.context_messages().unwrap().len(), 1);
         agent
@@ -2752,7 +2763,11 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(scripts.requests()[2].messages.len(), 2);
+        let requests = scripts.requests();
+        assert!(requests.iter().all(|request| {
+            request.provider_session_id.as_deref() == Some(provider_id.as_str())
+        }));
+        assert_eq!(requests[2].messages.len(), 2);
         assert_eq!(session.messages().unwrap().len(), 4);
         drop(session);
         std::fs::remove_dir_all(root).unwrap();

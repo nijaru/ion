@@ -181,6 +181,7 @@ async fn fill(
 fn request_from(session: &CodingSession) -> Result<ModelRequest> {
     Ok(ModelRequest {
         route: ModelRoute::direct(model(), ModelRouteReason::UserRequest),
+        provider_session_id: Some(session.provider_session_id().to_string()),
         instructions: Some("Measure request construction.".into()),
         messages: session.context_messages()?,
         tools: Vec::new(),

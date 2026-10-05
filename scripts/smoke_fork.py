@@ -20,9 +20,12 @@ root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 
 
+requests = []
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
-        self.rfile.read(int(self.headers["Content-Length"]))
+        requests.append(json.loads(self.rfile.read(int(self.headers["Content-Length"]))))
         events = [
             {"id": "fork", "choices": [{"index": 0, "delta": {"content": "FORK_OK"}, "finish_reason": None}]},
             {"id": "fork", "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
@@ -48,7 +51,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
     thread.start()
     try:
         endpoint = f"http://127.0.0.1:{server.server_port}/v1/chat/completions"
-        subprocess.run([binary, "use", "smoke", "fork-model", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        subprocess.run([binary, "use", "smoke", "fork-model", "--endpoint", endpoint, "--wire", "openrouter-chat"], env=env, check=True, capture_output=True)
 
         def ion(*args, check=True):
             return subprocess.run([binary, "--cwd", workspace, *args], env=env, capture_output=True, text=True, check=check)
@@ -57,6 +60,9 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         assert first.stdout.strip() == "FORK_OK"
         source_id = first.stderr.split("[session: ")[1].split("]")[0]
         ion("--session", source_id, "run", "second request")
+        source_provider_id = requests[0]["session_id"]
+        assert requests[1]["session_id"] == source_provider_id
+        assert len(source_provider_id) == 36
         listing = ion("--session", source_id, "turns").stdout
         assert "1\tended\tfirst request" in listing and "2\tended\tsecond request" in listing
         fork_id = ion("--session", source_id, "fork", "2").stdout.split()[-1]
@@ -65,11 +71,24 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
         assert starts == [1], starts
         assert fork_view["last_model"] == {"provider": "smoke", "model": "fork-model"}
         ion("--session", fork_id, "run", "alternative second request")
+        fork_provider_id = requests[-1]["session_id"]
+        assert fork_provider_id != source_provider_id
         source_view = json.loads(ion("--session", source_id, "inspect").stdout)
         assert [entry["data"]["turn"] for entry in source_view["entries"] if entry["kind"] == "turn_started"] == [1, 2]
         after_id = ion("--session", source_id, "fork", "1", "--after").stdout.split()[-1]
         after_view = json.loads(ion("--session", after_id, "inspect").stdout)
         assert [entry["data"]["turn"] for entry in after_view["entries"] if entry["kind"] == "turn_started"] == [1]
+        ion("--session", after_id, "run", "continue after first request")
+        after_provider_id = requests[-1]["session_id"]
+        clone_id = ion("--session", source_id, "clone").stdout.split()[-1]
+        ion("--session", clone_id, "run", "continue cloned conversation")
+        clone_provider_id = requests[-1]["session_id"]
+        assert len({source_provider_id, fork_provider_id, after_provider_id, clone_provider_id}) == 4
+        before_compact = len(requests)
+        ion("--session", source_id, "compact")
+        assert len(requests) > before_compact, "compaction did not call the provider"
+        assert all(request["session_id"] == source_provider_id for request in requests[before_compact:])
+        assert all(request["session_id"] not in json.dumps(request["messages"]) for request in requests)
         missing = ion("--session", source_id, "fork", "99", check=False)
         assert missing.returncode != 0 and "boundary" in missing.stderr
 
@@ -130,7 +149,7 @@ with tempfile.TemporaryDirectory(prefix="ion-fork-") as temporary:
                 child.send_signal(signal.SIGKILL)
                 child.wait()
             os.close(master)
-        print("Ion selected-point fork, source preservation and terminal control: OK")
+        print("Ion fork/clone, provider affinity across reopen/compaction and terminal control: OK")
     finally:
         server.shutdown()
         server.server_close()

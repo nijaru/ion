@@ -188,7 +188,15 @@ adapters may encode that timeline efficiently, but cannot make it depend on
 volatile provider cache state. Context changes must leave the recorded
 conversation inspectable.
 
-Prompt caching is a provider optimization, not conversation truth.
+Prompt caching is a provider optimization, not conversation truth. Each Session
+header owns a persisted opaque provider-conversation identity, retained on
+reopen and allocated fresh on clone/fork rather than copied with transcript
+entries. Every coding, retry, compaction and cache-refresh request carries it
+as optional transport metadata, never model-visible content. Supported
+adapters encode provider-specific affinity controls; the OpenRouter Chat wire
+uses its documented `session_id`, while other wires omit that field. Affinity
+is best effort and cannot become replay state, a cache-hit guarantee or an
+execution-correctness dependency.
 Provider-neutral usage retains total input/output plus optional cache-read and
 cache-write subcounts when the route reports them. Cache lifetime, pricing and
 refresh mechanisms belong to resolved route capabilities, never Session
