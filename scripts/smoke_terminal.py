@@ -318,3 +318,74 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
     finally:
         server.terminate()
         server.wait(timeout=5)
+
+def exercise_active_band():
+    with tempfile.TemporaryDirectory(prefix="ion-active-band-") as temporary:
+        work = Path(temporary)
+        env = os.environ.copy()
+        env.update(XDG_CONFIG_HOME=str(work / "config"), XDG_STATE_HOME=str(work / "state"), TERM="xterm-256color", ION_SMOKE_SALIENCE="1")
+        port, trace = work / "port", work / "trace"
+        server = subprocess.Popen([sys.executable, str(root / "scripts/smoke_provider.py"), str(port), str(trace)], env=env, stderr=subprocess.PIPE)
+        child = None
+        master = None
+        try:
+            end = time.monotonic() + 20
+            while not port.exists():
+                assert time.monotonic() < end, "active-band provider did not start"
+                time.sleep(0.02)
+            subprocess.run([binary, "use", "smoke", "smoke-model", "--endpoint", f"http://127.0.0.1:{port.read_text()}/v1/chat/completions", "--wire", "chat-completions"], env=env, capture_output=True, check=True)
+            master, slave = pty.openpty()
+            fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 100, 0, 0))
+
+            def attach():
+                os.setsid()
+                fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+
+            child = subprocess.Popen([binary, "--cwd", work, "chat"], env=env, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach)
+            os.close(slave)
+            output = bytearray()
+            sent = repainted = checked = quit_sent = False
+            repaint_time = 0
+            while time.monotonic() < end:
+                readable, _, _ = select.select([master], [], [], 0.03)
+                if readable:
+                    data = os.read(master, 65536)
+                    output.extend(data)
+                    if b"\x1b[6n" in data:
+                        os.write(master, b"\x1b[2;1R")
+                if not sent and "› ".encode() in output:
+                    os.write(master, b"Exercise the busy activity band.\r")
+                    sent = True
+                if not repainted and (work / "active.ready").exists():
+                    assert len(list(work.glob("mutation-*.txt"))) == 14
+                    # Discard earlier output; force the CURRENT inline region to
+                    # repaint, without opening an inspector or completing work.
+                    while select.select([master], [], [], 0)[0]:
+                        os.read(master, 65536)
+                    output.clear()
+                    fcntl.ioctl(master, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 99, 0, 0))
+                    os.kill(child.pid, signal.SIGWINCH)
+                    repaint_time = time.monotonic()
+                    repainted = True
+                if repainted and not checked and time.monotonic() - repaint_time > 0.4:
+                    for fact in [b"1 failed", b"1 pending", b"14 write", b"FAILURE_MARKER"]:
+                        assert fact in output, ("active normal band hid known work", fact, output)
+                    assert b"SALIENCE_DONE" not in output and b"\x1b[?1049h" not in output
+                    checked = True
+                if checked and b"SALIENCE_DONE" in output and not quit_sent:
+                    os.write(master, b"\x03")
+                    quit_sent = True
+                if child.poll() is not None:
+                    break
+            assert checked and child.wait(timeout=2) == 0, output[-2000:]
+            print("Ion active inline band retains mutation and exception facts: OK")
+        finally:
+            if child is not None and child.poll() is None:
+                child.kill()
+                child.wait()
+            if master is not None:
+                os.close(master)
+            server.terminate()
+            server.wait(timeout=5)
+
+exercise_active_band()

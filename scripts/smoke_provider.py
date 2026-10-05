@@ -22,6 +22,7 @@ count = 0
 require_steering = os.environ.get("ION_SMOKE_STEERING") == "1"
 partial_failure = os.environ.get("ION_SMOKE_PARTIAL_FAILURE") == "1"
 stream_error = os.environ.get("ION_SMOKE_STREAM_ERROR") == "1"
+salience = os.environ.get("ION_SMOKE_SALIENCE") == "1"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -63,7 +64,17 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 assert len(body["tools"]) == 4
                 assert {tool["function"]["name"] for tool in body["tools"]} == {"read", "edit", "write", "exec"}
-            if count < 4:
+            if salience:
+                if count == 0:
+                    calls = [("exec", {"command": "printf 'FAILURE_MARKER\\n'; exit 7"})]
+                    calls.extend(("write", {"path": f"mutation-{index}.txt", "content": "observed mutation\\n"}) for index in range(14))
+                    calls.append(("exec", {"command": "touch active.ready; exec sleep 5"}))
+                    delta = {"tool_calls": [{"index": index, "id": f"salience-{index}", "type": "function", "function": {"name": name, "arguments": json.dumps(arguments)}} for index, (name, arguments) in enumerate(calls)]}
+                    finish = "tool_calls"
+                else:
+                    assert count == 1
+                    delta, finish = {"content": "SALIENCE_DONE"}, "stop"
+            elif count < 4:
                 if count:
                     last = body["messages"][-1]
                     if count == 1 and require_steering:

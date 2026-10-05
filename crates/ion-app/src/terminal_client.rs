@@ -2001,19 +2001,20 @@ fn draw(
     }
 
     let width = width.max(1) as usize;
-    let mut live_rows = Vec::new();
-    for notice in &ui.notices {
-        push_wrapped(&mut live_rows, notice, width);
+    let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
+    let mut chrome = Vec::new();
+    let notices = progress.map_or(&[][..], LiveTranscript::notices);
+    if let Some(notice) = notices.last().or(ui.notices.last()) {
+        let count = notices.len() + ui.notices.len();
+        let label = if count == 1 {
+            "Notice".into()
+        } else {
+            format!("{count} notices")
+        };
+        chrome.push(brief(&format!("{label} · {notice}"), width));
     }
-    if let Some(progress) = progress {
-        live_rows.extend(crate::transcript_render::rows(progress.projection(), width));
-        for notice in progress.notices() {
-            push_wrapped(&mut live_rows, notice, width);
-        }
-    }
-
     if let Some(status) = visible_status(ui) {
-        push_wrapped(&mut live_rows, &status, width);
+        chrome.push(brief(&status, width));
     }
 
     let composer = wrap_input(&ui.draft, ui.cursor, width);
@@ -2022,6 +2023,11 @@ fn draw(
         .cursor_row
         .saturating_sub(composer_height.saturating_sub(1))
         .min(composer.lines.len().saturating_sub(composer_height));
+    let content_budget = row_budget.saturating_sub(composer_height + chrome.len());
+    let mut live_rows = progress.map_or_else(Vec::new, |progress| {
+        crate::transcript_render::live_rows(progress.projection(), width, content_budget)
+    });
+    live_rows.extend(chrome);
     let composer_offset = live_rows.len();
     for line in composer
         .lines
@@ -2033,7 +2039,7 @@ fn draw(
     }
     let mut cursor_row = composer_offset + composer.cursor_row.saturating_sub(composer_start);
 
-    let desired_live_height = live_rows.len().clamp(1, LIVE_REGION_MAX_ROWS);
+    let desired_live_height = live_rows.len().clamp(1, row_budget);
     if desired_live_height > screen.live_height() {
         screen.ensure_live_height(terminal.output(), desired_live_height)?;
     } else if desired_live_height < screen.live_height() && (history_committed || surface_reset) {

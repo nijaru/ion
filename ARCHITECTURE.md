@@ -437,6 +437,11 @@ reflow; the renderer does not keep a second virtual committed history.
 A rendering failure stops further input/redraw, requests cancellation and
 awaits the active operation. It must not drop a running tool/shell future;
 observed results still reach the Session before the host reports failure.
+Inline presentation budgets transcript rows after composer, status and notices.
+Overflow retains a current-Turn summary and an exception instead of blindly
+clipping all earlier work. This does not establish an immutable history cut;
+pending/exception counts are facts about committed calls, not permission or
+proof that every pending call is already running.
 
 Persistent fullscreen is an alternate renderer policy over the same
 `TranscriptProjection`, not a second conversation/runtime model. It owns the

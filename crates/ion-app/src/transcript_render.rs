@@ -29,6 +29,53 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
     rows
 }
 
+/// Keep current-Turn counts and an exception visible when its narrative/tool
+/// rows exceed the inline viewport. This is a projection, never a history cut.
+pub(super) fn live_rows(
+    projection: &TranscriptProjection,
+    width: usize,
+    budget: usize,
+) -> Vec<String> {
+    if budget == 0 {
+        return Vec::new();
+    }
+    let mut rendered = rows(projection, width);
+    if rendered.len() <= budget {
+        return rendered;
+    }
+    let activities = || {
+        projection.items.iter().flat_map(|item| match item {
+            TranscriptItem::ActivityGroup(group) => group.activities.as_slice(),
+            _ => &[],
+        })
+    };
+    let mut pinned = Vec::new();
+    if activities().next().is_some() {
+        push_wrapped(
+            &mut pinned,
+            &format!("{} · Ctrl-O", group_header(activities())),
+            width.max(1),
+        );
+        pinned.truncate(budget.saturating_sub(2).clamp(1, 3));
+        if budget > pinned.len() + 1
+            && let Some(exception) = activities().rfind(|activity| {
+                !matches!(
+                    activity.outcome,
+                    ActivityOutcome::Pending | ActivityOutcome::Completed
+                )
+            })
+        {
+            pinned.push(fit_line(&display_activity(exception).summary, width.max(1)));
+        }
+    } else {
+        pinned.push(fit_line("… earlier conversation · Ctrl-O", width.max(1)));
+    }
+    let tail = budget.saturating_sub(pinned.len());
+    rendered.drain(..rendered.len().saturating_sub(tail));
+    pinned.extend(rendered);
+    pinned
+}
+
 pub(super) fn render_message(
     rows: &mut Vec<String>,
     message: &TranscriptMessage,
@@ -149,7 +196,7 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
         return;
     }
 
-    rows.push(fit_line(&group_header(group), width));
+    rows.push(fit_line(&group_header(group.activities.iter()), width));
     let total_children = display.len() + usize::from(omitted > 0);
     for (index, item) in display.iter().enumerate() {
         let last = index + 1 == total_children;
@@ -165,15 +212,18 @@ fn render_group(rows: &mut Vec<String>, group: &ActivityGroup, width: usize) {
     }
 }
 
-fn group_header(group: &ActivityGroup) -> String {
+fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) -> String {
     let mut counts = [0usize; 9];
+    let mut pending = 0usize;
+    let mut count = 0usize;
     let mut failed = 0usize;
     let mut cancelled = 0usize;
     let mut timed_out = 0usize;
     let mut rejected = 0usize;
     let mut unknown = 0usize;
 
-    for activity in &group.activities {
+    for activity in activities {
+        count += 1;
         counts[kind_index(activity.activity.kind)] += 1;
         match activity.outcome {
             ActivityOutcome::Failed => failed += 1,
@@ -181,25 +231,18 @@ fn group_header(group: &ActivityGroup) -> String {
             ActivityOutcome::TimedOut => timed_out += 1,
             ActivityOutcome::Rejected => rejected += 1,
             ActivityOutcome::Unknown => unknown += 1,
-            ActivityOutcome::Pending | ActivityOutcome::Completed => {}
+            ActivityOutcome::Pending => pending += 1,
+            ActivityOutcome::Completed => {}
         }
     }
 
-    let count = group.activities.len();
     let mut parts = vec![format!(
         "{count} action{}",
         if count == 1 { "" } else { "s" }
     )];
-    const LABELS: [&str; 9] = [
-        "read", "list", "search", "edit", "write", "command", "ask", "subagent", "external",
-    ];
-    for (count, label) in counts.into_iter().zip(LABELS) {
-        if count > 0 {
-            parts.push(format!("{count} {label}"));
-        }
-    }
     for (count, label) in [
         (failed, "failed"),
+        (pending, "pending"),
         (cancelled, "cancelled"),
         (timed_out, "timed out"),
         (rejected, "skipped"),
@@ -207,6 +250,22 @@ fn group_header(group: &ActivityGroup) -> String {
     ] {
         if count > 0 {
             parts.push(format!("{count} {label}"));
+        }
+    }
+    const KINDS: [(usize, &str); 9] = [
+        (3, "edit"),
+        (4, "write"),
+        (5, "command"),
+        (6, "ask"),
+        (7, "subagent"),
+        (8, "external"),
+        (0, "read"),
+        (1, "list"),
+        (2, "search"),
+    ];
+    for (index, label) in KINDS {
+        if counts[index] > 0 {
+            parts.push(format!("{} {label}", counts[index]));
         }
     }
     format!("● {}", parts.join(" · "))
@@ -666,7 +725,9 @@ mod tests {
             })],
         };
         let rendered = rows(&projection, 100).join("\n");
-        assert!(rendered.contains("● 5 actions · 3 read · 1 edit · 1 command"));
+        for count in ["● 5 actions", "3 read", "1 edit", "1 command"] {
+            assert!(rendered.contains(count));
+        }
         assert!(rendered.contains("├ Read src/a.rs, src/b.rs, src/c.rs"));
         assert!(rendered.contains("├ Edited src/parser.rs · 2 replacements"));
         assert!(rendered.contains("└ Ran cargo test"));
@@ -714,6 +775,72 @@ mod tests {
             rows(&projection, 80),
             vec!["› fix the parser", "", "I found the issue."]
         );
+    }
+
+    #[test]
+    fn live_budget_keeps_earlier_exception_and_mutations_across_narrative() {
+        let mut activities = vec![activity(
+            "failed",
+            ToolActivityKind::Command,
+            "FAILURE_MARKER",
+            ActivityOutcome::Failed,
+            Some(serde_json::json!({"exit_code": 7})),
+        )];
+        activities.extend((0..14).map(|index| {
+            activity(
+                &format!("write-{index}"),
+                ToolActivityKind::Write,
+                "changed.txt",
+                ActivityOutcome::Completed,
+                None,
+            )
+        }));
+        let projection = TranscriptProjection {
+            items: vec![
+                TranscriptItem::ActivityGroup(ActivityGroup {
+                    turn: 1,
+                    open: false,
+                    activities,
+                }),
+                TranscriptItem::Assistant(TranscriptMessage {
+                    turn: Some(1),
+                    steering: false,
+                    parts: vec![TranscriptPart::Text(
+                        (0..20)
+                            .map(|index| format!("NARRATIVE_{index}\n"))
+                            .collect(),
+                    )],
+                }),
+                TranscriptItem::ActivityGroup(ActivityGroup {
+                    turn: 1,
+                    open: true,
+                    activities: vec![activity(
+                        "pending",
+                        ToolActivityKind::Read,
+                        "CURRENT_READ",
+                        ActivityOutcome::Pending,
+                        None,
+                    )],
+                }),
+            ],
+        };
+        for width in [24, 100] {
+            let rendered = live_rows(&projection, width, 7);
+            assert!(rendered.len() <= 7);
+            let text = rendered.join("\n");
+            for fact in [
+                "16 actions",
+                "1 failed",
+                "1 pending",
+                "14 write",
+                "FAILURE_MARKER",
+                "CURRENT_READ",
+            ] {
+                assert!(text.contains(fact), "missing {fact}: {text}");
+            }
+        }
+        assert_eq!(live_rows(&projection, 100, 100), rows(&projection, 100));
+        assert!(live_rows(&projection, 100, 0).is_empty());
     }
 
     #[test]
