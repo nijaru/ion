@@ -1,51 +1,43 @@
 # Working on Ion
 
-## Direction
+## Product and contracts
 
-- `ARCHITECTURE.md` holds the current coding-agent design target;
-  `README.md` describes implemented and validated behavior.
-- Build one cohesive local coding loop for TUI, headless and library hosts:
-  read, edit, write, native shell, project instructions, model catalog,
-  automatic environment keys, optional masked API-key entry and resumable
-  sessions. Use current Pi as a primary reference for mature coding-agent
-  workflows and fx as a primary reference for shell-like terminal
-  presentation; neither is a template to clone. Ion keeps its own Rust
-  Session/Turn/host architecture. OAuth is not a first-use gate.
-- Ion is unreleased v0 with no backward-compatibility or stability
-  guarantees. Replace obsolete representations, APIs and development storage
-  formats directly. Do not add migrations, deprecated aliases, compatibility
-  facades or parallel old/new paths unless the current coding contract itself
-  requires them. Do not keep a generic task graph, second runtime, private
-  importer/registry or attempt ledger simply because it existed before.
-  Retain a mechanism only when the coding contract or a reproduced failure
-  warrants it.
-- Tools act in the live working directory with host permissions. There is
-  no implicit sandbox or VM. Report cancellation and external effects only
-  as observed; never silently rerun an incomplete tool call on reopen.
-- Keep provider transports and credentials independent of Session storage
-  and terminal rendering. Give each rule one semantic owner.
-- Workers, personal memory, gateways, schedules and workflow authoring are
-  outside the first usable coding-agent scope.
+- `ARCHITECTURE.md` owns the coding-agent contracts; `README.md` describes
+  implemented behavior and qualification limits. Neither a plan checkbox nor
+  a passing test establishes that the implementation meets those contracts.
+- Build one cohesive Rust coding loop for terminal, headless, RPC and embedded
+  clients, with Pi-level common-workflow usability and fx-like terminal
+  restraint. Use current Pi for workflow/provider semantics and fx for semantic
+  activity presentation when those concerns are affected; neither is a template
+  to copy wholesale. Verify moving source revisions before relying on them.
+- Ion is unreleased v0 with no compatibility guarantees. Replace obsolete APIs,
+  storage formats and implementations directly; do not retain parallel runtimes,
+  migration layers or deprecated facades for development state.
+- Tools act in the live working directory with host permissions, not an implicit
+  sandbox or VM. Persist observed effects, distinguish unknown effects after
+  interruption, and never silently rerun an incomplete call. OAuth is not a
+  first-use gate.
+- Workers, personal memory, scheduling and generic workflow authoring remain
+  outside the current coding-agent scope.
 
-## Changes
+## Semantic owners
 
-- Before a substantial coding-path slice, trace affected Ion code and Git
-  status, then inspect the current reference that actually matches the
-  concern: Pi for coding-agent workflow semantics, fx for terminal
-  presentation, or another harness when a distinct boundary needs it. Record
-  moving revisions. Start from the user workflow and Ion's semantic owner: a
-  reference difference alone is not a requirement. Reconcile the accepted
-  contract before changing implementation, and verify the failure boundary.
-- Preserve user work and secrets. Delete obsolete production paths once the
-  replacement owns the behavior; Git retains historical source. Update
-  public documentation when behavior or a maintainer contract changes.
-- Test the actual headless and terminal surfaces for changes that affect
-  them. Scripted provider tests do not establish live coding ability.
-- Keep this the only repository agent-instruction file. Research, decisions
-  and rewrite tracking belong in the knowledge repository rather than a
-  new documentation scaffold here.
+- `ion-ai`: provider-neutral model/message contracts. `ion-core`: durable
+  Session facts, Turn ordering/recovery, context and abstract model/tool contracts.
+- `ion-host`: provider transports/credentials, native/MCP tools, project resources
+  and shared client operations. `ion-app`: client input/protocol/presentation.
+  `ion-terminal`: physical terminal ownership, input and rendering mechanics.
+- Keep durable facts, live progress and typed projections distinct. Clients must
+  not infer execution truth from rendered strings or become another agent loop.
+  Freeze model-visible tool definitions and execution routes together at each
+  request boundary; provider caching cannot become Session correctness state.
+- When cleanup changes an owner, trace and migrate every affected caller and
+  remove the superseded path and its obsolete tests/docs. Fix the boundary, not
+  another wrapper around it. Preserve distinct recovery, concurrency and effect
+  protections; do not retain incidental output or private-call assertions merely
+  because they already pass.
 
-## Validation
+## Verification
 
 Use the checked-in Rust 1.98.0 toolchain:
 
@@ -53,16 +45,18 @@ Use the checked-in Rust 1.98.0 toolchain:
 cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets --all-features -- -D warnings
 cargo test --locked --workspace
+cargo build --locked -p ion
 ```
 
-Run targeted tests during implementation and `scripts/smoke.sh` for the
-headless offline submit/reopen path. Add focused fault tests for changed
-storage, provider or cancellation behavior. Terminal changes need PTY and
-real-terminal checks. Run `python3 scripts/smoke_resources.py` for resource
-changes and `python3 scripts/smoke_images.py` for image changes. Run
-`python3 scripts/smoke_rpc.py` for sustained-control changes and
-`python3 scripts/smoke_mcp.py` for external-tool changes. Run
-`python3 scripts/smoke_fork.py` for navigation changes. Re-run relevant gates
-after the last code edit. For
-documentation-only work, verify links, authority and status consistency;
-do not claim runtime validation.
+Exercise the built user entry point for changed behavior. `scripts/smoke.sh`
+covers offline headless submit/reopen. Relevant feature smokes live in
+`scripts/smoke_{terminal,rpc,mcp,fork,resources,images}.py`; CI owns the required
+set in `.github/workflows/ci.yml`. Terminal changes also need real-terminal
+qualification; provider mocks alone do not establish live coding usability.
+Add focused faults for changed storage, provider, framing or cancellation
+boundaries. Investigate failed checks before changing expectations.
+
+Keep this the only repository agent-instruction file. Private research,
+decisions and continuation state belong in the knowledge repository, not new
+repository notes or instruction scaffolds. Documentation-only changes require
+link, authority and consistency checks, not a claim of runtime validation.
