@@ -305,7 +305,6 @@ async fn run(workspace: &std::path::Path, state: &std::path::Path) -> Result<()>
 
     let live = vec![Line::from("› ready"), Line::from("idle")];
     let frame = Frame {
-        committed: &[],
         live: &live,
         cursor: Some((0, 2)),
     };

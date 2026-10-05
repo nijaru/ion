@@ -2026,7 +2026,6 @@ fn draw(
     terminal.render(
         screen,
         &Frame {
-            committed: &[],
             live: &live,
             cursor,
         },

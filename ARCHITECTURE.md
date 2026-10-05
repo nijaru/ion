@@ -430,7 +430,10 @@ notices. A resumed or switched Session publishes only a bounded recent
 semantic tail into fresh native scrollback; earlier durable history remains
 inspectable rather than flooding the terminal. The mutable live band may grow
 for active work but returns to the smallest safe size after settled history is
-published.
+published. Physical frames contain only live rows; settled rows use explicit
+native publication, consuming available rows before scrolling. Resizing or
+redrawing a live frame is not a publication boundary. The terminal owns native
+reflow; the renderer does not keep a second virtual committed history.
 
 Persistent fullscreen is an alternate renderer policy over the same
 `TranscriptProjection`, not a second conversation/runtime model. It owns the

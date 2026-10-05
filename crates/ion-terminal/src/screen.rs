@@ -2,25 +2,22 @@
 //!
 //! Normal inline chat owns only a live band. Settled transcript rows can be
 //! appended once with `commit_text_lines`, after which the physical terminal
-//! owns their scrollback/reflow. `draw` still supports a monotonically growing
-//! committed slice for callers that need it, but normal chat does not have to
-//! re-own historical rows. Fullscreen rendering is a separate transient surface.
+//! owns their scrollback/reflow. Drawing never publishes or scrolls live rows.
+//! Fullscreen rendering is a separate transient surface.
 
 use std::io::{self, Write};
 
-use ratatui::buffer::Buffer;
+use ratatui::buffer::{Buffer, CellWidth};
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Paragraph, Widget};
 
-/// A rendered frame. Rows index the WRAPPED arrays the caller builds;
-/// `committed` grows monotonically, and `live` is bottom-aligned inside the
-/// screen's stable virtual live band.
+/// Wrapped live rows, bottom-aligned and clipped to the reserved inline band.
+/// Settled rows must be published separately through `commit_text_lines`.
 pub struct Frame<'a> {
-    pub committed: &'a [Line<'a>],
     pub live: &'a [Line<'a>],
-    /// (absolute wrapped row, column); None hides the hardware cursor.
+    /// (live row, column); None hides the hardware cursor.
     pub cursor: Option<(usize, u16)>,
 }
 
@@ -72,7 +69,6 @@ impl Surface {
 /// What the physical screen shows in our window right now.
 struct Window {
     surface: Surface,
-    offset: usize,
     /// One-based cursor row to use for the shell prompt after this
     /// frame. It is the first row after the rendered content, capped at
     /// the terminal bottom when the window is full-height.
@@ -91,14 +87,9 @@ pub struct Screen {
     /// sequences between frames (perceived flicker while typing).
     cursor_shown: bool,
     cursor_at: Option<(u16, u16)>,
-    /// Virtual live-band height used to keep reversible live changes from
-    /// changing the physical scroll offset. The rendered live rows are
-    /// bottom-aligned inside this stable band.
+    /// Reserved mutable band height. Shorter frames are bottom-aligned;
+    /// growing the reservation clears live cells before making physical room.
     live_height: Option<usize>,
-    /// Offset correction applied when a modal view changes the virtual
-    /// live-band height. It preserves the physical scroll position while
-    /// committed history continues to advance normally.
-    live_height_bias: isize,
     /// Previous fullscreen (alt-screen) frame, if the frontend is in
     /// fullscreen mode. Inline frames and fullscreen frames never
     /// compare: entering fullscreen forces a full repaint.
@@ -120,7 +111,6 @@ impl Screen {
             cursor_shown: false,
             cursor_at: None,
             live_height: None,
-            live_height_bias: 0,
             fullscreen: None,
         }
     }
@@ -135,7 +125,7 @@ impl Screen {
         live_height: usize,
     ) -> Self {
         let mut screen = Self::new(width, origin_row, screen_height);
-        screen.live_height = Some(live_height.max(1));
+        screen.live_height = Some(live_height.max(1).min(screen.avail() as usize));
         screen
     }
 
@@ -176,7 +166,6 @@ impl Screen {
         self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
-        self.live_height_bias = 0;
         Ok(())
     }
 
@@ -186,9 +175,8 @@ impl Screen {
         self.screen_height.saturating_sub(self.origin).max(1)
     }
 
-    /// A size change invalidates the window; the next draw repaints
-    /// every row from the fresh buffer. If the terminal shrank below
-    /// the origin, the origin re-anchors near the new bottom.
+    /// Repaint at the new dimensions without advancing terminal history.
+    /// Native reflow remains owned by the terminal, not this cell cache.
     pub fn resize(&mut self, width: u16, height: u16) {
         let width = width.max(1);
         let height = height.max(1);
@@ -197,47 +185,18 @@ impl Screen {
         }
         self.width = width;
         self.screen_height = height;
-        if self.origin + 2 > height {
+        if self.origin >= height.saturating_sub(1) {
             self.origin = height.saturating_sub(2);
         }
-        self.current = None;
-        self.fullscreen = None;
-        self.cursor_shown = false;
-        self.cursor_at = None;
-        self.live_height_bias = 0;
+        self.live_height = self.live_height.map(|rows| rows.min(self.avail() as usize));
+        self.invalidate();
     }
 
-    /// Change the reserved live-band height and repaint the virtual
-    /// surface. Frontends should keep this stable while editing; modal
-    /// views may reserve a larger band when they need additional rows.
+    /// Change the reservation without publishing or scrolling live rows.
+    /// Frontends should shrink it after publication or a surface reset.
     pub fn set_live_height(&mut self, live_height: usize) {
-        let live_height = live_height.max(1);
-        let old_height = self.live_height.unwrap_or(live_height);
-        if old_height == live_height {
-            return;
-        }
-        if self.current.is_some() {
-            self.live_height_bias += old_height as isize - live_height as isize;
-        }
-        self.live_height = Some(live_height);
-        // Keep the previous surface so draw can compare the same physical
-        // rows. The bias above prevents this modal-only change from being
-        // mistaken for committed scrollback growth.
-        self.cursor_shown = false;
-        self.cursor_at = None;
-    }
-
-    /// Re-anchor the window at the physical cursor row after the
-    /// frontend printed lines directly to the terminal (fullscreen
-    /// exit transcripts). The printed rows stay above the new window
-    /// like the launch banner; the window repaints fresh below them.
-    pub fn reanchor(&mut self, origin_row: u16) {
-        self.origin = origin_row.min(self.screen_height.saturating_sub(1));
-        self.current = None;
-        self.cursor_shown = false;
-        self.cursor_at = None;
-        self.live_height_bias = 0;
-        self.fullscreen = None;
+        self.live_height = Some(live_height.max(1).min(self.avail() as usize));
+        // Retain the old physical surface so freed rows are erased on redraw.
     }
 
     /// Force a full repaint on the next draw without changing size.
@@ -248,7 +207,6 @@ impl Screen {
         self.fullscreen = None;
         self.cursor_shown = false;
         self.cursor_at = None;
-        self.live_height_bias = 0;
     }
 
     /// Append settled plain-text rows exactly once above the mutable live band.
@@ -262,183 +220,76 @@ impl Screen {
         if lines.is_empty() {
             return Ok(());
         }
-
         write!(out, "\x1b[{};1H\x1b[J", self.origin + 1)?;
+        let mut origin = self.origin;
         for line in lines {
-            // Put one settled row at the top edge of the mutable band, then
-            // scroll the physical terminal exactly once from its bottom row.
-            // The settled row moves above the band while the band itself stays
-            // anchored and blank for the next live repaint.
-            write!(out, "\x1b[{};1H\x1b[2K{line}", self.origin + 1)?;
-            write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
+            write!(out, "\x1b[{};1H\x1b[2K{line}\r\n", origin + 1)?;
+            origin = origin.saturating_add(1).min(self.screen_height - 1);
         }
         out.flush()?;
-
-        self.current = None;
-        self.fullscreen = None;
-        self.cursor_shown = false;
-        self.cursor_at = None;
-        self.live_height_bias = 0;
+        self.origin = origin;
+        self.live_height = Some(self.live_height().min(self.avail() as usize));
+        self.invalidate();
         Ok(())
     }
 
-    /// Render one frame. Lines must already be wrapped to `width`;
-    /// each occupies exactly one row (overlong spans truncate).
+    /// Repaint only the mutable band. Reservation growth and publication are
+    /// explicit operations; resizing or replacing a frame cannot scroll it.
     pub fn draw(&mut self, out: &mut impl Write, frame: &Frame) -> io::Result<()> {
         let previous = self.current.take();
-        let previous_offset = previous.as_ref().map_or(0, |window| window.offset);
-        let mut h = self.avail() as usize;
-        let w = self.width;
-        let committed_rows = frame.committed.len();
-        let live_height = self.live_height.unwrap_or_else(|| frame.live.len().max(1));
-        if self.live_height.is_none() {
-            self.live_height = Some(live_height);
+        let height = self.avail();
+        let band = self
+            .live_height
+            .unwrap_or_else(|| frame.live.len().max(1))
+            .min(height as usize);
+        self.live_height = Some(band);
+        let dropped = frame.live.len().saturating_sub(band);
+        let padding = band.saturating_sub(frame.live.len());
+        let mut next = Surface::new(self.width, height);
+        for (index, line) in frame.live.iter().skip(dropped).enumerate() {
+            next.render_line(line.clone(), (padding + index) as u16);
         }
-        let live_padding = live_height.saturating_sub(frame.live.len());
-        let total = committed_rows + live_height;
-        let base_offset = total.saturating_sub(h);
-        let mut offset = if self.live_height_bias >= 0 {
-            base_offset
-                .saturating_add(self.live_height_bias as usize)
-                .min(total)
-        } else {
-            base_offset.saturating_sub(self.live_height_bias.unsigned_abs())
-        };
-
-        // A committed/live line can consume the blank rows above a
-        // nonzero launch origin before the physical terminal needs to
-        // scroll. Once the origin moves, the window height changes, so
-        // rebuild the frame and compare it as a fresh surface. Without
-        // this adjustment, a growing transcript keeps painting at the
-        // old origin after the terminal has already scrolled that origin
-        // upward, eventually addressing rows below the terminal.
-        let origin_before = self.origin;
-        if offset > previous_offset && self.origin > 0 {
-            let shift = offset
-                .saturating_sub(previous_offset)
-                .min(u16::MAX as usize) as u16;
-            self.origin = self.origin.saturating_sub(shift);
-            if self.origin != origin_before {
-                h = self.avail() as usize;
-                offset = total.saturating_sub(h);
-            }
-        }
-
-        let mut next = Surface::new(w, self.avail());
-        for r in 0..h {
-            let absolute = r + offset;
-            // Put virtual padding before the committed transcript. This
-            // keeps the actual footer/composer adjacent to the transcript
-            // instead of displaying a large idle gap below the latest
-            // notice, while preserving the stable total row count.
-            let content_absolute = absolute.checked_sub(live_padding);
-            let line = content_absolute.and_then(|absolute| {
-                if absolute < committed_rows {
-                    frame.committed.get(absolute)
-                } else {
-                    frame.live.get(absolute - committed_rows)
-                }
-            });
-            if let Some(line) = line {
-                next.render_line(line.clone(), r as u16);
-            }
-        }
-
-        // Physical scroll tracks committed advancement only. The virtual
-        // live band keeps offset stable while the actual live rows grow or
-        // shrink, so scrolled rows are permanently finished content and
-        // the shift maps old window row r + k to new window row r.
-        let scrolled = offset.saturating_sub(previous_offset);
-        if scrolled > 0 {
-            // A batch can add more committed rows than fit in the visible
-            // window. Paint each outgoing row before scrolling it away;
-            // otherwise notices that never appeared in a previous frame
-            // disappear from native scrollback entirely.
-            for step in 0..scrolled {
-                let mut outgoing = Surface::new(w, 1);
-                if let Some(line) = (previous_offset + step)
-                    .checked_sub(live_padding)
-                    .and_then(|row| frame.committed.get(row))
-                {
-                    outgoing.render_line(line.clone(), 0);
-                }
-                let unchanged = previous.as_ref().is_some_and(|prev| {
-                    self.origin == origin_before
-                        && step < prev.surface.buffer.area.height as usize
-                        && !row_differs(&outgoing.buffer, 0, &prev.surface.buffer, step as u16)
-                });
-                if !unchanged {
-                    emit_buffer_row(out, &outgoing.buffer, 0, 0)?;
-                }
-                write!(out, "\x1b[{};1H\r\n", self.screen_height)?;
-            }
-        }
-
         let mut painted = false;
-        for r in 0..h as u16 {
-            let src_row = r as usize + scrolled;
-            let comparable = previous.as_ref().is_some_and(|prev| {
-                self.origin == origin_before && src_row < prev.surface.buffer.area.height as usize
-            });
-            if !comparable
-                || row_differs(
-                    &next.buffer,
-                    r,
-                    &previous.as_ref().expect("checked").surface.buffer,
-                    src_row as u16,
-                )
+        for row in 0..height {
+            if previous
+                .as_ref()
+                .is_none_or(|prev| row_differs(&next.buffer, row, &prev.surface.buffer, row))
             {
-                emit_buffer_row(out, &next.buffer, r, self.origin)?;
+                emit_buffer_row(out, &next.buffer, row, self.origin)?;
                 painted = true;
             }
         }
         if painted {
             write!(out, "\x1b[0m")?;
         }
-
-        // Touch the cursor only when something was painted or it moved:
-        // per-frame hide/show is perceived flicker while typing.
-        let mut cursor_shown = self.cursor_shown;
-        let mut cursor_at_out = self.cursor_at;
-        if let Some((row, col)) = frame.cursor {
-            // Absolute wrapped row -> visible row inside the window. Live
-            // rows are bottom-aligned inside the virtual band, so translate
-            // a live cursor by the same leading padding as its text.
-            let row = if row >= committed_rows {
-                row + live_padding
-            } else {
-                row
-            };
-            if row >= offset {
-                let screen_row = row - offset;
-                if screen_row < h {
-                    let at = (self.origin + screen_row as u16, col);
-                    if painted || !self.cursor_shown || self.cursor_at != Some(at) {
-                        write!(out, "\x1b[{};{}H", at.0 + 1, at.1 + 1)?;
-                        if !self.cursor_shown {
-                            write!(out, "\x1b[?25h")?;
-                        }
-                        cursor_shown = true;
-                        cursor_at_out = Some(at);
-                    }
+        let cursor = frame
+            .cursor
+            .filter(|(row, col)| *row < frame.live.len() && *col < self.width)
+            .and_then(|(row, col)| {
+                let row = row.checked_sub(dropped)? + padding;
+                (row < band).then_some((self.origin + row as u16, col))
+            });
+        if let Some(at) = cursor {
+            if painted || !self.cursor_shown || self.cursor_at != Some(at) {
+                write!(out, "\x1b[{};{}H", at.0 + 1, at.1 + 1)?;
+                if !self.cursor_shown {
+                    write!(out, "\x1b[?25h")?;
                 }
             }
+        } else if self.cursor_shown {
+            write!(out, "\x1b[?25l")?;
         }
         out.flush()?;
-
-        let visible_rows = total.saturating_sub(offset).min(h);
-        let finish_row = self
-            .origin
-            .saturating_add(visible_rows.min(u16::MAX as usize) as u16)
-            .saturating_add(1)
-            .min(self.screen_height);
+        self.cursor_shown = cursor.is_some();
+        self.cursor_at = cursor;
         self.current = Some(Window {
             surface: next,
-            offset,
-            finish_row,
+            finish_row: self
+                .origin
+                .saturating_add(band as u16)
+                .saturating_add(1)
+                .min(self.screen_height),
         });
-        self.cursor_shown = cursor_shown;
-        self.cursor_at = cursor_at_out;
         Ok(())
     }
 
@@ -535,7 +386,9 @@ fn emit_buffer_row(out: &mut impl Write, buf: &Buffer, r: u16, origin: u16) -> i
                 break;
             }
             text.push_str(c.symbol());
-            x += 1;
+            // A wide glyph already paints its continuation cells. Emitting
+            // those reset cells again shifts text and can wrap the bottom row.
+            x += c.cell_width().max(1);
         }
         // Blank runs are written too: they erase whatever the previous
         // frame left in that row (shrink, lag rebuild).
@@ -634,6 +487,93 @@ mod tests {
     }
 
     #[test]
+    fn native_publication_uses_free_rows_before_scrolling() {
+        let mut screen = Screen::with_live_height(30, 2, 12, 1);
+        let mut terminal = vt100::Parser::new(12, 30, 32);
+        terminal.process(b"banner\r\n\r\n");
+        let mut out = Vec::new();
+        screen
+            .commit_text_lines(&mut out, &["first".into(), "second".into()])
+            .unwrap();
+        terminal.process(&out);
+        out.clear();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("prompt")],
+                    cursor: Some((0, 0)),
+                },
+            )
+            .unwrap();
+        terminal.process(&out);
+        let rows = terminal
+            .screen()
+            .rows(0, 30)
+            .take(5)
+            .map(|row| row.trim_end().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(rows, ["banner", "", "first", "second", "prompt"]);
+    }
+
+    #[test]
+    fn passive_resize_does_not_publish_blank_history() {
+        let mut screen = Screen::with_live_height(30, 0, 20, 12);
+        let mut terminal = vt100::Parser::new(20, 30, 32);
+        let live = [line("PROVISIONAL"), line("prompt")];
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &live,
+                    cursor: Some((1, 0)),
+                },
+            )
+            .unwrap();
+        terminal.process(&out);
+        screen.resize(30, 7);
+        terminal.screen_mut().set_size(7, 30);
+        out.clear();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &live,
+                    cursor: Some((1, 0)),
+                },
+            )
+            .unwrap();
+        assert!(
+            !out.windows(2).any(|bytes| bytes == b"\r\n"),
+            "resize must not emit history advancement"
+        );
+        terminal.process(&out);
+        assert!(terminal.screen().contents().contains("PROVISIONAL"));
+    }
+
+    #[test]
+    fn removing_the_inline_cursor_hides_it() {
+        let mut screen = Screen::new(20, 0, 4);
+        let mut terminal = vt100::Parser::new(4, 20, 0);
+        let mut out = Vec::new();
+        for cursor in [Some((0, 0)), None] {
+            out.clear();
+            screen
+                .draw(
+                    &mut out,
+                    &Frame {
+                        live: &[line("prompt")],
+                        cursor,
+                    },
+                )
+                .unwrap();
+            terminal.process(&out);
+        }
+        assert!(terminal.screen().hide_cursor());
+    }
+
+    #[test]
     fn growing_live_band_scrolls_only_after_clearing_mutable_rows() {
         let mut screen = Screen::with_live_height(80, 22, 24, 1);
         let mut output = Vec::new();
@@ -649,27 +589,6 @@ mod tests {
         assert!(output.is_empty(), "the live band never shrinks during chat");
         assert_eq!(screen.origin, 20);
         assert_eq!(screen.live_height(), 4);
-    }
-
-    #[test]
-    fn settled_rows_advance_anchor_without_reowning_history() {
-        let mut screen = Screen::with_live_height(80, 5, 24, 4);
-        let mut output = Vec::new();
-        screen
-            .commit_text_lines(
-                &mut output,
-                &["first".into(), "second".into(), "third".into()],
-            )
-            .unwrap();
-        assert_eq!(screen.origin, 5);
-        let text = String::from_utf8(output).unwrap();
-        assert!(text.starts_with("\x1b[6;1H\x1b[J"));
-        assert!(text.contains("\x1b[6;1H\x1b[2Kfirst"));
-        assert!(text.contains("\x1b[24;1H\r\n"));
-        assert!(text.contains("\x1b[6;1H\x1b[2Kthird"));
-
-        screen.resize(100, 30);
-        assert_eq!(screen.origin, 5);
     }
 
     #[test]
@@ -689,404 +608,227 @@ mod tests {
         assert_eq!(surface.row_text(1), "");
     }
 
-    type Spec<'a> = (
-        &'a [Line<'static>],
-        &'a [Line<'static>],
-        Option<(usize, u16)>,
-    );
+    type Spec<'a> = (&'a [Line<'static>], Option<(usize, u16)>);
 
     fn render(frames: Vec<Spec>) -> Vec<u8> {
         let mut out = Vec::new();
         let mut screen = Screen::new(40, 0, 6);
-        for (committed, live, cursor) in frames {
-            screen
-                .draw(
-                    &mut out,
-                    &Frame {
-                        committed,
-                        live,
-                        cursor,
-                    },
-                )
-                .expect("draw");
+        for (live, cursor) in frames {
+            screen.draw(&mut out, &Frame { live, cursor }).unwrap();
         }
         out
     }
 
+    fn all_rows(terminal: &mut vt100::Parser, width: u16) -> Vec<String> {
+        terminal.screen_mut().set_scrollback(usize::MAX);
+        let depth = terminal.screen().scrollback();
+        let mut rows = Vec::new();
+        for offset in (1..=depth).rev() {
+            terminal.screen_mut().set_scrollback(offset);
+            rows.push(terminal.screen().rows(0, width).next().unwrap());
+        }
+        terminal.screen_mut().set_scrollback(0);
+        rows.extend(terminal.screen().rows(0, width));
+        rows
+    }
+
     #[test]
     fn first_draw_paints_all_rows_and_positions_cursor() {
-        let out = render(vec![(
-            &[line("hello"), line("world")],
-            &[line("status"), line("› ")],
-            Some((1, 3)),
-        )]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(s.contains("hello"));
-        assert!(s.contains("world"));
-        // cursor: absolute row 1, offset 0 -> screen row 2
-        assert!(s.contains("\x1b[2;4H"));
-        assert!(s.contains("\x1b[?25h"));
+        let live = [line("hello"), line("world"), line("status"), line("prompt")];
+        let out = render(vec![(&live, Some((1, 3)))]);
+        let mut terminal = vt100::Parser::new(6, 40, 0);
+        terminal.process(&out);
+        assert_eq!(
+            terminal
+                .screen()
+                .rows(0, 40)
+                .take(4)
+                .map(|row| row.trim_end().to_owned())
+                .collect::<Vec<_>>(),
+            ["hello", "world", "status", "prompt"]
+        );
+        assert_eq!(terminal.screen().cursor_position(), (1, 3));
     }
 
     #[test]
     fn unchanged_frame_writes_no_text_cells() {
-        let committed = [line("alpha")];
-        let live = [line("beta")];
-        let out = render(vec![
-            (&committed, &live, None),
-            (&committed, &live, None),
-            (&committed, &live, None),
-        ]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert_eq!(s.matches("alpha").count(), 1, "repaint must skip text: {s}");
-        assert_eq!(s.matches("beta").count(), 1);
+        let live = [line("alpha"), line("beta")];
+        let out = render(vec![(&live, None), (&live, None), (&live, None)]);
+        let text = String::from_utf8(out).unwrap();
+        assert_eq!(text.matches("alpha").count(), 1);
+        assert_eq!(text.matches("beta").count(), 1);
     }
 
     #[test]
-    fn committed_growth_scrolls_without_rewriting_history() {
-        // Start inside the window (5 total rows < 6), then append three
-        // committed rows so offset grows 0 -> 3.
-        let c2: Vec<Line> = (0..4).map(|i| line(&format!("row{i}"))).collect();
-        let mut c3 = c2.clone();
-        c3.extend((4..8).map(|i| line(&format!("row{i}"))));
-        let live = [line("status")];
-        let out = render(vec![(&c2, &live, None), (&c3, &live, None)]);
-        let s = String::from_utf8(out).expect("utf8");
-        // three physical scrolls for the four appended rows minus one
-        // previously-free window row
-        assert_eq!(s.matches("\r\n").count(), 3);
-        // history never rewritten
-        assert_eq!(s.matches("row0").count(), 1);
-        assert_eq!(s.matches("row3").count(), 1);
-        assert_eq!(s.matches("row6").count(), 1);
-        assert!(s.contains("row7"));
-    }
-
-    #[test]
-    fn stateful_terminal_tracks_committed_scroll_without_duplicates() {
-        let c2: Vec<Line> = (0..4).map(|i| line(&format!("row{i}"))).collect();
-        let mut c3 = c2.clone();
-        c3.extend((4..8).map(|i| line(&format!("row{i}"))));
-        let live = [line("status")];
-        let mut screen = Screen::new(40, 0, 6);
-        let mut terminal = vt100::Parser::new(6, 40, 16);
-
-        for committed in [&c2, &c3] {
-            let mut bytes = Vec::new();
-            screen
-                .draw(
-                    &mut bytes,
-                    &Frame {
-                        committed,
-                        live: &live,
-                        cursor: None,
-                    },
-                )
-                .expect("draw");
-            terminal.process(&bytes);
-        }
-
-        let rows: Vec<String> = terminal
-            .screen()
-            .rows(0, 40)
-            .map(|row| row.trim_end().to_owned())
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                "row3".to_owned(),
-                "row4".to_owned(),
-                "row5".to_owned(),
-                "row6".to_owned(),
-                "row7".to_owned(),
-                "status".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn stateful_terminal_tracks_committed_scroll_from_a_nonzero_origin() {
-        // Launching below existing shell output leaves only four rows in
-        // the first inline region. Once committed history grows past that
-        // region, the physical scroll moves the anchor upward; the screen
-        // must still end with the newest six rows in the terminal window.
-        let first: Vec<Line> = (0..3).map(|i| line(&format!("row{i}"))).collect();
-        let second: Vec<Line> = (0..7).map(|i| line(&format!("row{i}"))).collect();
-        let live = [line("status")];
-        let mut screen = Screen::new(40, 2, 6);
-        let mut terminal = vt100::Parser::new(6, 40, 16);
-
-        for committed in [&first, &second] {
-            let mut bytes = Vec::new();
-            screen
-                .draw(
-                    &mut bytes,
-                    &Frame {
-                        committed,
-                        live: &live,
-                        cursor: None,
-                    },
-                )
-                .expect("draw");
-            terminal.process(&bytes);
-        }
-
-        let rows: Vec<String> = terminal
-            .screen()
-            .rows(0, 40)
-            .map(|row| row.trim_end().to_owned())
-            .collect();
-        assert_eq!(
-            rows,
-            vec![
-                "row2".to_owned(),
-                "row3".to_owned(),
-                "row4".to_owned(),
-                "row5".to_owned(),
-                "row6".to_owned(),
-                "status".to_owned(),
-            ]
-        );
-    }
-
-    #[test]
-    fn bulk_committed_rows_reach_native_scrollback_in_order() {
-        for (origin, band_height) in [(0, 1), (2, 1), (0, 4), (2, 4)] {
-            let mut screen = Screen::new(40, origin, 6);
-            screen.set_live_height(band_height);
-            let mut terminal = vt100::Parser::new(6, 40, 64);
-            let committed: Vec<Line> = (0..24).map(|i| line(&format!("notice-{i}"))).collect();
-            let live = [line("composer")];
-            for count in [1, 24] {
-                let mut bytes = Vec::new();
-                screen
-                    .draw(
-                        &mut bytes,
-                        &Frame {
-                            committed: &committed[..count],
-                            live: &live,
-                            cursor: None,
-                        },
-                    )
-                    .expect("draw");
-                terminal.process(&bytes);
+    fn application_sequence_publishes_once_and_repaints_without_scrolling() {
+        for origin in [0, 2] {
+            let mut screen = Screen::with_live_height(30, origin, 12, 1);
+            let mut terminal = vt100::Parser::new(12, 30, 64);
+            let settled = (0..24)
+                .map(|index| format!("settled-{index:02}"))
+                .collect::<Vec<_>>();
+            let mut out = Vec::new();
+            let mut emitted = Vec::new();
+            for batch in [&settled[..3], &settled[3..]] {
+                out.clear();
+                screen.commit_text_lines(&mut out, batch).unwrap();
+                terminal.process(&out);
+                emitted.extend_from_slice(&out);
             }
+            for height in [4, 6] {
+                out.clear();
+                screen.ensure_live_height(&mut out, height).unwrap();
+                terminal.process(&out);
+                emitted.extend_from_slice(&out);
+                for _ in 0..3 {
+                    out.clear();
+                    screen
+                        .draw(
+                            &mut out,
+                            &Frame {
+                                live: &[line("PROVISIONAL"), line("prompt")],
+                                cursor: Some((1, 0)),
+                            },
+                        )
+                        .unwrap();
+                    assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+                    terminal.process(&out);
+                    emitted.extend_from_slice(&out);
+                }
+            }
+            let rows = all_rows(&mut terminal, 30);
+            let recorded = rows
+                .iter()
+                .filter(|row| row.starts_with("settled-"))
+                .map(|row| row.trim_end())
+                .collect::<Vec<_>>();
+            assert_eq!(recorded, settled, "origin {origin}");
             terminal.screen_mut().set_scrollback(usize::MAX);
             let depth = terminal.screen().scrollback();
-            let mut rows = Vec::new();
-            for offset in (1..=depth).rev() {
+            for offset in 1..=depth {
                 terminal.screen_mut().set_scrollback(offset);
-                rows.push(terminal.screen().rows(0, 40).next().expect("top row"));
+                assert!(
+                    !terminal
+                        .screen()
+                        .rows(0, 30)
+                        .next()
+                        .unwrap()
+                        .contains("PROVISIONAL")
+                );
             }
             terminal.screen_mut().set_scrollback(0);
-            rows.extend(terminal.screen().rows(0, 40));
-            let notices: Vec<_> = rows
-                .iter()
-                .filter(|row| row.starts_with("notice-"))
-                .map(|row| row.trim_end().to_owned())
-                .collect();
-            assert_eq!(
-                notices,
-                (0..24).map(|i| format!("notice-{i}")).collect::<Vec<_>>(),
-                "origin {origin}"
-            );
-            assert_eq!(rows.last().map(|row| row.trim_end()), Some("composer"));
-        }
-    }
-
-    #[test]
-    fn live_band_growth_never_scrolls_or_duplicates_history() {
-        // The composer wrapping from one row to two must not push the
-        // transcript into scrollback (Sol review P1.2).
-        let committed = [line("transcript-line")];
-        let short = [line("status"), line("› ")];
-        let grown = [line("status"), line("› aaaaaa"), line("bbbbbb")];
-        let shrunk_again = [line("status"), line("› aaa")];
-        let out = render(vec![
-            (&committed, &short, None),
-            (&committed, &grown, None),
-            (&committed, &shrunk_again, None),
-        ]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(
-            !s.contains("\r\n"),
-            "live-band changes must not physically scroll: {s}"
-        );
-        // "transcript-line" appears exactly once across all three frames
-        assert_eq!(s.matches("transcript-line").count(), 1);
-    }
-
-    #[test]
-    fn cursor_translates_through_the_offset() {
-        // 8 absolute rows in a 6-row window: offset = 2. A cursor on
-        // absolute row 6 must land on screen row 5 (Sol review P1.3).
-        let committed: Vec<Line> = (0..7).map(|i| line(&format!("c{i}"))).collect();
-        let live = [line("composer-row")];
-        let out = render(vec![(&committed, &live, Some((6, 2)))]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(s.contains("\x1b[5;3H"), "cursor at screen row 5 col 3: {s}");
-        assert!(s.contains("\x1b[?25h"));
-    }
-
-    #[test]
-    fn cursor_translation_includes_the_anchored_origin() {
-        // The visible row is relative to the line-diff window, but the
-        // terminal cursor position is absolute. A nonzero origin models
-        // launching Ion below existing shell scrollback.
-        let out = {
-            let mut out = Vec::new();
-            let mut screen = Screen::new(40, 3, 10);
+            screen.set_live_height(1);
+            out.clear();
             screen
                 .draw(
                     &mut out,
                     &Frame {
-                        committed: &[],
-                        live: &[line("status"), line("› ")],
-                        cursor: Some((1, 2)),
+                        live: &[line("ready")],
+                        cursor: Some((0, 0)),
                     },
                 )
-                .expect("draw");
-            out
-        };
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(
-            s.contains("\x1b[5;3H"),
-            "cursor must include the anchored origin: {s:?}"
-        );
-        assert!(
-            !s.contains("\x1b[2;3H"),
-            "cursor must not jump above the anchored window: {s:?}"
-        );
+                .unwrap();
+            terminal.process(&out);
+            assert!(!terminal.screen().contents().contains("PROVISIONAL"));
+            for (height, width) in [(7, 20), (12, 30)] {
+                screen.resize(width, height);
+                terminal.screen_mut().set_size(height, width);
+                out.clear();
+                screen
+                    .draw(
+                        &mut out,
+                        &Frame {
+                            live: &[line("ready")],
+                            cursor: Some((0, 0)),
+                        },
+                    )
+                    .unwrap();
+                assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+                assert!(!String::from_utf8_lossy(&out).contains("settled-"));
+                terminal.process(&out);
+                assert!(terminal.screen().contents().contains("ready"));
+            }
+            let text = String::from_utf8(emitted).unwrap();
+            for row in &settled {
+                assert_eq!(text.matches(row).count(), 1);
+            }
+        }
     }
 
     #[test]
     fn stable_live_band_bottom_aligns_rows_and_cursor() {
+        let mut screen = Screen::with_live_height(40, 3, 10, 4);
+        let mut terminal = vt100::Parser::new(10, 40, 0);
         let mut out = Vec::new();
-        let mut screen = Screen::with_live_height(40, 0, 8, 4);
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    committed: &[line("history")],
-                    live: &[line("status"), line("footer"), line("model")],
-                    cursor: Some((3, 3)),
+                    live: &[line("status"), line("prompt")],
+                    cursor: Some((1, 2)),
                 },
             )
-            .expect("draw");
-        let rendered = String::from_utf8(out).expect("utf8");
-        // One virtual row precedes the committed transcript, so the live
-        // cursor lands on the physical fourth row (one-based row five).
-        assert!(rendered.contains("\x1b[5;4H"), "{rendered:?}");
-        assert!(rendered.contains("history"), "{rendered:?}");
-        assert!(rendered.contains("status"), "{rendered:?}");
-        assert!(rendered.contains("model"), "{rendered:?}");
-    }
-
-    #[test]
-    fn changing_live_band_height_does_not_scroll_committed_history() {
-        let committed: Vec<Line> = (0..10).map(|i| line(&format!("c{i}"))).collect();
-        let live = [line("status"), line("composer"), line("footer")];
-        let mut out = Vec::new();
-        let mut screen = Screen::with_live_height(40, 0, 6, 7);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    committed: &committed,
-                    live: &live,
-                    cursor: Some((12, 2)),
-                },
-            )
-            .expect("draw");
-        out.clear();
-        screen.set_live_height(10);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    committed: &committed,
-                    live: &live,
-                    cursor: Some((12, 2)),
-                },
-            )
-            .expect("draw");
-        let rendered = String::from_utf8(std::mem::take(&mut out)).expect("utf8");
-        assert!(
-            !rendered.contains("\x1b[6;1H\r\n"),
-            "modal height change must not scroll history: {rendered:?}"
-        );
-        out.clear();
-        screen.set_live_height(7);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    committed: &committed,
-                    live: &live,
-                    cursor: Some((12, 2)),
-                },
-            )
-            .expect("draw");
-        let rendered = String::from_utf8(out).expect("utf8");
-        assert!(
-            !rendered.contains("\x1b[6;1H\r\n"),
-            "closing the modal height must not scroll history: {rendered:?}"
+            .unwrap();
+        terminal.process(&out);
+        assert_eq!(terminal.screen().cursor_position(), (6, 2));
+        assert_eq!(
+            terminal.screen().rows(0, 40).nth(5).unwrap().trim_end(),
+            "status"
         );
     }
 
     #[test]
-    fn settled_commit_allows_live_band_to_shrink_fresh() {
+    fn reservation_shrink_blanks_freed_rows_without_scrolling() {
+        let mut screen = Screen::with_live_height(20, 0, 6, 4);
+        let mut terminal = vt100::Parser::new(6, 20, 0);
         let mut out = Vec::new();
-        let mut screen = Screen::with_live_height(40, 0, 8, 6);
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    committed: &[],
-                    live: &[
-                        line("one"),
-                        line("two"),
-                        line("three"),
-                        line("four"),
-                        line("five"),
-                        line("composer"),
-                    ],
-                    cursor: Some((5, 8)),
+                    live: &[line("one"), line("two"), line("three"), line("four")],
+                    cursor: None,
                 },
             )
-            .expect("initial draw");
-        screen
-            .commit_text_lines(&mut out, &[String::from("settled")])
-            .expect("commit");
-        out.clear();
-
+            .unwrap();
+        terminal.process(&out);
         screen.set_live_height(1);
+        out.clear();
         screen
             .draw(
                 &mut out,
                 &Frame {
-                    committed: &[],
-                    live: &[line("› ")],
-                    cursor: Some((0, 2)),
+                    live: &[line("short")],
+                    cursor: None,
                 },
             )
-            .expect("shrunk draw");
-
-        assert_eq!(screen.live_height(), 1);
-        let rendered = String::from_utf8(out).expect("utf8");
-        assert!(rendered.contains("› "), "{rendered:?}");
-        assert!(
-            !rendered.contains("\x1b[8;1H\r\n"),
-            "fresh shrink must not scroll history: {rendered:?}"
+            .unwrap();
+        terminal.process(&out);
+        assert!(!out.windows(2).any(|bytes| bytes == b"\r\n"));
+        assert_eq!(
+            terminal
+                .screen()
+                .rows(0, 20)
+                .map(|row| row.trim_end().to_owned())
+                .collect::<Vec<_>>(),
+            ["short", "", "", "", "", ""]
         );
     }
 
     #[test]
-    fn cursor_hidden_when_outside_the_window() {
-        let committed: Vec<Line> = (0..10).map(|i| line(&format!("c{i}"))).collect();
-        let out = render(vec![(&committed, &[line("s")], Some((1, 0)))]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(!s.contains("\x1b[?25h"), "cursor above window stays hidden");
+    fn cursor_hidden_when_clipped_from_the_live_band() {
+        let mut screen = Screen::with_live_height(20, 0, 6, 2);
+        let mut out = Vec::new();
+        screen
+            .draw(
+                &mut out,
+                &Frame {
+                    live: &[line("old"), line("new"), line("prompt")],
+                    cursor: Some((0, 0)),
+                },
+            )
+            .unwrap();
+        assert!(!String::from_utf8(out).unwrap().contains("\x1b[?25h"));
     }
 
     #[test]
@@ -1097,48 +839,36 @@ mod tests {
             .draw(
                 &mut out,
                 &Frame {
-                    committed: &[],
                     live: &[line("footer"), line("model")],
                     cursor: None,
                 },
             )
-            .expect("draw");
-        screen.finish(&mut out).expect("finish");
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(s.ends_with("\x1b[5;1H\x1b[?25h\x1b[0m\r\n"), "{s:?}");
+            .unwrap();
+        screen.finish(&mut out).unwrap();
+        let text = String::from_utf8(out).unwrap();
+        assert!(text.ends_with("\x1b[5;1H\x1b[?25h\x1b[0m\r\n"));
     }
 
     #[test]
     fn resize_repaints_every_row() {
-        let committed = [line("history")];
-        let live_before = [line("status one")];
-        let live_after = [line("status after resize")];
         let mut out = Vec::new();
         let mut screen = Screen::new(40, 0, 6);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    committed: &committed,
-                    live: &live_before,
-                    cursor: None,
-                },
-            )
-            .expect("draw");
-        screen.resize(40, 4);
-        screen
-            .draw(
-                &mut out,
-                &Frame {
-                    committed: &committed,
-                    live: &live_after,
-                    cursor: None,
-                },
-            )
-            .expect("draw");
-        let s = String::from_utf8(out).expect("utf8");
-        // invalidation repaints even rows whose content did not change
-        assert_eq!(s.matches("history").count(), 2, "{s}");
+        for height in [6, 4] {
+            screen.resize(40, height);
+            screen
+                .draw(
+                    &mut out,
+                    &Frame {
+                        live: &[line("progress"), line("prompt")],
+                        cursor: None,
+                    },
+                )
+                .unwrap();
+        }
+        assert_eq!(
+            String::from_utf8(out).unwrap().matches("progress").count(),
+            2
+        );
     }
 
     #[test]
@@ -1203,49 +933,20 @@ mod tests {
     }
 
     #[test]
-    fn shrink_blanks_freed_rows() {
-        let big = [
-            line("t0"),
-            line("t1"),
-            line("t2"),
-            line("t3"),
-            line("t4"),
-            line("t5"),
-        ];
-        let small = [line("t0"), line("t1")];
-        let out = render(vec![
-            (&big, &[line("s")], None),
-            (&small, &[line("s")], None),
-        ]);
-        let s = String::from_utf8(out).expect("utf8");
-        // freed rows are erased (spaces written), not left as ghosts
-        assert!(!s.matches("t4").count() > 1 || s.contains("\x1b[5;1H"));
-        let erase_row5 = s.matches("\x1b[5;1H").count();
-        let erase_row6 = s.matches("\x1b[6;1H").count();
-        assert!(erase_row5 >= 1 && erase_row6 >= 1, "{s}");
-    }
-
-    #[test]
     fn wide_char_edit_rewrites_the_full_row() {
-        // Editing single-width text into a wide CJK char must rewrite
-        // the whole row from a fresh render so continuation cells stay
-        // consistent (Sol review P1.5).
-        let out = render(vec![
-            (&[], &[line("abx")], None),
-            (&[], &[line("界x")], None),
-        ]);
-        let s = String::from_utf8(out).expect("utf8");
-        assert!(s.contains('界'));
-        // full-row repaint emits both characters in order in one run
-        let pong = s.find('界').expect("wide char present");
-        let x_pos = s[pong..].find('x').expect("trailing cell rewritten");
-        assert!(x_pos < 6, "continuation cell must follow immediately");
+        let out = render(vec![(&[line("abx")], None), (&[line("界x")], None)]);
+        let mut terminal = vt100::Parser::new(6, 40, 0);
+        terminal.process(&out);
+        assert_eq!(
+            terminal.screen().rows(0, 40).next().unwrap().trim_end(),
+            "界x"
+        );
     }
 
     #[test]
     fn styled_line_emits_sgr_once_per_run() {
         let styled = Line::from(vec![Span::from("dim ").dim(), Span::from("bright")]);
-        let out = render(vec![(&[], &[styled], None)]);
+        let out = render(vec![(&[styled], None)]);
         let s = String::from_utf8(out).expect("utf8");
         assert!(s.contains("\x1b[2m"));
         assert!(s.contains("\x1b[0m"));

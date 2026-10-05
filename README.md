@@ -70,6 +70,8 @@ native terminal scrollback; Ion keeps only the active composer/progress region
 mutable. Resuming or switching to a saved Session bootstraps at most the latest
 six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
+Publication uses available terminal rows before scrolling. Ordinary redraw and
+resize do not publish live rows; terminal-native reflow remains emulator-owned.
 After settled history is published, an expanded live band shrinks back to the
 rows the active composer/status actually need. Related tool calls are rendered
 as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of
