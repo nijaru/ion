@@ -49,10 +49,13 @@ python3 - "$WORK/first.json" "$WORK/second.json" "$WORK/requests" <<'PY'
 import json, sys
 first, second = (json.load(open(path)) for path in sys.argv[1:3])
 assert first['unfinished_turn'] is None and second['unfinished_turn'] is None
-assert len(first['entries']) == 11, first['entries']
-assert len(second['entries']) == 14, second['entries']
-assert [entry['kind'] for entry in first['entries']].count('tool_result') == 4
-assert [entry['kind'] for entry in second['entries']].count('turn_ended') == 2
+first_kinds = [entry['kind'] for entry in first['entries']]
+second_kinds = [entry['kind'] for entry in second['entries']]
+assert first_kinds.count('tool_result') == 4
+assert first_kinds.count('turn_started') == first_kinds.count('turn_ended') == 1
+assert second_kinds.count('turn_started') == second_kinds.count('turn_ended') == 2
+assert first_kinds.count('model_context_changed') == second_kinds.count('model_context_changed') == 1
+assert second['entries'][:len(first['entries'])] == first['entries']
 requests = [json.loads(line) for line in open(sys.argv[3])]
 assert len(requests) == 6, len(requests)
 assert len([m for m in requests[-1]['messages'] if m['role'] == 'user']) == 2

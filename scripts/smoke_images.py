@@ -107,7 +107,7 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
 
-        child = subprocess.Popen([binary, "--cwd", workspace, "--image", "red.png", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+        child = subprocess.Popen([binary, "--cwd", workspace, "--image", "red.png", "--tui-mode", "fullscreen", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
         os.close(slave)
         output = bytearray()
         sent_first = attached_second = sent_second = quit_sent = False
