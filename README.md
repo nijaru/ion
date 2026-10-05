@@ -152,6 +152,11 @@ follow-ups queued. Queued input is process-local and bounded to 32 MiB of
 encoded messages. Closing stdin cancels active work and returns pending
 follow-ups as `uncommitted_follow_up` records. Returned typed inputs can include
 image payloads, so clients should handle them as their own input data.
+Input/output errors also cancel and await active work before the process exits
+with an error. If stdout is broken, no terminal record can be promised; reopen
+or inspect the Session for committed outcomes. An operation panic terminates
+the connection with an error rather than leaving it permanently busy;
+uncommitted effects remain unknown and are not retried automatically.
 Session, resource, model and manual-compaction changes require an idle Turn.
 `compact` acknowledges that the operation started, can be cancelled with
 `abort`, and later emits `compact_end` with completed/cancelled/failed status

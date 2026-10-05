@@ -35,6 +35,12 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.flush()
 
         try:
+            if users and "IO_SETTLEMENT" in str(users[-1].get("content")):
+                arguments = {"command": "printf '%s\\n' $$ > io.pid; printf 'OBSERVED_BEFORE_DISCONNECT\\n'; touch io.ready; exec sleep 30", "timeout_ms": 120000}
+                event({"tool_calls": [{"index": 0, "id": "io-call", "type": "function", "function": {"name": "exec", "arguments": json.dumps(arguments)}}]}, "tool_calls")
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
             event({"content": "PROVISIONAL" if slow else "RPC_OK"})
             if slow:
                 time.sleep(2)
@@ -316,6 +322,46 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         records = [json.loads(line) for line in incomplete.stdout.splitlines()]
         assert [record["type"] for record in records] == ["ready", "response"], records
         assert records[1]["command"] == "parse" and "final newline" in records[1]["error"], records
+        disconnected = subprocess.Popen([binary, "--cwd", workspace, "rpc"], env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, bufsize=0)
+        pid = None
+        try:
+            disconnected_session = read(disconnected)["session"]
+            before = len(requests)
+            send(disconnected, {"type": "prompt", "message": "IO_SETTLEMENT"})
+            until(disconnected, lambda record: record["type"] == "tool_started")
+            deadline = time.monotonic() + 8
+            while not (workspace / "io.ready").exists() and time.monotonic() < deadline:
+                time.sleep(0.01)
+            assert (workspace / "io.ready").exists(), "native command did not become ready"
+            pid = int((workspace / "io.pid").read_text())
+            disconnected.stdout.close()
+            send(disconnected, {"type": "get_state"})
+            assert disconnected.wait(timeout=8) != 0, "broken output was reported as success"
+            assert b"Broken pipe" in disconnected.stderr.read()
+            view = json.loads(subprocess.run([binary, "--cwd", workspace, "--session", disconnected_session, "inspect"], env=env, capture_output=True, check=True).stdout)
+            results = [entry["data"]["result"] for entry in view["entries"] if entry["kind"] == "tool_result"]
+            assert len(results) == 1, ("native outcome was not committed on output failure", [entry["kind"] for entry in view["entries"]], view["unfinished_turn"])
+            output = results[0]["result"]
+            assert output["stdout"] == "OBSERVED_BEFORE_DISCONNECT\n" and output["cancelled"] is True, output
+            assert output["signal"] is not None and output["wait_error"] is None, output
+            assert view["unfinished_turn"] is None and view["entries"][-1]["data"]["reason"] == "cancelled", view
+            assert len(requests) == before + 1, "disconnect dispatched another model request"
+            try:
+                os.kill(pid, 0)
+            except ProcessLookupError:
+                pid = None
+            else:
+                raise AssertionError("direct native command still exists after RPC exit")
+        finally:
+            if disconnected.poll() is None:
+                disconnected.kill()
+                disconnected.wait()
+            if pid is not None:
+                try:
+                    os.kill(pid, 9)
+                except ProcessLookupError:
+                    pass
+            disconnected.stdin.close()
         print("Ion RPC acceptance, compaction, inline images, steering, follow-ups, settlement, abort and session clone/control: OK")
     finally:
         if child and child.poll() is None:

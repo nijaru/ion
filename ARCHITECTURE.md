@@ -589,6 +589,14 @@ correlate progress and settlement. A running Turn keeps its selected Session
 and model fixed. Cancellation requests the current Turn to stop; it never
 claims to undo tool effects. Closing input cancels active work and waits for
 its terminal record before exiting. Clients must keep draining stdout.
+The connection owns the active operation's task handle. Input/output faults
+close progress publication, request cancellation and await owned settlement
+before returning the original error. Completion records are published only
+after joining, following already-queued progress and before admitting queued
+input. A task panic ends the connection with an error; it cannot establish a
+settled effect or authorize replay of unfinished work. A broken output stream
+cannot promise delivery of completion records; durable facts remain available
+for inspection.
 RPC image input accepts local paths or inline MIME and base64 data. Both enter
 the same host normalization and selected-model capability check before Turn
 acceptance, so a controller can submit images without sharing Ion's filesystem.

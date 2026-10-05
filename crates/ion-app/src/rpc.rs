@@ -5,26 +5,29 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::Message;
 use ion_core::{CodingAgentEvent, ForkPoint, SteeringInbox};
 use serde_json::{Value, json};
-use tokio::{io::BufReader, sync::mpsc};
+use tokio::{
+    io::{AsyncBufRead, BufReader},
+    sync::mpsc,
+    task::JoinHandle,
+};
 use tokio_util::sync::CancellationToken;
 
-use crate::{expand_input, preview_input, redact_image_payloads, write_json_record};
+use crate::{
+    agent_events::event_record, expand_input, preview_input, redact_image_payloads,
+    write_json_record,
+};
 
 mod input;
 use input::{CommandReader, Input, MAX_COMMAND_BYTES};
 
 const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
 
-enum Output {
-    Record(Value),
-    Done,
-}
-
 struct Active {
     stop: CancellationToken,
     /// Present only for an active coding Turn. Other cancellable operations
     /// such as manual compaction do not accept steering or follow-ups.
     steering: Option<Arc<SteeringInbox>>,
+    task: JoinHandle<Vec<Value>>,
 }
 
 struct QueuedFollowUp {
@@ -40,12 +43,12 @@ struct Control {
     active: Option<Active>,
     follow_ups: VecDeque<QueuedFollowUp>,
     queued_bytes: usize,
-    output: mpsc::Sender<Output>,
+    output: mpsc::Sender<Value>,
 }
 
 pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
-    let (output, mut events) = mpsc::channel::<Output>(128);
-    let mut control = Control {
+    let (output, events) = mpsc::channel(128);
+    let control = Control {
         binding,
         active: None,
         follow_ups: VecDeque::new(),
@@ -55,37 +58,80 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
     write_json_record(
         &json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),
     )?;
-    let mut input = CommandReader::new(BufReader::new(tokio::io::stdin()));
-    let mut closing = false;
-    loop {
-        tokio::select! {
-            line = input.next(), if !closing => {
-                match line? {
-                    Input::Line(line) => control.command(&line)?,
-                    Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
-                    Input::Incomplete => write_json_record(&failure(None, "parse", "command is missing its final newline"))?,
-                    Input::Eof => {
-                        closing = true;
-                        if let Some(active) = &control.active { active.stop.cancel(); }
+    connection(
+        control,
+        CommandReader::new(BufReader::new(tokio::io::stdin())),
+        events,
+    )
+    .await
+}
+
+/// Connection exit owns cancellation and joining, including input/output faults.
+/// Closing the progress receiver makes further publication fail immediately;
+/// the operation still settles its owned work before the connection returns.
+async fn connection<R: AsyncBufRead + Unpin>(
+    mut control: Control,
+    mut input: CommandReader<R>,
+    mut events: mpsc::Receiver<Value>,
+) -> Result<()> {
+    let result: Result<()> = async {
+        let mut closing = false;
+        loop {
+            let busy = control.active.is_some();
+            tokio::select! {
+                Some(record) = events.recv(), if busy => {
+                    write_json_record(&record)?;
+                }
+                joined = async { (&mut control.active.as_mut().expect("active operation").task).await }, if busy => {
+                    // A polled-complete JoinHandle must not be awaited again during
+                    // error cleanup. Its result is now owned by this branch.
+                    control.active = None;
+                    let terminal = joined.context("RPC operation task failed; unfinished effects remain unknown")?;
+                    // The task has stopped producing. Publish pending progress,
+                    // then completion, before admitting follow-ups or idle state.
+                    while let Ok(record) = events.try_recv() {
+                        write_json_record(&record)?;
+                    }
+                    for record in terminal { write_json_record(&record)?; }
+                    if !closing { control.start_next_follow_up()?; }
+                }
+                line = input.next(), if !closing => {
+                    match line? {
+                        Input::Line(line) => control.command(&line)?,
+                        Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
+                        Input::Incomplete => write_json_record(&failure(None, "parse", "command is missing its final newline"))?,
+                        Input::Eof => {
+                            closing = true;
+                            if let Some(active) = &control.active { active.stop.cancel(); }
+                        }
                     }
                 }
             }
-            Some(output) = events.recv(), if control.active.is_some() => {
-                match output {
-                    Output::Record(record) => write_json_record(&record)?,
-                    Output::Done => {
-                        control.active = None;
-                        if !closing { control.start_next_follow_up()?; }
-                    }
-                }
+            if closing && control.active.is_none() {
+                control.return_uncommitted_follow_ups()?;
+                break;
             }
         }
-        if closing && control.active.is_none() {
-            control.return_uncommitted_follow_ups()?;
-            break;
+        Ok(())
+    }.await;
+    events.close();
+    let settlement = if let Some(active) = control.active.take() {
+        active.stop.cancel();
+        active
+            .task
+            .await
+            .context("RPC operation failed during connection settlement")
+            .map(|_| ())
+    } else {
+        Ok(())
+    };
+    match (result, settlement) {
+        (Err(error), Err(settlement)) => {
+            Err(error.context(format!("settlement also failed: {settlement:#}")))
         }
+        (Err(error), _) => Err(error),
+        (Ok(()), settlement) => settlement,
     }
-    Ok(())
 }
 
 impl Control {
@@ -314,19 +360,12 @@ impl Control {
         let stop = CancellationToken::new();
         let task_stop = stop.clone();
         let output = self.output.clone();
-        self.active = Some(Active {
-            stop,
-            steering: None,
-        });
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut output_fault = None;
             let result = agent
                 .compact(&session, model, task_stop.clone(), |event| {
-                    if output
-                        .try_send(Output::Record(event_record(event)))
-                        .is_err()
-                    {
-                        output_fault = Some("RPC output queue is full".to_owned());
+                    if output.try_send(event_record(event)).is_err() {
+                        output_fault = Some("RPC progress queue is unavailable".to_owned());
                         task_stop.cancel();
                     }
                 })
@@ -345,8 +384,12 @@ impl Control {
             if let Some(fault) = output_fault {
                 record["output_error"] = json!(fault);
             }
-            let _ = output.send(Output::Record(record)).await;
-            let _ = output.send(Output::Done).await;
+            vec![record]
+        });
+        self.active = Some(Active {
+            stop,
+            steering: None,
+            task,
         });
         Ok(json!({"disposition":"started"}))
     }
@@ -363,11 +406,7 @@ impl Control {
         let task_stop = stop.clone();
         let task_steering = steering.clone();
         let recover_input = queued.then(|| input.clone());
-        self.active = Some(Active {
-            stop,
-            steering: Some(steering),
-        });
-        tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             let mut accepted = None;
             let mut output_fault = None;
             let result = agent
@@ -390,8 +429,8 @@ impl Control {
                                     json!({"disposition":"started","turn":turn}),
                                 )
                             };
-                            if output.try_send(Output::Record(record)).is_err() {
-                                output_fault = Some("RPC output queue is full".to_owned());
+                            if output.try_send(record).is_err() {
+                                output_fault = Some("RPC progress queue is unavailable".to_owned());
                                 task_stop.cancel();
                             }
                         }
@@ -399,8 +438,9 @@ impl Control {
                             if let Some(turn) = accepted {
                                 let mut record = event_record(event);
                                 record["turn"] = json!(turn);
-                                if output.try_send(Output::Record(record)).is_err() {
-                                    output_fault = Some("RPC output queue is full".to_owned());
+                                if output.try_send(record).is_err() {
+                                    output_fault =
+                                        Some("RPC progress queue is unavailable".to_owned());
                                     task_stop.cancel();
                                 }
                             }
@@ -408,7 +448,7 @@ impl Control {
                     },
                 )
                 .await;
-            if let Some(turn) = accepted {
+            let terminal = if let Some(turn) = accepted {
                 let status = match &result {
                     Ok(_) => "completed",
                     Err(ion_core::CodingAgentError::Cancelled) => "cancelled",
@@ -421,27 +461,31 @@ impl Control {
                 if let Some(fault) = output_fault {
                     record["output_error"] = json!(fault);
                 }
-                let _ = output.send(Output::Record(record)).await;
+                record
             } else {
                 let error = result.err().map_or_else(
                     || "Turn was not accepted".to_owned(),
                     |error| error.to_string(),
                 );
-                let record = if queued {
+                if queued {
                     json!({"type":"follow_up_failed","id":id,"input":recover_input,"error":error})
                 } else {
                     failure(id, "prompt", &error)
-                };
-                let _ = output.send(Output::Record(record)).await;
-            }
-            for pending in task_steering.take_uncommitted() {
-                let _ = output
-                    .send(Output::Record(
-                        json!({"type":"uncommitted_steering","input":pending}),
-                    ))
-                    .await;
-            }
-            let _ = output.send(Output::Done).await;
+                }
+            };
+            let mut terminal = vec![terminal];
+            terminal.extend(
+                task_steering
+                    .take_uncommitted()
+                    .into_iter()
+                    .map(|pending| json!({"type":"uncommitted_steering","input":pending})),
+            );
+            terminal
+        });
+        self.active = Some(Active {
+            stop,
+            steering: Some(steering),
+            task,
         });
         Ok(())
     }
@@ -471,78 +515,11 @@ fn failure(id: Option<Value>, command: &str, error: &str) -> Value {
     record
 }
 
-pub(super) fn event_record(event: CodingAgentEvent) -> Value {
-    match event {
-        CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
-        CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
-        CodingAgentEvent::AssistantCommitted {
-            turn,
-            content,
-            tool_activities,
-            termination,
-        } => {
-            json!({"type":"assistant_committed","turn":turn,"content":content,"tool_activities":tool_activities,"termination":termination})
-        }
-        CodingAgentEvent::SteeringCommitted { turn, input } => {
-            json!({"type":"steering_committed","turn":turn,"input":input})
-        }
-        CodingAgentEvent::ProviderRetry {
-            attempt,
-            max_retries,
-            delay_ms,
-        } => {
-            json!({"type":"provider_retry","attempt":attempt,"max_retries":max_retries,"delay_ms":delay_ms})
-        }
-        CodingAgentEvent::ToolStarted {
-            call_id,
-            name,
-            arguments,
-            activity,
-        } => {
-            json!({"type":"tool_started","call_id":call_id,"name":name,"arguments":arguments,"activity":activity})
-        }
-        CodingAgentEvent::ToolFinished {
-            call_id,
-            name,
-            activity,
-            output,
-        } => {
-            json!({"type":"tool_finished","call_id":call_id,"name":name,"activity":activity,"output":output.value,"image_mime_types":output.images.iter().map(|image| image.mime_type().as_str()).collect::<Vec<_>>(),"is_error":output.is_error})
-        }
-        CodingAgentEvent::ToolRejected {
-            call_id,
-            name,
-            activity,
-            output,
-        } => {
-            json!({"type":"tool_rejected","call_id":call_id,"name":name,"activity":activity,"output":output.value,"is_error":output.is_error})
-        }
-        CodingAgentEvent::InterruptedCalls(count) => {
-            json!({"type":"interrupted_calls","count":count})
-        }
-        CodingAgentEvent::ContextCompacted { through_entry } => {
-            json!({"type":"context_compacted","through_entry":through_entry})
-        }
-        CodingAgentEvent::ProviderReplayRebased => json!({"type":"provider_replay_rebased"}),
-        CodingAgentEvent::ProviderReplayNotice {
-            action,
-            reason,
-            count,
-        } => json!({"type":"provider_replay_notice","action":action,"reason":reason,"count":count}),
-        CodingAgentEvent::ResponseRestarted => json!({"type":"response_restarted"}),
-        CodingAgentEvent::ToolCatalogWarning(message) => {
-            json!({"type":"tool_catalog_warning","message":message})
-        }
-        CodingAgentEvent::Final(text) => json!({"type":"final","text":text}),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[tokio::test(flavor = "current_thread")]
-    async fn manual_compaction_uses_the_shared_active_operation_slot() {
+    fn fixture() -> (Control, mpsc::Receiver<Value>, PathBuf) {
         use std::fs;
 
         use ion_core::CodingSession;
@@ -567,14 +544,21 @@ mod tests {
         let session = Arc::new(CodingSession::create(&session_path, &cwd).unwrap());
         session.select_model(selected.identity()).unwrap();
         let binding = SessionBinding::new(host, session, selected, None).unwrap();
-        let (output, mut events) = mpsc::channel(16);
-        let mut control = Control {
+        let (output, events) = mpsc::channel(16);
+        let control = Control {
             binding,
             active: None,
             follow_ups: VecDeque::new(),
             queued_bytes: 0,
             output,
         };
+
+        (control, events, root)
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn manual_compaction_uses_the_shared_active_operation_slot() {
+        let (mut control, _events, root) = fixture();
 
         assert_eq!(
             control.start_compaction(Some(json!("cancelled"))).unwrap(),
@@ -585,29 +569,95 @@ mod tests {
         assert!(active.steering.is_none());
         active.stop.cancel();
 
-        let Output::Record(cancelled) = events.recv().await.unwrap() else {
-            panic!("expected compact_end record");
-        };
+        let terminal = control.active.take().unwrap().task.await.unwrap();
+        let cancelled = &terminal[0];
         assert_eq!(cancelled["type"], "compact_end");
         assert_eq!(cancelled["id"], "cancelled");
         assert_eq!(cancelled["status"], "cancelled");
-        assert!(matches!(events.recv().await.unwrap(), Output::Done));
-        control.active = None;
 
         assert_eq!(
             control.start_compaction(Some(json!("noop"))).unwrap(),
             json!({"disposition":"started"})
         );
-        let Output::Record(completed) = events.recv().await.unwrap() else {
-            panic!("expected compact_end record");
-        };
+        let terminal = control.active.take().unwrap().task.await.unwrap();
+        let completed = &terminal[0];
         assert_eq!(completed["type"], "compact_end");
         assert_eq!(completed["id"], "noop");
         assert_eq!(completed["status"], "completed");
         assert_eq!(completed["changed"], false);
-        assert!(matches!(events.recv().await.unwrap(), Output::Done));
 
         drop(control);
-        fs::remove_dir_all(root).unwrap();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn input_failure_waits_for_owned_operation_and_releases_sends() {
+        use std::{
+            pin::Pin,
+            sync::atomic::{AtomicBool, Ordering},
+            task::{Context, Poll},
+        };
+        use tokio::io::{AsyncRead, ReadBuf};
+
+        struct FailedInput;
+        impl AsyncRead for FailedInput {
+            fn poll_read(
+                self: Pin<&mut Self>,
+                _cx: &mut Context<'_>,
+                _buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                Poll::Ready(Err(std::io::Error::other("injected RPC input failure")))
+            }
+        }
+        let (mut control, events, root) = fixture();
+        let stop = CancellationToken::new();
+        let task_stop = stop.clone();
+        let output = control.output.clone();
+        let settled = Arc::new(AtomicBool::new(false));
+        let task_settled = settled.clone();
+        let task = tokio::spawn(async move {
+            task_stop.cancelled().await;
+            assert!(output.send(json!({"type":"terminal"})).await.is_err());
+            task_settled.store(true, Ordering::SeqCst);
+            Vec::new()
+        });
+        control.active = Some(Active {
+            stop,
+            steering: None,
+            task,
+        });
+        let error = connection(
+            control,
+            CommandReader::new(BufReader::new(FailedInput)),
+            events,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("injected RPC input failure"));
+        assert!(
+            settled.load(Ordering::SeqCst),
+            "connection returned before operation settlement"
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn operation_panic_ends_connection_instead_of_stranding_busy_state() {
+        let (mut control, events, root) = fixture();
+        control.active = Some(Active {
+            stop: CancellationToken::new(),
+            steering: None,
+            task: tokio::spawn(async { panic!("injected RPC operation panic") }),
+        });
+        let (input, _open_client) = tokio::io::duplex(64);
+        let error = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            connection(control, CommandReader::new(BufReader::new(input)), events),
+        )
+        .await
+        .expect("RPC stranded its active slot after panic")
+        .unwrap_err();
+        assert!(format!("{error:#}").contains("injected RPC operation panic"));
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

@@ -20,6 +20,7 @@ use ion_host::{
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 
+mod agent_events;
 mod clipboard;
 mod external_editor;
 mod rpc;
@@ -627,7 +628,7 @@ async fn headless(
     let result = agent
         .submit_message(&session, model, input, instructions, stop, |event| {
             if json_output {
-                let record = rpc::event_record(event);
+                let record = agent_events::event_record(event);
                 if output_error.is_none()
                     && let Err(error) = write_json_record(&record)
                 {
