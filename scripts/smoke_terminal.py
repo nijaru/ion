@@ -1,5 +1,6 @@
 """Exercise a coding turn through Ion's actual terminal client and a PTY."""
 
+import errno
 import fcntl
 import json
 import os
@@ -355,7 +356,12 @@ def exercise_active_band():
             while time.monotonic() < end:
                 readable, _, _ = select.select([master], [], [], 0.03)
                 if readable:
-                    data = os.read(master, 65536)
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError as error:
+                        if error.errno != errno.EIO:  # Linux PTYs return EIO when their slave closes.
+                            raise
+                        break
                     output.extend(data)
                     if b"\x1b[6n" in data:
                         os.write(master, b"\x1b[2;1R")
@@ -383,7 +389,8 @@ def exercise_active_band():
                     quit_sent = True
                 if child.poll() is not None:
                     break
-            assert checked and child.wait(timeout=2) == 0, output[-2000:]
+            status = child.wait(timeout=2)
+            assert checked and status == 0, ("active-band child ended before qualification", status, output[-2000:])
             print("Ion active inline band retains mutation and exception facts: OK")
         finally:
             if child is not None and child.poll() is None:
