@@ -51,7 +51,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
         opened_active = closed_active = False
-        active_start = 0
+        sent_selected = closed_selected = False
+        active_start = tool_start = selected_start = 0
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -100,12 +101,20 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     resized = True
                 if resized and not sent_tool:
                     time.sleep(0.2)
+                    tool_start = len(output)
                     os.write(master, b"\x0f")
                     sent_tool = True
-                if sent_tool and b"Conversation" in output and not closed_tool:
+                if sent_tool and b"Conversation" in output[tool_start:] and b"RESUMED" in output[tool_start:] and not closed_tool:
                     os.write(master, b"\x0f")
                     closed_tool = True
-                if closed_tool and b"Details closed" in output and not sent_compact:
+                if closed_tool and b"Details closed" in output[tool_start:] and not sent_selected:
+                    selected_start = len(output)
+                    os.write(master, b"/tool\r")
+                    sent_selected = True
+                if sent_selected and b"Tool 4" in output[selected_start:] and b"sample data updated" in output[selected_start:] and not closed_selected:
+                    os.write(master, b"\x0f")
+                    closed_selected = True
+                if closed_selected and b"Details closed" in output[selected_start:] and not sent_compact:
                     time.sleep(0.2)
                     os.write(master, b"/compact\r")
                     sent_compact = True
