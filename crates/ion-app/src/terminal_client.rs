@@ -2004,7 +2004,13 @@ fn draw(
     let row_budget = LIVE_REGION_MAX_ROWS.min(height.max(1) as usize);
     let mut chrome = Vec::new();
     let notices = progress.map_or(&[][..], LiveTranscript::notices);
-    if let Some(notice) = notices.last().or(ui.notices.last()) {
+    if progress.is_none() {
+        // Idle command output (help, resources, diagnostics) is content, not
+        // busy chrome. Keep its wrapped rows rather than a one-line preview.
+        for notice in &ui.notices {
+            push_wrapped(&mut chrome, notice, width);
+        }
+    } else if let Some(notice) = notices.last().or(ui.notices.last()) {
         let count = notices.len() + ui.notices.len();
         let label = if count == 1 {
             "Notice".into()
@@ -2014,7 +2020,11 @@ fn draw(
         chrome.push(brief(&format!("{label} · {notice}"), width));
     }
     if let Some(status) = visible_status(ui) {
-        chrome.push(brief(&status, width));
+        if progress.is_some() {
+            chrome.push(brief(&status, width));
+        } else {
+            push_wrapped(&mut chrome, &status, width);
+        }
     }
 
     let composer = wrap_input(&ui.draft, ui.cursor, width);
