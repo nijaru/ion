@@ -135,7 +135,10 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
                 if sent_second and len(requests) >= 4 and not quit_sent:
                     os.write(master, b"\x03")
                     quit_sent = True
-                if quit_sent and b"\x1b[?1049l" in output:
+                # Leaving the alternate screen is only one teardown write.
+                # Keep draining the PTY until exit so restoration cannot block
+                # on a full terminal output queue (notably on macOS).
+                if child.poll() is not None:
                     break
             child.wait(timeout=5)
             assert child.returncode == 0, output[-1000:]
@@ -146,10 +149,10 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
             assert last_user[0] == {"type": "text", "text": "Inspect again."}
             assert last_user[1]["type"] == "image_url"
         finally:
+            os.close(master)
             if child.poll() is None:
                 child.send_signal(signal.SIGKILL)
-                child.wait()
-            os.close(master)
+                child.wait(timeout=5)
         tool_read = subprocess.run([binary, "--cwd", workspace, "run", "Read workspace picture."], env=env, check=True, capture_output=True, text=True)
         assert tool_read.stdout.strip() == "IMAGE_OK", tool_read
         assert len(requests) == 6
