@@ -81,7 +81,7 @@ Inline remains the default, but persistent fullscreen is also available with
 `--tui-mode fullscreen`; use `/tui inline` or `/tui fullscreen` to switch
 inside chat. Fullscreen owns the transcript viewport and scrolling while using
 the same Session, agent loop and semantic transcript projection. File/model/
-session pickers and Ctrl-O tool detail use alternate-screen views in either
+session pickers and Ctrl-O conversation detail use alternate-screen views in either
 mode. Working-directory, Session, model and context metadata are no longer
 permanent footer rows; `/session` exposes Session/context detail on demand.
 Cloning copies committed conversation and context into a new session with
@@ -170,9 +170,12 @@ recent queued follow-up to the editor, and Ctrl-C cancels. Up and Down browse
 earlier prompts when the cursor reaches the first or last editor line. Type
 `@` to pick a project file, or use Tab after a partial `@path`; the picker
 inserts a path reference for the model to read, not the file's contents.
-Ctrl-O opens the latest complete tool result in a full-screen detail view;
-`/tools` lists results and `/tool N` opens a selected one. Esc or Ctrl-O
-closes the result view and restores the selected chat renderer. Input
+Ctrl-O opens the whole conversation, including current work and provisional
+assistant text, in a full-screen detail view. Left/Right browse earlier/newer
+pages (32 messages, calls or shell records); Up/Down and Page-Up/Page-Down
+scroll. Results retain their full stored content, including capture paths.
+`/tools` lists calls, `/tool` opens the latest and `/tool N` selects one. Esc or Ctrl-O
+closes details and restores the selected chat renderer. Input
 that has not reached the model returns to the editor if the turn fails or is
 cancelled.
 Ctrl-G edits the current draft in `$VISUAL`, then `$EDITOR`, falling back to
@@ -188,7 +191,10 @@ overwritten.
 In the terminal, `!command` runs a shell command in the live working
 directory and includes its observed result in later model context.
 `!!command` runs it without sharing the result with the model. Both commands
-remain visible in the saved Session. The host executes the command while the
+remain visible in the saved Session. The terminal shows bounded stdout/stderr
+previews, observed exit/signal and cancellation/timeout status, capture notices
+and the `!!` sharing choice; Ctrl-O inspects the full stored result.
+The host executes the command while the
 Session holds an exclusive direct-shell permit, then publishes the observed
 result before releasing that permit. Ctrl-C requests cancellation of a running
 command; a command that started can still have external effects.

@@ -338,6 +338,7 @@ fn live_result(output: ToolOutput) -> ActivityResult {
 /// provisional text; restart never removes committed assistant or steering.
 #[derive(Debug, Default)]
 pub struct LiveTranscript {
+    revision: u64,
     turn: Option<u64>,
     builder: TranscriptBuilder,
     current_text: Option<usize>,
@@ -360,7 +361,18 @@ impl LiveTranscript {
         &self.notices
     }
 
+    /// Observation revision within this instance, for presentation invalidation.
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Index of the uncommitted assistant tail in this live projection.
+    pub fn provisional_item_index(&self) -> Option<usize> {
+        self.current_text
+    }
+
     pub fn observe(&mut self, event: AgentEvent) {
+        self.revision += 1;
         match event {
             AgentEvent::TurnAccepted { turn } => {
                 self.turn = Some(turn);

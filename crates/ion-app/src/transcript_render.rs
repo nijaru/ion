@@ -1,7 +1,7 @@
 //! Pure compact rendering for the typed coding transcript.
 use ion_core::{
     ActivityGroup, ActivityOutcome, ActivityResult, ToolActivityKind, TranscriptActivity,
-    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection,
+    TranscriptItem, TranscriptMessage, TranscriptPart, TranscriptProjection, UserShellActivity,
 };
 use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
@@ -20,16 +20,7 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
             TranscriptItem::User(message) => render_message(&mut rows, message, true, width),
             TranscriptItem::Assistant(message) => render_message(&mut rows, message, false, width),
             TranscriptItem::ActivityGroup(group) => render_group(&mut rows, group, width),
-            TranscriptItem::UserShell(shell) => {
-                let marker = if shell.is_error { "!" } else { "›" };
-                push_prefixed(
-                    &mut rows,
-                    &format!("{marker} !"),
-                    "  ",
-                    &shell.command,
-                    width,
-                );
-            }
+            TranscriptItem::UserShell(shell) => render_shell(&mut rows, shell, width),
         }
     }
     while rows.last().is_some_and(String::is_empty) {
@@ -38,7 +29,12 @@ pub fn rows(projection: &TranscriptProjection, width: usize) -> Vec<String> {
     rows
 }
 
-fn render_message(rows: &mut Vec<String>, message: &TranscriptMessage, user: bool, width: usize) {
+pub(super) fn render_message(
+    rows: &mut Vec<String>,
+    message: &TranscriptMessage,
+    user: bool,
+    width: usize,
+) {
     let mut first = true;
     for part in &message.parts {
         match part {
@@ -70,6 +66,62 @@ fn render_message(rows: &mut Vec<String>, message: &TranscriptMessage, user: boo
         }
         first = false;
     }
+}
+
+fn render_shell(rows: &mut Vec<String>, shell: &UserShellActivity, width: usize) {
+    let prefix = if shell.exclude_from_context {
+        "› !!"
+    } else {
+        "› !"
+    };
+    push_prefixed(rows, prefix, "  ", &shell.command, width);
+    for stream in ["stdout", "stderr"] {
+        if let Some(text) = shell.output[stream]
+            .as_str()
+            .filter(|text| !text.is_empty())
+        {
+            let count = text.lines().count();
+            if count > 4 {
+                push_wrapped(
+                    rows,
+                    &format!("  … {} earlier {stream} lines · Ctrl-O", count - 4),
+                    width,
+                );
+            }
+            for line in text.lines().skip(count.saturating_sub(4)) {
+                push_prefixed(rows, &format!("  {stream}: "), "    ", line, width);
+            }
+        }
+        if shell.output[format!("{stream}_truncated")].as_bool() == Some(true) {
+            let capture = shell.output[format!("{stream}_full_path")].as_str();
+            let note = capture.map_or_else(
+                || format!("  {stream} truncated/incomplete · Ctrl-O"),
+                |path| format!("  {stream} truncated/incomplete · capture: {path} · Ctrl-O"),
+            );
+            push_wrapped(rows, &note, width);
+        }
+    }
+    let mut outcome = if let Some(signal) = shell.output["signal"].as_i64() {
+        format!("signal {signal}")
+    } else if let Some(code) = shell.output["exit_code"].as_i64() {
+        format!("exit {code}")
+    } else if shell.output["wait_error"].as_str().is_some() {
+        "exit unknown; inspect details".into()
+    } else if shell.is_error {
+        "failed; inspect details".into()
+    } else {
+        "completed".into()
+    };
+    if shell.output["cancelled"].as_bool() == Some(true) {
+        outcome.push_str(" · cancelled");
+    }
+    if shell.output["timed_out"].as_bool() == Some(true) {
+        outcome.push_str(" · timed out");
+    }
+    if shell.exclude_from_context {
+        outcome.push_str(" · not shared with model");
+    }
+    push_wrapped(rows, &format!("  {outcome}"), width);
 }
 
 #[derive(Debug)]
@@ -450,7 +502,7 @@ fn push_prefixed(
     }
 }
 
-fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
+pub(super) fn push_wrapped(rows: &mut Vec<String>, text: &str, width: usize) {
     for logical in text.split('\n') {
         wrap_one(rows, "", "", logical, width);
     }
@@ -514,6 +566,33 @@ fn fit_line(text: &str, width: usize) -> String {
 mod tests {
     use super::*;
     use ion_core::{ToolActivity, TranscriptActivity};
+
+    #[test]
+    fn shell_preview_shows_observed_output_outcome_and_context_choice() {
+        let projection = TranscriptProjection {
+            items: vec![TranscriptItem::UserShell(ion_core::UserShellActivity {
+                command: "run-check".into(),
+                output: serde_json::json!({
+                    "stdout": "first\nsecond\nthird\nfourth\nOBSERVED_OUTPUT\n",
+                    "stderr": "\u{1b}[2JOBSERVED_FAILURE\n",
+                    "exit_code": 7,
+                    "stdout_truncated": true,
+                    "stdout_full_path": "/tmp/capture.txt"
+                }),
+                is_error: true,
+                exclude_from_context: true,
+            })],
+        };
+        let rendered = rows(&projection, 120).join("\n");
+        assert!(rendered.contains("OBSERVED_OUTPUT"), "{rendered}");
+        assert!(rendered.contains("OBSERVED_FAILURE"));
+        assert!(rendered.contains("exit 7"));
+        assert!(rendered.contains("not shared with model"));
+        assert!(rendered.contains("stdout truncated"));
+        assert!(rendered.contains("/tmp/capture.txt"));
+        assert!(rendered.contains("earlier stdout lines"));
+        assert!(!rendered.contains("\u{1b}"));
+    }
 
     fn activity(
         id: &str,

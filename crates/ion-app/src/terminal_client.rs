@@ -9,13 +9,13 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use crate::transcript_detail::{DetailView, kind_label, tools};
 use anyhow::{Context, Result, ensure};
 use ignore::WalkBuilder;
 use ion_ai::{Content, Message, ModelRef};
 use ion_core::{
-    ActivityOutcome, CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry,
-    SessionView, SteeringInbox, ToolActivityKind, TranscriptActivity, TranscriptItem,
-    TranscriptProjection, TurnEndReason,
+    CodingAgent, CodingSession, ForkPoint, LiveTranscript, SessionEntry, SessionView,
+    SteeringInbox, TranscriptItem, TranscriptProjection, TurnEndReason,
 };
 use ion_host::image_input::LoadedImage;
 use ion_host::{CredentialStatus, CredentialStore, Resources, Selection};
@@ -60,7 +60,6 @@ struct Frontend {
     draft: String,
     images: Vec<LoadedImage>,
     cursor: usize,
-    tool_details: Vec<TranscriptActivity>,
     history_session: Option<PathBuf>,
     history_published_items: usize,
     pending_history_items: Vec<TranscriptItem>,
@@ -74,15 +73,9 @@ struct Frontend {
     prompt_history: Vec<String>,
     history_cursor: Option<usize>,
     saved_draft: String,
-    tool_view: Option<ToolView>,
+    details: Option<DetailView>,
     clipboard_job: Option<tokio::task::JoinHandle<Result<PreparedPaste>>>,
     cwd: PathBuf,
-}
-
-struct ToolView {
-    label: String,
-    output: String,
-    scroll: usize,
 }
 
 struct PendingInput {
@@ -864,11 +857,11 @@ fn handle_command(
         "/tools" => ui.list_tools(),
         "/tool" => {
             let number = if args.is_empty() {
-                None
+                tools(&ui.history).count()
             } else {
-                Some(args.parse::<usize>().context("use /tool [N]")?)
+                args.parse::<usize>().context("use /tool [N]")?
             };
-            ui.open_tool(number);
+            ui.open_details(Some(number));
         }
         _ => {
             if let Some(prompt) = runtime.resources().expand_command(command) {
@@ -902,7 +895,7 @@ async fn run_compaction(
                 result = &mut compact => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
@@ -1135,7 +1128,7 @@ async fn run_user_shell(
                         stop.cancel();
                         ui.status = "Cancelling shell…".into();
                     }
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, runtime.selected());
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, None, None),
@@ -1230,7 +1223,7 @@ async fn run_turn(
                 result = &mut turn => break result,
                 event = input.next(), if !input_ended => match event {
                     Some(Ok(InputEvent::Key(KeyEvent { code: KeyCode::Char('c'), modifiers }))) if modifiers.contains(Modifiers::CONTROL) => { stop.cancel(); ui.status = "Cancelling…".into(); },
-                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.tool_view.is_none() => {
+                    Some(Ok(InputEvent::Key(key))) if is_clipboard_shortcut(key) && ui.picker.is_none() && ui.details.is_none() => {
                         start_clipboard_paste(ui, selected);
                     },
                     Some(Ok(InputEvent::Key(key))) => busy_key(ui, key, &stop, Some(&steering), Some(resources)),
@@ -1354,7 +1347,7 @@ impl Frontend {
     fn refresh_session(&mut self, session: &CodingSession) -> Result<()> {
         let view = session.view()?;
         self.load_history(session, &view);
-        self.tool_view = None;
+        self.details = None;
         self.notices.clear();
         self.scroll = 0;
         self.cwd = session.cwd().to_path_buf();
@@ -1405,17 +1398,10 @@ impl Frontend {
         self.pending_history_items = history.items[start..].to_vec();
         self.pending_history_target = history.items.len();
         self.history_session = Some(session_path);
-        self.tool_details = history
-            .items
-            .iter()
-            .filter_map(|item| match item {
-                TranscriptItem::ActivityGroup(group) => Some(&group.activities),
-                _ => None,
-            })
-            .flatten()
-            .cloned()
-            .collect();
         self.history = history;
+        if let Some(details) = &mut self.details {
+            details.invalidate();
+        }
         self.prompt_history = view
             .entries
             .iter()
@@ -1474,8 +1460,8 @@ impl Frontend {
     }
 
     fn key(&mut self, key: KeyEvent) -> Action {
-        if self.tool_view.is_some() {
-            return self.tool_view_key(key);
+        if self.details.is_some() {
+            return self.detail_key(key);
         }
         if self.picker.is_some() {
             return self.picker_key(key);
@@ -1515,7 +1501,7 @@ impl Frontend {
                 code: KeyCode::Char('o'),
                 modifiers,
             } if modifiers.contains(Modifiers::CONTROL) => {
-                self.open_tool(None);
+                self.open_details(None);
                 Action::None
             }
             KeyEvent {
@@ -1761,100 +1747,55 @@ impl Frontend {
         }
     }
 
-    fn tool_view_key(&mut self, key: KeyEvent) -> Action {
-        let view = self.tool_view.as_mut().expect("tool output view is active");
-        match key {
-            KeyEvent {
-                code: KeyCode::Esc, ..
-            }
-            | KeyEvent {
-                code: KeyCode::Char('o'),
-                modifiers: Modifiers::CONTROL,
-            } => {
-                self.tool_view = None;
-                self.status = "Tool output closed".into();
-            }
-            KeyEvent {
-                code: KeyCode::Up, ..
-            } => view.scroll = view.scroll.saturating_add(1),
-            KeyEvent {
-                code: KeyCode::Down,
-                ..
-            } => view.scroll = view.scroll.saturating_sub(1),
-            KeyEvent {
-                code: KeyCode::PageUp,
-                ..
-            } => view.scroll = view.scroll.saturating_add(12),
-            KeyEvent {
-                code: KeyCode::PageDown,
-                ..
-            } => view.scroll = view.scroll.saturating_sub(12),
-            _ => {}
+    fn detail_key(&mut self, key: KeyEvent) -> Action {
+        if key.code == KeyCode::Esc
+            || (key.code == KeyCode::Char('o') && key.modifiers == Modifiers::CONTROL)
+        {
+            self.details = None;
+            self.status = "Details closed".into();
+        } else if let Some(view) = &mut self.details {
+            view.key(key.code);
         }
         Action::None
     }
 
     fn list_tools(&mut self) {
-        let names = self
-            .tool_details
-            .iter()
+        let names = tools(&self.history)
             .enumerate()
             .map(|(index, activity)| {
                 format!(
                     "{}:{} ({})",
                     index + 1,
                     activity.name,
-                    activity_kind_label(activity.activity.kind)
+                    kind_label(activity.activity.kind)
                 )
             })
             .collect::<Vec<_>>();
         self.note(if names.is_empty() {
-            "No tool results in this session".into()
+            "No tools in this session".into()
         } else {
-            format!("Tool results: {}", names.join(" · "))
+            format!("Tools: {}", names.join(" · "))
         });
     }
 
-    fn open_tool(&mut self, number: Option<usize>) {
-        let index = number.unwrap_or(self.tool_details.len());
-        if index == 0 || index > self.tool_details.len() {
-            self.status = "Tool result not found; use /tools to list results".into();
-            return;
-        }
-        let activity = &self.tool_details[index - 1];
-        let mut output = format!(
-            "Call ID: {}\nKind: {}\nOutcome: {}",
-            activity.call_id,
-            activity_kind_label(activity.activity.kind),
-            activity_outcome_label(activity.outcome)
-        );
-        if let Some(subject) = activity.activity.subject.as_deref() {
-            output.push_str(&format!("\nSubject: {subject}"));
-        }
-        output.push_str("\n\nArguments\n");
-        output.push_str(
-            &serde_json::to_string_pretty(&activity.arguments)
-                .unwrap_or_else(|_| activity.arguments.to_string()),
-        );
-        if let Some(result) = &activity.result {
-            output.push_str("\n\nResult\n");
-            output.push_str(
-                &serde_json::to_string_pretty(&result.value)
-                    .unwrap_or_else(|_| result.value.to_string()),
-            );
-            for mime in &result.image_mime_types {
-                output.push_str(&format!("\n[image: {mime}]"));
+    fn open_details(&mut self, number: Option<usize>) {
+        let selected = match number {
+            None => None,
+            Some(index) => {
+                let Some(number) = std::num::NonZeroUsize::new(index) else {
+                    self.status = "Tool result not found; use /tools to list tools".into();
+                    return;
+                };
+                if tools(&self.history).nth(index - 1).is_none() {
+                    self.status = "Tool result not found; use /tools to list tools".into();
+                    return;
+                }
+                Some(number)
             }
-        } else {
-            output.push_str("\n\nResult\n[no committed result]");
-        }
-        self.tool_view = Some(ToolView {
-            label: format!("Tool {index}: {} · Esc or Ctrl-O closes", activity.name),
-            output,
-            scroll: 0,
-        });
-        self.status = format!("Viewing tool result {index}");
+        };
+        self.details = Some(DetailView::new(selected));
     }
+
     fn open_file_picker(&mut self, start: usize, end: usize, query: String) {
         let files = scan_files(&self.cwd);
         if files.is_empty() {
@@ -1967,32 +1908,6 @@ impl Frontend {
     }
 }
 
-fn activity_kind_label(kind: ToolActivityKind) -> &'static str {
-    match kind {
-        ToolActivityKind::Read => "read",
-        ToolActivityKind::List => "list",
-        ToolActivityKind::Search => "search",
-        ToolActivityKind::Edit => "edit",
-        ToolActivityKind::Write => "write",
-        ToolActivityKind::Command => "command",
-        ToolActivityKind::Ask => "ask",
-        ToolActivityKind::Subagent => "subagent",
-        ToolActivityKind::External => "external",
-    }
-}
-
-fn activity_outcome_label(outcome: ActivityOutcome) -> &'static str {
-    match outcome {
-        ActivityOutcome::Pending => "pending",
-        ActivityOutcome::Completed => "completed",
-        ActivityOutcome::Failed => "failed",
-        ActivityOutcome::Cancelled => "cancelled",
-        ActivityOutcome::TimedOut => "timed out",
-        ActivityOutcome::Rejected => "rejected",
-        ActivityOutcome::Unknown => "unknown",
-    }
-}
-
 fn vertical_cursor(draft: &str, cursor: usize, down: bool) -> Option<usize> {
     let line_start = draft[..cursor].rfind('\n').map_or(0, |at| at + 1);
     let column = draft[line_start..cursor].graphemes(true).count();
@@ -2030,9 +1945,9 @@ fn draw(
     let (width, height) = terminal.size()?;
     screen.resize(width, height);
 
-    if ui.tool_view.is_some() || ui.picker.is_some() {
+    if ui.details.is_some() || ui.picker.is_some() {
         terminal.enter_alt_screen()?;
-        return draw_modal_fullscreen(terminal, screen, ui, width, height);
+        return draw_modal_fullscreen(terminal, screen, ui, progress, width, height);
     }
     if ui.mode == TuiMode::Fullscreen {
         terminal.enter_alt_screen()?;
@@ -2232,7 +2147,8 @@ fn draw_chat_fullscreen(
 fn draw_modal_fullscreen(
     terminal: &mut TerminalSession,
     screen: &mut Screen,
-    ui: &Frontend,
+    ui: &mut Frontend,
+    progress: Option<&LiveTranscript>,
     width: u16,
     height: u16,
 ) -> Result<()> {
@@ -2241,10 +2157,10 @@ fn draw_modal_fullscreen(
     let mut content = Vec::new();
     let mut composer = None;
 
-    if let Some(view) = &ui.tool_view {
-        content.push(view.label.clone());
-        push_wrapped(&mut content, &view.output, width);
-    } else if let Some(picker) = &ui.picker {
+    if let Some(view) = &mut ui.details {
+        view.prepare(&ui.history, progress, width);
+    }
+    if let Some(picker) = &ui.picker {
         let matching = picker.matches();
         content.push(format!("{} · {} match(es)", picker.title, matching.len()));
         let visible = height.saturating_sub(2);
@@ -2260,12 +2176,18 @@ fn draw_modal_fullscreen(
         composer = Some(wrap_input(&picker.query, picker.query.len(), width));
     }
 
+    let content = ui
+        .details
+        .as_ref()
+        .map_or(content.as_slice(), DetailView::rows);
+    let controls = ui.details.as_ref().map(DetailView::controls);
+    let status = visible_status(ui);
     let composer_height = composer
         .as_ref()
         .map_or(0, |composer| composer.lines.len().min(3));
-    let status_height = usize::from(!ui.status.is_empty());
+    let status_height = usize::from(controls.is_some()) + usize::from(status.is_some());
     let viewport = height.saturating_sub(composer_height + status_height);
-    let scroll = ui.tool_view.as_ref().map_or(0, |view| view.scroll);
+    let scroll = ui.details.as_ref().map_or(0, |view| view.scroll);
     let end = content.len().saturating_sub(scroll.min(content.len()));
     let start = end.saturating_sub(viewport);
     let mut rows = vec![Line::raw(""); height];
@@ -2276,9 +2198,11 @@ fn draw_modal_fullscreen(
 
     let mut cursor = None;
     let mut next_row = viewport;
-    if !ui.status.is_empty() && next_row < height {
-        rows[next_row] = Line::raw(brief(&ui.status, width));
-        next_row += 1;
+    for label in controls.iter().chain(status.iter()) {
+        if next_row < height {
+            rows[next_row] = Line::raw(brief(label, width));
+            next_row += 1;
+        }
     }
     if let Some(composer) = composer {
         let start = composer
@@ -2684,35 +2608,6 @@ mod tests {
         assert_eq!(ui.draft, "unsent");
     }
 
-    #[test]
-    fn tool_view_keeps_output_beyond_the_compact_preview() {
-        let output = format!("{}END_MARKER", "x".repeat(4_000));
-        let mut ui = Frontend {
-            tool_details: vec![TranscriptActivity {
-                call_id: "call".into(),
-                name: "exec".into(),
-                activity: ion_core::ToolActivity {
-                    kind: ToolActivityKind::Command,
-                    subject: Some("printf test".into()),
-                },
-                arguments: serde_json::json!({"command":"printf test"}),
-                outcome: ActivityOutcome::Completed,
-                result: Some(ion_core::ActivityResult {
-                    value: serde_json::json!({"stdout": output}),
-                    image_mime_types: Vec::new(),
-                    is_error: false,
-                }),
-            }],
-            ..Frontend::default()
-        };
-        ui.open_tool(None);
-        let view = ui.tool_view.as_ref().unwrap();
-        assert!(view.output.contains("Arguments"));
-        assert!(view.output.contains("printf test"));
-        assert!(view.output.contains("Result"));
-        assert!(view.output.contains("END_MARKER"));
-        assert!(view.output.len() > 2_048);
-    }
     #[test]
     fn file_picker_inserts_a_selected_project_path() {
         let root = std::env::temp_dir().join(format!("ion-files-{}", std::process::id()));

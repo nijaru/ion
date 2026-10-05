@@ -25,6 +25,7 @@ mod external_editor;
 mod rpc;
 mod terminal_client;
 mod transcript;
+mod transcript_detail;
 mod transcript_render;
 
 #[derive(Parser)]

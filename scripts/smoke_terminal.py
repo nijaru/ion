@@ -50,6 +50,8 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
         output = bytearray()
         sent_file_start = selected_file = sent_first = sent_steering = sent_second = resized = sent_tool = closed_tool = sent_compact = sent_clone = sent_controls = sent_login = sent_key = sent_logout = sent_copy = sent_quit = False
         saw_inline_start = False
+        opened_active = closed_active = False
+        active_start = 0
         try:
             while time.monotonic() < deadline:
                 readable, _, _ = select.select([master], [], [], 0.05)
@@ -72,7 +74,15 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                 if selected_file and b"Read @data.txt" in output and not sent_first:
                     os.write(master, b", edit it, create created.txt, then verify both files with shell.\r")
                     sent_first = True
-                if sent_first and trace.exists() and not sent_steering:
+                if sent_first and trace.exists() and not opened_active:
+                    active_start = len(output)
+                    os.write(master, b"\x0f")
+                    opened_active = True
+                if opened_active and not closed_active and b"Conversation" in output[active_start:]:
+                    assert b"Read @data.txt" in output[active_start:], "active first-Turn input missing from conversation detail"
+                    os.write(master, b"\x0f")
+                    closed_active = True
+                if closed_active and b"Details closed" in output[active_start:] and not sent_steering:
                     os.write(master, b"Also check that the updated file has two lines.\r")
                     sent_steering = True
                 if sent_steering and not sent_second:
@@ -92,10 +102,10 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     time.sleep(0.2)
                     os.write(master, b"\x0f")
                     sent_tool = True
-                if sent_tool and b"Tool 4: exec" in output and not closed_tool:
+                if sent_tool and b"Conversation" in output and not closed_tool:
                     os.write(master, b"\x0f")
                     closed_tool = True
-                if closed_tool and b"Tool output closed" in output and not sent_compact:
+                if closed_tool and b"Details closed" in output and not sent_compact:
                     time.sleep(0.2)
                     os.write(master, b"/compact\r")
                     sent_compact = True
@@ -134,6 +144,7 @@ with tempfile.TemporaryDirectory(prefix="ion-terminal-") as temporary:
                     sent_quit = True
                 if child.poll() is not None:
                     break
+            assert closed_active, "Ctrl-O did not open the first-Turn conversation"
             assert child.poll() == 0, f"terminal did not exit cleanly: {child.poll()}; tail={output[-2000:]!r}"
             alt_enters = output.count(b"\x1b[?1049h")
             alt_leaves = output.count(b"\x1b[?1049l")
