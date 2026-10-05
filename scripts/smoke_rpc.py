@@ -126,6 +126,20 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
         assert "Check RPC." in str(requests[0]["messages"])
 
+        send(child, {"id": "fragment-parent", "type": "prompt", "message": "SLOW"})
+        until(child, lambda r: r.get("id") == "fragment-parent")
+        fragmented = json.dumps({"id": "fragment-state", "type": "get_state"}).encode()
+        child.stdin.write(fragmented[:-2])
+        child.stdin.flush()
+        # Progress and completion must not discard an unfinished command frame.
+        records = until(child, lambda r: r["type"] == "turn_end")
+        assert records[-1]["status"] == "completed", records
+        child.stdin.write(fragmented[-2:] + b"\n")
+        child.stdin.flush()
+        state = read(child)
+        assert state.get("id") == "fragment-state" and state["success"], state
+        assert state["data"]["busy"] is False, state
+
         send(child, {"id": "compact", "type": "compact"})
         compact_ack = read(child)
         assert compact_ack["id"] == "compact" and compact_ack["success"]

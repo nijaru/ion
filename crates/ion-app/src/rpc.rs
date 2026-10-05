@@ -5,23 +5,15 @@ use anyhow::{Context, Result, anyhow, bail, ensure};
 use ion_ai::Message;
 use ion_core::{CodingAgentEvent, ForkPoint, SteeringInbox};
 use serde_json::{Value, json};
-use tokio::{
-    io::{AsyncBufRead, AsyncBufReadExt, BufReader},
-    sync::mpsc,
-};
+use tokio::{io::BufReader, sync::mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::{expand_input, preview_input, redact_image_payloads, write_json_record};
 
-const MAX_COMMAND_BYTES: usize = 8 * 1024 * 1024;
-const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
+mod input;
+use input::{CommandReader, Input, MAX_COMMAND_BYTES};
 
-enum Input {
-    Line(Vec<u8>),
-    TooLarge,
-    Incomplete,
-    Eof,
-}
+const MAX_QUEUED_BYTES: usize = 4 * MAX_COMMAND_BYTES;
 
 enum Output {
     Record(Value),
@@ -63,11 +55,11 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
     write_json_record(
         &json!({"type":"ready","session":control.session_id(),"cwd":control.binding.session().cwd()}),
     )?;
-    let mut input = BufReader::new(tokio::io::stdin());
+    let mut input = CommandReader::new(BufReader::new(tokio::io::stdin()));
     let mut closing = false;
     loop {
         tokio::select! {
-            line = read_command(&mut input), if !closing => {
+            line = input.next(), if !closing => {
                 match line? {
                     Input::Line(line) => control.command(&line)?,
                     Input::TooLarge => write_json_record(&failure(None, "parse", "command exceeds 8 MiB"))?,
@@ -94,44 +86,6 @@ pub async fn run(binding: ion_host::SessionBinding) -> Result<()> {
         }
     }
     Ok(())
-}
-
-async fn read_command<R: AsyncBufRead + Unpin>(reader: &mut R) -> Result<Input> {
-    let mut line = Vec::new();
-    let mut too_large = false;
-    loop {
-        let chunk = reader.fill_buf().await?;
-        if chunk.is_empty() {
-            return if line.is_empty() && !too_large {
-                Ok(Input::Eof)
-            } else if too_large {
-                Ok(Input::TooLarge)
-            } else {
-                Ok(Input::Incomplete) // Incomplete trailing records are never executed.
-            };
-        }
-        let end = chunk.iter().position(|byte| *byte == b'\n');
-        let count = end.map_or(chunk.len(), |index| index + 1);
-        if !too_large {
-            if line.len() + count > MAX_COMMAND_BYTES {
-                too_large = true;
-                line.clear();
-            } else {
-                line.extend_from_slice(&chunk[..count]);
-            }
-        }
-        reader.consume(count);
-        if end.is_some() {
-            if too_large {
-                return Ok(Input::TooLarge);
-            }
-            line.pop();
-            if line.last() == Some(&b'\r') {
-                line.pop();
-            }
-            return Ok(Input::Line(line));
-        }
-    }
 }
 
 impl Control {
@@ -644,39 +598,5 @@ mod tests {
 
         drop(control);
         fs::remove_dir_all(root).unwrap();
-    }
-
-    #[tokio::test]
-    async fn framing_is_lf_only_and_recovers_after_oversize() {
-        let mut input = Vec::new();
-        input.extend_from_slice(b"{\"message\":\"a\xE2\x80\xA8b\"}\r\n");
-        input.extend(std::iter::repeat_n(b'x', MAX_COMMAND_BYTES + 1));
-        input.extend_from_slice(b"\n{}\n");
-        let mut reader = BufReader::new(input.as_slice());
-        assert!(matches!(
-            read_command(&mut reader).await.unwrap(),
-            Input::Line(_)
-        ));
-        assert!(matches!(
-            read_command(&mut reader).await.unwrap(),
-            Input::TooLarge
-        ));
-        assert!(
-            matches!(read_command(&mut reader).await.unwrap(), Input::Line(line) if line == b"{}")
-        );
-        assert!(matches!(
-            read_command(&mut reader).await.unwrap(),
-            Input::Eof
-        ));
-
-        let mut incomplete = BufReader::new(b"{\"type\":\"get_state\"}".as_slice());
-        assert!(matches!(
-            read_command(&mut incomplete).await.unwrap(),
-            Input::Incomplete
-        ));
-        assert!(matches!(
-            read_command(&mut incomplete).await.unwrap(),
-            Input::Eof
-        ));
     }
 }
