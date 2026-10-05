@@ -72,6 +72,9 @@ six turns into scrollback and labels omitted earlier history as retained; the
 complete Session remains available through inspect/export and tool detail.
 Publication uses available terminal rows before scrolling. Ordinary redraw and
 resize do not publish live rows; terminal-native reflow remains emulator-owned.
+If terminal rendering fails during a Turn, shell or compaction, Ion requests
+cancellation and awaits the operation before returning the error. Inspect the
+Session for saved outcomes when the terminal can no longer display them.
 After settled history is published, an expanded live band shrinks back to the
 rows the active composer/status actually need. Related tool calls are rendered
 as semantic activity groups with a compact tree (`●`, `├`, `└`) instead of

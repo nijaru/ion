@@ -434,6 +434,9 @@ published. Physical frames contain only live rows; settled rows use explicit
 native publication, consuming available rows before scrolling. Resizing or
 redrawing a live frame is not a publication boundary. The terminal owns native
 reflow; the renderer does not keep a second virtual committed history.
+A rendering failure stops further input/redraw, requests cancellation and
+awaits the active operation. It must not drop a running tool/shell future;
+observed results still reach the Session before the host reports failure.
 
 Persistent fullscreen is an alternate renderer policy over the same
 `TranscriptProjection`, not a second conversation/runtime model. It owns the

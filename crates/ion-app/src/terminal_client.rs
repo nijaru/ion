@@ -886,6 +886,7 @@ async fn run_compaction(
     ui.status = "Summarizing context · Ctrl-C cancels".into();
     let stop = CancellationToken::new();
     let mut input_ended = false;
+    let mut output_error = None;
     let result = {
         let compact = agent.compact(session, model.clone(), stop.clone(), |_| {});
         tokio::pin!(compact);
@@ -909,7 +910,14 @@ async fn run_compaction(
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
-                _ = tick.tick() => { finish_ready_clipboard_paste(ui).await; draw(terminal, screen, ui, None, &model, true)?; },
+                _ = tick.tick(), if output_error.is_none() => {
+                    finish_ready_clipboard_paste(ui).await;
+                    if let Err(error) = draw(terminal, screen, ui, None, &model, true) {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
+                },
             }
         }
     };
@@ -922,6 +930,9 @@ async fn run_compaction(
         Ok(false) => "No settled history to summarize".into(),
         Err(error) => format!("Compaction ended: {error}"),
     };
+    if let Some(error) = output_error {
+        return Err(error.context("terminal output failed after operation settlement"));
+    }
     if input_ended {
         return Err(anyhow::anyhow!("terminal input ended during compaction"));
     }
@@ -1116,6 +1127,7 @@ async fn run_user_shell(
     let stop = CancellationToken::new();
     let mut tick = interval(Duration::from_millis(50));
     let mut input_ended = false;
+    let mut output_error = None;
     ui.status = "Running shell · Ctrl-C cancels".into();
     let output = {
         let running = runtime.run_user_shell(&command, stop.clone(), exclude_from_context);
@@ -1146,7 +1158,14 @@ async fn run_user_shell(
                     }
                     None => { stop.cancel(); input_ended = true; },
                 },
-                _ = tick.tick() => { finish_ready_clipboard_paste(ui).await; draw(terminal, screen, ui, None, &model, true)?; },
+                _ = tick.tick(), if output_error.is_none() => {
+                    finish_ready_clipboard_paste(ui).await;
+                    if let Err(error) = draw(terminal, screen, ui, None, &model, true) {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
+                },
             }
         }
     };
@@ -1161,6 +1180,9 @@ async fn run_user_shell(
         "Shell finished"
     }
     .into();
+    if let Some(error) = output_error {
+        return Err(error.context("terminal output failed after operation settlement"));
+    }
     if input_ended {
         ui.status = "Terminal input ended after the shell result was saved".into();
     }
@@ -1201,6 +1223,7 @@ async fn run_turn(
     let stop = CancellationToken::new();
     let steering = SteeringInbox::default();
     let mut input_ended = false;
+    let mut output_error = None;
     let result = {
         let turn = agent.submit_message_with_steering(
             session,
@@ -1237,10 +1260,14 @@ async fn run_turn(
                     Some(Err(error)) => { stop.cancel(); input_ended = true; ui.status = format!("Input failed: {error}. Cancelling…"); },
                     None => { stop.cancel(); input_ended = true; },
                 },
-                _ = tick.tick() => {
+                _ = tick.tick(), if output_error.is_none() => {
                     finish_ready_clipboard_paste(ui).await;
                     let preview = progress.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    draw(terminal, screen, ui, Some(&preview), &model, true)?;
+                    if let Err(error) = draw(terminal, screen, ui, Some(&preview), &model, true) {
+                        output_error = Some(error);
+                        input_ended = true;
+                        stop.cancel();
+                    }
                 }
             }
         }
@@ -1272,6 +1299,9 @@ async fn run_turn(
         Ok(_) => String::new(),
         Err(error) => format!("Turn ended: {error}"),
     };
+    if let Some(error) = output_error {
+        return Err(error.context("terminal output failed after operation settlement"));
+    }
     if input_ended {
         return Err(anyhow::anyhow!("terminal input ended during the turn"));
     }
