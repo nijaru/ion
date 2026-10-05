@@ -872,7 +872,7 @@ impl Agent {
                                 ..
                             },
                             ..
-                        }) if *output < u64::from(self.limits.max_output_tokens)
+                        }) if *output < u64::from(output_budget)
                     );
                 if ((overflow && !emitted_text) || recoverable_length)
                     && !prefix_bound_continuation
@@ -3145,57 +3145,110 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_output_limit_does_not_trigger_context_recovery() {
-        let root = std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
-        std::fs::create_dir(&root).unwrap();
-        let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
-        let limit = 128;
-        let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::Text("earlier work".into())]),
-            Script::Stream(vec![ModelStreamEvent::Completed(ModelResponse {
-                message: Message {
-                    role: Role::Assistant,
-                    content: vec![Content::Text("unfinished".into())],
-                    provider_replay: None,
-                },
-                usage: Usage::known(100, limit),
-                termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
-                returned_model: None,
-            })]),
-            response(vec![Content::Text("unexpected retry".into())]),
-        ]));
-        let agent =
-            Agent::new(scripts.clone(), Arc::new(TestTools::new(&root))).with_limits(AgentLimits {
-                max_output_tokens: limit as u32,
-                ..AgentLimits::default()
+    async fn full_dispatched_output_budget_does_not_trigger_context_recovery() {
+        struct FillBudget {
+            requests: Mutex<Vec<ModelRequest>>,
+        }
+
+        impl ModelService for FillBudget {
+            fn stream<'a>(
+                &'a self,
+                request: ModelRequest,
+            ) -> BoxFuture<'a, Result<ion_ai::ModelStream, ProviderError>> {
+                Box::pin(async move {
+                    let budget = request.controls.max_output_tokens;
+                    let step = {
+                        let mut requests = self.requests.lock().unwrap();
+                        let step = requests.len();
+                        requests.push(request);
+                        step
+                    };
+                    let (text, termination, output) = match step {
+                        0 => ("earlier work", ResponseTermination::Completed, 1),
+                        1 => (
+                            "unfinished",
+                            ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                            u64::from(budget),
+                        ),
+                        2 => ("unexpected summary", ResponseTermination::Completed, 1),
+                        _ => ("unexpected retry", ResponseTermination::Completed, 1),
+                    };
+                    let event = ModelStreamEvent::Completed(ModelResponse {
+                        message: Message {
+                            role: Role::Assistant,
+                            content: vec![Content::Text(text.into())],
+                            provider_replay: None,
+                        },
+                        usage: Usage::known(100, output),
+                        termination,
+                        returned_model: None,
+                    });
+                    let stream: ion_ai::ModelStream =
+                        Box::pin(futures_util::stream::iter([Ok(event)]));
+                    Ok(stream)
+                })
+            }
+        }
+
+        for (ceiling, window) in [(128, None), (16_384, Some(20_000))] {
+            let root =
+                std::env::temp_dir().join(format!("ion-full-length-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let session = CodingSession::create(root.join("session.sqlite"), &root).unwrap();
+            let model_service = Arc::new(FillBudget {
+                requests: Mutex::new(Vec::new()),
             });
-        agent
-            .submit(
-                &session,
-                model(),
-                "first".into(),
-                "test".into(),
-                CancellationToken::new(),
-                |_| {},
-            )
-            .await
-            .unwrap();
-        let error = agent
-            .submit(
-                &session,
-                model(),
-                "second".into(),
-                "test".into(),
-                CancellationToken::new(),
-                |_| {},
-            )
-            .await
-            .unwrap_err();
-        assert!(matches!(error, AgentError::IncompleteModelResponse));
-        assert_eq!(scripts.requests().len(), 2);
-        assert!(session.view().unwrap().compacted_through.is_none());
-        drop(session);
-        std::fs::remove_dir_all(root).unwrap();
+            let agent = Agent::new(model_service.clone(), Arc::new(TestTools::new(&root)))
+                .with_limits(AgentLimits {
+                    max_output_tokens: ceiling,
+                    context_window_tokens: window,
+                    ..AgentLimits::default()
+                });
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "first".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await
+                .unwrap();
+            let result = agent
+                .submit(
+                    &session,
+                    model(),
+                    "second".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |_| {},
+                )
+                .await;
+            assert!(
+                matches!(result, Err(AgentError::IncompleteModelResponse)),
+                "{result:?}"
+            );
+            let requests = model_service.requests.lock().unwrap();
+            assert_eq!(
+                requests.len(),
+                2,
+                "ordinary output exhaustion must not issue a summary or retry"
+            );
+            let dispatched = requests[1].controls.max_output_tokens;
+            if window.is_some() {
+                assert!(
+                    dispatched < ceiling,
+                    "this case must exercise a context-clamped budget"
+                );
+            } else {
+                assert_eq!(dispatched, ceiling);
+            }
+            assert!(session.view().unwrap().compacted_through.is_none());
+            drop(requests);
+            drop(session);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]
