@@ -70,18 +70,17 @@ impl SteeringInbox {
         session: &Session,
         turn: u64,
         limits: AgentLimits,
-    ) -> Result<(), AgentError> {
+    ) -> Result<Vec<Message>, AgentError> {
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if pending.is_empty() {
-            return Ok(());
+            return Ok(Vec::new());
         }
         validate_steering(&pending, limits)?;
         session.record_steerings(turn, pending.iter().cloned().collect())?;
-        pending.clear();
-        Ok(())
+        Ok(pending.drain(..).collect())
     }
 
     #[expect(
@@ -97,7 +96,7 @@ impl SteeringInbox {
         execution: ModelExecution,
         usage: ion_ai::Usage,
         limits: AgentLimits,
-    ) -> Result<bool, AgentError> {
+    ) -> Result<(bool, Vec<Message>), AgentError> {
         let mut pending = self
             .pending
             .lock()
@@ -111,8 +110,7 @@ impl SteeringInbox {
             usage,
             pending.iter().cloned().collect(),
         )?;
-        pending.clear();
-        Ok(complete)
+        Ok((complete, pending.drain(..).collect()))
     }
 }
 
@@ -733,7 +731,9 @@ impl Agent {
                 return Err(AgentError::Cancelled);
             }
             if let Some(inbox) = steering {
-                inbox.record_pending(session, turn, self.limits)?;
+                for input in inbox.record_pending(session, turn, self.limits)? {
+                    observe(AgentEvent::SteeringCommitted { turn, input });
+                }
             }
             let mut recovered_overflow = false;
             let (generated, tool_catalog, warm_request, warm_request_started) = loop {
@@ -945,6 +945,7 @@ impl Agent {
                 .provider_replay
                 .as_ref()
                 .is_some_and(|replay| replay.prefix_bound);
+            let committed_content = response.message.content.clone();
             if truncated_calls {
                 assistant_seen_in_turn = true;
                 let results = session.record_truncated_assistant(
@@ -954,6 +955,12 @@ impl Agent {
                     execution.clone(),
                     response.usage,
                 )?;
+                observe(AgentEvent::AssistantCommitted {
+                    turn,
+                    content: committed_content,
+                    tool_activities,
+                    termination: response.termination,
+                });
                 for result in results {
                     let activity = calls
                         .iter()
@@ -994,18 +1001,20 @@ impl Agent {
             // Steering arriving during a tool stays in the host inbox until
             // the tool result is durable. A final answer and its queued
             // steering enter the Session together or neither does.
-            let complete = if calls.is_empty() {
-                if let Some(inbox) = steering {
-                    inbox.record_assistant(
-                        session,
-                        turn,
-                        response.message,
-                        tool_activities.clone(),
-                        execution.clone(),
-                        response.usage,
-                        self.limits,
-                    )?
-                } else {
+            let (complete, committed_steering) = if calls.is_empty()
+                && let Some(inbox) = steering
+            {
+                inbox.record_assistant(
+                    session,
+                    turn,
+                    response.message,
+                    tool_activities.clone(),
+                    execution.clone(),
+                    response.usage,
+                    self.limits,
+                )?
+            } else {
+                (
                     session.record_assistant_with_activities(
                         turn,
                         response.message,
@@ -1013,18 +1022,19 @@ impl Agent {
                         execution.clone(),
                         response.usage,
                         false,
-                    )?
-                }
-            } else {
-                session.record_assistant_with_activities(
-                    turn,
-                    response.message,
-                    tool_activities.clone(),
-                    execution.clone(),
-                    response.usage,
-                    false,
-                )?
+                    )?,
+                    Vec::new(),
+                )
             };
+            observe(AgentEvent::AssistantCommitted {
+                turn,
+                content: committed_content,
+                tool_activities,
+                termination: response.termination,
+            });
+            for input in committed_steering {
+                observe(AgentEvent::SteeringCommitted { turn, input });
+            }
             assistant_seen_in_turn = true;
             if complete {
                 observe(AgentEvent::Final(final_text.clone()));
@@ -1134,7 +1144,20 @@ pub enum AgentEvent {
     TurnAccepted {
         turn: u64,
     },
+    /// Provisional text for the current response only.
     TextDelta(String),
+    /// Published after the assistant's complete content and call metadata commit.
+    AssistantCommitted {
+        turn: u64,
+        content: Vec<Content>,
+        tool_activities: Vec<StoredToolActivity>,
+        termination: ResponseTermination,
+    },
+    /// Published after steering enters the Session, in durable order.
+    SteeringCommitted {
+        turn: u64,
+        input: Message,
+    },
     ProviderRetry {
         attempt: usize,
         max_retries: usize,
@@ -2440,6 +2463,7 @@ mod tests {
         });
         let steering = SteeringInbox::default();
         let prompt = "\0".repeat(11 * 1024 * 1024);
+        let mut published = 0;
         let result = agent
             .submit_with_steering(
                 &session,
@@ -2449,6 +2473,13 @@ mod tests {
                 CancellationToken::new(),
                 &steering,
                 |event| {
+                    if matches!(
+                        &event,
+                        AgentEvent::AssistantCommitted { .. }
+                            | AgentEvent::SteeringCommitted { .. }
+                    ) {
+                        published += 1;
+                    }
                     if matches!(event, AgentEvent::TextDelta(_)) {
                         steering.push(prompt.clone());
                     }
@@ -2457,6 +2488,10 @@ mod tests {
             .await;
         assert!(matches!(result, Err(AgentError::Session(_))));
         assert_eq!(steering.take_uncommitted(), vec![user_text(prompt)]);
+        assert_eq!(
+            published, 0,
+            "failed commit cannot publish authoritative facts"
+        );
         let entries = session.view().unwrap().entries;
         assert_eq!(
             entries
@@ -2547,6 +2582,165 @@ mod tests {
             ]
         );
         drop(session);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn committed_transcript_survives_steering_and_response_restart() {
+        use crate::{LiveTranscript, SessionEntry, TranscriptItem, TranscriptProjection};
+
+        let root =
+            std::env::temp_dir().join(format!("ion-transcript-restart-{}", uuid::Uuid::now_v7()));
+        std::fs::create_dir(&root).unwrap();
+        let path = root.join("session.sqlite");
+        let session = CodingSession::create(&path, &root).unwrap();
+        let scripts = Arc::new(ScriptedModelService::new([
+            response(vec![Content::Text("earlier work".into())]),
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("first".into()),
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("first".into())],
+                        provider_replay: None,
+                    },
+                    usage: Usage::unknown(),
+                    termination: ResponseTermination::Completed,
+                    returned_model: None,
+                }),
+            ]),
+            Script::Stream(vec![
+                ModelStreamEvent::TextDelta("discard this attempt".into()),
+                ModelStreamEvent::Completed(ModelResponse {
+                    message: Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("discard this attempt".into())],
+                        provider_replay: None,
+                    },
+                    usage: Usage::known(100, 10),
+                    termination: ResponseTermination::Incomplete(IncompleteReason::MaxOutputTokens),
+                    returned_model: None,
+                }),
+            ]),
+            response(vec![Content::Text("Earlier work summarized.".into())]),
+            response(vec![Content::Text("second".into())]),
+        ]));
+        let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
+        agent
+            .submit(
+                &session,
+                model(),
+                "earlier".into(),
+                "test".into(),
+                CancellationToken::new(),
+                |_| {},
+            )
+            .await
+            .unwrap();
+
+        let input = user_text("start".into());
+        let mut live = LiveTranscript::with_user_input(&input);
+        let steering = SteeringInbox::default();
+        steering.push("queued before the first step".into());
+        let mut restarted = false;
+        let answer = agent
+            .submit_with_steering(
+                &session,
+                model(),
+                "start".into(),
+                "test".into(),
+                CancellationToken::new(),
+                &steering,
+                |event| {
+                    if matches!(&event, AgentEvent::TextDelta(text) if text == "first") {
+                        steering.push("after the first answer".into());
+                    }
+                    let restart = matches!(&event, AgentEvent::ResponseRestarted);
+                    live.observe(event);
+                    if restart {
+                        restarted = true;
+                        let view = session.view().unwrap();
+                        let turn = view.unfinished_turn.unwrap();
+                        let committed = TranscriptProjection::from_session(&view);
+                        let prefix = committed
+                            .items
+                            .into_iter()
+                            .filter(|item| match item {
+                                TranscriptItem::User(message)
+                                | TranscriptItem::Assistant(message) => message.turn == Some(turn),
+                                TranscriptItem::ActivityGroup(group) => group.turn == turn,
+                                TranscriptItem::UserShell(_) => false,
+                            })
+                            .collect::<Vec<_>>();
+                        assert_eq!(
+                            live.projection().items,
+                            prefix,
+                            "restart must retain committed assistant and steering"
+                        );
+                    }
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(answer, "second");
+        assert!(restarted);
+        assert!(steering.take_uncommitted().is_empty());
+        let requests = scripts.requests();
+        assert_eq!(requests.len(), 5);
+        assert!(requests[3].tools.is_empty());
+        let turn = session
+            .view()
+            .unwrap()
+            .entries
+            .iter()
+            .rev()
+            .find_map(|entry| match entry {
+                SessionEntry::TurnStarted { turn, .. } => Some(*turn),
+                _ => None,
+            })
+            .unwrap();
+        drop(session);
+        let reopened = CodingSession::open(&path).unwrap();
+        let durable = TranscriptProjection::from_session(&reopened.view().unwrap());
+        let items = durable
+            .items
+            .into_iter()
+            .filter(|item| match item {
+                TranscriptItem::User(message) | TranscriptItem::Assistant(message) => {
+                    message.turn == Some(turn)
+                }
+                TranscriptItem::ActivityGroup(group) => group.turn == turn,
+                TranscriptItem::UserShell(_) => false,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(live.projection().items, items);
+        let visible = live
+            .projection()
+            .items
+            .iter()
+            .map(|item| {
+                let (role, message) = match item {
+                    TranscriptItem::User(message) => ("user", message),
+                    TranscriptItem::Assistant(message) => ("assistant", message),
+                    _ => panic!("this Turn has only conversation messages"),
+                };
+                let [crate::TranscriptPart::Text(text)] = message.parts.as_slice() else {
+                    panic!("expected one text part");
+                };
+                (role, message.steering, text.as_str())
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            visible,
+            [
+                ("user", false, "start"),
+                ("user", true, "queued before the first step"),
+                ("assistant", false, "first"),
+                ("user", true, "after the first answer"),
+                ("assistant", false, "second"),
+            ]
+        );
+        drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
     }
 
@@ -2658,23 +2852,29 @@ mod tests {
 
     #[tokio::test]
     async fn steering_is_recorded_before_the_next_model_step_in_one_turn() {
+        use crate::{LiveTranscript, TranscriptProjection};
+
         let root = std::env::temp_dir().join(format!("ion-steering-{}", uuid::Uuid::now_v7()));
         std::fs::create_dir(&root).unwrap();
         let path = root.join("session.sqlite");
         let session = CodingSession::create(&path, &root).unwrap();
         let scripts = Arc::new(ScriptedModelService::new([
-            response(vec![Content::ToolCall(ToolCall {
-                id: "call-1".into(),
-                name: "read".into(),
-                arguments: serde_json::json!({"path":"file.txt"}),
-                raw_arguments: None,
-            })]),
+            response(vec![
+                Content::Text("Before the call".into()),
+                Content::ToolCall(ToolCall {
+                    id: "call-1".into(),
+                    name: "read".into(),
+                    arguments: serde_json::json!({"path":"file.txt"}),
+                    raw_arguments: None,
+                }),
+                Content::Text("After the call".into()),
+            ]),
             response(vec![Content::Text("done".into())]),
         ]));
         std::fs::write(root.join("file.txt"), "content").unwrap();
         let agent = Agent::new(scripts.clone(), Arc::new(TestTools::new(&root)));
         let steering = Arc::new(SteeringInbox::default());
-        let sender = steering.clone();
+        let mut live = LiveTranscript::with_user_input(&user_text("read file".into()));
         agent
             .submit_with_steering(
                 &session,
@@ -2683,10 +2883,11 @@ mod tests {
                 "test".into(),
                 CancellationToken::new(),
                 &steering,
-                move |event| {
-                    if matches!(event, AgentEvent::ToolFinished { .. }) {
-                        sender.push("also check the content".into());
+                |event| {
+                    if matches!(&event, AgentEvent::ToolFinished { .. }) {
+                        steering.push("also check the content".into());
                     }
+                    live.observe(event);
                 },
             )
             .await
@@ -2713,6 +2914,10 @@ mod tests {
                 .filter(|entry| matches!(entry, crate::session::SessionEntry::TurnStarted { .. }))
                 .count(),
             1
+        );
+        assert_eq!(
+            *live.projection(),
+            TranscriptProjection::from_session(&session.view().unwrap())
         );
         drop(session);
         std::fs::remove_dir_all(root).unwrap();

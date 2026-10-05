@@ -55,7 +55,8 @@ pub struct TranscriptActivity {
 pub struct ActivityGroup {
     pub turn: u64,
     pub activities: Vec<TranscriptActivity>,
-    /// Live groups stay mutable until visible assistant narrative closes them.
+    /// Whether subsequent silent calls can join this presentation group.
+    /// Closed groups can still have pending outcomes; this is not immutability.
     pub open: bool,
 }
 
@@ -82,19 +83,14 @@ pub struct TranscriptProjection {
 
 impl TranscriptProjection {
     pub fn from_session(view: &SessionView) -> Self {
-        let mut items = Vec::new();
-        let mut active_group: Option<(u64, usize)> = None;
-        let mut calls: HashMap<(u64, String), (usize, usize)> = HashMap::new();
-
+        let mut builder = TranscriptBuilder::default();
         for entry in &view.entries {
             match entry {
                 SessionEntry::TurnStarted { turn, input, .. } => {
-                    active_group = None;
-                    push_message(&mut items, *turn, false, input, true);
+                    builder.push_user(Some(*turn), false, input);
                 }
                 SessionEntry::Steering { turn, input } => {
-                    active_group = None;
-                    push_message(&mut items, *turn, true, input, true);
+                    builder.push_user(Some(*turn), true, input);
                 }
                 SessionEntry::Assistant {
                     turn,
@@ -102,78 +98,18 @@ impl TranscriptProjection {
                     tool_activities,
                     termination,
                     ..
-                } => {
-                    for content in &message.content {
-                        match content {
-                            Content::Text(text) if !text.trim().is_empty() => {
-                                active_group = None;
-                                items.push(TranscriptItem::Assistant(TranscriptMessage {
-                                    turn: Some(*turn),
-                                    steering: false,
-                                    parts: vec![TranscriptPart::Text(text.clone())],
-                                }));
-                            }
-                            Content::Image(image) => {
-                                active_group = None;
-                                items.push(TranscriptItem::Assistant(TranscriptMessage {
-                                    turn: Some(*turn),
-                                    steering: false,
-                                    parts: vec![TranscriptPart::Image {
-                                        mime_type: image.mime_type().as_str().to_owned(),
-                                    }],
-                                }));
-                            }
-                            Content::ToolCall(call) => {
-                                let group_index =
-                                    ensure_group(&mut items, &mut active_group, *turn, false);
-                                let activity = tool_activities
-                                    .iter()
-                                    .find(|stored| stored.call_id == call.id)
-                                    .map_or_else(
-                                        || ToolActivity::external(&call.name),
-                                        |stored| stored.activity.clone(),
-                                    );
-                                let activity_index = match &mut items[group_index] {
-                                    TranscriptItem::ActivityGroup(group) => {
-                                        let index = group.activities.len();
-                                        group.activities.push(TranscriptActivity {
-                                            call_id: call.id.clone(),
-                                            name: call.name.clone(),
-                                            activity,
-                                            arguments: call.arguments.clone(),
-                                            outcome: if matches!(
-                                                termination,
-                                                ResponseTermination::Completed
-                                            ) {
-                                                ActivityOutcome::Pending
-                                            } else {
-                                                ActivityOutcome::Rejected
-                                            },
-                                            result: None,
-                                        });
-                                        index
-                                    }
-                                    _ => unreachable!("ensure_group returns an activity group"),
-                                };
-                                calls.insert(
-                                    (*turn, call.id.clone()),
-                                    (group_index, activity_index),
-                                );
-                            }
-                            Content::Text(_) | Content::ToolResult(_) => {}
-                        }
-                    }
-                }
+                } => builder.push_assistant(
+                    *turn,
+                    &message.content,
+                    tool_activities,
+                    termination,
+                    false,
+                ),
                 SessionEntry::ToolResult { turn, result } => {
-                    if let Some(&(group_index, activity_index)) =
-                        calls.get(&(*turn, result.call_id.clone()))
-                        && let TranscriptItem::ActivityGroup(group) = &mut items[group_index]
-                        && let Some(activity) = group.activities.get_mut(activity_index)
-                    {
-                        if activity.outcome != ActivityOutcome::Rejected {
-                            activity.outcome = result_outcome(result.is_error, &result.result);
-                        }
-                        activity.result = Some(ActivityResult {
+                    builder.push_result(
+                        *turn,
+                        &result.call_id,
+                        ActivityResult {
                             value: result.result.clone(),
                             image_mime_types: result
                                 .images
@@ -181,8 +117,8 @@ impl TranscriptProjection {
                                 .map(|image| image.mime_type().as_str().to_owned())
                                 .collect(),
                             is_error: result.is_error,
-                        });
-                    }
+                        },
+                    );
                 }
                 SessionEntry::UserShell {
                     command,
@@ -190,15 +126,18 @@ impl TranscriptProjection {
                     is_error,
                     exclude_from_context,
                 } => {
-                    active_group = None;
-                    items.push(TranscriptItem::UserShell(UserShellActivity {
-                        command: command.clone(),
-                        output: output.clone(),
-                        is_error: *is_error,
-                        exclude_from_context: *exclude_from_context,
-                    }));
+                    builder.close_group();
+                    builder
+                        .projection
+                        .items
+                        .push(TranscriptItem::UserShell(UserShellActivity {
+                            command: command.clone(),
+                            output: output.clone(),
+                            is_error: *is_error,
+                            exclude_from_context: *exclude_from_context,
+                        }));
                 }
-                SessionEntry::TurnEnded { .. } => active_group = None,
+                SessionEntry::TurnEnded { .. } => builder.close_group(),
                 SessionEntry::ModelSelected { .. }
                 | SessionEntry::EffectiveModelChanged { .. }
                 | SessionEntry::ProviderReplayRebased { .. }
@@ -207,8 +146,7 @@ impl TranscriptProjection {
                 | SessionEntry::Compacted { .. } => {}
             }
         }
-
-        for item in &mut items {
+        for item in &mut builder.projection.items {
             if let TranscriptItem::ActivityGroup(group) = item {
                 group.open = false;
                 for activity in &mut group.activities {
@@ -218,7 +156,133 @@ impl TranscriptProjection {
                 }
             }
         }
-        Self { items }
+        builder.projection
+    }
+}
+
+/// Shared ordering and grouping of committed facts. Streaming text never enters
+/// this call index; only the live projection owns a removable provisional tail.
+#[derive(Debug, Default)]
+struct TranscriptBuilder {
+    projection: TranscriptProjection,
+    active_group: Option<(u64, usize)>,
+    calls: HashMap<(u64, String), (usize, usize)>,
+}
+
+impl TranscriptBuilder {
+    fn push_user(&mut self, turn: Option<u64>, steering: bool, input: &Message) {
+        self.close_group();
+        let parts = visible_parts(input);
+        if !parts.is_empty() {
+            self.projection
+                .items
+                .push(TranscriptItem::User(TranscriptMessage {
+                    turn,
+                    steering,
+                    parts,
+                }));
+        }
+    }
+
+    fn push_assistant(
+        &mut self,
+        turn: u64,
+        content: &[Content],
+        tool_activities: &[crate::StoredToolActivity],
+        termination: &ResponseTermination,
+        open: bool,
+    ) {
+        for part in content {
+            let visible = match part {
+                Content::Text(text) if !text.trim().is_empty() => {
+                    Some(TranscriptPart::Text(text.clone()))
+                }
+                Content::Image(image) => Some(TranscriptPart::Image {
+                    mime_type: image.mime_type().as_str().to_owned(),
+                }),
+                _ => None,
+            };
+            if let Some(part) = visible {
+                self.close_group();
+                self.projection
+                    .items
+                    .push(TranscriptItem::Assistant(TranscriptMessage {
+                        turn: Some(turn),
+                        steering: false,
+                        parts: vec![part],
+                    }));
+            } else if let Content::ToolCall(call) = part {
+                let group_index = self.ensure_group(turn, open);
+                let stored = tool_activities
+                    .iter()
+                    .find(|stored| stored.call_id == call.id)
+                    .expect("Session validates activity metadata before committing an assistant");
+                let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index]
+                else {
+                    unreachable!("ensure_group returns an activity group");
+                };
+                let activity_index = group.activities.len();
+                group.activities.push(TranscriptActivity {
+                    call_id: call.id.clone(),
+                    name: call.name.clone(),
+                    activity: stored.activity.clone(),
+                    arguments: call.arguments.clone(),
+                    outcome: if matches!(termination, ResponseTermination::Completed) {
+                        ActivityOutcome::Pending
+                    } else {
+                        ActivityOutcome::Rejected
+                    },
+                    result: None,
+                });
+                self.calls
+                    .insert((turn, call.id.clone()), (group_index, activity_index));
+            }
+        }
+    }
+
+    fn push_result(&mut self, turn: u64, call_id: &str, result: ActivityResult) {
+        let &(group_index, activity_index) = self
+            .calls
+            .get(&(turn, call_id.to_owned()))
+            .expect("Session commits the assistant call before its result");
+        let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index] else {
+            unreachable!("call index points to an activity group");
+        };
+        let activity = &mut group.activities[activity_index];
+        if activity.outcome != ActivityOutcome::Rejected {
+            activity.outcome = result_outcome(result.is_error, &result.value);
+        }
+        activity.result = Some(result);
+    }
+
+    fn ensure_group(&mut self, turn: u64, open: bool) -> usize {
+        if let Some((active_turn, index)) = self.active_group
+            && active_turn == turn
+        {
+            if let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index] {
+                group.open |= open;
+            }
+            return index;
+        }
+        self.close_group();
+        let index = self.projection.items.len();
+        self.projection
+            .items
+            .push(TranscriptItem::ActivityGroup(ActivityGroup {
+                turn,
+                activities: Vec::new(),
+                open,
+            }));
+        self.active_group = Some((turn, index));
+        index
+    }
+
+    fn close_group(&mut self) {
+        if let Some((_, index)) = self.active_group.take()
+            && let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index]
+        {
+            group.open = false;
+        }
     }
 }
 
@@ -234,53 +298,6 @@ fn visible_parts(message: &Message) -> Vec<TranscriptPart> {
             Content::Text(_) | Content::ToolCall(_) | Content::ToolResult(_) => None,
         })
         .collect()
-}
-
-fn push_message(
-    items: &mut Vec<TranscriptItem>,
-    turn: u64,
-    steering: bool,
-    message: &Message,
-    user: bool,
-) {
-    let parts = visible_parts(message);
-    if parts.is_empty() {
-        return;
-    }
-    let message = TranscriptMessage {
-        turn: Some(turn),
-        steering,
-        parts,
-    };
-    items.push(if user {
-        TranscriptItem::User(message)
-    } else {
-        TranscriptItem::Assistant(message)
-    });
-}
-
-fn ensure_group(
-    items: &mut Vec<TranscriptItem>,
-    active_group: &mut Option<(u64, usize)>,
-    turn: u64,
-    open: bool,
-) -> usize {
-    if let Some((active_turn, index)) = *active_group
-        && active_turn == turn
-    {
-        if let TranscriptItem::ActivityGroup(group) = &mut items[index] {
-            group.open |= open;
-        }
-        return index;
-    }
-    let index = items.len();
-    items.push(TranscriptItem::ActivityGroup(ActivityGroup {
-        turn,
-        activities: Vec::new(),
-        open,
-    }));
-    *active_group = Some((turn, index));
-    index
 }
 
 fn result_outcome(is_error: bool, value: &Value) -> ActivityOutcome {
@@ -316,41 +333,27 @@ fn live_result(output: ToolOutput) -> ActivityResult {
     }
 }
 
-/// Mutable projection for one active Turn. It keeps a silent multi-step tool
-/// phase in one open group and closes that group when visible narrative begins.
+/// One active Turn's committed projection plus a removable streamed response.
+/// Feed all events in order, starting with TurnAccepted. Commit events replace
+/// provisional text; restart never removes committed assistant or steering.
 #[derive(Debug, Default)]
 pub struct LiveTranscript {
     turn: Option<u64>,
-    projection: TranscriptProjection,
-    active_group: Option<usize>,
+    builder: TranscriptBuilder,
     current_text: Option<usize>,
-    group_closed_for_partial_text: Option<usize>,
-    calls: HashMap<String, (usize, usize)>,
+    group_closed_for_partial_text: Option<(u64, usize)>,
     notices: Vec<String>,
 }
 
 impl LiveTranscript {
     pub fn with_user_input(input: &Message) -> Self {
-        let parts = visible_parts(input);
-        let projection = if parts.is_empty() {
-            TranscriptProjection::default()
-        } else {
-            TranscriptProjection {
-                items: vec![TranscriptItem::User(TranscriptMessage {
-                    turn: None,
-                    steering: false,
-                    parts,
-                })],
-            }
-        };
-        Self {
-            projection,
-            ..Self::default()
-        }
+        let mut live = Self::default();
+        live.builder.push_user(None, false, input);
+        live
     }
 
     pub fn projection(&self) -> &TranscriptProjection {
-        &self.projection
+        &self.builder.projection
     }
 
     pub fn notices(&self) -> &[String] {
@@ -361,21 +364,28 @@ impl LiveTranscript {
         match event {
             AgentEvent::TurnAccepted { turn } => {
                 self.turn = Some(turn);
-                for item in &mut self.projection.items {
-                    match item {
-                        TranscriptItem::User(message) | TranscriptItem::Assistant(message)
-                            if message.turn.is_none() =>
-                        {
-                            message.turn = Some(turn);
-                        }
-                        TranscriptItem::ActivityGroup(group) if group.turn == 0 => {
-                            group.turn = turn;
-                        }
-                        _ => {}
+                for item in &mut self.builder.projection.items {
+                    if let TranscriptItem::User(message) = item
+                        && message.turn.is_none()
+                    {
+                        message.turn = Some(turn);
                     }
                 }
             }
             AgentEvent::TextDelta(text) => self.push_text(text),
+            AgentEvent::AssistantCommitted {
+                turn,
+                content,
+                tool_activities,
+                termination,
+            } => {
+                self.restart_partial_response();
+                self.builder
+                    .push_assistant(turn, &content, &tool_activities, &termination, true);
+            }
+            AgentEvent::SteeringCommitted { turn, input } => {
+                self.builder.push_user(Some(turn), true, &input);
+            }
             AgentEvent::ProviderRetry {
                 attempt,
                 max_retries,
@@ -403,60 +413,23 @@ impl LiveTranscript {
             AgentEvent::ToolCatalogWarning(message) => {
                 self.note(format!("Tool catalog: {message}"));
             }
-            AgentEvent::ToolStarted {
-                call_id,
-                name,
-                arguments,
-                activity,
-            } => {
-                self.commit_partial_text_boundary();
-                let group_index = self.ensure_live_group();
-                let activity_index = match &mut self.projection.items[group_index] {
-                    TranscriptItem::ActivityGroup(group) => {
-                        let index = group.activities.len();
-                        group.activities.push(TranscriptActivity {
-                            call_id: call_id.clone(),
-                            name,
-                            activity,
-                            arguments,
-                            outcome: ActivityOutcome::Pending,
-                            result: None,
-                        });
-                        index
-                    }
-                    _ => unreachable!("live group index is an activity group"),
-                };
-                self.calls.insert(call_id, (group_index, activity_index));
-            }
+            // Call content and metadata are already projected by the commit.
+            // Start is execution progress, not another authoritative call.
+            AgentEvent::ToolStarted { .. } => {}
             AgentEvent::ToolFinished {
-                call_id,
-                name,
-                activity,
-                output,
-            } => {
-                self.commit_partial_text_boundary();
-                let outcome = result_outcome(output.is_error, &output.value);
-                let result = live_result(output);
-                self.finish_or_insert(call_id, name, activity, outcome, result);
+                call_id, output, ..
             }
-            AgentEvent::ToolRejected {
-                call_id,
-                name,
-                activity,
-                output,
+            | AgentEvent::ToolRejected {
+                call_id, output, ..
             } => {
-                self.commit_partial_text_boundary();
-                let result = live_result(output);
-                self.finish_or_insert(call_id, name, activity, ActivityOutcome::Rejected, result);
+                let turn = self.turn.expect("tool progress follows TurnAccepted");
+                self.builder
+                    .push_result(turn, &call_id, live_result(output));
             }
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
             )),
-            AgentEvent::Final(_) => {
-                self.close_group();
-                self.current_text = None;
-                self.group_closed_for_partial_text = None;
-            }
+            AgentEvent::Final(_) => self.builder.close_group(),
         }
     }
 
@@ -465,16 +438,11 @@ impl LiveTranscript {
             return;
         }
         if self.current_text.is_none() {
-            if let Some(group_index) = self.active_group.take() {
-                if let TranscriptItem::ActivityGroup(group) =
-                    &mut self.projection.items[group_index]
-                {
-                    group.open = false;
-                }
-                self.group_closed_for_partial_text = Some(group_index);
-            }
-            let index = self.projection.items.len();
-            self.projection
+            self.group_closed_for_partial_text = self.builder.active_group;
+            self.builder.close_group();
+            let index = self.builder.projection.items.len();
+            self.builder
+                .projection
                 .items
                 .push(TranscriptItem::Assistant(TranscriptMessage {
                     turn: self.turn,
@@ -484,89 +452,28 @@ impl LiveTranscript {
             self.current_text = Some(index);
         }
         if let Some(index) = self.current_text
-            && let TranscriptItem::Assistant(message) = &mut self.projection.items[index]
+            && let TranscriptItem::Assistant(message) = &mut self.builder.projection.items[index]
             && let Some(TranscriptPart::Text(current)) = message.parts.first_mut()
         {
             current.push_str(&text);
         }
     }
 
-    fn commit_partial_text_boundary(&mut self) {
-        self.current_text = None;
-        self.group_closed_for_partial_text = None;
-    }
-
     fn restart_partial_response(&mut self) {
-        if let Some(index) = self.current_text.take()
-            && index + 1 == self.projection.items.len()
-        {
-            self.projection.items.pop();
+        if let Some(index) = self.current_text.take() {
+            assert_eq!(
+                index + 1,
+                self.builder.projection.items.len(),
+                "provisional text is always the last transcript item"
+            );
+            self.builder.projection.items.pop();
         }
-        if let Some(group_index) = self.group_closed_for_partial_text.take() {
-            if let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index] {
+        if let Some((turn, index)) = self.group_closed_for_partial_text.take() {
+            if let TranscriptItem::ActivityGroup(group) = &mut self.builder.projection.items[index]
+            {
                 group.open = true;
             }
-            self.active_group = Some(group_index);
-        }
-    }
-
-    fn ensure_live_group(&mut self) -> usize {
-        if let Some(index) = self.active_group {
-            return index;
-        }
-        let index = self.projection.items.len();
-        self.projection
-            .items
-            .push(TranscriptItem::ActivityGroup(ActivityGroup {
-                turn: self.turn.unwrap_or(0),
-                activities: Vec::new(),
-                open: true,
-            }));
-        self.active_group = Some(index);
-        index
-    }
-
-    fn finish_or_insert(
-        &mut self,
-        call_id: String,
-        name: String,
-        activity: ToolActivity,
-        outcome: ActivityOutcome,
-        result: ActivityResult,
-    ) {
-        if let Some(&(group_index, activity_index)) = self.calls.get(&call_id)
-            && let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[group_index]
-            && let Some(item) = group.activities.get_mut(activity_index)
-        {
-            item.outcome = outcome;
-            item.result = Some(result);
-            return;
-        }
-
-        let group_index = self.ensure_live_group();
-        let activity_index = match &mut self.projection.items[group_index] {
-            TranscriptItem::ActivityGroup(group) => {
-                let index = group.activities.len();
-                group.activities.push(TranscriptActivity {
-                    call_id: call_id.clone(),
-                    name,
-                    activity,
-                    arguments: Value::Null,
-                    outcome,
-                    result: Some(result),
-                });
-                index
-            }
-            _ => unreachable!("live group index is an activity group"),
-        };
-        self.calls.insert(call_id, (group_index, activity_index));
-    }
-
-    fn close_group(&mut self) {
-        if let Some(index) = self.active_group.take()
-            && let TranscriptItem::ActivityGroup(group) = &mut self.projection.items[index]
-        {
-            group.open = false;
+            self.builder.active_group = Some((turn, index));
         }
     }
 
@@ -750,24 +657,43 @@ mod tests {
         }));
     }
 
+    fn committed(turn: u64, content: Vec<Content>) -> AgentEvent {
+        let SessionEntry::Assistant {
+            message,
+            tool_activities,
+            termination,
+            ..
+        } = assistant(turn, content)
+        else {
+            unreachable!()
+        };
+        AgentEvent::AssistantCommitted {
+            turn,
+            content: message.content,
+            tool_activities,
+            termination,
+        }
+    }
+
     #[test]
     fn live_projection_reopens_a_group_when_partial_text_is_restarted() {
         let mut live = LiveTranscript::default();
         live.observe(AgentEvent::TurnAccepted { turn: 7 });
-        let read = ToolActivity {
-            kind: ToolActivityKind::Read,
-            subject: Some("src/lib.rs".into()),
-        };
-        live.observe(AgentEvent::ToolStarted {
-            call_id: "read-1".into(),
-            name: "read".into(),
-            arguments: serde_json::json!({"path":"src/lib.rs"}),
-            activity: read.clone(),
-        });
+        live.observe(committed(
+            7,
+            vec![call(
+                "read-1",
+                "read",
+                serde_json::json!({"path":"src/lib.rs"}),
+            )],
+        ));
         live.observe(AgentEvent::ToolFinished {
             call_id: "read-1".into(),
             name: "read".into(),
-            activity: read,
+            activity: ToolActivity {
+                kind: ToolActivityKind::Read,
+                subject: Some("src/lib.rs".into()),
+            },
             output: ToolOutput {
                 value: serde_json::json!({"path":"src/lib.rs"}),
                 images: Vec::new(),
@@ -776,6 +702,15 @@ mod tests {
         });
         live.observe(AgentEvent::TextDelta("discard me".into()));
         live.observe(AgentEvent::ResponseRestarted);
+        live.observe(committed(
+            7,
+            vec![call(
+                "read-2",
+                "read",
+                serde_json::json!({"path":"src/main.rs"}),
+            )],
+        ));
+        // Progress must not duplicate the already committed call.
         live.observe(AgentEvent::ToolStarted {
             call_id: "read-2".into(),
             name: "read".into(),
@@ -785,28 +720,23 @@ mod tests {
                 subject: Some("src/main.rs".into()),
             },
         });
-
-        assert_eq!(live.projection.items.len(), 1);
-        let TranscriptItem::ActivityGroup(group) = &live.projection.items[0] else {
+        assert_eq!(live.projection().items.len(), 1);
+        let TranscriptItem::ActivityGroup(group) = &live.projection().items[0] else {
             panic!("expected one activity group");
         };
         assert!(group.open);
         assert_eq!(group.activities.len(), 2);
+        assert_eq!(group.activities[0].outcome, ActivityOutcome::Completed);
     }
 
     #[test]
-    fn live_visible_text_splits_the_next_tool_group() {
+    fn live_committed_text_splits_the_next_tool_group() {
         let mut live = LiveTranscript::default();
         live.observe(AgentEvent::TurnAccepted { turn: 3 });
-        live.observe(AgentEvent::ToolStarted {
-            call_id: "one".into(),
-            name: "read".into(),
-            arguments: serde_json::json!({"path":"one.rs"}),
-            activity: ToolActivity {
-                kind: ToolActivityKind::Read,
-                subject: Some("one.rs".into()),
-            },
-        });
+        live.observe(committed(
+            3,
+            vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
+        ));
         live.observe(AgentEvent::ToolFinished {
             call_id: "one".into(),
             name: "read".into(),
@@ -820,28 +750,26 @@ mod tests {
                 is_error: false,
             },
         });
-        live.observe(AgentEvent::TextDelta("Now editing.".into()));
-        live.observe(AgentEvent::ToolStarted {
-            call_id: "two".into(),
-            name: "edit".into(),
-            arguments: serde_json::json!({"path":"two.rs"}),
-            activity: ToolActivity {
-                kind: ToolActivityKind::Edit,
-                subject: Some("two.rs".into()),
-            },
-        });
-
-        assert_eq!(live.projection.items.len(), 3);
+        live.observe(AgentEvent::TextDelta("provisional".into()));
+        live.observe(committed(
+            3,
+            vec![
+                Content::Text("Now editing.".into()),
+                call("two", "edit", serde_json::json!({"path":"two.rs"})),
+            ],
+        ));
+        assert_eq!(live.projection().items.len(), 3);
         assert!(matches!(
-            &live.projection.items[0],
+            &live.projection().items[0],
             TranscriptItem::ActivityGroup(ActivityGroup { open: false, .. })
         ));
         assert!(matches!(
-            &live.projection.items[1],
-            TranscriptItem::Assistant(_)
+            &live.projection().items[1],
+            TranscriptItem::Assistant(TranscriptMessage { parts, .. })
+                if parts == &vec![TranscriptPart::Text("Now editing.".into())]
         ));
         assert!(matches!(
-            &live.projection.items[2],
+            &live.projection().items[2],
             TranscriptItem::ActivityGroup(ActivityGroup { open: true, .. })
         ));
     }

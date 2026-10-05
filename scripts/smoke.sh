@@ -108,6 +108,13 @@ assert events[-1] == {'type': 'run_end', 'status': 'completed'}
 started = [event['call_id'] for event in events if event['type'] == 'tool_started']
 finished = [event['call_id'] for event in events if event['type'] == 'tool_finished']
 assert len(started) == 4 and started == finished
+committed = [event for event in events if event['type'] == 'assistant_committed']
+assert len(committed) == 5 and 'TASK_COMPLETE' in str(committed[-1]['content']), committed
+for event in events:
+    if event['type'] == 'tool_started':
+        prior = events[:events.index(event)]
+        assert any(event['call_id'] == call.get('ToolCall', {}).get('id') for record in prior
+                   if record['type'] == 'assistant_committed' for call in record['content']), event
 assert next(event['text'] for event in events if event['type'] == 'final') == 'TASK_COMPLETE'
 assert pathlib.Path(sys.argv[2], 'data.txt').read_text() == 'sample data updated\nsecond token updated\n'
 assert pathlib.Path(sys.argv[2], 'created.txt').read_text() == 'created by ion\n'

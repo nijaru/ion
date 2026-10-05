@@ -124,6 +124,10 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert len(accepted) == 1 and accepted[0]["success"]
         assert records[-1]["status"] == "completed"
         assert any(r["type"] == "final" and r["text"] == "RPC_OK" for r in records)
+        committed = [r for r in records if r["type"] == "assistant_committed"]
+        assert len(committed) == 1 and committed[0]["turn"] == accepted[0]["data"]["turn"], records
+        assert "RPC_OK" in str(committed[0]["content"]), committed
+        assert records.index(committed[0]) < next(i for i, r in enumerate(records) if r["type"] == "final"), records
         assert "Check RPC." in str(requests[0]["messages"])
 
         send(child, {"id": "fragment-parent", "type": "prompt", "message": "SLOW"})
@@ -195,6 +199,9 @@ with tempfile.TemporaryDirectory(prefix="ion-rpc-") as temporary:
         assert steered["success"], steered
         records = until(child, lambda r: r["type"] == "turn_end")
         assert records[-1]["status"] == "completed", records[-1]
+        commits = [r for r in records if r["type"] in {"assistant_committed", "steering_committed"}]
+        assert [r["type"] for r in commits] == ["assistant_committed", "steering_committed", "assistant_committed"], records
+        assert "Inspect the image" in str(commits[1]["input"]["content"]), commits
         latest = [message for message in requests[-1]["messages"] if message["role"] == "user"][-1]["content"]
         assert latest[0] == {"type": "text", "text": "Inspect the image"}, latest
         assert latest[1]["type"] == "image_url" and latest[1]["image_url"]["url"].startswith("data:image/png;base64,"), latest

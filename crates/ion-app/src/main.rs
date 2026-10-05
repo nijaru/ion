@@ -636,8 +636,10 @@ async fn headless(
                 return;
             }
             match event {
-                CodingAgentEvent::TurnAccepted { .. } => {}
-                CodingAgentEvent::TextDelta(_) => {}
+                CodingAgentEvent::TurnAccepted { .. }
+                | CodingAgentEvent::TextDelta(_)
+                | CodingAgentEvent::AssistantCommitted { .. }
+                | CodingAgentEvent::SteeringCommitted { .. } => {}
                 CodingAgentEvent::ProviderRetry {
                     attempt,
                     max_retries,

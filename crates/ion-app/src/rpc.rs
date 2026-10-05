@@ -475,6 +475,17 @@ pub(super) fn event_record(event: CodingAgentEvent) -> Value {
     match event {
         CodingAgentEvent::TurnAccepted { turn } => json!({"type":"turn_accepted","turn":turn}),
         CodingAgentEvent::TextDelta(text) => json!({"type":"text_delta","text":text}),
+        CodingAgentEvent::AssistantCommitted {
+            turn,
+            content,
+            tool_activities,
+            termination,
+        } => {
+            json!({"type":"assistant_committed","turn":turn,"content":content,"tool_activities":tool_activities,"termination":termination})
+        }
+        CodingAgentEvent::SteeringCommitted { turn, input } => {
+            json!({"type":"steering_committed","turn":turn,"input":input})
+        }
         CodingAgentEvent::ProviderRetry {
             attempt,
             max_retries,

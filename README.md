@@ -112,8 +112,15 @@ then a `run_end` record with `completed`, `cancelled` or `failed` status.
 `activity` object (kind plus bounded subject when available);
 `tool_rejected` reports a call that was never dispatched because the model
 response was truncated.
-`response_restarted` means earlier text deltas from that incomplete attempt
-were replaced after context compaction; consumers should discard those deltas.
+`assistant_committed` publishes a durable assistant boundary with `turn`,
+`content`, `tool_activities` and `termination`; `content` uses the library's
+`Content` encoding (for example, `{"Text":"answer"}` or `{"ToolCall":{...}}).
+It replaces the current provisional response, including content that arrived
+without text deltas. `steering_committed` publishes accepted steering as a
+`turn` and typed `input` message, in Session order. A queued steering
+acknowledgement alone does not mean that the input is durable.
+`response_restarted` discards only text deltas since the last assistant commit;
+it never removes previously committed assistant content or steering.
 `provider_replay_rebased` means a changed request prefix caused Ion to omit
 older opaque reasoning before dispatch while retaining the raw Session facts.
 `provider_replay_notice` reports a provider's count and reason for dropped or

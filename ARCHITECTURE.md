@@ -135,7 +135,13 @@ reopen.
 Steering remains in a host-owned inbox until it commits to the Session. When
 it arrives beside a completed assistant response, the assistant and steering
 commit together. A failed write leaves the uncommitted prompt available to
-the host for restoration.
+the host for restoration. The agent publishes assistant and steering commit
+events only after successful writes, in durable order, including assistant
+responses that continue the same Turn. Live and reopened transcripts share
+committed ordering and grouping; only the live response tail is provisional.
+A response restart replaces that tail, never earlier committed content.
+Tool-start progress does not establish another call or replace its committed
+arguments and metadata.
 Recorded assistant attempts retain their provider termination reason, so a
 truncated call that was rejected is distinguishable from a complete call.
 User-run shell commands are separate Session facts recorded after their
