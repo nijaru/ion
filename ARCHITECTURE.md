@@ -145,7 +145,9 @@ persisted and respected after reopen and compaction. Session owns an exclusive
 direct-shell permit and observed-result publication; the host owns the concrete
 live-directory shell executor. The host holds that permit across execution, so
 direct shell work cannot interleave with an active coding Turn and its observed
-result commits before exclusivity is released.
+result commits before exclusivity is released. After interrupted reopen,
+Session commits unresolved-call recovery and closes the old Turn before granting
+a direct-shell permit. A failed recovery write grants no authority to execute.
 
 An unmatched call after process loss has an unknown effect, including when
 dispatch may not have begun. An accepted Turn without an end entry is
@@ -158,6 +160,9 @@ silently reruns a call. Session resume means continuing the conversation
 across launches, not automatically resuming an interrupted external effect.
 
 Cancellation prevents new dispatch and requests that active host work stop.
+The Turn awaits the tool host's settlement and records its observed result;
+cache warming may stop, but cannot drop an in-flight tool's cleanup. Embedded
+tool hosts must respond to cancellation and settle their owned work.
 A command's direct exit, timeout or signal result is recorded as observed;
 remote or detached effects may continue. A failure to persist history needed
 for the next step stops that step. These rules give truthful recovery without

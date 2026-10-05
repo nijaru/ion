@@ -185,6 +185,9 @@ pub trait ToolHost: Send + Sync {
         Box::pin(async { Vec::new() })
     }
 
+    /// Respond to `stop`, settle owned work and return its observed outcome.
+    /// The Turn awaits this future through cancellation; hosts must not depend
+    /// on it being dropped to stop work or claim unobserved effects were undone.
     fn execute<'a>(
         &'a self,
         call: &'a ToolCall,

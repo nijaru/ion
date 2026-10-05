@@ -281,15 +281,12 @@ impl Agent {
         call: &ion_ai::ToolCall,
         stop: &CancellationToken,
         warmer: &mut Option<PromptCacheWarmer>,
-    ) -> Result<ToolExecution, AgentError> {
+    ) -> ToolExecution {
         let tool = catalog.execute_model_call(call, stop.clone());
         tokio::pin!(tool);
         loop {
             let Some(state) = warmer.as_ref() else {
-                return tokio::select! {
-                    output = &mut tool => Ok(output),
-                    () = stop.cancelled() => Err(AgentError::Cancelled),
-                };
+                return tool.await;
             };
             if state.next_refresh >= state.stop_at {
                 *warmer = None;
@@ -305,7 +302,7 @@ impl Agent {
             };
             tokio::pin!(refresh);
             tokio::select! {
-                output = &mut tool => return Ok(output),
+                output = &mut tool => return output,
                 refreshed = &mut refresh => {
                     let (started, Some((execution, usage))) = refreshed else {
                         *warmer = None;
@@ -323,7 +320,12 @@ impl Agent {
                         *warmer = None;
                     }
                 }
-                () = stop.cancelled() => return Err(AgentError::Cancelled),
+                () = stop.cancelled() => {
+                    *warmer = None;
+                    // The host owns cancellation and effect settlement. Dropping
+                    // this future would interrupt its process/capture cleanup.
+                    return tool.await;
+                }
             }
         }
     }
@@ -1077,7 +1079,7 @@ impl Agent {
                             stop,
                             &mut cache_warmer,
                         )
-                        .await?;
+                        .await;
                     (execution.output, execution.activate)
                 };
                 activate_tools.extend(activate);

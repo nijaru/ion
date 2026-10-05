@@ -1050,33 +1050,125 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn cancelled_command_reports_observed_exit_without_waiting_for_timeout() {
-        let tools = LocalTools::new(std::env::temp_dir()).unwrap();
-        let stop = CancellationToken::new();
-        let trigger = stop.clone();
-        let started = tokio::time::Instant::now();
-        let task = tokio::spawn(async move {
-            tools
-                .execute(
-                    &ToolCall {
-                        id: "test".into(),
+    async fn turn_cancellation_waits_for_native_tool_settlement_with_or_without_warming() {
+        use ion_ai::{
+            Content, Message, ModelRef, ModelResponse, ModelStreamEvent, ResponseTermination, Role,
+            Script, ScriptedModelService, Usage,
+        };
+        use ion_core::{
+            AgentLimits, CodingAgent, CodingAgentError, CodingAgentEvent, CodingSession,
+            PromptCacheWarmingPolicy, SessionEntry, TurnEndReason,
+        };
+
+        for warming in [false, true] {
+            let root =
+                std::env::temp_dir().join(format!("ion-turn-cancel-{}", uuid::Uuid::now_v7()));
+            fs::create_dir(&root).unwrap();
+            let path = root.join("session.sqlite");
+            let session = Arc::new(CodingSession::create(&path, &root).unwrap());
+            let response = ModelResponse {
+                message: Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "running".into(),
                         name: "exec".into(),
-                        arguments: json!({"command":"sleep 10","timeout_ms":120000}),
+                        arguments: json!({"command":"printf 'OBSERVED_BEFORE_CANCEL\\n'; printf ready > ready; exec sleep 30", "timeout_ms": 120000}),
                         raw_arguments: None,
-                    },
-                    stop,
-                )
+                    })],
+                    provider_replay: None,
+                },
+                usage: Usage {
+                    input_tokens: Some(10_000),
+                    cache_write_input_tokens: Some(10_000),
+                    ..Usage::unknown()
+                },
+                termination: ResponseTermination::Completed,
+                returned_model: None,
+            };
+            let model = Arc::new(ScriptedModelService::new([Script::Stream(vec![
+                ModelStreamEvent::Completed(response),
+            ])]));
+            let agent = CodingAgent::new(model.clone(), Arc::new(LocalTools::new(&root).unwrap()))
+                .with_limits(AgentLimits {
+                    prompt_cache_warming: warming.then_some(PromptCacheWarmingPolicy {
+                        lifetime_seconds: 300,
+                        cache_write_microusd_per_million: 5_000_000,
+                        cache_read_microusd_per_million: 100_000,
+                        output_microusd_per_million: 1_000_000,
+                        minimum_savings_microusd: 1,
+                    }),
+                    ..AgentLimits::default()
+                });
+            let stop = CancellationToken::new();
+            let trigger = stop.clone();
+            let running_session = session.clone();
+            let task = tokio::spawn(async move {
+                let mut events = Vec::new();
+                let result = agent
+                    .submit(
+                        &running_session,
+                        ModelRef {
+                            provider: "test".into(),
+                            model: "test".into(),
+                        },
+                        "run".into(),
+                        String::new(),
+                        stop,
+                        |event| events.push(event),
+                    )
+                    .await;
+                (result, events)
+            });
+            let ready = tokio::time::timeout(Duration::from_secs(4), async {
+                while !root.join("ready").exists() {
+                    tokio::time::sleep(Duration::from_millis(1)).await;
+                }
+            })
+            .await;
+            trigger.cancel(); // Also stop the task if startup failed.
+            let (result, events) = tokio::time::timeout(Duration::from_secs(4), task)
                 .await
-        });
-        tokio::time::sleep(Duration::from_millis(100)).await;
-        trigger.cancel();
-        let output = tokio::time::timeout(Duration::from_secs(4), task)
-            .await
-            .expect("command cancellation hung")
-            .unwrap();
-        assert!(output.is_error);
-        assert_eq!(output.value["cancelled"], true);
-        assert!(started.elapsed() < Duration::from_secs(4));
+                .expect("Turn cancellation did not settle")
+                .unwrap();
+            ready.expect("native command did not start");
+            assert!(
+                matches!(result, Err(CodingAgentError::Cancelled)),
+                "{result:?}"
+            );
+            let view = session.view().unwrap();
+            let output = view
+                .entries
+                .iter()
+                .find_map(|entry| match entry {
+                    SessionEntry::ToolResult { result, .. } => Some(result),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                output.result["cancelled"], true,
+                "must record observed cancellation, not a synthetic unknown effect: {output:?}"
+            );
+            assert_eq!(output.result["stdout"], "OBSERVED_BEFORE_CANCEL\n");
+            assert!(output.result["exit_code"].is_number() || output.result["signal"].is_number());
+            assert!(events.iter().any(|event| matches!(event, CodingAgentEvent::ToolFinished { output, .. } if output.value["cancelled"] == true)));
+            assert!(matches!(
+                view.entries.last(),
+                Some(SessionEntry::TurnEnded {
+                    reason: TurnEndReason::Cancelled,
+                    ..
+                })
+            ));
+            assert_eq!(
+                model.requests().len(),
+                1,
+                "no dependent request or warming after cancellation"
+            );
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            assert_eq!(reopened.view().unwrap().entries, view.entries);
+            drop(reopened);
+            fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

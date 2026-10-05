@@ -702,6 +702,12 @@ impl Session {
         if stop.is_cancelled() {
             return Err(SessionError::UserShellCancelled);
         }
+        let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
+        let recovery = interrupted_turn_entries(&store.state);
+        if !recovery.is_empty() {
+            // Recovery must commit before the host gets permission to run.
+            append(&mut store, &recovery)?;
+        }
         Ok(UserShellPermit {
             session: self,
             _gate: gate,
@@ -1065,15 +1071,8 @@ impl Session {
             return Err(SessionError::InvalidUserInput);
         }
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
-        let mut entries = Vec::new();
+        let mut entries = interrupted_turn_entries(&store.state);
         let interrupted = store.state.pending.len();
-        if let Some(old) = store.state.active {
-            entries.extend(unknown_results(old, &store.state.pending));
-            entries.push(SessionEntry::TurnEnded {
-                turn: old,
-                reason: TurnEndReason::Interrupted,
-            });
-        }
         let turn = store
             .state
             .last_id
@@ -1304,6 +1303,18 @@ impl Session {
         entries.push(SessionEntry::TurnEnded { turn, reason });
         append(&mut store, &entries)
     }
+}
+
+fn interrupted_turn_entries(state: &State) -> Vec<SessionEntry> {
+    let Some(turn) = state.active else {
+        return Vec::new();
+    };
+    let mut entries = unknown_results(turn, &state.pending);
+    entries.push(SessionEntry::TurnEnded {
+        turn,
+        reason: TurnEndReason::Interrupted,
+    });
+    entries
 }
 
 fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry> {
@@ -1737,6 +1748,86 @@ mod tests {
             Some(SessionEntry::UserShell { .. })
         ));
         drop(session);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn interrupted_shell_permit_recovers_before_authority_and_rejects_failed_recovery() {
+        let (root, path) = fixture();
+        let session = Session::create(&path, &root).unwrap();
+        let (turn, _) = session
+            .begin_turn("interrupted".into(), test_execution().route.logical)
+            .unwrap();
+        session
+            .record_assistant(
+                turn,
+                Message {
+                    role: Role::Assistant,
+                    content: vec![Content::ToolCall(ToolCall {
+                        id: "unsettled".into(),
+                        name: "write".into(),
+                        arguments: serde_json::json!({"path":"must-not-replay","content":"old"}),
+                        raw_arguments: None,
+                    })],
+                    provider_replay: None,
+                },
+                Usage::unknown(),
+                false,
+            )
+            .unwrap();
+        drop(session);
+        let session = Session::open(&path).unwrap();
+        let before = session.view().unwrap();
+        assert_eq!(before.unfinished_turn, Some(turn));
+        session.store.lock().unwrap().connection.execute_batch(
+            "CREATE TRIGGER reject_recovery BEFORE INSERT ON entries BEGIN SELECT RAISE(ABORT, 'recovery unavailable'); END;"
+        ).unwrap();
+        assert!(matches!(
+            session.begin_user_shell(CancellationToken::new()).await,
+            Err(SessionError::Sqlite(_))
+        ));
+        assert_eq!(session.view().unwrap().entries, before.entries);
+        session
+            .store
+            .lock()
+            .unwrap()
+            .connection
+            .execute_batch("DROP TRIGGER reject_recovery;")
+            .unwrap();
+
+        let permit = session
+            .begin_user_shell(CancellationToken::new())
+            .await
+            .unwrap();
+        let recovered = session.view().unwrap();
+        assert_eq!(
+            recovered.unfinished_turn, None,
+            "recovery must precede permission to run an effect"
+        );
+        assert!(matches!(
+            recovered.entries.last(),
+            Some(SessionEntry::TurnEnded {
+                reason: TurnEndReason::Interrupted,
+                ..
+            })
+        ));
+        assert!(
+            matches!(&recovered.entries[recovered.entries.len() - 2], SessionEntry::ToolResult { result, .. } if result.call_id == "unsettled" && result.is_error)
+        );
+        permit
+            .record(
+                "printf new".into(),
+                serde_json::json!({"stdout":"new","exit_code":0}),
+                false,
+                false,
+            )
+            .unwrap();
+        drop(session);
+        let reopened = Session::open(&path).unwrap();
+        assert!(
+            matches!(reopened.view().unwrap().entries.last(), Some(SessionEntry::UserShell { output, .. }) if output["stdout"] == "new")
+        );
+        drop(reopened);
         fs::remove_dir_all(root).unwrap();
     }
 
