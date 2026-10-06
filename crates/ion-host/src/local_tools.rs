@@ -6,7 +6,7 @@ use std::{
     os::unix::{fs::OpenOptionsExt, fs::PermissionsExt, process::ExitStatusExt},
     path::{Path, PathBuf},
     process::Stdio,
-    sync::{Arc, Mutex},
+    sync::Arc,
     time::Duration,
 };
 
@@ -18,7 +18,6 @@ use sha2::{Digest, Sha256};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     process::Command,
-    sync::watch,
 };
 use tokio_util::sync::CancellationToken;
 
@@ -408,18 +407,26 @@ impl LocalTools {
         };
         // A descendant may hold the pipes after the direct command exits.
         // Continue reading while output arrives, then release idle pipes.
-        let (stdout, stdout_cancelled) = stdout.finish(&stop, cancelled).await;
-        if stdout_cancelled {
-            cancelled = true;
-            if let Some(pid) = pid {
-                let _ = kill_process_group(pid, Signal::TERM);
+        // Timeout already requested process stop too: neither stream may
+        // follow an endlessly writing descendant during the final drain.
+        let already_stopped = cancelled || timed_out;
+        let captures = async {
+            tokio::join!(
+                stdout.finish(&stop, already_stopped),
+                stderr.finish(&stop, already_stopped),
+            )
+        };
+        tokio::pin!(captures);
+        let ((stdout, stdout_cancelled), (stderr, stderr_cancelled)) = tokio::select! {
+            result = &mut captures => result,
+            () = stop.cancelled(), if !cancelled => {
+                if let Some(pid) = pid {
+                    let _ = kill_process_group(pid, Signal::TERM);
+                }
+                captures.await
             }
-        }
-        let (stderr, stderr_cancelled) = stderr.finish(&stop, cancelled).await;
-        cancelled |= stderr_cancelled;
-        if stderr_cancelled && let Some(pid) = pid {
-            let _ = kill_process_group(pid, Signal::TERM);
-        }
+        };
+        cancelled |= stdout_cancelled || stderr_cancelled || stop.is_cancelled();
         let (exit_code, signal, wait_error, succeeded) = match status {
             Ok(status) => (status.code(), status.signal(), None, status.success()),
             Err(error) => (
@@ -652,13 +659,21 @@ struct Captured {
     full_path: Option<PathBuf>,
     full_error: Option<String>,
 }
-#[derive(Default)]
 struct CaptureState {
     bytes: VecDeque<u8>,
     total: u64,
     complete: bool,
     full_path: Option<PathBuf>,
     full_error: Option<String>,
+}
+
+impl Drop for CaptureState {
+    fn drop(&mut self) {
+        // A dropped client must not leave an unclaimed completed artifact.
+        if let Some(path) = self.full_path.take() {
+            let _ = fs::remove_file(path);
+        }
+    }
 }
 
 struct OutputSpool {
@@ -684,9 +699,11 @@ impl OutputSpool {
         self.file.write_all(bytes).await
     }
 
-    async fn finish(mut self) -> std::io::Result<PathBuf> {
+    async fn finish(mut self, complete: bool) -> std::io::Result<Option<PathBuf>> {
+        // Tokio writes can return before the blocking filesystem operation
+        // settles. Flush even an incomplete capture before deleting its file.
         self.file.flush().await?;
-        Ok(self.path.take().expect("open spool has a path"))
+        Ok(if complete { self.path.take() } else { None })
     }
 }
 
@@ -699,63 +716,67 @@ impl Drop for OutputSpool {
 }
 
 struct OutputCapture {
-    task: tokio::task::JoinHandle<()>,
-    state: Arc<Mutex<CaptureState>>,
-    progress: watch::Receiver<u64>,
+    task: tokio::task::JoinHandle<CaptureState>,
+    exited: CancellationToken,
+    stop_acquisition: CancellationToken,
+}
+impl Drop for OutputCapture {
+    fn drop(&mut self) {
+        // Stop acquisition without aborting filesystem work in flight.
+        self.stop_acquisition.cancel();
+    }
 }
 impl OutputCapture {
     fn start(mut pipe: impl tokio::io::AsyncRead + Unpin + Send + 'static) -> Self {
-        let state = Arc::new(Mutex::new(CaptureState {
-            bytes: VecDeque::with_capacity(MAX_OUTPUT_BYTES),
-            ..CaptureState::default()
-        }));
-        let capture_state = Arc::clone(&state);
-        let (progress_tx, progress) = watch::channel(0u64);
+        let exited = CancellationToken::new();
+        let capture_exited = exited.clone();
+        let stop_acquisition = CancellationToken::new();
+        let capture_stop = stop_acquisition.clone();
         let task = tokio::spawn(async move {
+            let mut state = CaptureState {
+                bytes: VecDeque::with_capacity(MAX_OUTPUT_BYTES),
+                total: 0,
+                complete: false,
+                full_path: None,
+                full_error: None,
+            };
             let mut chunk = [0u8; 8192];
             let mut spool: Option<OutputSpool> = None;
             let mut spool_failed = false;
+            let mut post_exit = false;
             loop {
-                match pipe.read(&mut chunk).await {
+                // Idle means a pending pipe read, never a spool write/flush.
+                // Stop takes priority even for endless ready output; otherwise
+                // ready bytes or EOF win over a simultaneously expired idle wait.
+                let read = tokio::select! {
+                    biased;
+                    () = capture_stop.cancelled() => break,
+                    result = pipe.read(&mut chunk) => result,
+                    () = capture_exited.cancelled(), if !post_exit => {
+                        post_exit = true;
+                        continue;
+                    }
+                    () = tokio::time::sleep(POST_EXIT_OUTPUT_IDLE), if post_exit => break,
+                };
+                match read {
                     Ok(0) => {
-                        let spool_result = if let Some(spool) = spool.take() {
-                            Some(spool.finish().await)
-                        } else {
-                            None
-                        };
-                        let mut state = capture_state
-                            .lock()
-                            .unwrap_or_else(std::sync::PoisonError::into_inner);
-                        if let Some(result) = spool_result {
-                            match result {
-                                Ok(path) => state.full_path = Some(path),
-                                Err(error) => state.full_error = Some(error.to_string()),
-                            }
-                        }
                         state.complete = true;
                         break;
                     }
                     Ok(n) => {
-                        let (prefix, total) = {
-                            let mut state = capture_state
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner);
-                            let prefix = (!spool_failed
-                                && spool.is_none()
-                                && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
-                                .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
-                            state.total = state.total.saturating_add(n as u64);
-                            let overflow = state
-                                .bytes
-                                .len()
-                                .saturating_add(n)
-                                .saturating_sub(MAX_OUTPUT_BYTES);
-                            let remove_existing = overflow.min(state.bytes.len());
-                            state.bytes.drain(..remove_existing);
-                            state.bytes.extend(&chunk[overflow - remove_existing..n]);
-                            (prefix, state.total)
-                        };
-                        let _ = progress_tx.send(total);
+                        let prefix = (!spool_failed
+                            && spool.is_none()
+                            && state.total.saturating_add(n as u64) > MAX_OUTPUT_BYTES as u64)
+                            .then(|| state.bytes.iter().copied().collect::<Vec<_>>());
+                        state.total = state.total.saturating_add(n as u64);
+                        let overflow = state
+                            .bytes
+                            .len()
+                            .saturating_add(n)
+                            .saturating_sub(MAX_OUTPUT_BYTES);
+                        let remove_existing = overflow.min(state.bytes.len());
+                        state.bytes.drain(..remove_existing);
+                        state.bytes.extend(&chunk[overflow - remove_existing..n]);
                         if let Some(prefix) = prefix {
                             match async {
                                 let mut file = OutputSpool::open()?;
@@ -768,10 +789,7 @@ impl OutputCapture {
                                 Ok(file) => spool = Some(file),
                                 Err(error) => {
                                     spool_failed = true;
-                                    capture_state
-                                        .lock()
-                                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                        .full_error = Some(error.to_string());
+                                    state.full_error = Some(error.to_string());
                                 }
                             }
                         } else if let Some(file) = &mut spool
@@ -779,61 +797,61 @@ impl OutputCapture {
                         {
                             spool_failed = true;
                             spool = None;
-                            capture_state
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .full_error = Some(error.to_string());
+                            state.full_error = Some(error.to_string());
                         }
                     }
                     Err(_) => break,
                 }
             }
+            // Acquisition has stopped, but every started filesystem operation
+            // must settle. EOF remains true even if the artifact cannot finish.
+            if let Some(spool) = spool {
+                match spool.finish(state.complete).await {
+                    Ok(path) => state.full_path = path,
+                    Err(error) => state.full_error = Some(error.to_string()),
+                }
+            }
+            state
         });
         Self {
             task,
-            state,
-            progress,
+            exited,
+            stop_acquisition,
         }
     }
 
-    async fn finish(
-        mut self,
-        stop: &CancellationToken,
-        already_cancelled: bool,
-    ) -> (Captured, bool) {
-        let idle = tokio::time::sleep(POST_EXIT_OUTPUT_IDLE);
-        tokio::pin!(idle);
-        // Once cancellation has begun, take only a short bounded drain even
-        // if a surviving descendant continues to write indefinitely.
-        let mut progress_open = !already_cancelled;
-        let mut cancelled = false;
-        let finished = loop {
-            tokio::select! {
-                result = &mut self.task => break result.is_ok(),
-                _ = &mut idle => break false,
-                _ = stop.cancelled(), if !already_cancelled => {
-                    cancelled = true;
-                    break false;
-                }
-                update = self.progress.changed(), if progress_open => {
-                    if update.is_ok() {
-                        idle.as_mut().reset(tokio::time::Instant::now() + POST_EXIT_OUTPUT_IDLE);
-                    } else {
-                        progress_open = false;
-                    }
-                }
+    async fn finish(mut self, stop: &CancellationToken, already_stopped: bool) -> (Captured, bool) {
+        self.exited.cancel();
+        // Only cancellation/timeout imposes a bounded drain regardless of
+        // activity. Normal direct exit has no total post-exit cutoff.
+        let stop_reading = async {
+            if already_stopped {
+                tokio::time::sleep(POST_EXIT_OUTPUT_IDLE).await;
+            } else {
+                stop.cancelled().await;
             }
         };
-        if !finished {
-            self.task.abort();
-            let _ = self.task.await;
-        }
-        let mut state = self
-            .state
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut cancelled = false;
+        let result = tokio::select! {
+            biased;
+            result = &mut self.task => result,
+            () = stop_reading => {
+                cancelled = !already_stopped;
+                self.stop_acquisition.cancel();
+                // Do not abort: this task may be writing or flushing, even
+                // after EOF. It will stop at its next acquisition boundary.
+                (&mut self.task).await
+            }
+        };
+        let mut state = result.unwrap_or_else(|error| CaptureState {
+            bytes: VecDeque::new(),
+            total: 0,
+            complete: false,
+            full_path: None,
+            full_error: Some(format!("output capture task failed: {error}")),
+        });
         let bytes: Vec<u8> = std::mem::take(&mut state.bytes).into();
-        let complete = finished && state.complete;
+        let complete = state.complete;
         let omitted_bytes = complete.then(|| state.total.saturating_sub(bytes.len() as u64));
         (
             Captured {
@@ -1192,6 +1210,149 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn spool_finalization_reports_delayed_write_failure_and_removes_artifact() {
+        let path = std::env::temp_dir().join(format!("ion-spool-fault-{}", uuid::Uuid::now_v7()));
+        fs::write(&path, b"original").unwrap();
+        let mut spool = OutputSpool {
+            path: Some(path.clone()),
+            file: tokio::fs::File::from_std(File::open(&path).unwrap()),
+        };
+        // Tokio accepts this into its buffer; the actual read-only-file fault
+        // is only observed when the blocking write settles during flush.
+        spool.write(b"cannot write").await.unwrap();
+        assert!(spool.finish(true).await.is_err());
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn capture_settles_spool_io_without_treating_it_as_pipe_idle() {
+        use std::{
+            pin::Pin,
+            sync::mpsc,
+            task::{Context, Poll},
+        };
+        use tokio::io::{AsyncRead, ReadBuf};
+
+        struct GatedRead {
+            cursor: std::io::Cursor<Vec<u8>>,
+            stall_at: u64,
+            release: Option<mpsc::Receiver<()>>,
+            entered: Option<tokio::sync::oneshot::Sender<()>>,
+            eof: Option<tokio::sync::oneshot::Sender<()>>,
+        }
+        impl AsyncRead for GatedRead {
+            fn poll_read(
+                mut self: Pin<&mut Self>,
+                cx: &mut Context<'_>,
+                buf: &mut ReadBuf<'_>,
+            ) -> Poll<std::io::Result<()>> {
+                if self.cursor.position() == self.stall_at
+                    && let Some(release) = self.release.take()
+                {
+                    let (ready_tx, ready_rx) = mpsc::channel();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = ready_tx.send(());
+                        let _ = release.recv();
+                    });
+                    // The sole blocking thread must be occupied before the
+                    // next chunk can start its real Tokio file write.
+                    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+                    let _ = self.entered.take().unwrap().send(());
+                }
+                let before = buf.filled().len();
+                let result = Pin::new(&mut self.cursor).poll_read(cx, buf);
+                if matches!(result, Poll::Ready(Ok(())))
+                    && buf.filled().len() == before
+                    && let Some(eof) = self.eof.take()
+                {
+                    let _ = eof.send(());
+                }
+                result
+            }
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .max_blocking_threads(1)
+            .build()
+            .unwrap();
+        runtime.block_on(async {
+            for (stall_at, cancel) in [
+                (65_536, false),
+                (73_728, false),
+                (65_536, true),
+                (73_728, true),
+            ] {
+                let payload = [b"x\n".repeat(36_864), b"END_MARKER\n".to_vec()].concat();
+                // Dropping the sender also releases the gate on any assertion
+                // failure, before runtime Drop waits for blocking work.
+                let (release, gate) = mpsc::channel::<()>();
+                let (entered_tx, entered) = tokio::sync::oneshot::channel();
+                let (eof_tx, eof) = tokio::sync::oneshot::channel();
+                let capture = OutputCapture::start(GatedRead {
+                    cursor: std::io::Cursor::new(payload.clone()),
+                    stall_at,
+                    release: Some(gate),
+                    entered: Some(entered_tx),
+                    eof: Some(eof_tx),
+                });
+                let stop = CancellationToken::new();
+                let trigger = stop.clone();
+                let finishing = tokio::spawn(async move { capture.finish(&stop, false).await });
+                tokio::time::timeout(Duration::from_secs(2), entered)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                let at_eof = stall_at == 73_728;
+                if at_eof {
+                    // The final write is queued behind the blocker; EOF then
+                    // arrives while the real Tokio File flush is still pending.
+                    tokio::time::timeout(Duration::from_secs(2), eof)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                }
+                if cancel {
+                    trigger.cancel();
+                }
+                tokio::time::sleep(POST_EXIT_OUTPUT_IDLE * 3).await;
+                let finished_before_io = finishing.is_finished();
+                drop(release);
+                let (captured, cancelled) = tokio::time::timeout(Duration::from_secs(2), finishing)
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(
+                    !finished_before_io,
+                    "capture returned before spool I/O settled: {stall_at}, {cancel}"
+                );
+                assert_eq!(cancelled, cancel);
+                let complete = !cancel || at_eof;
+                assert_eq!(captured.complete, complete);
+                assert_eq!(captured.full_error, None);
+                if complete {
+                    assert_eq!(captured.bytes, payload[payload.len() - MAX_OUTPUT_BYTES..]);
+                    assert_eq!(
+                        captured.omitted_bytes,
+                        Some((payload.len() - MAX_OUTPUT_BYTES) as u64)
+                    );
+                    let path = captured.full_path.unwrap();
+                    assert_eq!(fs::read(&path).unwrap(), payload);
+                    assert_eq!(
+                        fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+                        0o600
+                    );
+                    fs::remove_file(path).unwrap();
+                } else {
+                    assert_eq!(captured.omitted_bytes, None);
+                    assert_eq!(captured.full_path, None);
+                    assert_eq!(captured.bytes, payload[8_192..73_728]);
+                }
+            }
+        });
+    }
+
+    #[tokio::test]
     async fn long_command_output_retains_the_failure_summary_at_the_end() {
         let tools = ion_core::ToolSet::new([
             Arc::new(LocalTools::new(std::env::temp_dir()).unwrap()) as Arc<dyn ToolSource>,
@@ -1210,25 +1371,31 @@ mod tests {
             .await;
         assert!(!output.is_error, "{}", output.value);
         assert_eq!(output.value["stdout_truncated"], true);
-        assert!(output.value["stdout_omitted_bytes"].as_u64().unwrap() > 0);
-        assert!(
-            output.value["stdout"]
-                .as_str()
-                .unwrap()
-                .ends_with("END_MARKER\n")
+        assert_eq!(
+            output.value["stdout_omitted_bytes"],
+            70_011 - MAX_OUTPUT_BYTES
+        );
+        assert_eq!(
+            output.value["stderr_omitted_bytes"],
+            70_013 - MAX_OUTPUT_BYTES
+        );
+        assert_eq!(output.value["stderr_truncated"], true);
+        let expected_stdout = [b"x\n".repeat(35_000), b"END_MARKER\n".to_vec()].concat();
+        let expected_stderr = [b"e\n".repeat(35_000), b"ERROR_MARKER\n".to_vec()].concat();
+        assert_eq!(
+            output.value["stdout"].as_str().unwrap().as_bytes(),
+            &expected_stdout[expected_stdout.len() - MAX_OUTPUT_BYTES..]
+        );
+        assert_eq!(
+            output.value["stderr"].as_str().unwrap().as_bytes(),
+            &expected_stderr[expected_stderr.len() - MAX_OUTPUT_BYTES..]
         );
         let stdout_path = PathBuf::from(output.value["stdout_full_path"].as_str().unwrap());
         let stderr_path = PathBuf::from(output.value["stderr_full_path"].as_str().unwrap());
         let stdout = fs::read(&stdout_path).unwrap();
         let stderr = fs::read(&stderr_path).unwrap();
-        assert_eq!(
-            stdout,
-            [b"x\n".repeat(35_000), b"END_MARKER\n".to_vec()].concat()
-        );
-        assert_eq!(
-            stderr,
-            [b"e\n".repeat(35_000), b"ERROR_MARKER\n".to_vec()].concat()
-        );
+        assert_eq!(stdout, expected_stdout);
+        assert_eq!(stderr, expected_stderr);
         assert_eq!(
             fs::metadata(&stdout_path).unwrap().permissions().mode() & 0o777,
             0o600
@@ -1369,6 +1536,51 @@ mod tests {
         let (captured, _) = output.expect("cancelled capture followed endless output");
         assert!(!captured.complete);
         assert!(!captured.bytes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn stopped_capture_bounds_continuously_ready_output() {
+        let (captured, cancelled) = tokio::time::timeout(
+            Duration::from_secs(2),
+            OutputCapture::start(tokio::io::repeat(b'x')).finish(&CancellationToken::new(), true),
+        )
+        .await
+        .expect("stopped capture followed continuously ready output");
+        assert!(
+            !cancelled,
+            "timeout-style drain must not invent cancellation"
+        );
+        assert!(!captured.complete);
+        assert_eq!(captured.bytes, vec![b'x'; MAX_OUTPUT_BYTES]);
+        assert_eq!(captured.omitted_bytes, None);
+        assert_eq!(captured.full_path, None);
+    }
+
+    #[tokio::test]
+    async fn shell_timeout_bounds_output_from_a_surviving_descendant() {
+        let root = std::env::temp_dir().join(format!("ion-timeout-drain-{}", uuid::Uuid::now_v7()));
+        fs::create_dir(&root).unwrap();
+        let tools = LocalTools::new(&root).unwrap();
+        let output = tokio::time::timeout(
+            Duration::from_secs(3),
+            tools.exec(
+                &json!({
+                    "command": "(trap '' TERM; printf ready > ready; while :; do printf x || exit; sleep 0.01; done) & exec sleep 30",
+                    "timeout_ms": 500,
+                }),
+                CancellationToken::new(),
+            ),
+        )
+        .await
+        .expect("timed-out command followed descendant output");
+        assert!(root.join("ready").exists());
+        assert!(output.is_error);
+        assert_eq!(output.value["timed_out"], true);
+        assert_eq!(output.value["cancelled"], false);
+        assert!(!output.value["stdout"].as_str().unwrap().is_empty());
+        assert_eq!(output.value["stdout_truncated"], true);
+        assert_eq!(output.value["stdout_omitted_bytes"], Value::Null);
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
