@@ -17,7 +17,8 @@ use crate::{
         ModelContextSnapshot, Session, SessionError, StoredToolActivity, TurnEndReason,
         valid_user_message,
     },
-    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolOutput, ToolSet, ToolSource},
+    tool_result::{ToolOutput, ToolResultProjection},
+    tool_set::{ToolActivity, ToolCatalog, ToolExecution, ToolSet, ToolSource},
 };
 
 fn user_text(prompt: String) -> Message {
@@ -990,7 +991,7 @@ impl Agent {
                     arguments: call.arguments.clone(),
                     activity: activity.clone(),
                 });
-                let (mut output, activate) = if call.raw_arguments.is_some() {
+                let (output, activate) = if call.raw_arguments.is_some() {
                     (
                         ToolOutput {
                             value: serde_json::json!({"error":"tool arguments were not a valid JSON object; submit a corrected call"}),
@@ -1013,23 +1014,8 @@ impl Agent {
                     (execution.output, execution.activate)
                 };
                 activate_tools.extend(activate);
-                if !self.limits.image_input && !output.images.is_empty() {
-                    output = ToolOutput {
-                        value: serde_json::json!({"error":"selected model route does not support image tool results; choose an image-capable model and read the file again"}),
-                        images: Vec::new(),
-                        is_error: true,
-                    };
-                }
-                if output.images.iter().any(|image| image.validate().is_err())
-                    || serde_json::to_vec(&(&output.value, &output.images))?.len()
-                        > self.limits.max_request_bytes
-                {
-                    output = ToolOutput {
-                        value: serde_json::json!({"error":"tool result image data is invalid or exceeds this route's request bound; the tool may already have affected the workspace"}),
-                        images: Vec::new(),
-                        is_error: true,
-                    };
-                }
+                let projection = output
+                    .model_projection(self.limits.image_input, self.limits.max_request_bytes)?;
                 let next_context =
                     (index + 1 == call_count && !activate_tools.is_empty()).then(|| {
                         ModelContextSnapshot {
@@ -1046,6 +1032,7 @@ impl Agent {
                         images: output.images.clone(),
                         is_error: output.is_error,
                     },
+                    projection,
                     next_context,
                 )?;
                 observe(AgentEvent::ToolFinished {
@@ -1053,6 +1040,7 @@ impl Agent {
                     name: call.name,
                     activity,
                     output,
+                    projection,
                 });
             }
         }
@@ -1105,6 +1093,7 @@ pub enum AgentEvent {
         name: String,
         activity: ToolActivity,
         output: ToolOutput,
+        projection: ToolResultProjection,
     },
     ToolRejected {
         call_id: String,
@@ -2192,6 +2181,206 @@ mod tests {
         drop(fork);
         drop(reopened);
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn model_result_limits_preserve_observed_effects_and_inspection() {
+        struct ReportingTool {
+            root: std::path::PathBuf,
+            output: ToolOutput,
+        }
+        impl ToolSource for ReportingTool {
+            fn registrations(self: Arc<Self>) -> Vec<ToolRegistration> {
+                vec![ToolRegistration::new(
+                    ToolDefinition::external(ToolSpec {
+                        name: "report".into(),
+                        description: "Write a marker and return a report".into(),
+                        input_schema: serde_json::json!({"type":"object"}),
+                    }),
+                    self,
+                )]
+            }
+        }
+        impl ToolExecutor for ReportingTool {
+            fn execute<'a>(
+                &'a self,
+                _call: &'a ToolCall,
+                _stop: CancellationToken,
+            ) -> BoxFuture<'a, ToolOutput> {
+                Box::pin(async move {
+                    std::fs::write(self.root.join("mutation.txt"), "effect observed").unwrap();
+                    self.output.clone()
+                })
+            }
+        }
+        for output in [
+            ToolOutput {
+                value: serde_json::json!({"report":"x".repeat(32_768)}),
+                images: Vec::new(),
+                is_error: false,
+            },
+            ToolOutput {
+                value: serde_json::json!({"path":"picture.png"}),
+                images: vec![tiny_image()],
+                is_error: false,
+            },
+        ] {
+            let root =
+                std::env::temp_dir().join(format!("ion-result-views-{}", uuid::Uuid::now_v7()));
+            std::fs::create_dir(&root).unwrap();
+            let path = root.join("session.sqlite");
+            let session = CodingSession::create(&path, &root).unwrap();
+            let scripts = Arc::new(ScriptedModelService::new([
+                response(vec![Content::ToolCall(ToolCall {
+                    id: "report-call".into(),
+                    name: "report".into(),
+                    arguments: serde_json::json!({}),
+                    raw_arguments: None,
+                })]),
+                response(vec![Content::Text("done".into())]),
+                response(vec![Content::Text("summary".into())]),
+            ]));
+            let agent = Agent::new(
+                scripts.clone(),
+                Arc::new(ReportingTool {
+                    root: root.clone(),
+                    output: output.clone(),
+                }),
+            )
+            .with_limits(AgentLimits {
+                max_request_bytes: 4_096,
+                ..AgentLimits::default()
+            });
+            let mut live = crate::LiveTranscript::with_user_input(&Message {
+                role: Role::User,
+                content: vec![Content::Text("report".into())],
+                provider_replay: None,
+            });
+            agent
+                .submit(
+                    &session,
+                    model(),
+                    "report".into(),
+                    "test".into(),
+                    CancellationToken::new(),
+                    |event| live.observe(event),
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                std::fs::read_to_string(root.join("mutation.txt")).unwrap(),
+                "effect observed"
+            );
+            let requests = scripts.requests();
+            let Content::ToolResult(model_result) = &requests[1].messages[2].content[0] else {
+                panic!("missing projected result")
+            };
+            assert!(model_result.is_error);
+            assert!(model_result.images.is_empty());
+            assert!(model_result.result.get("error").is_some());
+            let view = session.view().unwrap();
+            let observed = view
+                .entries
+                .iter()
+                .find_map(|entry| match entry {
+                    crate::SessionEntry::ToolResult { result, .. } => Some(result),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(
+                observed.result, output.value,
+                "model rejection replaced the observed result"
+            );
+            assert_eq!(observed.images, output.images);
+            assert!(
+                !observed.is_error,
+                "a model-context limit is not a failed external effect"
+            );
+            let saved = crate::TranscriptProjection::from_session(&view);
+            let activity = saved
+                .items
+                .iter()
+                .find_map(|item| match item {
+                    crate::TranscriptItem::ActivityGroup(group) => group.activities.first(),
+                    _ => None,
+                })
+                .unwrap();
+            assert_eq!(activity.state, crate::ActivityState::Completed);
+            assert_eq!(activity.result.as_ref().unwrap().value, output.value);
+            assert!(
+                activity
+                    .result
+                    .as_ref()
+                    .unwrap()
+                    .projection
+                    .notice()
+                    .is_some()
+            );
+            assert_eq!(live.projection(), &saved);
+            assert!(
+                matches!(&view.display_messages()[2].content[0], Content::ToolResult(raw) if raw.result == output.value && raw.images == output.images)
+            );
+            drop(session);
+            let reopened = CodingSession::open(&path).unwrap();
+            assert_eq!(
+                crate::TranscriptProjection::from_session(&reopened.view().unwrap()),
+                saved
+            );
+            assert_eq!(
+                reopened.context_messages_for(&model()).unwrap(),
+                requests[1]
+                    .messages
+                    .iter()
+                    .cloned()
+                    .chain([Message {
+                        role: Role::Assistant,
+                        content: vec![Content::Text("done".into())],
+                        provider_replay: None
+                    }])
+                    .collect::<Vec<_>>()
+            );
+            let context = reopened.context_messages_for(&model()).unwrap();
+            let other_model = ModelRef {
+                model: "other".into(),
+                ..model()
+            };
+            assert_eq!(
+                reopened.context_messages_for(&other_model).unwrap(),
+                context
+            );
+            for copy in [
+                reopened.clone_to(root.join("clone.sqlite")).unwrap(),
+                reopened
+                    .fork_to(root.join("fork.sqlite"), ForkPoint::AfterTurn(1))
+                    .unwrap(),
+            ] {
+                assert_eq!(copy.context_messages_for(&model()).unwrap(), context);
+                assert_eq!(
+                    crate::TranscriptProjection::from_session(&copy.view().unwrap()),
+                    saved
+                );
+            }
+            assert!(
+                agent
+                    .compact(&reopened, model(), CancellationToken::new(), |_| {})
+                    .await
+                    .unwrap()
+            );
+            let summary_request = serde_json::to_string(&scripts.requests()[2]).unwrap();
+            assert!(summary_request.contains(model_result.result["error"].as_str().unwrap()));
+            if let Some(report) = output.value["report"].as_str() {
+                assert!(!summary_request.contains(report));
+            }
+            for image in &output.images {
+                assert!(!summary_request.contains(image.data()));
+            }
+            assert_eq!(
+                crate::TranscriptProjection::from_session(&reopened.view().unwrap()),
+                saved
+            );
+            drop(reopened);
+            std::fs::remove_dir_all(root).unwrap();
+        }
     }
 
     #[tokio::test]

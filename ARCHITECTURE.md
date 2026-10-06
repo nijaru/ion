@@ -143,7 +143,13 @@ content is an explicit error, never silently discarded.
 ## Context and providers
 
 Keep three views distinct: raw committed history, bounded model context and
-human conversation/activity. Compaction changes model context, not raw history.
+human conversation/activity. Commit the observed tool outcome and its model
+projection decision together. A route's payload/image limit must not replace
+observed output with an error in raw history or classify successful work as
+failed. Reopen, fork and compaction use the recorded model projection; human
+inspection retains the observed output and delivery notice. Storage limits
+still apply, and failed commits leave unknown effects rather than invented
+outcomes. Compaction changes model context, not raw history.
 It commits atomically, respects complete call/result cuts, uses bounded settled
 prefixes when needed, and leaves the old projection intact if cancelled before
 commit. Measure successful continuation, not merely summary compression.

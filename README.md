@@ -105,7 +105,7 @@ Session ID. The source retains all later history. These operations copy
 conversation facts, not working files, and an unfinished Turn cannot be an
 after-Turn point. RPC clients can use `list_turns` and `fork` with `turn` and
 optional `after: true`.
-This unreleased branch uses Session format 7; earlier development Session
+This unreleased branch uses Session format 8; earlier development Session
 files are not reopened. Tool activity classification used by the transcript is
 stored with each assistant tool-call batch, so resumed history is not
 reinterpreted through the currently installed tool catalog.
@@ -120,7 +120,11 @@ In JSONL mode, stdout contains one JSON object per line: a `session` record with
 directory, ordered `text_delta`, tool lifecycle, recovery and final records,
 then a `run_end` record with `completed`, `cancelled` or `failed` status.
 `tool_started` and `tool_finished` share a `call_id` and include a semantic
-`activity` object (kind plus bounded subject when available);
+`activity` object (kind plus bounded subject when available). `tool_finished`
+contains the observed output and `model_projection`: `observed`,
+`images_unsupported` or `request_limit_exceeded`. The latter two withhold the
+payload from model context, not from saved inspection; `is_error` describes the
+actual tool outcome, not the delivery limit.
 `tool_rejected` reports a call that was never dispatched because the model
 response was truncated.
 `assistant_committed` publishes a durable assistant boundary with `turn`,
@@ -364,8 +368,14 @@ nears a known model's context window or exceeds its transport bound, and can
 retry one model request after a provider reports context overflow. The raw
 conversation remains inspectable; `compact` and `/compact` also trigger this
 explicitly. Longer saved histories are summarized in bounded steps when one
-summary request cannot fit. A single oversized prompt or tool result may
-still exceed the context limit when no settled group can be summarized.
+summary request cannot fit. Tool results that individually exceed the route's
+request bound, or return images to a text-only route, give the model a bounded
+explanation. Their observed output remains available in Session inspection,
+export and tool detail, with a notice that it was not shared. The Session's
+64 MiB encoded-entry limit still applies; a failed result commit leaves the
+effect unknown rather than silently discarding data or replaying the tool.
+A large prompt or accumulated context can still exceed the limit when no
+settled group can be summarized.
 Transient provider failures can trigger up to two cancellable retries before
 stream output; retry events appear in the TUI and JSONL output. A response that
 stops after producing partial output is not replayed silently.

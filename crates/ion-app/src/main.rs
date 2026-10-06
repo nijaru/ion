@@ -651,8 +651,16 @@ async fn headless(
                     eprintln!("[provider retry {attempt}/{max_retries} in {delay_ms}ms]")
                 }
                 CodingAgentEvent::ToolStarted { name, .. } => eprintln!("[tool: {name}]"),
-                CodingAgentEvent::ToolFinished { name, output, .. } => {
+                CodingAgentEvent::ToolFinished {
+                    name,
+                    output,
+                    projection,
+                    ..
+                } => {
                     eprintln!("[tool: {name}] {}", output.value);
+                    if let Some(notice) = projection.notice() {
+                        eprintln!("[tool: {name}] {notice}");
+                    }
                     for image in &output.images {
                         eprintln!("[tool image: {}]", image.mime_type().as_str());
                     }

@@ -32,13 +32,18 @@ pub fn render(view: &SessionView) -> String {
                 let _ = write!(text, "\nAssistant\n");
                 message(&mut text, answer);
             }
-            SessionEntry::ToolResult { result, .. } => {
+            SessionEntry::ToolResult {
+                result, projection, ..
+            } => {
                 let _ = writeln!(
                     text,
                     "\nTool result · {} · {}",
                     result.name,
                     if result.is_error { "error" } else { "ok" }
                 );
+                if let Some(notice) = projection.notice() {
+                    let _ = writeln!(text, "  {notice}");
+                }
                 json_value(&mut text, &result.result);
                 for image in &result.images {
                     let _ = writeln!(text, "  [image: {}]", image.mime_type().as_str());

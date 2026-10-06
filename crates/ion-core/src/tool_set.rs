@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio_util::sync::CancellationToken;
 
+use crate::tool_result::ToolOutput;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ToolActivityKind {
@@ -120,13 +122,6 @@ impl ToolDefinition {
         self.exposure = ToolExposure::Deferred;
         self
     }
-}
-
-#[derive(Debug, Clone)]
-pub struct ToolOutput {
-    pub value: Value,
-    pub images: Vec<ion_ai::ImageContent>,
-    pub is_error: bool,
 }
 
 #[derive(Debug, Clone)]

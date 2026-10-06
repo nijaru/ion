@@ -4,6 +4,7 @@ mod agent;
 mod generation;
 mod request;
 mod session;
+mod tool_result;
 mod tool_set;
 mod transcript;
 
@@ -18,9 +19,11 @@ pub use session::{
 };
 pub use tool_set::{
     ToolActivity, ToolActivityKind, ToolCatalog, ToolDefinition, ToolExecutor, ToolExposure,
-    ToolOutput as CodingToolOutput, ToolPresentation, ToolPresentationTarget, ToolRegistration,
-    ToolSet, ToolSource as CodingToolSource,
+    ToolPresentation, ToolPresentationTarget, ToolRegistration, ToolSet,
+    ToolSource as CodingToolSource,
 };
+
+pub use tool_result::{ToolOutput as CodingToolOutput, ToolResultProjection};
 
 pub use transcript::{
     ActivityGroup, ActivityResult, ActivityState, LiveTranscript, TranscriptActivity,

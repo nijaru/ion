@@ -99,14 +99,15 @@ pub(super) fn live_rows(
         if budget > selected.len()
             && let Some((item_index, activity_index, exception)) =
                 activities().rfind(|(_, _, activity)| {
-                    matches!(
-                        activity.state,
-                        ActivityState::Failed
-                            | ActivityState::Cancelled
-                            | ActivityState::TimedOut
-                            | ActivityState::Rejected
-                            | ActivityState::Unknown
-                    )
+                    model_result_notice(activity).is_some()
+                        || matches!(
+                            activity.state,
+                            ActivityState::Failed
+                                | ActivityState::Cancelled
+                                | ActivityState::TimedOut
+                                | ActivityState::Rejected
+                                | ActivityState::Unknown
+                        )
                 })
         {
             pinned = Some((item_index, activity_index));
@@ -117,10 +118,11 @@ pub(super) fn live_rows(
                 .as_deref()
                 .map(clean_inline)
                 .unwrap_or_else(|| exception.name.clone());
-            selected.push(fit_line(
-                &format!("! {subject} · {}", action_label(exception)),
-                width,
-            ));
+            let diagnostic = match model_result_notice(exception) {
+                Some(notice) => format!("! {notice} · {subject}"),
+                None => format!("! {subject} · {}", action_label(exception)),
+            };
+            selected.push(fit_line(&diagnostic, width));
         }
     } else {
         selected.push(fit_line("… earlier conversation · Ctrl-O", width));
@@ -314,12 +316,14 @@ struct DisplayActivity {
     source: std::ops::Range<usize>,
     observation: bool,
     state: ActivityState,
+    model_notice: Option<&'static str>,
 }
 
 impl DisplayActivity {
     fn priority(&self) -> u8 {
         match self.state {
             ActivityState::Running => 0,
+            _ if self.model_notice.is_some() => 1,
             ActivityState::Failed
             | ActivityState::Cancelled
             | ActivityState::TimedOut
@@ -370,9 +374,11 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
     let mut timed_out = 0usize;
     let mut rejected = 0usize;
     let mut unknown = 0usize;
+    let mut withheld = 0usize;
 
     for activity in activities {
         count += 1;
+        withheld += usize::from(model_result_notice(activity).is_some());
         counts[kind_index(activity.activity.kind)] += 1;
         match activity.state {
             ActivityState::Failed => failed += 1,
@@ -398,6 +404,7 @@ fn group_header<'a>(activities: impl Iterator<Item = &'a TranscriptActivity>) ->
         (timed_out, "timed out"),
         (rejected, "skipped"),
         (unknown, "unknown"),
+        (withheld, "not shared"),
     ] {
         if count > 0 {
             parts.push(format!("{count} {label}"));
@@ -427,12 +434,16 @@ fn compact_activities(activities: &[TranscriptActivity]) -> Vec<DisplayActivity>
     let mut index = 0;
     while index < activities.len() {
         let current = &activities[index];
-        if is_observation(current.activity.kind) && current.state == ActivityState::Completed {
+        if is_observation(current.activity.kind)
+            && current.state == ActivityState::Completed
+            && model_result_notice(current).is_none()
+        {
             let kind = current.activity.kind;
             let mut end = index + 1;
             while end < activities.len()
                 && activities[end].activity.kind == kind
                 && activities[end].state == ActivityState::Completed
+                && model_result_notice(&activities[end]).is_none()
             {
                 end += 1;
             }
@@ -476,12 +487,24 @@ fn coalesced_observation(
         source,
         observation: true,
         state: ActivityState::Completed,
+        model_notice: None,
     }
+}
+
+fn model_result_notice(activity: &TranscriptActivity) -> Option<&'static str> {
+    activity
+        .result
+        .as_ref()
+        .and_then(|result| result.projection.notice())
 }
 
 fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActivity {
     let kind = activity.activity.kind;
     let mut summary = action_label(activity);
+    let model_notice = model_result_notice(activity);
+    if model_notice.is_some() {
+        summary.push_str(" · result not shared with model");
+    }
     if let Some(subject) = activity.activity.subject.as_deref() {
         let subject = clean_inline(subject);
         if !subject.is_empty() {
@@ -507,6 +530,7 @@ fn display_activity(activity: &TranscriptActivity, index: usize) -> DisplayActiv
         source: index..index + 1,
         observation,
         state: activity.state,
+        model_notice,
     }
 }
 
@@ -730,6 +754,7 @@ mod tests {
             arguments: serde_json::Value::Null,
             state,
             result: result.map(|value| ActivityResult {
+                projection: ion_core::ToolResultProjection::Observed,
                 value,
                 image_mime_types: Vec::new(),
                 is_error: state != ActivityState::Completed,
@@ -793,6 +818,36 @@ mod tests {
         assert!(rendered.contains("└ Ran cargo test"));
         assert!(rendered.contains("  └ test result: ok. 148 passed"));
         assert_eq!(rendered.matches("Read src/").count(), 1);
+    }
+
+    #[test]
+    fn withheld_result_notice_survives_long_subject_without_overflow() {
+        for projection in [
+            ion_core::ToolResultProjection::RequestLimitExceeded,
+            ion_core::ToolResultProjection::ImagesUnsupported,
+        ] {
+            let mut read = activity(
+                "x",
+                ToolActivityKind::Read,
+                &"long/path/".repeat(30),
+                ActivityState::Completed,
+                Some(serde_json::json!({"path":"observed"})),
+            );
+            read.result.as_mut().unwrap().projection = projection;
+            let history = TranscriptProjection {
+                items: vec![TranscriptItem::ActivityGroup(ActivityGroup {
+                    turn: 1,
+                    open: false,
+                    activities: vec![read],
+                })],
+            };
+            for rendered in [rows(&history, 80), live_rows(&history, 80, 16)] {
+                let rendered = rendered.join("\n");
+                assert!(rendered.contains("not shared with model"), "{rendered}");
+                assert!(rendered.contains("Read"), "{rendered}");
+                assert!(!rendered.contains("Read failed"), "{rendered}");
+            }
+        }
     }
 
     #[test]

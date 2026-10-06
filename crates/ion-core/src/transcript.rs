@@ -7,7 +7,8 @@ use serde_json::Value;
 use crate::{
     agent::AgentEvent,
     session::{SessionEntry, SessionView},
-    tool_set::{ToolActivity, ToolOutput},
+    tool_result::{ToolOutput, ToolResultProjection},
+    tool_set::ToolActivity,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +39,7 @@ pub enum ActivityState {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ActivityResult {
+    pub projection: ToolResultProjection,
     pub value: Value,
     pub image_mime_types: Vec<String>,
     pub is_error: bool,
@@ -107,11 +109,16 @@ impl TranscriptProjection {
                     termination,
                     false,
                 ),
-                SessionEntry::ToolResult { turn, result } => {
+                SessionEntry::ToolResult {
+                    turn,
+                    result,
+                    projection,
+                } => {
                     builder.push_result(
                         *turn,
                         &result.call_id,
                         ActivityResult {
+                            projection: *projection,
                             value: result.result.clone(),
                             image_mime_types: result
                                 .images
@@ -327,8 +334,9 @@ fn result_state(is_error: bool, value: &Value) -> ActivityState {
     ActivityState::Failed
 }
 
-fn live_result(output: ToolOutput) -> ActivityResult {
+fn live_result(output: ToolOutput, projection: ToolResultProjection) -> ActivityResult {
     ActivityResult {
+        projection,
         value: output.value,
         image_mime_types: output
             .images
@@ -440,14 +448,24 @@ impl LiveTranscript {
                 activity.state = ActivityState::Running;
             }
             AgentEvent::ToolFinished {
-                call_id, output, ..
-            }
-            | AgentEvent::ToolRejected {
-                call_id, output, ..
+                call_id,
+                output,
+                projection,
+                ..
             } => {
                 let turn = self.turn.expect("tool progress follows TurnAccepted");
                 self.builder
-                    .push_result(turn, &call_id, live_result(output));
+                    .push_result(turn, &call_id, live_result(output, projection));
+            }
+            AgentEvent::ToolRejected {
+                call_id, output, ..
+            } => {
+                let turn = self.turn.expect("tool progress follows TurnAccepted");
+                self.builder.push_result(
+                    turn,
+                    &call_id,
+                    live_result(output, ToolResultProjection::Observed),
+                );
             }
             AgentEvent::InterruptedCalls(count) => self.note(format!(
                 "{count} previous tool call(s) had unknown effects; inspect before retrying"
@@ -594,6 +612,7 @@ mod tests {
                     vec![call("a", "read", serde_json::json!({"path":"a.rs"}))],
                 ),
                 SessionEntry::ToolResult {
+                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
                     result: ToolResult {
                         call_id: "a".into(),
@@ -608,6 +627,7 @@ mod tests {
                     vec![call("b", "edit", serde_json::json!({"path":"b.rs"}))],
                 ),
                 SessionEntry::ToolResult {
+                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
                     result: ToolResult {
                         call_id: "b".into(),
@@ -625,6 +645,7 @@ mod tests {
                     ],
                 ),
                 SessionEntry::ToolResult {
+                    projection: crate::ToolResultProjection::Observed,
                     turn: 1,
                     result: ToolResult {
                         call_id: "c".into(),
@@ -723,6 +744,7 @@ mod tests {
         assert_eq!(group.activities[0].arguments["path"], "a");
         assert_eq!(group.activities[1].state, ActivityState::Queued);
         live.observe(AgentEvent::ToolFinished {
+            projection: crate::ToolResultProjection::Observed,
             call_id: "first".into(),
             name: "read".into(),
             activity: ToolActivity::external("read"),
@@ -752,6 +774,7 @@ mod tests {
             )],
         ));
         live.observe(AgentEvent::ToolFinished {
+            projection: crate::ToolResultProjection::Observed,
             call_id: "read-1".into(),
             name: "read".into(),
             activity: ToolActivity {
@@ -802,6 +825,7 @@ mod tests {
             vec![call("one", "read", serde_json::json!({"path":"one.rs"}))],
         ));
         live.observe(AgentEvent::ToolFinished {
+            projection: crate::ToolResultProjection::Observed,
             call_id: "one".into(),
             name: "read".into(),
             activity: ToolActivity {

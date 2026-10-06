@@ -19,6 +19,7 @@ from pathlib import Path
 root = Path(__file__).resolve().parent.parent
 binary = Path(os.environ.get("ION_SMOKE_BIN", root / "target/debug/ion"))
 requests = []
+long_image_path = "long-subject-" + "x" * 96 + "/red.png"
 
 
 def chunk(kind, payload):
@@ -38,9 +39,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(body)
-        if any(message.get("content") == "Read workspace picture." for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
+        if any(message.get("content") in ("Read workspace picture.", "Read unshared picture.") for message in body["messages"]) and not any(message["role"] == "tool" for message in body["messages"]):
+            image_path = long_image_path if any(message.get("content") == "Read unshared picture." for message in body["messages"]) else "red.png"
             events = [
-                {"id": "images", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-picture", "type": "function", "function": {"name": "read", "arguments": '{"path":"red.png"}'}}]}, "finish_reason": None}]},
+                {"id": "images", "choices": [{"index": 0, "delta": {"tool_calls": [{"index": 0, "id": "read-picture", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": image_path})}}]}, "finish_reason": None}]},
                 {"id": "images", "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]},
             ]
         else:
@@ -168,7 +170,72 @@ with tempfile.TemporaryDirectory(prefix="ion-images-") as temporary:
         exported = subprocess.run([binary, "--cwd", workspace, "--continue", "export"], env=env, check=True, capture_output=True, text=True).stdout
         assert "[image: image/png]" in exported
         assert "iVBORw0KGgo" not in exported
-        print("Ion image input, resume, inspection and terminal attachment: OK")
+        # Model delivery limits must not turn a successful native read into a
+        # failed saved activity, or discard its image from full inspection.
+        (workspace / long_image_path).parent.mkdir()
+        (workspace / long_image_path).write_bytes(tiny_png())
+        subprocess.run([binary, "use", "smoke", "text-only", "--endpoint", endpoint, "--wire", "chat-completions"], env=env, check=True, capture_output=True)
+        withheld = subprocess.run([binary, "--cwd", workspace, "--json", "run", "Read unshared picture."], env=env, check=True, capture_output=True, text=True)
+        records = [json.loads(line) for line in withheld.stdout.splitlines()]
+        observed = next(record for record in records if record["type"] == "tool_finished")
+        assert observed["model_projection"] == "images_unsupported", observed
+        assert observed["is_error"] is False and observed["output"]["path"] == long_image_path
+        assert observed["image_mime_types"] == ["image/png"]
+        assert len(requests) == 8
+        projected = next(message for message in requests[7]["messages"] if message["role"] == "tool")
+        assert "does not support image tool results" in projected["content"], projected
+        assert not any(
+            part.get("type") == "image_url"
+            for message in requests[7]["messages"]
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+        )
+        session_id = next(record["id"] for record in records if record["type"] == "session")
+        exported = subprocess.run([binary, "--cwd", workspace, "--session", session_id, "export"], env=env, check=True, capture_output=True, text=True).stdout
+        assert "Tool result · read · ok" in exported
+        assert "Image result not shared with this text-only model" in exported
+        assert "[image: image/png]" in exported and "iVBORw0KGgo" not in exported
+
+        master, slave = pty.openpty()
+        fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", 30, 80, 0, 0))
+        child = subprocess.Popen([binary, "--cwd", workspace, "--session", session_id, "--tui-mode", "fullscreen", "chat"], env={**env, "TERM": "xterm-256color"}, stdin=slave, stdout=slave, stderr=slave, preexec_fn=attach_terminal)
+        os.close(slave)
+        output = bytearray()
+        detail_sent = detail_closed = quit_sent = False
+        deadline = time.monotonic() + 12
+        try:
+            while time.monotonic() < deadline:
+                readable, _, _ = select.select([master], [], [], 0.05)
+                if readable:
+                    try:
+                        data = os.read(master, 65536)
+                    except OSError:
+                        data = b""
+                    output.extend(data)
+                    if b"\x1b[6n" in data:
+                        os.write(master, b"\x1b[2;1R")
+                if not detail_sent and b"result not shared with model" in output:
+                    assert b"Read" in output and b"Read failed" not in output
+                    output.clear()  # Detail must qualify from fresh output.
+                    os.write(master, b"\x0f")
+                    detail_sent = True
+                if detail_sent and not detail_closed and b"Image result not shared with this text-only model" in output and b"[image: image/png]" in output:
+                    os.write(master, b"\x1b")
+                    output.clear()
+                    detail_closed = True
+                if detail_closed and not quit_sent and b"result not shared with model" in output:
+                    os.write(master, b"\x03")
+                    quit_sent = True
+                if child.poll() is not None:
+                    break
+            child.wait(timeout=5)
+            assert child.returncode == 0 and detail_sent and quit_sent, output[-1500:]
+        finally:
+            os.close(master)
+            if child.poll() is None:
+                child.send_signal(signal.SIGKILL)
+                child.wait(timeout=5)
+        print("Ion image input, resume, inspection, terminal attachment and withheld-result truth: OK")
     finally:
         server.shutdown()
         server.server_close()

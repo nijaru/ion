@@ -22,7 +22,7 @@ use thiserror::Error;
 use tokio::sync::{Mutex as AsyncMutex, MutexGuard as AsyncMutexGuard};
 use tokio_util::sync::CancellationToken;
 
-const FORMAT_VERSION: u32 = 7;
+const FORMAT_VERSION: u32 = 8;
 // An 8 MiB raw prompt or streamed response can grow up to sixfold when JSON
 // escapes control characters. Keep the storage bound above that encoded size.
 const MAX_ENTRY_BYTES: usize = 64 * 1024 * 1024;
@@ -107,7 +107,9 @@ pub enum SessionEntry {
     },
     ToolResult {
         turn: u64,
+        /// Observed output, never replaced by a route-specific delivery error.
         result: ToolResult,
+        projection: crate::ToolResultProjection,
     },
     TurnEnded {
         turn: u64,
@@ -178,6 +180,9 @@ impl SessionView {
                     exclude_from_context,
                     ..
                 } => Some(shell_message(command, output, *exclude_from_context)),
+                SessionEntry::ToolResult { result, .. } => {
+                    Some(crate::ToolResultProjection::Observed.message(result))
+                }
                 other => message_from_entry(other),
             })
             .collect()
@@ -419,7 +424,11 @@ impl State {
                     new_settled.push(self.sequence + 1);
                 }
             }
-            SessionEntry::ToolResult { turn, result } => {
+            SessionEntry::ToolResult {
+                turn,
+                result,
+                projection,
+            } => {
                 let position = self
                     .pending
                     .iter()
@@ -428,11 +437,7 @@ impl State {
                     return Err(SessionError::InvalidHistory);
                 }
                 self.pending.remove(position.expect("checked above"));
-                messages.push(Message {
-                    role: Role::Tool,
-                    content: vec![Content::ToolResult(result.clone())],
-                    provider_replay: None,
-                });
+                messages.push(projection.message(result));
                 if self.pending.is_empty() {
                     new_settled.push(self.sequence + 1);
                 }
@@ -1254,7 +1259,11 @@ impl Session {
             results
                 .iter()
                 .cloned()
-                .map(|result| SessionEntry::ToolResult { turn, result }),
+                .map(|result| SessionEntry::ToolResult {
+                    turn,
+                    result,
+                    projection: crate::ToolResultProjection::Observed,
+                }),
         );
         let mut store = self.store.lock().map_err(|_| SessionError::Poisoned)?;
         append(&mut store, &entries)?;
@@ -1283,7 +1292,12 @@ impl Session {
         turn: u64,
         result: ToolResult,
     ) -> Result<(), SessionError> {
-        self.record_tool_result_with_context(turn, result, None)
+        self.record_tool_result_with_context(
+            turn,
+            result,
+            crate::ToolResultProjection::Observed,
+            None,
+        )
     }
 
     /// Publish one observed tool result and, when this closes the assistant's
@@ -1292,9 +1306,14 @@ impl Session {
         &self,
         turn: u64,
         result: ToolResult,
+        projection: crate::ToolResultProjection,
         context: Option<ModelContextSnapshot>,
     ) -> Result<(), SessionError> {
-        let mut entries = vec![SessionEntry::ToolResult { turn, result }];
+        let mut entries = vec![SessionEntry::ToolResult {
+            turn,
+            result,
+            projection,
+        }];
         if let Some(context) = context {
             entries.push(SessionEntry::ModelContextChanged { turn, context });
         }
@@ -1331,7 +1350,7 @@ fn unknown_results(turn: u64, pending: &[(String, String)]) -> Vec<SessionEntry>
         result: serde_json::json!({"error":"The tool result was not committed. Its external effect is unknown; inspect the working directory before retrying."}),
         images: Vec::new(),
         is_error: true,
-    }}).collect()
+    }, projection: crate::ToolResultProjection::Observed }).collect()
 }
 
 fn append(store: &mut Store, entries: &[SessionEntry]) -> Result<(), SessionError> {
@@ -1489,11 +1508,9 @@ fn message_from_entry(entry: &SessionEntry) -> Option<Message> {
         SessionEntry::TurnStarted { input, .. } => Some(input.clone()),
         SessionEntry::Steering { input, .. } => Some(input.clone()),
         SessionEntry::Assistant { message, .. } => Some(message.clone()),
-        SessionEntry::ToolResult { result, .. } => Some(Message {
-            role: Role::Tool,
-            content: vec![Content::ToolResult(result.clone())],
-            provider_replay: None,
-        }),
+        SessionEntry::ToolResult {
+            result, projection, ..
+        } => Some(projection.message(result)),
         SessionEntry::UserShell { .. }
         | SessionEntry::ModelSelected { .. }
         | SessionEntry::EffectiveModelChanged { .. }

@@ -276,6 +276,9 @@ fn render_tool(rows: &mut Vec<String>, number: usize, activity: &TranscriptActiv
     render_json(rows, &activity.arguments, width);
     push_wrapped(rows, "Result", width);
     if let Some(result) = &activity.result {
+        if let Some(notice) = result.projection.notice() {
+            push_wrapped(rows, notice, width);
+        }
         render_json(rows, &result.value, width);
         for mime in &result.image_mime_types {
             push_wrapped(rows, &format!("[image: {mime}]"), width);
@@ -343,6 +346,7 @@ mod tests {
         assert!(initial.contains("queued"));
         assert!(initial.contains("no committed result"));
         live.observe(AgentEvent::ToolFinished {
+            projection: ion_core::ToolResultProjection::Observed,
             call_id: "call".into(),
             name: "exec".into(),
             activity,
